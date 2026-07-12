@@ -45,16 +45,6 @@ example/
 └── flake.lock
 ```
 
-The applications temporarily declare repository-relative package paths.
-Integration tests never use those paths: they rewrite temporary copies to
-content-addressed bundles served from distinct package directories on
-localhost. A release publishes each bundle under a package-specific tag, such
-as `1.2.3-blueprint` and `1.2.3-blueprint-nix`, because Roc treats every bundle
-in one URL directory as the same package version. Once those package releases
-exist, the checked-in applications can point directly at their published URLs.
-After both package releases succeed, the release workflow opens a follow-up PR
-that updates every example and the latest-release header in this README.
-
 ### How to run an example
 
 From the repo root:
@@ -67,15 +57,6 @@ nix develop "path:$PWD#default" --command hello
 ```
 
 Swap `hello-shell` for any other folder to try the other examples.
-
-For the canonical sample used by the acceptance test, use:
-
-```sh
-cd examples/dev-shell
-roc main.roc > flake.nix
-nix flake check "path:$PWD" --no-write-lock-file
-nix develop "path:$PWD#default" --command rustc --version
-```
 
 ## Development
 
