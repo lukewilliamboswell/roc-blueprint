@@ -197,12 +197,12 @@ def exercise_examples(
                 [
                     nix,
                     "develop",
-                    f"{flake_dir}#default",
+                    ".#default",
                     "--command",
                     "rustc",
                     "--version",
                 ],
-                cwd=ROOT,
+                cwd=flake_dir,
             )
 
 
