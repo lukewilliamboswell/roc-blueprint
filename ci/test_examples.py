@@ -132,12 +132,15 @@ def require_equal(actual: bytes, expected: bytes, description: str) -> None:
         raise SystemExit(f"{description} did not match byte-for-byte")
 
 
-def exercise_examples(examples_dir: Path, work_dir: Path) -> None:
+def exercise_examples(
+    examples_dir: Path, work_dir: Path, nix_work_dir: Path
+) -> None:
     nix = shutil.which("nix")
     if nix is None:
         raise SystemExit("nix is required to validate generated flakes")
 
     work_dir.mkdir(parents=True, exist_ok=True)
+    nix_work_dir.mkdir(parents=True, exist_ok=True)
     for example_dir in discover_examples(examples_dir):
         name = example_dir.name
         print(f"\nTesting example: {name}", flush=True)
@@ -159,7 +162,7 @@ def exercise_examples(examples_dir: Path, work_dir: Path) -> None:
         require_equal(first, golden, f"{name} generated output")
         require_equal(second, first, f"{name} repeated generation")
 
-        flake_dir = work_dir / "flakes" / name
+        flake_dir = nix_work_dir / name
         flake_dir.mkdir(parents=True, exist_ok=True)
         (flake_dir / "flake.nix").write_bytes(first)
         source_lock = example_dir / "flake.lock"
@@ -211,12 +214,21 @@ def main() -> None:
     args = parser.parse_args()
 
     tmp_parent = Path(
+        os.environ.get("ROC_BLUEPRINT_TMPDIR", ROOT / ".roc-blueprint-tmp")
+    )
+    nix_tmp_parent = Path(
         os.environ.get(
-            "ROC_BLUEPRINT_TMPDIR", f"{tempfile.gettempdir()}/roc-blueprint"
+            "ROC_BLUEPRINT_NIX_TMPDIR",
+            f"{tempfile.gettempdir()}/roc-blueprint-nix",
         )
     )
     tmp_parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="examples-", dir=tmp_parent) as tmp:
+    nix_tmp_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="examples-", dir=tmp_parent
+    ) as tmp, tempfile.TemporaryDirectory(
+        prefix="flakes-", dir=nix_tmp_parent
+    ) as nix_tmp:
         tmp_dir = Path(tmp)
         bundle_dir = tmp_dir / "bundles"
         bundle_dir.mkdir()
@@ -258,7 +270,11 @@ def main() -> None:
                 urls,
                 platform_url,
             )
-            exercise_examples(rewritten_examples, tmp_dir / "example-tests")
+            exercise_examples(
+                rewritten_examples,
+                tmp_dir / "example-tests",
+                Path(nix_tmp),
+            )
         finally:
             server.shutdown()
             server.server_close()
