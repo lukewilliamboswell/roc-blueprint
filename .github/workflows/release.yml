@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Release version, e.g. 0.1.0"
+        required: true
+        type: string
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && format('release-{0}', github.repository) || format('release-validate-{0}-{1}', github.repository, github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+jobs:
+  build:
+    name: Build release bundles
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.validate.outputs.release_version }}
+      test_matrix: ${{ steps.bundles.outputs.test_matrix }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Roc
+        uses: roc-lang/setup-roc@bd311e2fb815a3d2255f7ee14a922f0b736e020b
+        with:
+          version: nightly-new-compiler
+
+      - name: Validate release request
+        id: validate
+        uses: roc-lang/release-package/actions/validate-release@d2560ead9f724bfaabfbc8134b8895e120171064
+        with:
+          release_version: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version || '' }}
+          dry_run: ${{ github.event_name != 'workflow_dispatch' }}
+          github_token: ${{ github.token }}
+
+      - name: Validate repository
+        run: ./ci/all_tests.sh
+
+      - name: Record compatibility-check status
+        uses: roc-lang/release-package/actions/run-bump-check@d2560ead9f724bfaabfbc8134b8895e120171064
+        with:
+          release_version: ${{ steps.validate.outputs.release_version }}
+          dry_run: ${{ github.event_name != 'workflow_dispatch' }}
+          bump_check: off
+
+      - name: Bundle packages
+        run: |
+          ./scripts/bundle.sh --output-dir dist
+          python3 scripts/create_bundle_manifest.py
+
+      - name: Prepare release metadata
+        id: bundles
+        uses: roc-lang/release-package/actions/prepare-bundles@d2560ead9f724bfaabfbc8134b8895e120171064
+        with:
+          bundle_glob: dist/*/*.tar.zst
+          bundle_manifest_path: dist/release-bundles.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundles
+          path: .release/bundles/*
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata
+          path: |
+            .release/bump-output.txt
+            .release/release-bundles.json
+            .release/test-matrix.json
+          if-no-files-found: error
+
+  test-bundles:
+    name: Test ${{ matrix.bundle_name }} (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.build.outputs.test_matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Roc
+        uses: roc-lang/setup-roc@bd311e2fb815a3d2255f7ee14a922f0b736e020b
+        with:
+          version: nightly-new-compiler
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundles
+          path: .release/test-bundles
+
+      - name: Test release bundle
+        uses: roc-lang/release-package/actions/test-bundle@d2560ead9f724bfaabfbc8134b8895e120171064
+        with:
+          test_bundle_command: python3 ci/test_bundle_examples.py --bundle-path
+          bundle_path: .release/test-bundles/${{ matrix.artifact_file }}
+          bundle_name: ${{ matrix.bundle_name }}
+          release_version: ${{ needs.build.outputs.release_version }}
+
+  publish:
+    name: Publish GitHub release
+    needs: [build, test-bundles]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundles
+          path: .release/bundles
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-metadata
+          path: .release
+
+      - name: Make release notes
+        uses: roc-lang/release-package/actions/make-release-notes@d2560ead9f724bfaabfbc8134b8895e120171064
+        with:
+          release_version: ${{ needs.build.outputs.release_version }}
+          github_token: ${{ github.token }}
+
+      - name: Publish release
+        uses: roc-lang/release-package/actions/publish-release@d2560ead9f724bfaabfbc8134b8895e120171064
+        with:
+          release_version: ${{ needs.build.outputs.release_version }}
+          github_token: ${{ github.token }}
