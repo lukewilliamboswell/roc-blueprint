@@ -4,13 +4,25 @@ import blueprint.Requirement
 import blueprint.Target
 import NixExpr
 
+## Validates Nix-owned bindings and renders a complete development-shell flake.
+##
+## Portable requirements and environments remain in `blueprint`. This module
+## supplies the concrete `nixpkgs` input and exact package path for every
+## requirement on every declared target. It performs no effects and never
+## invokes Nix.
 Nix := [].{
 
-	## A GitHub-backed flake input.
+	## A GitHub-backed flake input identified by owner, repository, and ref.
+	##
+	## The current renderer accepts exactly one input named `nixpkgs`. `owner`,
+	## `repo`, and `ref` become `github:owner/repo/ref` in the generated flake.
 	Input := { name : Str, owner : Str, repo : Str, ref : Str }
 
 	## An exact mapping from a portable requirement to a Nix package path.
-	## An empty target_systems list means every target declared by the workspace.
+	##
+	## `input` names the flake input that owns the package set. `path` contains
+	## attribute segments below `legacyPackages.<system>`. An empty
+	## `target_systems` list means every target declared by the workspace.
 	Binding := {
 		requirement : Requirement,
 		target_systems : List(Target),
@@ -18,8 +30,45 @@ Nix := [].{
 		path : List(Str),
 	}
 
+	## All backend-owned data required to render a validated `Blueprint`.
+	##
+	## Environment structure and requirement order are intentionally absent: the
+	## renderer reads them from the portable Blueprint.
 	Config := { nixpkgs : Input, bindings : List(Binding) }
 
+	## Structured Nix configuration failures returned by `render`.
+	##
+	## Errors accumulate in stable order: input metadata, bindings in declaration
+	## order, missing or duplicate coverage in environment/target/requirement
+	## order, then unused bindings.
+	##
+	## `BindingTargetNotDeclared(binding, requirement, target)` identifies a
+	## zero-based binding index whose target is absent from the Blueprint.
+	##
+	## `DuplicateBinding(environment, requirement, target)` means more than one
+	## binding applies to the same required tool.
+	##
+	## `DuplicateBindingTarget(binding, target)` identifies a target repeated in
+	## one target-specific binding.
+	##
+	## `EmptyInputField(field)` names an empty `owner`, `repo`, or `ref` field.
+	##
+	## `EmptyPackagePath(binding, requirement)` identifies a binding with no
+	## package path segments.
+	##
+	## `EmptyPackagePathSegment(binding, requirement, segment)` gives zero-based
+	## binding and segment positions.
+	##
+	## `InvalidNixpkgsInputName(name)` reports an input not named `nixpkgs`.
+	##
+	## `MissingBinding(environment, requirement, target)` means no binding covers
+	## one required tool.
+	##
+	## `UnknownInput(binding, requirement, input)` identifies a binding that does
+	## not reference `nixpkgs`.
+	##
+	## `UnusedBinding(binding, requirement)` identifies configuration that cannot
+	## apply to any declared environment and target.
 	Error := [
 		BindingTargetNotDeclared(U64, Str, Target),
 		DuplicateBinding(Str, Str, Target),
@@ -33,19 +82,39 @@ Nix := [].{
 		UnusedBinding(U64, Str),
 	]
 
+	## Constructs GitHub input metadata without validating it.
+	##
+	## Arguments are the input name, GitHub owner, repository, and ref. Validation
+	## occurs together with all bindings when `render` is called.
 	github_input : Str, Str, Str, Str -> Input
 	github_input = |name, owner, repo, ref| { name, owner, repo, ref }
 
+	## Binds a requirement on every Blueprint target.
+	##
+	## The input name must currently be `nixpkgs`. Path segments are exact Nix
+	## attribute names, such as `["rustc"]` or `["python3Packages", "ruff"]`.
 	bind : Requirement, Str, List(Str) -> Binding
 	bind = |requirement, input, path| { requirement, target_systems: [], input, path }
 
+	## Binds a requirement only on the listed targets.
+	##
+	## Every listed target must be declared by the Blueprint. Duplicate targets
+	## and overlapping applicable bindings are errors.
 	bind_for : Requirement, List(Target), Str, List(Str) -> Binding
 	bind_for = |requirement, target_systems, input, path| { requirement, target_systems, input, path }
 
+	## Begins an unvalidated Nix configuration.
+	##
+	## The supplied binding order does not determine generated package order;
+	## each environment's portable requirement order does.
 	config : { nixpkgs : Input, bindings : List(Binding) } -> Config
 	config = |fields| fields
 
-	## Render a complete flake, or return all unambiguous backend errors.
+	## Renders a complete flake, or returns all unambiguous backend errors.
+	##
+	## The result contains a generated-file notice and exactly one final newline.
+	## Rendering is deterministic for equal Blueprint and Config values. This
+	## function does not read, create, or modify `flake.lock`.
 	render : Blueprint, Config -> Try(Str, List(Error))
 	render = |valid, config_value| {
 		workspace = Blueprint.to_draft(valid)

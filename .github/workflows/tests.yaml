@@ -21,10 +21,7 @@ jobs:
         with:
           version: nightly-new-compiler
 
-      - run: ./ci/all_tests.sh
-
       - name: Install Nix
         uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c
 
-      - name: Test generated development shell
-        run: ./ci/test_nix_example.sh
+      - run: ./ci/all_tests.sh

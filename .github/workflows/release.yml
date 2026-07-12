@@ -32,6 +32,9 @@ jobs:
         with:
           version: nightly-new-compiler
 
+      - name: Install Nix
+        uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c
+
       - name: Validate release request
         id: validate
         uses: roc-lang/release-package/actions/validate-release@d2560ead9f724bfaabfbc8134b8895e120171064
@@ -94,6 +97,9 @@ jobs:
         with:
           version: nightly-new-compiler
 
+      - name: Install Nix
+        uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c
+
       - uses: actions/download-artifact@v4
         with:
           name: release-bundles
@@ -102,7 +108,7 @@ jobs:
       - name: Test release bundle
         uses: roc-lang/release-package/actions/test-bundle@d2560ead9f724bfaabfbc8134b8895e120171064
         with:
-          test_bundle_command: python3 ci/test_bundle_examples.py --bundle-path
+          test_bundle_command: python3 ci/test_examples.py --bundle-path
           bundle_path: .release/test-bundles/${{ matrix.artifact_file }}
           bundle_name: ${{ matrix.bundle_name }}
           release_version: ${{ needs.build.outputs.release_version }}

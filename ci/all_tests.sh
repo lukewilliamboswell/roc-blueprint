@@ -5,13 +5,14 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
 
 ROC_BIN="${ROC:-roc}"
+ROC_CACHE_DIR="${ROC_BLUEPRINT_CACHE_DIR:-${TMPDIR:-/tmp}/roc-blueprint-roc-cache}"
+export ROC_CACHE_DIR
 tmp_base="${ROC_BLUEPRINT_TMPDIR:-$root_dir/.roc-blueprint-tmp}"
 tmp_dir="$tmp_base/ci"
 docs_dir="$tmp_dir/docs"
-bundle_dir="$tmp_dir/bundles"
 
 rm -rf "$tmp_dir"
-mkdir -p "$docs_dir" "$bundle_dir"
+mkdir -p "$docs_dir"
 
 echo "$("$ROC_BIN" version)"
 
@@ -39,17 +40,6 @@ echo ""
 echo "Generating blueprint docs..."
 "$ROC_BIN" docs packages/blueprint/main.roc --output="$docs_dir/blueprint"
 
-echo ""
-echo "Checking examples..."
-if [ -z "${ROC_PLATFORM_BUNDLE:-}" ]; then
-    for example in examples/*.roc; do
-        "$ROC_BIN" check "$example" --no-cache
-        "$ROC_BIN" test "$example" --no-cache
-    done
-else
-    echo "Using the local platform override during bundle-backed example tests."
-fi
-
 case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
         echo ""
@@ -59,9 +49,5 @@ case "$(uname -s)" in
 esac
 
 echo ""
-echo "Bundling packages..."
-scripts/bundle.sh --output-dir "$bundle_dir"
-
-echo ""
 echo "Testing examples against localhost bundles..."
-python3 ci/test_bundle_examples.py
+python3 ci/test_examples.py

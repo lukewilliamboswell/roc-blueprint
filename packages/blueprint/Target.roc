@@ -1,5 +1,14 @@
-## A supported target system.
+## A closed set of supported target systems.
+##
+## The variants represent `aarch64-darwin`, `aarch64-linux`,
+## `x86_64-darwin`, and `x86_64-linux`. Applications declare targets explicitly
+## on a `Blueprint.Draft`; backends must not infer the current host system.
 Target := [Aarch64Darwin, Aarch64Linux, X86_64Darwin, X86_64Linux].{
+
+	## Returns the stable lowercase architecture-system spelling for a target.
+	##
+	## This function is total over the closed target set and performs no host
+	## detection.
 	to_str : Target -> Str
 	to_str = |target|
 		match target {

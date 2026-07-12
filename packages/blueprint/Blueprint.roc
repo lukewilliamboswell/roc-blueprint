@@ -2,19 +2,65 @@ import Environment
 import Requirement
 import Target
 
-## A validated portable workspace.
+## A validated, backend-neutral development workspace.
+##
+## A `Blueprint` contains a workspace name, its supported target systems, and
+## its named development environments. It is opaque: applications construct a
+## `Draft` and must pass `validate` before a backend can consume the result.
+## This prevents renderers from accidentally accepting unchecked data.
+##
+## ```roc
+## git = Requirement.new({ id: "git", display_name: "Git" })
+## draft = Blueprint.workspace(
+## 	{
+## 		name: "example",
+## 		target_systems: [Target.X86_64Linux],
+## 		envs: [Environment.new({ name: "default", requirements: [git] })],
+## 	},
+## )
+## validated = Blueprint.validate(draft)
+## ```
 Blueprint :: {
 	name : Str,
 	target_systems : List(Target),
 	envs : List(Environment),
 }.{
+
+	## Unvalidated input for `workspace` and `validate`.
+	##
+	## `name` identifies the workspace. `target_systems` declares every system
+	## for which its environments are defined. `envs` retains declaration order,
+	## as do the requirements inside each environment.
 	Draft := {
 		name : Str,
 		target_systems : List(Target),
 		envs : List(Environment),
 	}
 
-	## Stable portable validation errors, returned in declaration order.
+	## Portable validation failures returned by `validate`.
+	##
+	## Errors accumulate in stable validation and declaration order:
+	##
+	## `ConflictingRequirement(id)` means the same requirement identity has
+	## different display names across environments.
+	##
+	## `DuplicateEnvironment(name)` identifies a repeated environment name.
+	##
+	## `DuplicateRequirement(environment, id)` identifies a requirement used
+	## more than once in one environment.
+	##
+	## `DuplicateTarget(target)` identifies a repeated workspace target.
+	##
+	## `EmptyEnvironmentName(index)` gives the zero-based position of an
+	## environment with an empty name.
+	##
+	## `EmptyEnvironments` means the workspace declares no environments.
+	##
+	## `EmptyRequirementId(environment)` identifies the containing environment.
+	##
+	## `EmptyTargets` means the workspace declares no target systems.
+	##
+	## `EmptyWorkspaceName` means the workspace name is empty.
 	Error := [
 		ConflictingRequirement(Str),
 		DuplicateEnvironment(Str),
@@ -27,9 +73,17 @@ Blueprint :: {
 		EmptyWorkspaceName,
 	]
 
+	## Begins a workspace description without validating it.
+	##
+	## This constructor intentionally preserves the supplied data exactly. Call
+	## `validate` after composing the complete draft.
 	workspace : Draft -> Draft
 	workspace = |fields| fields
 
+	## Validates a complete draft and seals it as an opaque `Blueprint`.
+	##
+	## Returns every independent error that can be reported without inventing
+	## replacement data. Successful validation preserves all declared list order.
 	validate : Draft -> Try(Blueprint, List(Error))
 	validate = |workspace_draft| {
 		initial = if workspace_draft.name == "" [EmptyWorkspaceName] else []
@@ -51,6 +105,11 @@ Blueprint :: {
 		}
 	}
 
+	## Exposes validated portable data for inspection by backend packages.
+	##
+	## The returned record is equal to the draft that produced the `Blueprint`.
+	## Changing it does not change the already validated value; validate the new
+	## draft again before rendering it.
 	to_draft : Blueprint -> Draft
 	to_draft = |blueprint| {
 		name: blueprint.name,

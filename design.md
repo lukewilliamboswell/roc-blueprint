@@ -2,22 +2,15 @@
 
 ## Status and purpose
 
-This document defines the intended direction for two pure Roc packages:
+This document defines the architecture and intended direction for two pure Roc packages:
 
 - `roc-blueprint`, which lets Roc programs construct and validate a portable
   description of reproducible development environments and build work; and
 - `roc-blueprint-nix`, which consumes that description plus explicit Nix
   bindings and renders a Nix flake.
 
-The first release is a concept validation, not a complete build system. It
-must prove that an ordinary Roc application can construct a useful portable
-description, pass it to an ordinary Roc backend package, print the resulting
-Nix source through an existing CLI platform, and use that source with normal
-Nix commands.
-
-This document is forward-looking. Examples illustrate the desired boundaries
-and vocabulary; they do not commit the initial implementation to exact Roc
-syntax or function names.
+The implementation demonstrates a pure, portable blueprint model, an explicit
+backend binding phase, and deterministic rendering to Nix.
 
 ## Summary
 
@@ -47,11 +40,10 @@ derivation construction, realization, the store, substituters, remote
 builders, and garbage collection.
 
 Neither package performs effects. A Roc application supplies the effects by
-using `basic-cli` or another platform to write the rendered source to stdout or
-a file:
+using an existing platform to write the rendered source to stdout or a file:
 
 ```sh
-roc run my_blueprint.roc > flake.nix
+roc my_blueprint.roc > flake.nix
 nix flake lock
 nix develop
 ```
@@ -152,6 +144,12 @@ of each data contract:
 The same package versions and equal input values must produce byte-identical
 Nix source.
 
+In the implemented baseline, target, environment, and requirement lists retain
+their declared order. Package expressions follow each environment's
+requirement order, so reordering otherwise equivalent backend bindings does not
+change the generated source. Validation errors follow documented validation
+and declaration order.
+
 This guarantee concerns Blueprint processing and source generation. It does
 not by itself guarantee that every Nix build is bit-for-bit reproducible;
 realization has additional requirements owned by the generated Nix and its
@@ -218,17 +216,18 @@ The long-term portable model is expected to include:
 - applications or runnable commands; and
 - dependency edges between those values.
 
-The initial implementation includes only the subset needed by its acceptance example.
+The baseline implementation includes only the subset needed by its acceptance
+example.
 Unimplemented concepts should be absent from the API rather than represented
 by placeholders with unclear meaning.
 
 ### Target model
 
-Targets are explicit data, not strings interpreted by a backend. The first
-phase may support a small closed set such as `x86_64-linux`, `aarch64-linux`,
-`x86_64-darwin`, and `aarch64-darwin`. Before widening that set, the project
-must decide whether targets are best represented as known values or as a
-structured architecture/OS/ABI description.
+Targets are explicit data, not strings interpreted by a backend. The initial
+implementation uses the closed `Target` tags `X86_64Linux`, `Aarch64Linux`,
+`X86_64Darwin`, and `Aarch64Darwin`. Before widening that set, the project must
+decide whether targets are best represented as known values or as a structured
+architecture/OS/ABI description.
 
 A backend owns the exact mapping from a supported Blueprint target to its
 native target name. Unknown mappings are errors.
@@ -259,18 +258,25 @@ this catches misspelled identities and accidental configuration drift.
 
 ### API shape
 
-The intended flow is conceptually:
+The implemented validation flow is:
 
 ```roc
-draft = Blueprint.workspace({...})
+draft : Blueprint.Draft
+draft = Blueprint.workspace({ ... })
 
-validated : Result(Blueprint.Valid, List(Blueprint.Error))
+validated : Try(Blueprint, List(Blueprint.Error))
 validated = Blueprint.validate(draft)
 ```
 
-Whether invalid intermediate states are representable is an implementation
-choice. The public API must make it impossible to call a backend renderer as if
-an invalid Blueprint were valid.
+`Blueprint.Draft` is inspectable construction data. `Blueprint` is opaque and
+can only be obtained by successful validation. `Blueprint.to_draft` gives
+backend packages the stable inspection boundary they need without allowing an
+application to forge a validated value.
+
+The portable package exports flat `Blueprint`, `Environment`, `EnvironmentId`,
+`Requirement`, and `Target` modules. Requirement and environment identities
+are distinct types. Human-readable display names remain separate from exact
+requirement identity strings.
 
 ## `roc-blueprint-nix`
 
@@ -286,10 +292,10 @@ The package must provide:
 - deterministic formatting of that tree as a complete flake; and
 - structured errors tied back to Blueprint identities where possible.
 
-The conceptual API is:
+The implemented API is:
 
 ```roc
-render : Blueprint.Valid, Nix.Config -> Result(Str, List(Nix.Error))
+render : Blueprint, Nix.Config -> Try(Str, List(Nix.Error))
 ```
 
 `Nix.Config` is backend data. It may declare flake inputs and bind portable
@@ -328,76 +334,92 @@ The generated source must:
 - escape all application-supplied text correctly; and
 - end with one newline.
 
-The renderer should expose the typed Nix tree separately from text formatting
-once doing so is useful for testing or composition. Text is the only required
-output in the initial implementation.
+The renderer currently lowers through an internal `NixExpr` tree before
+formatting text. That module is tested but is not part of the package's public
+API. It may be exposed later if composition or downstream testing provides a
+concrete use case; rendered text remains the only public output today.
 
-## Initial implementation: end-to-end concept validation
+## Baseline implementation: end-to-end generation
 
 ### Goal
 
 Prove the smallest useful path from pure Roc data to a working Nix flake. The
-phase validates the package boundary and user workflow; it does not validate
-the complete long-term build model.
+implemented baseline validates the package boundary and user workflow; it does
+not validate the complete long-term build model.
 
 ### Scope
 
-The initial implementation supports:
+The baseline implementation supports:
 
 - one Blueprint workspace;
 - one or more explicitly declared target systems;
-- one named development environment;
-- a list of abstract tool requirements for that environment;
+- one or more named development environments;
+- a list of abstract tool requirements for each environment;
 - one `nixpkgs` flake input declared in `Nix.Config`;
 - exact Nix package bindings for every requirement;
 - lowering to `devShells.<system>.<name>`; and
 - deterministic rendering of a complete `flake.nix`.
 
-Supporting a single default environment first is acceptable if the data model
-does not make multiple named environments impossible.
+The maintained example declares `x86_64-linux` and `aarch64-darwin` so the same
+generated flake can be accepted by Linux CI and Apple Silicon development
+hosts. Bindings with no target restriction apply to every target in the
+Blueprint; `Nix.bind_for` supplies target-specific bindings when needed.
 
-### Illustrative application
+### Maintained application shape
+
+The canonical application is `examples/dev-shell/main.roc`. Its construction and
+rendering flow is:
 
 ```roc
-blueprint =
-    Blueprint.workspace({
-        name: "example",
-        targets: [Blueprint.x86_64_linux],
-        environments: [
-            Blueprint.environment({
-                name: "default",
-                requires: [rust_compiler, cargo, git],
-            }),
-        ],
-    })
+rust_compiler : Requirement
+rust_compiler = Requirement.new({ id: "rust-compiler", display_name: "Rust compiler" })
 
-nix =
-    Nix.config({
-        inputs: [Nix.github_input("nixpkgs", "NixOS/nixpkgs", "nixos-unstable")],
-        requirements: [
-            Nix.package(rust_compiler, "nixpkgs", ["rustc"]),
-            Nix.package(cargo, "nixpkgs", ["cargo"]),
-            Nix.package(git, "nixpkgs", ["git"]),
-        ],
-    })
+workspace : Blueprint.Draft
+workspace = Blueprint.workspace(
+	{
+		name: "example",
+		target_systems: [Target.X86_64Linux, Target.Aarch64Darwin],
+		envs: [
+			Environment.new(
+				{
+					name: "default",
+					requirements: [rust_compiler, cargo, git],
+				},
+			),
+		],
+	},
+)
 
-source = Blueprint.validate(blueprint)? |> Nix.render(nix)?
-Stdout.write!(source)
+nix_config : Nix.Config
+nix_config = Nix.config(
+	{
+		nixpkgs: Nix.github_input("nixpkgs", "NixOS", "nixpkgs", "nixos-unstable"),
+		bindings: [
+			Nix.bind(rust_compiler, "nixpkgs", ["rustc"]),
+			Nix.bind(cargo, "nixpkgs", ["cargo"]),
+			Nix.bind(git, "nixpkgs", ["git"]),
+		],
+	},
+)
+
+valid = Blueprint.validate(workspace) ? |errors| BlueprintInvalid(errors)
+source = Nix.render(valid, nix_config) ? |errors| NixInvalid(errors)
 ```
 
-The exact syntax may change. The separation must not: portable requirements
-are declared in the Blueprint and resolved explicitly in Nix configuration.
-The platform write operation must emit the returned string exactly; because the
-renderer includes the final newline, a line-printing operation must not append a
-second one.
+The separation is the important contract: portable requirements are declared
+in the Blueprint and resolved explicitly in Nix configuration. The maintained
+application uses `roc-platform-template-zig` 1.0.0, whose stdout API provides a
+line operation rather than an exact string write. It removes the renderer's
+one final newline and then calls `Stdout.line!`, preserving the rendered bytes
+without adding a second newline.
 
 ### Acceptance test
 
-One maintained example must demonstrate:
+The canonical maintained example demonstrates:
 
 ```sh
-roc run examples/dev-shell.roc > flake.nix
-nix flake lock
+cd examples/dev-shell
+roc main.roc > flake.nix
 nix flake check
 nix develop --command rustc --version
 ```
@@ -411,17 +433,70 @@ The test succeeds when:
 - rerunning generation produces byte-identical `flake.nix`; and
 - invalid fixtures produce stable structured errors rather than Nix source.
 
-The example's locked inputs make its Nix evaluation repeatable. The renderer
-does not itself produce the lockfile.
+Every example directory contains its application, golden generated source, and
+lockfile. Nothing generated for an example is stored at the repository root.
+The locked inputs make Nix evaluation repeatable; the renderer itself does not
+produce or modify a lockfile.
 
-The clean-checkout test harness must supply a known Roc compiler and exact
-package versions. The initial implementation does not yet make the generator bootstrap through the
-flake it generates. The generated-file notice must make the generator package
-versions explicit inputs when the example knows them.
+The clean-checkout test harness pins the `setup-roc` action implementation but
+currently selects its moving `nightly-new-compiler` channel. The application
+pins its platform bundle to the content-addressed 1.0.0 release, and release
+tests consume content-addressed bundles for both packages. Pinning an exact Roc
+compiler build remains follow-up work if compiler-level reproducibility is
+required.
+
+The baseline implementation does not yet make the generator bootstrap through
+the flake it generates. The generated-file notice identifies
+`roc-blueprint` and `roc-blueprint-nix`, but does not claim package versions
+because local package imports do not supply them as renderer inputs. Versions
+should be added only when they are explicit data rather than inferred from the
+filesystem, a URL, or build context.
+
+### Package and release shape
+
+The repository releases two package bundles:
+
+- `blueprint`, containing the portable public modules; and
+- `blueprint-nix`, containing the Nix renderer plus an embedded copy of its
+  `blueprint` dependency so the published bundle is self-contained.
+
+The standalone `blueprint` bundle remains independently consumable. The
+recursive example runner always builds both packages and rewrites temporary
+application copies to localhost bundle URLs before testing. Release integration
+tests use that same runner with the supplied artifact substituted for its
+freshly built counterpart. Every application is checked, tested, interpreted,
+evaluated with Nix, built, and executed. Interpreted and compiled stdout must
+both match each example's committed golden Nix source.
+
+### Implementation findings
+
+The package boundary survived implementation: portable modules contain no Nix
+concepts, and `Nix.Config` supplies only backend inputs and exact requirement
+bindings. The following findings affect the current source and test layout but
+are not changes to that boundary:
+
+- The current new compiler cannot directly run `roc test` or `roc docs` on a
+  package entry point that declares another package dependency. Expectations
+  for `blueprint-nix` therefore run through the maintained application, while
+  CI still checks its package entry point directly.
+- A nested opaque-module layout triggered compiler failures when consumed by
+  applications. The public API uses flat package modules such as `Blueprint`,
+  `Environment`, `Requirement`, and `Target`; this preserves separate opaque
+  identities without making module nesting part of the architecture.
+- A published `blueprint-nix` bundle cannot retain the repository-relative
+  dependency used during local development. Its bundle is staged with the
+  portable package sources and a bundle-specific entry point. This is a
+  packaging workaround, not a reverse dependency or a merger of the packages.
+- Nix calls a flake's `outputs` function with `self` in addition to declared
+  inputs. The internal Nix lambda formatter therefore emits an open attribute
+  pattern such as `{ nixpkgs, ... }`.
+- The renderer includes exactly one final newline. Until the example platform
+  offers an exact stdout write, the application owns the small line-operation
+  adaptation described above.
 
 ### Explicit exclusions
 
-The initial implementation does not include:
+The baseline implementation does not include:
 
 - build steps or multi-node build DAGs;
 - source fetching or content hashes;
@@ -438,27 +513,11 @@ The initial implementation does not include:
 These exclusions keep the first result capable of disproving the architecture
 quickly and cheaply.
 
-### Falsification criteria
-
-The initial implementation is successful only if its small result provides evidence for the split,
-not merely a working Nix template. The design must be revised before Stage 2
-if any of the following occurs:
-
-- the Blueprint package needs to expose a Nix attribute path, flake output, or
-  Nix expression to describe the environment;
-- `Nix.Config` must repeat environment structure instead of only supplying
-  backend-owned inputs and requirement bindings;
-- the renderer needs to inspect display names or generated text to discover
-  targets or requirements;
-- adding a second named environment requires changing the meaning of the first;
-  or
-- the same Blueprint cannot be inspected and rendered by a trivial test
-  consumer that has no Nix dependency.
-
 ## Short-term goals
 
-After the initial implementation proves the boundary, the short-term objective is a useful
-portable build graph rather than a larger catalog of Nix conveniences.
+After the reference implementation proves the boundary, the short-term objective
+is a useful portable build graph rather than a larger catalog of Nix
+conveniences.
 
 ### Build nodes and outputs
 
@@ -544,7 +603,7 @@ writing text.
 
 ## Roadmap and decision gates
 
-### Stage 0: vocabulary and fixtures
+### Stage 0: vocabulary and fixtures — implemented
 
 - Write representative Roc examples before fixing the public API.
 - Define Blueprint identities, targets, requirements, and environment data.
@@ -552,16 +611,18 @@ writing text.
 - Define the minimal typed Nix expression tree and printer contract.
 
 Gate: the example can be expressed without a Nix concept appearing in
-`roc-blueprint`.
+`roc-blueprint`. The maintained example and portable package satisfy this gate.
 
-### Stage 1: minimal development shell
+### Stage 1: minimal development shell — implemented
 
 - Implement the initial subset in both packages.
 - Add unit tests for construction, validation, binding completeness, escaping,
   and deterministic formatting.
 - Add the maintained end-to-end Nix example and golden generated source.
 
-Gate: the initial acceptance test passes from a clean checkout.
+Gate: the initial acceptance test passes from a clean checkout. CI exercises
+the complete Linux path, and the two-target example has also passed the same
+acceptance flow on `aarch64-darwin`.
 
 ### Stage 2: real build graph
 
@@ -582,7 +643,8 @@ and Nix realizes the graph successfully.
   explicit Nix-owned APIs.
 - Add apps and richer development environments where their portable meaning is
   clear.
-- Establish release/versioning policy for both packages.
+- Formalize compatibility and versioning policy for both packages beyond the
+  existing two-bundle release mechanism.
 
 Gate: an existing Nix project can adopt a generated output incrementally
 without surrendering its lockfile, caches, or native modules.
@@ -611,29 +673,38 @@ rewrite to use the platform.
 
 ### `roc-blueprint`
 
-- Constructor and composition tests.
-- Stable error tests for every validation rule.
-- Duplicate identity, unknown reference, and cycle tests.
-- Determinism tests across different construction orders where order is
-  declared irrelevant.
-- Generated small typed graph tests once build nodes exist; avoid a catalog of
-  handwritten graph scenarios.
+The implemented baseline covers construction, sealing a valid draft, empty
+required fields, duplicate targets, environments and requirements, conflicting
+requirement declarations, exact target spellings, and stable accumulation of
+independent errors. As graph concepts are added, its suite must grow to cover:
+
+- composition tests;
+- stable errors for every new validation rule;
+- duplicate identity, unknown reference, and cycle cases;
+- determinism tests across different construction orders where order is
+  declared irrelevant; and
+- generated small typed graph tests once build nodes exist, avoiding a catalog
+  of handwritten graph scenarios.
 
 ### `roc-blueprint-nix`
 
-- Nix expression printer tests for strings, paths, identifiers, lists,
-  attribute sets, function application, and precedence.
-- Golden tests for complete generated flakes.
-- Requirement-binding tests: missing, duplicate, unused where prohibited, and
-  wrong-target bindings.
-- Stable ordering and byte-for-byte repeat rendering tests.
-- End-to-end tests using `nix flake check`, `nix eval`, and `nix develop` or
-  `nix build` for maintained examples.
-- Negative tests proving unsupported Blueprint nodes return errors and are not
-  omitted.
+The implemented baseline covers Nix string escaping, interpolation escaping,
+quoted attribute names, lists, attribute sets, selection, function application
+and precedence. It also covers missing, duplicate, unused, unknown-input and
+wrong-target bindings; invalid input metadata and package paths; binding-order
+independence; golden source; repeat rendering; `nix flake check`; and
+`nix develop` with a required command. The same runner covers freshly built and
+supplied release bundles served over localhost. Future work must add:
+
+- `nix eval` and `nix build` acceptance for build outputs;
+- printer cases introduced by any expanded `NixExpr` model; and
+- negative tests proving unsupported future Blueprint nodes return errors and
+  are not omitted.
 
 Pure unit tests must not require Nix. Nix integration tests belong to the Nix
-package's integration suite and CI environment.
+package's integration suite and CI environment. Until dependent-package test
+entry points work in the compiler, application expectations are the executable
+unit-test host for internal `blueprint-nix` behavior.
 
 ## Compatibility and evolution
 
