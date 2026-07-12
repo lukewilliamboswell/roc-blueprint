@@ -132,15 +132,12 @@ def require_equal(actual: bytes, expected: bytes, description: str) -> None:
         raise SystemExit(f"{description} did not match byte-for-byte")
 
 
-def exercise_examples(
-    examples_dir: Path, work_dir: Path, nix_work_dir: Path
-) -> None:
+def exercise_examples(examples_dir: Path, work_dir: Path) -> None:
     nix = shutil.which("nix")
     if nix is None:
         raise SystemExit("nix is required to validate generated flakes")
 
     work_dir.mkdir(parents=True, exist_ok=True)
-    nix_work_dir.mkdir(parents=True, exist_ok=True)
     for example_dir in discover_examples(examples_dir):
         name = example_dir.name
         print(f"\nTesting example: {name}", flush=True)
@@ -162,21 +159,22 @@ def exercise_examples(
         require_equal(first, golden, f"{name} generated output")
         require_equal(second, first, f"{name} repeated generation")
 
-        flake_dir = nix_work_dir / name
+        flake_dir = work_dir / "flakes" / name
         flake_dir.mkdir(parents=True, exist_ok=True)
+        flake_ref = f"path:{flake_dir}"
         (flake_dir / "flake.nix").write_bytes(first)
         source_lock = example_dir / "flake.lock"
         generated_lock = flake_dir / "flake.lock"
         shutil.copy2(source_lock, generated_lock)
 
-        run([nix, "flake", "lock", str(flake_dir)], cwd=ROOT)
+        run([nix, "flake", "lock", flake_ref], cwd=ROOT)
         require_equal(
             generated_lock.read_bytes(),
             source_lock.read_bytes(),
             f"{name} lockfile",
         )
         run(
-            [nix, "flake", "check", str(flake_dir), "--no-write-lock-file"],
+            [nix, "flake", "check", flake_ref, "--no-write-lock-file"],
             cwd=ROOT,
         )
 
@@ -197,12 +195,12 @@ def exercise_examples(
                 [
                     nix,
                     "develop",
-                    ".#default",
+                    f"{flake_ref}#default",
                     "--command",
                     "rustc",
                     "--version",
                 ],
-                cwd=flake_dir,
+                cwd=ROOT,
             )
 
 
@@ -216,19 +214,8 @@ def main() -> None:
     tmp_parent = Path(
         os.environ.get("ROC_BLUEPRINT_TMPDIR", ROOT / ".roc-blueprint-tmp")
     )
-    nix_tmp_parent = Path(
-        os.environ.get(
-            "ROC_BLUEPRINT_NIX_TMPDIR",
-            f"{tempfile.gettempdir()}/roc-blueprint-nix",
-        )
-    )
     tmp_parent.mkdir(parents=True, exist_ok=True)
-    nix_tmp_parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix="examples-", dir=tmp_parent
-    ) as tmp, tempfile.TemporaryDirectory(
-        prefix="flakes-", dir=nix_tmp_parent
-    ) as nix_tmp:
+    with tempfile.TemporaryDirectory(prefix="examples-", dir=tmp_parent) as tmp:
         tmp_dir = Path(tmp)
         bundle_dir = tmp_dir / "bundles"
         bundle_dir.mkdir()
@@ -270,11 +257,7 @@ def main() -> None:
                 urls,
                 platform_url,
             )
-            exercise_examples(
-                rewritten_examples,
-                tmp_dir / "example-tests",
-                Path(nix_tmp),
-            )
+            exercise_examples(rewritten_examples, tmp_dir / "example-tests")
         finally:
             server.shutdown()
             server.server_close()
