@@ -40,6 +40,10 @@ echo ""
 echo "Generating blueprint docs..."
 "$ROC_BIN" docs packages/blueprint/main.roc --output="$docs_dir/blueprint"
 
+echo ""
+echo "Testing release note generation..."
+python3 ci/test_release_notes.py
+
 case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
         echo ""

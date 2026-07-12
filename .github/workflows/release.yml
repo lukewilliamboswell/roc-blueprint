@@ -67,6 +67,17 @@ jobs:
           bundle_glob: dist/*/*.tar.zst
           bundle_manifest_path: dist/release-bundles.json
 
+      - name: Make release notes
+        uses: roc-lang/release-package/actions/make-release-notes@d2560ead9f724bfaabfbc8134b8895e120171064
+        with:
+          release_version: ${{ steps.validate.outputs.release_version }}
+          github_token: ${{ github.token }}
+
+      - name: Add package URLs to release notes
+        env:
+          RELEASE_VERSION: ${{ steps.validate.outputs.release_version }}
+        run: python3 scripts/add_release_app_header.py
+
       - uses: actions/upload-artifact@v4
         with:
           name: release-bundles
@@ -79,6 +90,7 @@ jobs:
           path: |
             .release/bump-output.txt
             .release/release-bundles.json
+            .release/release-notes.md
             .release/test-matrix.json
           if-no-files-found: error
 
@@ -135,12 +147,6 @@ jobs:
         with:
           name: release-metadata
           path: .release
-
-      - name: Make release notes
-        uses: roc-lang/release-package/actions/make-release-notes@d2560ead9f724bfaabfbc8134b8895e120171064
-        with:
-          release_version: ${{ needs.build.outputs.release_version }}
-          github_token: ${{ github.token }}
 
       - name: Publish release
         uses: roc-lang/release-package/actions/publish-release@d2560ead9f724bfaabfbc8134b8895e120171064
