@@ -21,7 +21,7 @@ workspace : Blueprint.Draft
 workspace = Blueprint.workspace(
 	{
 		name: "python-tooling",
-		target_systems: [Target.X86_64Linux],
+		target_systems: [Target.X86_64Linux, Target.Aarch64Darwin],
 		envs: [
 			Environment.new(
 				{
