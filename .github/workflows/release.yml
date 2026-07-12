@@ -24,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_version: ${{ steps.validate.outputs.release_version }}
+      blueprint_release_version: ${{ steps.package_versions.outputs.blueprint }}
+      blueprint_nix_release_version: ${{ steps.package_versions.outputs.blueprint_nix }}
       test_matrix: ${{ steps.bundles.outputs.test_matrix }}
 
     steps:
@@ -43,7 +45,43 @@ jobs:
         with:
           release_version: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version || '' }}
           dry_run: ${{ github.event_name != 'workflow_dispatch' }}
+          check_availability: false
           github_token: ${{ github.token }}
+
+      - name: Define package release versions
+        id: package_versions
+        env:
+          RELEASE_VERSION: ${{ steps.validate.outputs.release_version }}
+        run: |
+          echo "blueprint=${RELEASE_VERSION}-blueprint" >> "$GITHUB_OUTPUT"
+          echo "blueprint_nix=${RELEASE_VERSION}-blueprint-nix" >> "$GITHUB_OUTPUT"
+
+      - name: Validate blueprint release request
+        uses: roc-lang/release-package/actions/validate-release@d2560ead9f724bfaabfbc8134b8895e120171064
+        with:
+          release_version: ${{ steps.package_versions.outputs.blueprint }}
+          dry_run: ${{ github.event_name != 'workflow_dispatch' }}
+          check_availability: ${{ github.event_name == 'workflow_dispatch' }}
+          github_token: ${{ github.token }}
+
+      - name: Validate blueprint-nix release request
+        uses: roc-lang/release-package/actions/validate-release@d2560ead9f724bfaabfbc8134b8895e120171064
+        with:
+          release_version: ${{ steps.package_versions.outputs.blueprint_nix }}
+          dry_run: ${{ github.event_name != 'workflow_dispatch' }}
+          check_availability: ${{ github.event_name == 'workflow_dispatch' }}
+          github_token: ${{ github.token }}
+
+      - name: Validate follow-up pull request permission
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          allowed="$(gh api "repos/${{ github.repository }}/actions/permissions/workflow" --jq '.can_approve_pull_request_reviews')"
+          if [[ "$allowed" != "true" ]]; then
+            echo "Enable 'Allow GitHub Actions to create and approve pull requests' before releasing." >&2
+            exit 1
+          fi
 
       - name: Validate repository
         run: ./ci/all_tests.sh
@@ -67,6 +105,9 @@ jobs:
           bundle_glob: dist/*/*.tar.zst
           bundle_manifest_path: dist/release-bundles.json
 
+      - name: Split package release metadata
+        run: python3 scripts/split_release_metadata.py
+
       - uses: actions/upload-artifact@v4
         with:
           name: release-bundles
@@ -79,6 +120,8 @@ jobs:
           path: |
             .release/bump-output.txt
             .release/release-bundles.json
+            .release/release-bundles-blueprint.json
+            .release/release-bundles-blueprint-nix.json
             .release/test-matrix.json
           if-no-files-found: error
 
@@ -116,12 +159,13 @@ jobs:
           release_version: ${{ needs.build.outputs.release_version }}
 
   publish:
-    name: Publish GitHub release
+    name: Publish package releases
     needs: [build, test-bundles]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
@@ -147,8 +191,34 @@ jobs:
           RELEASE_VERSION: ${{ needs.build.outputs.release_version }}
         run: python3 scripts/add_release_app_header.py
 
-      - name: Publish release
+      - name: Publish blueprint release
         uses: roc-lang/release-package/actions/publish-release@d2560ead9f724bfaabfbc8134b8895e120171064
         with:
+          release_version: ${{ needs.build.outputs.blueprint_release_version }}
+          release_list_file: .release/release-bundles-blueprint.json
+          github_token: ${{ github.token }}
+
+      - name: Publish blueprint-nix release
+        uses: roc-lang/release-package/actions/publish-release@d2560ead9f724bfaabfbc8134b8895e120171064
+        with:
+          release_version: ${{ needs.build.outputs.blueprint_nix_release_version }}
+          release_list_file: .release/release-bundles-blueprint-nix.json
+          github_token: ${{ github.token }}
+
+      - name: Update published package URLs
+        run: |
+          python3 scripts/update_release_urls.py \
+            --repo "${{ github.repository }}" \
+            --version "${{ needs.build.outputs.release_version }}"
+
+      - name: Open release follow-up pull request
+        uses: roc-lang/release-package/actions/create-followup-pr@d2560ead9f724bfaabfbc8134b8895e120171064
+        with:
           release_version: ${{ needs.build.outputs.release_version }}
+          paths: README.md examples
+          commit_message: Update package URLs for ${{ needs.build.outputs.release_version }}
+          pr_title: Update package URLs for ${{ needs.build.outputs.release_version }}
+          pr_body: |
+            Update the README and example app headers to use the newly published
+            `blueprint` and `blueprint-nix` package bundles.
           github_token: ${{ github.token }}

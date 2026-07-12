@@ -31,11 +31,15 @@ example/
 └── flake.lock
 ```
 
-The applications temporarily declare repository-relative package paths so the
-first bundles can be produced. Integration tests never use those paths: they
-rewrite temporary copies to content-addressed bundles served over localhost.
-After the first release, the checked-in applications can point directly at the
-published package bundles.
+The applications temporarily declare repository-relative package paths.
+Integration tests never use those paths: they rewrite temporary copies to
+content-addressed bundles served from distinct package directories on
+localhost. A release publishes each bundle under a package-specific tag, such
+as `1.2.3-blueprint` and `1.2.3-blueprint-nix`, because Roc treats every bundle
+in one URL directory as the same package version. Once those package releases
+exist, the checked-in applications can point directly at their published URLs.
+After both package releases succeed, the release workflow opens a follow-up PR
+that updates every example and the latest-release header in this README.
 
 ### How to run an example
 

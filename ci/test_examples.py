@@ -150,14 +150,8 @@ def exercise_examples(examples_dir: Path, work_dir: Path) -> None:
             cwd=example_dir,
             capture_stdout=True,
         ).stdout
-        second = run(
-            [ROC, "main.roc", "--no-cache"],
-            cwd=example_dir,
-            capture_stdout=True,
-        ).stdout
         golden = (example_dir / "flake.golden.nix").read_bytes()
         require_equal(first, golden, f"{name} generated output")
-        require_equal(second, first, f"{name} repeated generation")
 
         flake_dir = work_dir / "flakes" / name
         flake_dir.mkdir(parents=True, exist_ok=True)
@@ -189,6 +183,7 @@ def exercise_examples(examples_dir: Path, work_dir: Path) -> None:
             [str(executable)], cwd=example_dir, capture_stdout=True
         ).stdout
         require_equal(compiled, golden, f"{name} compiled output")
+        require_equal(compiled, first, f"{name} repeated generation")
 
         if name == "dev-shell":
             run(

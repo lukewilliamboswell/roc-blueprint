@@ -470,6 +470,23 @@ freshly built counterpart. Every application is checked, tested, interpreted,
 evaluated with Nix, built, and executed. Interpreted and compiled stdout must
 both match each example's committed golden Nix source.
 
+Roc identifies a remote package version by the URL directory containing its
+content-addressed bundle, not by the bundle filename alone. GitHub release
+assets are flat, so publishing both bundles on one GitHub release makes Roc
+interpret them as conflicting contents for one package version. The workflow
+therefore publishes two package-specific SemVer tags for an input version:
+`<version>-blueprint` and `<version>-blueprint-nix`. This retains the official
+Roc release preparation, testing, notes, and publishing actions while giving
+each bundle a distinct download directory. The suffixes are SemVer prerelease
+identifiers, so GitHub labels these package releases as prereleases.
+After both publishes succeed, a deterministic follow-up step updates every
+example application header and the marker-delimited latest-release block in the
+README, then opens a PR containing only those paths. Running that updater again
+for the same release must produce no changes. Release validation checks the
+repository's “Allow GitHub Actions to create and approve pull requests” setting
+before publishing, so a missing permission cannot fail only after the package
+URLs become live.
+
 ### Implementation findings
 
 The package boundary survived implementation: portable modules contain no Nix

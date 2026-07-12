@@ -50,6 +50,79 @@ def main() -> None:
             check=True,
         )
 
+        split_dir = tmp_dir / "split"
+        subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/split_release_metadata.py"),
+                "--bundles",
+                str(bundles),
+                "--output-dir",
+                str(split_dir),
+            ],
+            cwd=ROOT,
+            check=True,
+        )
+
+        for package_name in ("blueprint", "blueprint-nix"):
+            split = json.loads(
+                (split_dir / f"release-bundles-{package_name}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            if len(split) != 1 or split[0]["name"] != package_name:
+                raise SystemExit(
+                    f"release metadata was not isolated for {package_name}"
+                )
+
+        update_root = tmp_dir / "update"
+        example_dir = update_root / "examples" / "hello"
+        example_dir.mkdir(parents=True)
+        (update_root / "README.md").write_text(
+            "# Project\n\nDescription.\n\n## Packages\n\nPackage list.\n",
+            encoding="utf-8",
+        )
+        (example_dir / "main.roc").write_text(
+            "app [main!] {\n"
+            '\tblueprint: "../../packages/blueprint/main.roc",\n'
+            '\tblueprint_nix: "../../packages/blueprint-nix/main.roc",\n'
+            "}\n",
+            encoding="utf-8",
+        )
+        update_command = [
+            sys.executable,
+            str(ROOT / "scripts/update_release_urls.py"),
+            "--root",
+            str(update_root),
+            "--bundles",
+            str(bundles),
+            "--repo",
+            "owner/project",
+            "--version",
+            "1.2.3",
+        ]
+        subprocess.run(update_command, cwd=ROOT, check=True)
+        first_update = (
+            (update_root / "README.md").read_bytes(),
+            (example_dir / "main.roc").read_bytes(),
+        )
+        subprocess.run(update_command, cwd=ROOT, check=True)
+        second_update = (
+            (update_root / "README.md").read_bytes(),
+            (example_dir / "main.roc").read_bytes(),
+        )
+        if first_update != second_update:
+            raise SystemExit("release URL update was not idempotent")
+        readme_text = first_update[0].decode("utf-8")
+        example_text = first_update[1].decode("utf-8")
+        for text in (readme_text, example_text):
+            if "download/1.2.3-blueprint/blueprint-hash.tar.zst" not in text:
+                raise SystemExit("blueprint release URL was not updated")
+            if "download/1.2.3-blueprint-nix/nix-hash.tar.zst" not in text:
+                raise SystemExit("blueprint-nix release URL was not updated")
+        if readme_text.count("<!-- BEGIN LATEST RELEASE -->") != 1:
+            raise SystemExit("README latest-release marker was not stable")
+
         content = notes.read_text(encoding="utf-8")
         expected_lines = [
             "## Roc app header",
@@ -65,11 +138,11 @@ def main() -> None:
             ),
             (
                 "\tblueprint: \"https://github.com/owner/project/releases/"
-                "download/1.2.3/blueprint-hash.tar.zst\","
+                "download/1.2.3-blueprint/blueprint-hash.tar.zst\","
             ),
             (
                 "\tblueprint_nix: \"https://github.com/owner/project/releases/"
-                "download/1.2.3/nix-hash.tar.zst\","
+                "download/1.2.3-blueprint-nix/nix-hash.tar.zst\","
             ),
             "}",
             "```",

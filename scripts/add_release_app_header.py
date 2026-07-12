@@ -61,9 +61,9 @@ def read_bundle_names(path: Path) -> dict[str, str]:
 
 
 def app_header(repo: str, version: str, bundles: dict[str, str]) -> str:
-    base_url = f"https://github.com/{repo}/releases/download/{version}"
+    urls = package_urls(repo, version, bundles)
     package_lines = [
-        f'\t{PACKAGE_ALIASES[name]}: "{base_url}/{bundles[name]}",'
+        f'\t{PACKAGE_ALIASES[name]}: "{urls[name]}",'
         for name in PACKAGE_ALIASES
     ]
     return "\n".join(
@@ -80,6 +80,16 @@ def app_header(repo: str, version: str, bundles: dict[str, str]) -> str:
             "```",
         ]
     )
+
+
+def package_urls(repo: str, version: str, bundles: dict[str, str]) -> dict[str, str]:
+    return {
+        name: (
+            f"https://github.com/{repo}/releases/download/"
+            f"{version}-{name}/{bundles[name]}"
+        )
+        for name in PACKAGE_ALIASES
+    }
 
 
 def main() -> None:
