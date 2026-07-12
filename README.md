@@ -62,8 +62,8 @@ From the repo root:
 ```sh
 cd examples/hello-shell
 roc main.roc > flake.nix
-nix flake check
-nix develop --command hello
+nix flake check "path:$PWD" --no-write-lock-file
+nix develop "path:$PWD#default" --command hello
 ```
 
 Swap `hello-shell` for any other folder to try the other examples.
@@ -73,8 +73,8 @@ For the canonical sample used by the acceptance test, use:
 ```sh
 cd examples/dev-shell
 roc main.roc > flake.nix
-nix flake check
-nix develop --command rustc --version
+nix flake check "path:$PWD" --no-write-lock-file
+nix develop "path:$PWD#default" --command rustc --version
 ```
 
 ## Development

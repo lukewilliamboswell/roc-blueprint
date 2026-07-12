@@ -16,6 +16,13 @@
             ];
           };
         };
+        "aarch64-darwin" = {
+          "default" = nixpkgs."legacyPackages"."aarch64-darwin"."mkShell" {
+            "packages" = [
+              nixpkgs."legacyPackages"."aarch64-darwin"."hello"
+            ];
+          };
+        };
       };
     };
 }

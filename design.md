@@ -44,8 +44,8 @@ using an existing platform to write the rendered source to stdout or a file:
 
 ```sh
 roc my_blueprint.roc > flake.nix
-nix flake lock
-nix develop
+nix flake lock "path:$PWD"
+nix develop "path:$PWD#default"
 ```
 
 Diagnostics must not be mixed into the generated stdout stream. The
@@ -422,8 +422,8 @@ The canonical maintained example demonstrates:
 ```sh
 cd examples/dev-shell
 roc main.roc > flake.nix
-nix flake check
-nix develop --command rustc --version
+nix flake check "path:$PWD" --no-write-lock-file
+nix develop "path:$PWD#default" --command rustc --version
 ```
 
 The test succeeds when:

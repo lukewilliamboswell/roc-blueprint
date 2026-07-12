@@ -18,7 +18,7 @@ workspace : Blueprint.Draft
 workspace = Blueprint.workspace(
 	{
 		name: "hello-shell",
-		target_systems: [Target.X86_64Linux],
+		target_systems: [Target.X86_64Linux, Target.Aarch64Darwin],
 		envs: [
 			Environment.new(
 				{
