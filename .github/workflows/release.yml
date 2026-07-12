@@ -72,17 +72,6 @@ jobs:
           check_availability: ${{ github.event_name == 'workflow_dispatch' }}
           github_token: ${{ github.token }}
 
-      - name: Validate follow-up pull request permission
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          allowed="$(gh api "repos/${{ github.repository }}/actions/permissions/workflow" --jq '.can_approve_pull_request_reviews')"
-          if [[ "$allowed" != "true" ]]; then
-            echo "Enable 'Allow GitHub Actions to create and approve pull requests' before releasing." >&2
-            exit 1
-          fi
-
       - name: Validate repository
         run: ./ci/all_tests.sh
 

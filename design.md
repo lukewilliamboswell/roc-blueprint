@@ -482,10 +482,10 @@ identifiers, so GitHub labels these package releases as prereleases.
 After both publishes succeed, a deterministic follow-up step updates every
 example application header and the marker-delimited latest-release block in the
 README, then opens a PR containing only those paths. Running that updater again
-for the same release must produce no changes. Release validation checks the
-repository's “Allow GitHub Actions to create and approve pull requests” setting
-before publishing, so a missing permission cannot fail only after the package
-URLs become live.
+for the same release must produce no changes. The repository must enable
+“Allow GitHub Actions to create and approve pull requests”; GitHub does not let
+a workflow's own token inspect that administration setting, so it is configured
+and verified outside the release job.
 
 ### Implementation findings
 
