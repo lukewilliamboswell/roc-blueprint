@@ -9,9 +9,9 @@ NixExpr := [
 ].{
 	Field := { name : Str, value : NixExpr }
 
-	## Format an expression deterministically and include exactly one final newline.
+	## Formats an expression deterministically without a trailing newline.
 	format : NixExpr -> Str
-	format = |expression| "${render_at(expression, 0)}\n"
+	format = |expression| render_at(expression, 0)
 }
 
 render_at : NixExpr, U64 -> Str
@@ -95,20 +95,25 @@ indent : U64 -> Str
 indent = |depth| Str.join_with(List.repeat("  ", depth), "")
 
 ## Strings escape Nix quotes and backslashes.
-expect NixExpr.format(NixExpr.String("quote: \" slash: \\")) == "\"quote: \\\" slash: \\\\\"\n"
+expect {
+	backslash = "\\"
+	quote = "\""
+	expected = "${quote}quote: ${backslash}${quote} slash: ${backslash}${backslash}${quote}"
+	NixExpr.format(NixExpr.String("quote: \" slash: \\")) == expected
+}
 
 ## Nix interpolation openers are escaped as literal string data.
 expect {
 	interpolation_open = Str.concat("$", "{")
-	expected = Str.concat(Str.concat("\"", "\\"), Str.concat(interpolation_open, "\"\n"))
+	expected = Str.concat(Str.concat("\"", "\\"), Str.concat(interpolation_open, "\""))
 	NixExpr.format(NixExpr.String(interpolation_open)) == expected
 }
 
 ## Lists retain item order and use stable indentation.
-expect NixExpr.format(NixExpr.ListExpr([NixExpr.String("a"), NixExpr.String("b")])) == "[\n  \"a\"\n  \"b\"\n]\n"
+expect NixExpr.format(NixExpr.ListExpr([NixExpr.String("a"), NixExpr.String("b")])) == "[\n  \"a\"\n  \"b\"\n]"
 
 ## Attribute names are always safely quoted.
-expect NixExpr.format(NixExpr.AttrSet([{ name: "not-an-identifier", value: NixExpr.String("value") }])) == "{\n  \"not-an-identifier\" = \"value\";\n}\n"
+expect NixExpr.format(NixExpr.AttrSet([{ name: "not-an-identifier", value: NixExpr.String("value") }])) == "{\n  \"not-an-identifier\" = \"value\";\n}"
 
 ## Function application parenthesizes a lambda in function position.
-expect NixExpr.format(NixExpr.Apply(NixExpr.Lambda(["x"], NixExpr.Identifier("x")), NixExpr.String("value"))) == "({ x, ... }:\n  x) \"value\"\n"
+expect NixExpr.format(NixExpr.Apply(NixExpr.Lambda(["x"], NixExpr.Identifier("x")), NixExpr.String("value"))) == "({ x, ... }:\n  x) \"value\""

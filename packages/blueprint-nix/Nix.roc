@@ -112,9 +112,10 @@ Nix := [].{
 
 	## Renders a complete flake, or returns all unambiguous backend errors.
 	##
-	## The result contains a generated-file notice and exactly one final newline.
-	## Rendering is deterministic for equal Blueprint and Config values. This
-	## function does not read, create, or modify `flake.lock`.
+	## The result contains a generated-file notice and no trailing newline, so it
+	## can be passed directly to a platform line-writing operation. Rendering is
+	## deterministic for equal Blueprint and Config values. This function does
+	## not read, create, or modify `flake.lock`.
 	render : Blueprint, Config -> Try(Str, List(Error))
 	render = |valid, config_value| {
 		workspace = Blueprint.to_draft(valid)

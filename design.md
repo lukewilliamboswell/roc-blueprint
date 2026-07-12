@@ -332,7 +332,8 @@ The generated source must:
 - expose supported values through conventional flake output names;
 - use stable formatting and ordering;
 - escape all application-supplied text correctly; and
-- end with one newline.
+- omit a trailing newline so a platform line operation can emit the source
+  directly with exactly one output newline.
 
 The renderer currently lowers through an internal `NixExpr` tree before
 formatting text. That module is tested but is not part of the package's public
@@ -409,9 +410,10 @@ source = Nix.render(valid, nix_config) ? |errors| NixInvalid(errors)
 The separation is the important contract: portable requirements are declared
 in the Blueprint and resolved explicitly in Nix configuration. The maintained
 application uses `roc-platform-template-zig` 1.0.0, whose stdout API provides a
-line operation rather than an exact string write. It removes the renderer's
-one final newline and then calls `Stdout.line!`, preserving the rendered bytes
-without adding a second newline.
+line operation rather than an exact string write. The renderer therefore omits
+a trailing newline, and the application passes its result directly to
+`Stdout.line!`. The generated file still ends with exactly one newline without
+requiring byte removal or a UTF-8 round trip.
 
 ### Acceptance test
 
@@ -490,9 +492,10 @@ are not changes to that boundary:
 - Nix calls a flake's `outputs` function with `self` in addition to declared
   inputs. The internal Nix lambda formatter therefore emits an open attribute
   pattern such as `{ nixpkgs, ... }`.
-- The renderer includes exactly one final newline. Until the example platform
-  offers an exact stdout write, the application owns the small line-operation
-  adaptation described above.
+- The example platform offers a line operation rather than an exact stdout
+  write. Returning source without a trailing newline gives that platform a
+  direct, lossless output path while keeping newline ownership at the effect
+  boundary.
 
 ### Explicit exclusions
 

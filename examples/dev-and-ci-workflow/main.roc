@@ -62,7 +62,6 @@ main! : List(Str) => Try({}, _)
 main! = |_args| {
 	valid = Blueprint.validate(workspace) ? |errors| BlueprintInvalid(errors)
 	source = Nix.render(valid, nix_config) ? |errors| NixInvalid(errors)
-	without_final_newline = Str.from_utf8(source.to_utf8().drop_last(1)) ? |_| GeneratedSourceInvalidUtf8
-	Stdout.line!(without_final_newline)?
+	Stdout.line!(source)?
 	Ok({})
 }
