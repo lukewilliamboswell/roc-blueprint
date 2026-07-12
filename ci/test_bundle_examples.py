@@ -106,12 +106,22 @@ def exercise_examples(examples: list[Path], build_dir: Path) -> None:
     for example in examples:
         run([ROC, "check", example.name, "--no-cache"], cwd=cwd)
         run([ROC, "test", example.name, "--no-cache"], cwd=cwd)
-    run([ROC, "hello.roc", "--no-cache"], cwd=cwd)
-
-    output = build_dir / ("hello.exe" if os.name == "nt" else "hello")
     build_dir.mkdir(parents=True, exist_ok=True)
-    run([ROC, "build", "hello.roc", f"--output={output}", "--no-cache"], cwd=cwd)
-    run([str(output)])
+
+    for example in examples:
+        expected_path = cwd / f"{example.stem}.golden.nix"
+        expected = expected_path.read_text(encoding="utf-8")
+
+        interpreted = run([ROC, example.name, "--no-cache"], cwd=cwd)
+        if interpreted.stdout != expected:
+            raise SystemExit(f"interpreted output did not match {expected_path.name}")
+
+        executable_name = f"{example.stem}.exe" if os.name == "nt" else example.stem
+        output = build_dir / executable_name
+        run([ROC, "build", example.name, f"--output={output}", "--no-cache"], cwd=cwd)
+        compiled = run([str(output)])
+        if compiled.stdout != expected:
+            raise SystemExit(f"compiled output did not match {expected_path.name}")
 
 
 def main() -> None:

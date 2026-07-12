@@ -1,1 +1,1 @@
-package [BlueprintNix] { blueprint: "blueprint/main.roc" }
+package [Nix] { blueprint: "blueprint/main.roc" }

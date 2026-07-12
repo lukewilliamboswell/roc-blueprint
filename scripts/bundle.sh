@@ -35,17 +35,27 @@ for package_name in blueprint blueprint-nix; do
         trap 'rm -rf "$stage_dir"' EXIT
         mkdir -p "$stage_dir/blueprint"
         cp "$root_dir/scripts/blueprint-nix-bundle-main.roc" "$stage_dir/main.roc"
-        cp "$package_dir/BlueprintNix.roc" "$stage_dir/BlueprintNix.roc"
+        cp "$package_dir/Nix.roc" "$stage_dir/Nix.roc"
+        cp "$package_dir/NixExpr.roc" "$stage_dir/NixExpr.roc"
         cp "$root_dir/packages/blueprint/main.roc" "$stage_dir/blueprint/main.roc"
-        cp "$root_dir/packages/blueprint/Plan.roc" "$stage_dir/blueprint/Plan.roc"
+        cp "$root_dir/packages/blueprint/Blueprint.roc" "$stage_dir/blueprint/Blueprint.roc"
+        cp "$root_dir/packages/blueprint/Environment.roc" "$stage_dir/blueprint/Environment.roc"
+        cp "$root_dir/packages/blueprint/EnvironmentId.roc" "$stage_dir/blueprint/EnvironmentId.roc"
+        cp "$root_dir/packages/blueprint/Requirement.roc" "$stage_dir/blueprint/Requirement.roc"
+        cp "$root_dir/packages/blueprint/Target.roc" "$stage_dir/blueprint/Target.roc"
 
         (
             cd "$stage_dir"
             "$roc_bin" bundle \
                 main.roc \
-                BlueprintNix.roc \
+                Nix.roc \
+                NixExpr.roc \
                 blueprint/main.roc \
-                blueprint/Plan.roc \
+                blueprint/Blueprint.roc \
+                blueprint/Environment.roc \
+                blueprint/EnvironmentId.roc \
+                blueprint/Requirement.roc \
+                blueprint/Target.roc \
                 --output-dir "$package_output_dir"
         )
         rm -rf "$stage_dir"

@@ -1,0 +1,19 @@
+## A supported target system.
+Target := [Aarch64Darwin, Aarch64Linux, X86_64Darwin, X86_64Linux].{
+	to_str : Target -> Str
+	to_str = |target|
+		match target {
+			Aarch64Darwin => "aarch64-darwin"
+			Aarch64Linux => "aarch64-linux"
+			X86_64Darwin => "x86_64-darwin"
+			X86_64Linux => "x86_64-linux"
+		}
+}
+
+## Every supported target maps to its portable canonical spelling.
+expect [
+	Target.to_str(Target.X86_64Linux),
+	Target.to_str(Target.Aarch64Linux),
+	Target.to_str(Target.X86_64Darwin),
+	Target.to_str(Target.Aarch64Darwin),
+] == ["x86_64-linux", "aarch64-linux", "x86_64-darwin", "aarch64-darwin"]
