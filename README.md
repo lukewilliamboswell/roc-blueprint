@@ -2,6 +2,20 @@
 
 Two pure Roc packages for describing portable development environments and rendering them as Nix flakes.
 
+<!-- BEGIN LATEST RELEASE -->
+## Latest release
+
+Version `0.0.3` publishes two packages. Copy these URLs into your application header:
+
+```roc
+app [main!] {
+	pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/1.0.0/AnZoxzoGPtSGQ15EQh6pBeeaHJ7aizP9MQhK81dES3Uq.tar.zst",
+	blueprint: "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.0.3-blueprint/HmTRQhvSpRQsj78WCR7j5y3anhqMVB4zuMejydrdAGeV.tar.zst",
+	blueprint_nix: "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.0.3-blueprint-nix/5stkC8nuQYzCjQueDhBLQrFPvfk6MP1byVq8nR3ET72h.tar.zst",
+}
+```
+<!-- END LATEST RELEASE -->
+
 ## Packages
 
 - `blueprint` owns portable requirements, target systems, environments, construction, and validation.
