@@ -4,6 +4,9 @@
 ## requirement identities. Values are case-sensitive and are not normalized.
 EnvironmentId :: { value : Str }.{
 
+	## Compare all declared fields structurally.
+	is_eq : _
+
 	## Wraps an exact string as an environment identity without validating it.
 	##
 	## Most applications create these indirectly with `Environment.new`, then

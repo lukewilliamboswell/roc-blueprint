@@ -26,6 +26,9 @@ Blueprint :: {
 	envs : List(Environment),
 }.{
 
+	## Compare all declared fields structurally.
+	is_eq : _
+
 	## Unvalidated input for `workspace` and `validate`.
 	##
 	## `name` identifies the workspace. `target_systems` declares every system
@@ -35,6 +38,8 @@ Blueprint :: {
 		name : Str,
 		target_systems : List(Target),
 		envs : List(Environment),
+	}.{
+		is_eq : _
 	}
 
 	## Portable validation failures returned by `validate`.
@@ -71,7 +76,9 @@ Blueprint :: {
 		EmptyRequirementId(Str),
 		EmptyTargets,
 		EmptyWorkspaceName,
-	]
+	].{
+		is_eq : _
+	}
 
 	## Begins a workspace description without validating it.
 	##
@@ -200,13 +207,11 @@ rust : Requirement
 rust = Requirement.new({ id: "rust-compiler", display_name: "Rust compiler" })
 
 valid_workspace : Blueprint.Draft
-valid_workspace = Blueprint.workspace(
-	{
-		name: "example",
-		target_systems: [Target.X86_64Linux],
-		envs: [Environment.new({ name: "default", requirements: [rust] })],
-	},
-)
+valid_workspace = Blueprint.workspace({
+	name: "example",
+	target_systems: [Target.X86_64Linux],
+	envs: [Environment.new({ name: "default", requirements: [rust] })],
+})
 
 ## A valid draft is sealed and remains inspectable by backend packages.
 expect {
@@ -215,55 +220,45 @@ expect {
 }
 
 ## Empty required workspace collections produce stable declaration-order errors.
-expect Blueprint.validate(Blueprint.workspace({ name: "", target_systems: [], envs: [] })) == Err(
-	[
-		Blueprint.Error.EmptyWorkspaceName,
-		Blueprint.Error.EmptyTargets,
-		Blueprint.Error.EmptyEnvironments,
-	],
-)
+expect Blueprint.validate(Blueprint.workspace({ name: "", target_systems: [], envs: [] })) == Err([
+	Blueprint.Error.EmptyWorkspaceName,
+	Blueprint.Error.EmptyTargets,
+	Blueprint.Error.EmptyEnvironments,
+])
 
 ## Independent duplicate errors accumulate in target, requirement, then environment order.
 expect {
-	invalid = Blueprint.workspace(
-		{
-			name: "duplicates",
-			target_systems: [Target.X86_64Linux, Target.X86_64Linux],
-			envs: [
-				Environment.new({ name: "dev", requirements: [rust, rust] }),
-				Environment.new({ name: "dev", requirements: [] }),
-			],
-		},
-	)
-	Blueprint.validate(invalid) == Err(
-		[
-			Blueprint.Error.DuplicateTarget(Target.X86_64Linux),
-			Blueprint.Error.DuplicateRequirement("dev", "rust-compiler"),
-			Blueprint.Error.DuplicateEnvironment("dev"),
+	invalid = Blueprint.workspace({
+		name: "duplicates",
+		target_systems: [Target.X86_64Linux, Target.X86_64Linux],
+		envs: [
+			Environment.new({ name: "dev", requirements: [rust, rust] }),
+			Environment.new({ name: "dev", requirements: [] }),
 		],
-	)
+	})
+	Blueprint.validate(invalid) == Err([
+		Blueprint.Error.DuplicateTarget(Target.X86_64Linux),
+		Blueprint.Error.DuplicateRequirement("dev", "rust-compiler"),
+		Blueprint.Error.DuplicateEnvironment("dev"),
+	])
 }
 
 ## Invalid identities and conflicting declarations accumulate without invented replacements.
 expect {
 	empty_id = Requirement.new({ id: "", display_name: "Missing identity" })
 	conflicting_rust = Requirement.new({ id: "rust-compiler", display_name: "Different display name" })
-	invalid = Blueprint.workspace(
-		{
-			name: "identity-errors",
-			target_systems: [Target.X86_64Linux],
-			envs: [
-				Environment.new({ name: "", requirements: [empty_id] }),
-				Environment.new({ name: "one", requirements: [rust] }),
-				Environment.new({ name: "two", requirements: [conflicting_rust] }),
-			],
-		},
-	)
-	Blueprint.validate(invalid) == Err(
-		[
-			Blueprint.Error.EmptyEnvironmentName(0),
-			Blueprint.Error.EmptyRequirementId(""),
-			Blueprint.Error.ConflictingRequirement("rust-compiler"),
+	invalid = Blueprint.workspace({
+		name: "identity-errors",
+		target_systems: [Target.X86_64Linux],
+		envs: [
+			Environment.new({ name: "", requirements: [empty_id] }),
+			Environment.new({ name: "one", requirements: [rust] }),
+			Environment.new({ name: "two", requirements: [conflicting_rust] }),
 		],
-	)
+	})
+	Blueprint.validate(invalid) == Err([
+		Blueprint.Error.EmptyEnvironmentName(0),
+		Blueprint.Error.EmptyRequirementId(""),
+		Blueprint.Error.ConflictingRequirement("rust-compiler"),
+	])
 }

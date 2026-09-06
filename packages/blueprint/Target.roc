@@ -5,6 +5,9 @@
 ## on a `Blueprint.Draft`; backends must not infer the current host system.
 Target := [Aarch64Darwin, Aarch64Linux, X86_64Darwin, X86_64Linux].{
 
+	## Compare all declared fields structurally.
+	is_eq : _
+
 	## Returns the stable lowercase architecture-system spelling for a target.
 	##
 	## This function is total over the closed target set and performs no host

@@ -24,39 +24,31 @@ nodejs : Requirement
 nodejs = Requirement.new({ id: "nodejs", display_name: "Node.js" })
 
 workspace : Blueprint.Draft
-workspace = Blueprint.workspace(
-	{
-		name: "dev-and-ci-workflow",
-		target_systems: [Target.X86_64Linux, Target.Aarch64Darwin],
-		envs: [
-			Environment.new(
-				{
-					name: "default",
-					requirements: [rust_compiler, cargo, git],
-				},
-			),
-			Environment.new(
-				{
-					name: "ci",
-					requirements: [git, nodejs],
-				},
-			),
-		],
-	},
-)
+workspace = Blueprint.workspace({
+	name: "dev-and-ci-workflow",
+	target_systems: [Target.X86_64Linux, Target.Aarch64Darwin],
+	envs: [
+		Environment.new({
+			name: "default",
+			requirements: [rust_compiler, cargo, git],
+		}),
+		Environment.new({
+			name: "ci",
+			requirements: [git, nodejs],
+		}),
+	],
+})
 
 nix_config : Nix.Config
-nix_config = Nix.config(
-	{
-		nixpkgs: Nix.github_input("nixpkgs", "NixOS", "nixpkgs", "nixos-unstable"),
-		bindings: [
-			Nix.bind(rust_compiler, "nixpkgs", ["rustc"]),
-			Nix.bind(cargo, "nixpkgs", ["cargo"]),
-			Nix.bind(git, "nixpkgs", ["git"]),
-			Nix.bind(nodejs, "nixpkgs", ["nodejs"]),
-		],
-	},
-)
+nix_config = Nix.config({
+	nixpkgs: Nix.github_input("nixpkgs", "NixOS", "nixpkgs", "nixos-unstable"),
+	bindings: [
+		Nix.bind(rust_compiler, "nixpkgs", ["rustc"]),
+		Nix.bind(cargo, "nixpkgs", ["cargo"]),
+		Nix.bind(git, "nixpkgs", ["git"]),
+		Nix.bind(nodejs, "nixpkgs", ["nodejs"]),
+	],
+})
 
 main! : List(Str) => Try({}, _)
 main! = |_args| {

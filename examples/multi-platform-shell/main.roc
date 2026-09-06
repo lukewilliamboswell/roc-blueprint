@@ -15,30 +15,24 @@ shell_tools : Requirement
 shell_tools = Requirement.new({ id: "shell-tools", display_name: "Shell tools" })
 
 workspace : Blueprint.Draft
-workspace = Blueprint.workspace(
-	{
-		name: "multi-platform-shell",
-		target_systems: [Target.X86_64Linux, Target.Aarch64Darwin],
-		envs: [
-			Environment.new(
-				{
-					name: "default",
-					requirements: [shell_tools],
-				},
-			),
-		],
-	},
-)
+workspace = Blueprint.workspace({
+	name: "multi-platform-shell",
+	target_systems: [Target.X86_64Linux, Target.Aarch64Darwin],
+	envs: [
+		Environment.new({
+			name: "default",
+			requirements: [shell_tools],
+		}),
+	],
+})
 
 nix_config : Nix.Config
-nix_config = Nix.config(
-	{
-		nixpkgs: Nix.github_input("nixpkgs", "NixOS", "nixpkgs", "nixos-unstable"),
-		bindings: [
-			Nix.bind(shell_tools, "nixpkgs", ["git"]),
-		],
-	},
-)
+nix_config = Nix.config({
+	nixpkgs: Nix.github_input("nixpkgs", "NixOS", "nixpkgs", "nixos-unstable"),
+	bindings: [
+		Nix.bind(shell_tools, "nixpkgs", ["git"]),
+	],
+})
 
 main! : List(Str) => Try({}, _)
 main! = |_args| {

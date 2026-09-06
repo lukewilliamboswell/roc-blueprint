@@ -6,6 +6,9 @@
 ## in backend lookup.
 Requirement :: { id : Str, display_name : Str }.{
 
+	## Compare all declared fields structurally.
+	is_eq : _
+
 	## Creates an unvalidated requirement identity and display name.
 	##
 	## IDs are case-sensitive and are not normalized. `Blueprint.validate`
