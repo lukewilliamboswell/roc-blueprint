@@ -3,9 +3,14 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      nightly_validation:
+        description: "Validate a nightly candidate without publishing or deploying"
+        type: boolean
+        required: false
+        default: false
       release_version:
         description: "Release version, e.g. 0.1.0"
-        required: true
+        required: false
         type: string
   pull_request:
   push:
@@ -15,8 +20,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('release-{0}', github.repository) || format('release-validate-{0}-{1}', github.repository, github.ref) }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  group: ${{ (github.event_name == 'workflow_dispatch' && !inputs.nightly_validation) && format('release-{0}', github.repository) || format('release-validate-{0}-{1}', github.repository, github.ref) }}
+  cancel-in-progress: ${{ (github.event_name != 'workflow_dispatch' || inputs.nightly_validation) }}
 
 jobs:
   build:
@@ -29,12 +34,24 @@ jobs:
       test_matrix: ${{ steps.bundles.outputs.test_matrix }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Require a version for publication
+        if: github.event_name == 'workflow_dispatch' && !inputs.nightly_validation
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: test -n "$RELEASE_VERSION" || { echo "A release version is required for publication" >&2; exit 1; }
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Read pinned Roc nightly
+        shell: bash
+        run: printf 'ROC_NIGHTLY_TAG=%s\n' "$(sed -n '1p' .roc-version)" >> "$GITHUB_ENV"
 
       - name: Install Roc
         uses: roc-lang/setup-roc@bd311e2fb815a3d2255f7ee14a922f0b736e020b
         with:
           version: nightly-new-compiler
+          nightly-tag: ${{ env.ROC_NIGHTLY_TAG }}
 
       - name: Install Nix
         uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c
@@ -43,8 +60,8 @@ jobs:
         id: validate
         uses: roc-lang/release-package/actions/validate-release@d2560ead9f724bfaabfbc8134b8895e120171064
         with:
-          release_version: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version || '' }}
-          dry_run: ${{ github.event_name != 'workflow_dispatch' }}
+          release_version: ${{ (github.event_name == 'workflow_dispatch' && !inputs.nightly_validation) && inputs.release_version || '' }}
+          dry_run: ${{ (github.event_name != 'workflow_dispatch' || inputs.nightly_validation) }}
           check_availability: false
           github_token: ${{ github.token }}
 
@@ -60,16 +77,16 @@ jobs:
         uses: roc-lang/release-package/actions/validate-release@d2560ead9f724bfaabfbc8134b8895e120171064
         with:
           release_version: ${{ steps.package_versions.outputs.blueprint }}
-          dry_run: ${{ github.event_name != 'workflow_dispatch' }}
-          check_availability: ${{ github.event_name == 'workflow_dispatch' }}
+          dry_run: ${{ (github.event_name != 'workflow_dispatch' || inputs.nightly_validation) }}
+          check_availability: ${{ (github.event_name == 'workflow_dispatch' && !inputs.nightly_validation) }}
           github_token: ${{ github.token }}
 
       - name: Validate blueprint-nix release request
         uses: roc-lang/release-package/actions/validate-release@d2560ead9f724bfaabfbc8134b8895e120171064
         with:
           release_version: ${{ steps.package_versions.outputs.blueprint_nix }}
-          dry_run: ${{ github.event_name != 'workflow_dispatch' }}
-          check_availability: ${{ github.event_name == 'workflow_dispatch' }}
+          dry_run: ${{ (github.event_name != 'workflow_dispatch' || inputs.nightly_validation) }}
+          check_availability: ${{ (github.event_name == 'workflow_dispatch' && !inputs.nightly_validation) }}
           github_token: ${{ github.token }}
 
       - name: Validate repository
@@ -79,7 +96,7 @@ jobs:
         uses: roc-lang/release-package/actions/run-bump-check@d2560ead9f724bfaabfbc8134b8895e120171064
         with:
           release_version: ${{ steps.validate.outputs.release_version }}
-          dry_run: ${{ github.event_name != 'workflow_dispatch' }}
+          dry_run: ${{ (github.event_name != 'workflow_dispatch' || inputs.nightly_validation) }}
           bump_check: off
 
       - name: Bundle packages
@@ -97,13 +114,13 @@ jobs:
       - name: Split package release metadata
         run: python3 scripts/split_release_metadata.py
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-bundles
           path: .release/bundles/*
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-metadata
           path: |
@@ -124,17 +141,22 @@ jobs:
         include: ${{ fromJson(needs.build.outputs.test_matrix) }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Read pinned Roc nightly
+        shell: bash
+        run: printf 'ROC_NIGHTLY_TAG=%s\n' "$(sed -n '1p' .roc-version)" >> "$GITHUB_ENV"
 
       - name: Install Roc
         uses: roc-lang/setup-roc@bd311e2fb815a3d2255f7ee14a922f0b736e020b
         with:
           version: nightly-new-compiler
+          nightly-tag: ${{ env.ROC_NIGHTLY_TAG }}
 
       - name: Install Nix
         uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-bundles
           path: .release/test-bundles
@@ -150,21 +172,21 @@ jobs:
   publish:
     name: Publish package releases
     needs: [build, test-bundles]
-    if: github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'workflow_dispatch' && !inputs.nightly_validation)
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-bundles
           path: .release/bundles
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-metadata
           path: .release
