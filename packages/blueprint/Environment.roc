@@ -8,6 +8,9 @@ import Requirement
 ## separate from workspace validation.
 Environment := { id : EnvironmentId, requirements : List(Requirement) }.{
 
+	## Compare all declared fields structurally.
+	is_eq : _
+
 	## Creates an unvalidated environment from a name and ordered requirements.
 	##
 	## Empty or duplicate names and duplicate requirements are reported when the

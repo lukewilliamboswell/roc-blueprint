@@ -440,12 +440,11 @@ lockfile. Nothing generated for an example is stored at the repository root.
 The locked inputs make Nix evaluation repeatable; the renderer itself does not
 produce or modify a lockfile.
 
-The clean-checkout test harness pins the `setup-roc` action implementation but
-currently selects its moving `nightly-new-compiler` channel. The application
+The clean-checkout test harness pins the `setup-roc` action implementation and
+reads the exact compiler release from `.roc-version`. The application
 pins its platform bundle to the content-addressed 1.0.0 release, and release
-tests consume content-addressed bundles for both packages. Pinning an exact Roc
-compiler build remains follow-up work if compiler-level reproducibility is
-required.
+tests consume content-addressed bundles for both packages. Scheduled compiler
+updates validate a proposed pin before reporting it ready for review.
 
 The baseline implementation does not yet make the generator bootstrap through
 the flake it generates. The generated-file notice identifies

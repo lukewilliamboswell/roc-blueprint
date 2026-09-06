@@ -18,31 +18,25 @@ git : Requirement
 git = Requirement.new({ id: "git", display_name: "Git" })
 
 workspace : Blueprint.Draft
-workspace = Blueprint.workspace(
-	{
-		name: "node-tooling",
-		target_systems: [Target.X86_64Linux, Target.Aarch64Darwin],
-		envs: [
-			Environment.new(
-				{
-					name: "default",
-					requirements: [nodejs, git],
-				},
-			),
-		],
-	},
-)
+workspace = Blueprint.workspace({
+	name: "node-tooling",
+	target_systems: [Target.X86_64Linux, Target.Aarch64Darwin],
+	envs: [
+		Environment.new({
+			name: "default",
+			requirements: [nodejs, git],
+		}),
+	],
+})
 
 nix_config : Nix.Config
-nix_config = Nix.config(
-	{
-		nixpkgs: Nix.github_input("nixpkgs", "NixOS", "nixpkgs", "nixos-unstable"),
-		bindings: [
-			Nix.bind(nodejs, "nixpkgs", ["nodejs"]),
-			Nix.bind(git, "nixpkgs", ["git"]),
-		],
-	},
-)
+nix_config = Nix.config({
+	nixpkgs: Nix.github_input("nixpkgs", "NixOS", "nixpkgs", "nixos-unstable"),
+	bindings: [
+		Nix.bind(nodejs, "nixpkgs", ["nodejs"]),
+		Nix.bind(git, "nixpkgs", ["git"]),
+	],
+})
 
 main! : List(Str) => Try({}, _)
 main! = |_args| {
