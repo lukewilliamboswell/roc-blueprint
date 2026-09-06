@@ -36,6 +36,6 @@ jobs:
           nightly-tag: ${{ env.ROC_NIGHTLY_TAG }}
 
       - name: Install Nix
-        uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
 
       - run: ./ci/all_tests.sh
