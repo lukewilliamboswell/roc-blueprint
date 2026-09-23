@@ -12,3 +12,5 @@ cli/main
 fuzz/*/ir-*
 !fuzz/*/main.roc
 .roc-fuzz/
+fuzz-artifacts/
+crash-*
