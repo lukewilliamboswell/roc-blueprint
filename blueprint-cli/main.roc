@@ -23,7 +23,7 @@ import Backend
 import NixBackend
 
 version : Str
-version = "0.1.0"
+version = "0.2.0"
 
 ## The backend every command goes through.
 backend : Backend
