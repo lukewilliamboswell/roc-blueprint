@@ -94,7 +94,7 @@ zig build                                   # platform/targets/x64musl/libhost.a
 roc Blueprint.roc                           # print the IR
 roc build cli/main.roc --output=./blueprint
 ./ci/test.sh                                # everything CI runs
-scripts/bundle.sh                           # bundle into dist/ and smoke-test
+scripts/bundle.sh platform                  # bundle into dist/ and smoke-test
 ```
 
 Only `x64musl` is supported. Everything the platform links except
@@ -104,18 +104,26 @@ came from and its checksums.
 
 ### Releasing
 
-Push a tag like `0.1.0`. `.github/workflows/release.yml` runs the tests,
-bundles, and publishes two releases: `0.1.0` with the `roc-blueprint`
-platform bundle and a prebuilt `blueprint` binary, and `0.1.0-ir` with the
-`roc-blueprint-ir` bundle. They're separate because Roc identifies a package
-by its URL minus the version and hash, so two bundles under one tag look like
-one package served with two hashes.
+`roc-blueprint` and `roc-blueprint-ir` have independent release cycles.
 
-`roc bundle` only packs files below the entry point's directory, so the
-platform can't carry `../ir` inside its bundle. `scripts/bundle.sh` bundles
-`ir` first, then bundles a staged copy of the platform whose `ir:`
-dependency points at the ir bundle's URL: localhost for the smoke test, and
-the GitHub release for a release.
+- **roc-blueprint-ir:** push a tag like `ir-0.1.0`. `release-ir.yml` tests and
+  bundles `ir/` and publishes release `ir-0.1.0` with the bundle.
+- **roc-blueprint:** put the ir bundle URL the platform should use in
+  `platform/ir-release`, then push a tag like `0.1.0`. `release.yml` runs the
+  tests and publishes release `0.1.0` with the platform bundle and a prebuilt
+  `blueprint` binary.
+
+During development the platform uses `ir: "../ir/main.roc"`. `roc bundle`
+only packs files below the entry point's directory, so `scripts/bundle.sh
+platform <ir-url>` bundles a staged copy whose `ir:` is the given URL. With
+no URL it bundles the local `ir/` and serves it from localhost. Either way
+it serves the platform bundle from localhost and runs `Blueprint.roc` against
+it as a smoke test. CI does both, so a platform change that needs an
+unreleased ir fails before release.
+
+The two packages need separate tags: Roc identifies a package by its URL
+minus the version and hash, so two bundles under one tag look like one
+package served with two hashes.
 
 ## Upstream workarounds
 

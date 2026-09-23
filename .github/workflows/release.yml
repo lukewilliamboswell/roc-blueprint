@@ -1,13 +1,11 @@
-name: Release
+name: Release roc-blueprint
 
-# Push a tag like 0.1.0 to publish:
-#   - release <tag>: the roc-blueprint platform bundle and a prebuilt
-#     x86_64 Linux `blueprint` CLI
-#   - release <tag>-ir: the roc-blueprint-ir package bundle
+# Push a tag like 0.1.0 to publish the roc-blueprint platform bundle and a
+# prebuilt x86_64 Linux `blueprint` CLI.
 #
-# The two bundles need separate releases: Roc identifies a package by its URL
-# with the version and hash removed, so two bundles under the same tag would
-# look like one package version served with two different hashes.
+# The platform depends on a published roc-blueprint-ir release, whose bundle
+# URL is pinned in platform/ir-release (ir has its own release cycle; see
+# release-ir.yml).
 on:
   push:
     tags: ["[0-9]+.[0-9]+.[0-9]+*"]
@@ -41,18 +39,17 @@ jobs:
       - name: Test (including a localhost bundle smoke test)
         run: ./ci/test.sh
 
-      - name: Bundle against the release URL
-        run: scripts/bundle.sh "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}-ir"
+      - name: Bundle against the pinned ir release
+        run: scripts/bundle.sh platform "$(cat platform/ir-release)"
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          read -r _ ir < <(grep '^roc-blueprint-ir ' dist/bundles.txt)
           read -r _ pf < <(grep '^roc-blueprint ' dist/bundles.txt)
+          ir_url="$(cat platform/ir-release)"
           cp blueprint dist/blueprint-x86_64-linux
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
-          ir_url="${url}-ir"
           cat > notes.md <<NOTES
           Platform (use in \`Blueprint.roc\`):
 
@@ -60,18 +57,11 @@ jobs:
           app [config] { pf: platform "${url}/${pf}" }
           \`\`\`
 
-          IR package (for tools that read the blueprint IR):
+          The \`blueprint\` CLI for x86_64 Linux is attached.
 
-          \`\`\`roc
-          ir: "${ir_url}/${ir}"
-          \`\`\`
-
-          Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl only.
+          Uses roc-blueprint-ir \`${ir_url}\`. Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl only.
           NOTES
           prerelease=()
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
-          gh release create "${GITHUB_REF_NAME}-ir" "${prerelease[@]}" --target "$GITHUB_SHA" \
-            --title "${GITHUB_REF_NAME}-ir" --notes "roc-blueprint-ir for roc-blueprint ${GITHUB_REF_NAME}: \`${ir_url}/${ir}\`" \
-            "dist/${ir}"
-          gh release create "$GITHUB_REF_NAME" "${prerelease[@]}" --title "$GITHUB_REF_NAME" --notes-file notes.md \
+          gh release create "$GITHUB_REF_NAME" "${prerelease[@]}" --title "roc-blueprint $GITHUB_REF_NAME" --notes-file notes.md \
             "dist/${pf}" dist/blueprint-x86_64-linux

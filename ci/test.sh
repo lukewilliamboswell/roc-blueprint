@@ -34,5 +34,10 @@ git diff --exit-code Blueprint.lock
 step "ci dev shell builds"
 nix develop path:.blueprint#ci -c git --version
 
-step "Bundles"
-scripts/bundle.sh
+step "Bundle ir and the platform against it"
+scripts/bundle.sh platform
+
+if [[ -f platform/ir-release ]]; then
+	step "Bundle the platform against the pinned ir release"
+	scripts/bundle.sh platform "$(cat platform/ir-release)"
+fi
