@@ -1,1 +1,1 @@
-((name "q\"b\\s\nn\tt") (overlays ("a\\b")) (shells (((name "\"") (tools (("\\n")))))) (systems ()) (tasks ()) (version 2))
+((format ((major 1) (minor 0))) (name "q\"b\\s\nn\tt") (systems ("a\\b")) (shells (((name "\"") (packages (((source "\\n") (path ("\t")))))))))

@@ -1,1 +1,1 @@
-((name "x") (overlays ()) (shells ()) (systems ((X86_64Linux) (Aarch64Linux 1))) (tasks ()) (version 2))
+((format ((major 1) (minor 0))) (name "x") (inputs (((kind (Packages 1)) (name "n") (url "u")))))

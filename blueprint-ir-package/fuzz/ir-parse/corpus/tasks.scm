@@ -1,1 +1,1 @@
-((name "tasks") (overlays ()) (shells (((name "default") (tools (("git")))))) (systems (X86_64Linux)) (tasks (((name "test") (run ("python3" "-c" "print(\"hi\")")) (shell "default")))) (version 2))
+((format ((major 1) (minor 0))) (name "tasks") (shells (((name "default") (packages (((source "nixpkgs") (path ("git")))))))) (tasks (((name "test") (run ("python3" "-c" "print(\"hi\")")) (shell "default")))))

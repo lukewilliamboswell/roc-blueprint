@@ -1,11 +1,24 @@
 (
+	(format (
+		(major 1)
+		(minor 0)))
+	(inputs ((
+		(kind Packages)
+		(name "nixpkgs")
+		(url "github:NixOS/nixpkgs/nixos-unstable")) (
+		(kind Overlay)
+		(name "roc")
+		(url "github:roc-lang/roc-overlay"))))
 	(name "roc-blueprint")
-	(overlays ("github:roc-lang/roc-overlay"))
+	(requires ())
 	(shells ((
 		(name "default")
-		(tools (("rocpkgs" "nightly") ("zig_0_16") ("git") ("python3") ("zstd") ("nixfmt")))) (
-		(name "ci")
-		(tools (("rocpkgs" "nightly") ("zig_0_16") ("git"))))))
-	(systems (X86_64Linux))
-	(tasks ())
-	(version 2))
+		(packages ((
+			(path ("rocpkgs" "nightly"))
+			(source "nixpkgs")) (
+			(path ("zig_0_16"))
+			(source "nixpkgs")) (
+			(path ("git"))
+			(source "nixpkgs")))))))
+	(systems ("x86_64-linux"))
+	(tasks ()))

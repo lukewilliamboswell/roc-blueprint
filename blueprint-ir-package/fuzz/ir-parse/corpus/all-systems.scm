@@ -1,1 +1,1 @@
-((name "x") (overlays ()) (shells ()) (systems (Aarch64Darwin Aarch64Linux X86_64Darwin X86_64Linux)) (tasks ()) (version 2))
+((format ((major 1) (minor 0))) (name "x") (systems ("aarch64-darwin" "aarch64-linux" "x86_64-darwin" "x86_64-linux")))

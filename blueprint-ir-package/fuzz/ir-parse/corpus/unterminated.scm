@@ -1,1 +1,1 @@
-((name "x) (overlays ()) (shells ()) (systems ()) (tasks ()) (version 2))
+((format ((major 1) (minor 0))) (name "x))

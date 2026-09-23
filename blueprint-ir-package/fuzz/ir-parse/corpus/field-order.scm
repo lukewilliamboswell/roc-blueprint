@@ -1,1 +1,1 @@
-((tasks ()) (version 2) (systems (X86_64Linux)) (shells ()) (overlays ()) (name "reordered"))
+((tasks ()) (systems ("x86_64-linux")) (shells ()) (raw ()) (name "reordered") (inputs ()) (format ((major 1) (minor 0))) (extensions ()))

@@ -1,1 +1,1 @@
-((name "x") (extra ((nested (1 2 "three")) sym)) (overlays ()) (shells ()) (systems ()) (tasks ()) (version 2) (later 7))
+((name "x") (extra ((nested (1 2 "three")) sym)) (format ((major 1) (minor 0))) (shells (((name "s") (packages ()) (colour "red")))) (later 7))

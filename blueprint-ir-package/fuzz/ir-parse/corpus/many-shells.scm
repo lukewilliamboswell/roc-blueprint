@@ -1,1 +1,1 @@
-((name "m") (overlays ("a" "b" "c")) (shells (((name "a") (tools ())) ((name "b") (tools (("x" "y" "z") ("w")))) ((name "c") (tools (() ("")))))) (systems (X86_64Linux X86_64Linux)) (tasks ()) (version 2))
+((format ((major 1) (minor 0))) (name "m") (shells (((name "a") (packages ())) ((name "b") (packages (((source "nixpkgs") (path ("x" "y" "z"))) ((source "o") (path ("w")))))) ((name "c") (packages (((source "") (path ()))))))))

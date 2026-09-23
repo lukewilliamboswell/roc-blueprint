@@ -11,6 +11,9 @@
 ## | `Tag`                  | `Tag`                     |
 ## | `Tag(a, b)`            | `(Tag a b)`               |
 ##
+## A trailing `_` on a Roc field name is dropped in the text, so fields
+## named after Roc keywords (`packages_`, `requires_`) read naturally.
+##
 ## Nested records are indented one tab per level, so the text diffs cleanly.
 Sexpr :: [].{
 
@@ -104,7 +107,7 @@ Sexpr :: [].{
 		## Parsing
 
 		rename_field : Format, Str -> Str
-		rename_field = |_, name| name
+		rename_field = |_, name| wire_name(name)
 
 		parse_str : Format, List(Token) -> Try({ value : Str, rest : List(Token) }, [InvalidSexpr(Str), ..others])
 		parse_str = |_, tokens|
@@ -330,9 +333,20 @@ Sexpr :: [].{
 	write_field : Out, Str, (Out -> Try(Out, err)) -> Try(Out, err)
 	write_field = |out, name, write_value| {
 		indent = Str.repeat("\t", out.depth)
-		written = write_value(append(out, "\n${indent}(${name} "))?
+		written = write_value(append(out, "\n${indent}(${wire_name(name)} "))?
 		Ok(append(written, ")"))
 	}
+
+	## A field's name in the text: the Roc name without a trailing `_`, so a
+	## field can be called `packages_` in Roc (where `packages` is a keyword)
+	## and `packages` on the wire.
+	wire_name : Str -> Str
+	wire_name = |name|
+		if name.ends_with("_") and name != "_" {
+			Str.from_utf8_lossy(name.to_utf8().drop_last(1))
+		} else {
+			name
+		}
 
 	open : List(Token) -> Try(List(Token), [InvalidSexpr(Str), ..others])
 	open = |tokens|
@@ -428,4 +442,11 @@ expect {
 	parsed : Try(List(Str), _)
 	parsed = Sexpr.parse("(\"x\"")
 	parsed.is_err()
+}
+
+expect {
+	value : { packages_ : List(Str), requires_ : List(Str) }
+	value = { packages_: ["a"], requires_: [] }
+	text = Sexpr.to_str(value)
+	text.contains("(packages (\"a\"))") and text.contains("(requires ())") and Sexpr.parse(text) == Ok(value)
 }

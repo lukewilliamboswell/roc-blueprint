@@ -1,1 +1,1 @@
-((name "x") (overlays ()) (shells ()) (systems (Riscv64Linux)) (tasks ()) (version 2))
+((format ((major 1) (minor 0))) (name "x") (inputs (((kind Registry) (name "n") (url "u")))))

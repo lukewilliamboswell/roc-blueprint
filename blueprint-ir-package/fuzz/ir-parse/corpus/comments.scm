@@ -1,6 +1,6 @@
 ;; header comment
 (
 	(name "c") ; trailing
-	(overlays ()) (shells ())
-	(systems (X86_64Linux)) (tasks ())
-	(version 2)) ; end
+	(inputs ()) (shells ())
+	(systems ("x86_64-linux")) (tasks ())
+	(format ((major 1) (minor 0)))) ; end
