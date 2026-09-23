@@ -1,19 +1,8 @@
-# Roc example executables have no extension.
-examples/**
-!examples/**/
-!examples/**/*.*
-examples/*/flake.nix
-
-.direnv/
+.blueprint/
 .roc-blueprint-tmp/
+.zig-cache/
+zig-out/
 dist/
-generated-docs/
-
-__pycache__/
-*.py[cod]
-
-*.tar.br
-*.tar.gz
-*.tar.zst
-
-.DS_Store
+platform/targets/x64musl/libhost.a
+/blueprint
+cli/main
