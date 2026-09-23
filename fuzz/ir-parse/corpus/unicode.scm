@@ -1,0 +1,1 @@
+((name "λ→🦊 ünï") (overlays ("github:ü/ñ")) (shells (((name "日本") (tools (("ç" "ø")))))) (systems ()) (version 1))

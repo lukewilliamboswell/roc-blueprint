@@ -7,3 +7,6 @@ platform/targets/x64musl/libhost.a
 /blueprint
 cli/main
 .bundle-stage/
+fuzz/*/ir-*
+!fuzz/*/main.roc
+.roc-fuzz/
