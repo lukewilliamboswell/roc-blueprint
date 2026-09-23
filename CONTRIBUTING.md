@@ -8,12 +8,14 @@ blueprint-ir-platform/   the roc-blueprint platform that Blueprint.roc apps use
   host/, build.zig       Zig host, built into targets/x64musl/libhost.a
   targets/               linker inputs; all but libhost.a are vendored (see its README)
   ir-release             the released IR bundle URL a platform release uses
-blueprint-ir-package/    roc-blueprint-ir: the IR types and S-expression format
+blueprint-ir-package/    roc-blueprint-ir: the IR types, Value, and the S-expression format
   fuzz/                  roc-fuzz targets: ir-parse, ir-round-trip
 blueprint-cli/           the blueprint CLI (basic-cli + weaver)
-  Flake.roc              renders the IR as a Nix flake
-  tests/                 golden files
+  Backend.roc            the backend interface: render files, argv for lock/shell/run
+  NixBackend.roc         the Nix backend (flake.nix)
+  tests/                 IR fixtures and golden flakes
 examples/Blueprint.roc   uses every setting; CI runs blueprint against it
+examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
 scripts/                 test.sh (all of CI), bundle.sh, fuzz.sh
 flake.nix                builds blueprint with the pinned Roc; user and contributor shells
 ```
@@ -48,28 +50,56 @@ twice (see below), and runs each fuzz target for 30 seconds.
 
 ## The IR
 
-`roc Blueprint.roc` prints the IR, e.g.
+`roc Blueprint.roc` prints the IR as an S-expression: records are
+`((field value) ...)`, lists `(a b)`, tags `Tag` or `(Tag payload ...)`, and
+`;` starts a comment. `blueprint-ir-package/Ir.roc` documents every field.
 
-```lisp
-(
-	(name "roc-blueprint")
-	(overlays ("github:roc-lang/roc-overlay"))
-	(shells ((
-		(name "ci")
-		(tools (("rocpkgs" "nightly") ("zig") ("git"))))))
-	(systems (X86_64Linux))
-	(tasks ((
-		(name "test")
-		(run ("./scripts/test.sh"))
-		(shell "default"))))
-	(version N))
-```
+In outline:
 
-(`N` is `Ir.current_version`.)
+- `format` — `(major minor)`; see the compatibility rules below.
+- `name`, `systems` (strings such as `"x86_64-linux"`).
+- `inputs` — `{ name, url, kind }`, where kind is `Packages` (a package set),
+  `Overlay` or `Flake`. The IR implies no inputs; the platform always writes an
+  explicit `nixpkgs`.
+- `shells` — `{ name, packages }`, each package `{ source, path }` where
+  `source` names a `Packages` input.
+- `tasks` — `{ name, shell, run }`.
+- `raw` — `{ backend, target, value }`, passed through to one backend.
+- `extensions` — `{ kind, name, value }`, blocks a backend may understand.
+- `requires` — features the config uses beyond the core (`"raw"`,
+  `"extensions"`), so an older `blueprint` can say what's missing.
 
-Records are `((field value) ...)`, lists are `(a b)`, tags are `Tag` or
-`(Tag payload ...)`, and `;` starts a comment. Any change to the IR's shape
-must bump `Ir.current_version`; the CLI refuses versions it doesn't know.
+`Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its codec is hand-written
+(deriving it hangs the compiler), so the IR only encodes to S-expressions.
+`requires` and `packages` are reserved words in Roc; the Roc fields are
+`requires_` and `packages_`, and `Sexpr` drops a trailing `_` on the wire.
+
+### Compatibility
+
+- A consumer accepts any IR with the same `major`, whatever the `minor`.
+- **Minor** (compatible): a new optional top-level field (missing fields
+  default to empty, unknown ones are ignored), or a new `requires` feature.
+- **Major** (breaking): anything else, such as a new required field, a new
+  field inside a nested record, or a new `kind` tag.
+
+### Backends
+
+`blueprint-cli/Backend.roc` is the interface: a backend is pure. It renders the
+IR into files and gives the argv for locking, updating, entering a shell and
+running a task; `main.roc` does the effects. `NixBackend.roc` is the only
+backend. It:
+
+- imports every `Packages` input once per system and applies every overlay to
+  each;
+- renders `raw` entries for backend `"nix"` (targets `shell:<name>` and
+  `flake`) as data, and ignores raw entries for other backends;
+- refuses any `extensions` (it supports none yet) and advertises the
+  `"raw"` feature.
+
+A new feature usually means: a setting in the platform (`Config.roc`,
+`Lower.roc`), then either an `extensions` kind or a new optional IR field
+(a minor bump), then support in a backend. Prototyping it as `Raw` or `Custom`
+first needs no IR change at all.
 
 ## Releasing
 

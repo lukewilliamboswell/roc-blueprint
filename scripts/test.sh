@@ -36,6 +36,15 @@ step "blueprint against examples/Blueprint.roc"
 	"$ROOT/blueprint" run hello
 )
 
+step "Golden flakes parse as Nix"
+for f in blueprint-cli/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done
+
+step "Extensions example: the platform emits them, this blueprint refuses them clearly"
+"$ROC" check examples/extensions/Blueprint.roc
+(cd examples/extensions && "$ROC" Blueprint.roc | grep -qF '(kind "services")')
+out="$(cd examples/extensions && "$ROOT/blueprint" check 2>&1 || true)"
+grep -qF "needs features: extensions" <<<"$out" || { echo "expected a 'needs features' error, got: $out" >&2; exit 1; }
+
 step "Nix flake: blueprint builds with the pinned Roc"
 nix build .#blueprint --no-link
 nix develop . -c blueprint --version

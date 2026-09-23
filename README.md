@@ -56,16 +56,20 @@ app provides one value, `config`, a list of settings:
 | Setting | Meaning |
 |---|---|
 | `Name(Str)` | Project name. Required, once. |
-| `Systems(List(System))` | Nix systems to generate shells for: `X86_64Linux`, `Aarch64Linux`, `X86_64Darwin`, `Aarch64Darwin`. Default: all four. |
-| `Overlay(FlakeRef)` | A flake whose `overlays.default` is applied to nixpkgs, e.g. `"github:roc-lang/roc-overlay"`. |
+| `Systems(List(System))` | Systems to generate shells for, e.g. `"x86_64-linux"`, `"aarch64-darwin"`. Default: x86_64 and aarch64, Linux and macOS. |
+| `Packages(InputName, FlakeRef)` | A package set. `"nixpkgs"` (nixos-unstable) is always there; declare it to pin a different one, or add more, e.g. `Packages("stable", "github:NixOS/nixpkgs/nixos-24.05")`. |
+| `Overlay(FlakeRef)` | A flake whose `overlays.default` is applied to every package set, e.g. `"github:roc-lang/roc-overlay"`. |
+| `Input(InputName, FlakeRef)` | Any other flake input. |
 | `Shell(Name, List(ShellSetting))` | A dev shell. Names must be unique; `"default"` is the one `blueprint shell` enters. |
 | `Task(Name, List(TaskSetting))` | A named command. Names must be unique. |
+| `Raw(backend, target, Val)` | Settings passed straight to a backend, for anything the other settings don't cover. See below. |
+| `Custom(kind, name, Val)` | A block for a future or third-party feature. The current `blueprint` refuses configs that use one. |
 
 Inside a `Shell`:
 
 | Setting | Meaning |
 |---|---|
-| `Tools(List(Tool))` | nixpkgs attribute paths, e.g. `"git"` or `"llvmPackages.bintools"`. Repeat to add more. |
+| `Tools(List(Tool))` | Package attribute paths, e.g. `"git"` or `"llvmPackages.bintools"`, from `nixpkgs`; `"stable#jq"` takes `jq` from the `stable` package set. Repeat to add more. |
 
 Inside a `Task`:
 
@@ -86,6 +90,25 @@ config = [
 ]
 ```
 
+### Raw settings
+
+`Raw` passes data straight to a backend. The Nix backend understands two
+targets:
+
+```roc
+Raw("nix", "shell:default", Attrs([
+	("shellHook", Str("echo ready")),
+	("RUST_LOG", Str("debug")),    # environment variables are just attributes
+])),
+Raw("nix", "flake", Attrs([("formatter", Str("nixpkgs-fmt"))])),
+```
+
+- `shell:<name>` adds attributes to that shell's `mkShell` call.
+- `flake` adds attributes to the flake's outputs.
+
+Values are `Str`, `Int`, `Bool`, `List([...])` and `Attrs([(name, value), ...])`.
+They're data, not Nix code, so they can't refer to packages or inputs.
+
 See [`examples/Blueprint.roc`](examples/Blueprint.roc) for every setting in
 one file.
 
@@ -101,7 +124,7 @@ Run these in the directory that contains `Blueprint.roc`.
 | `blueprint tasks` | List the tasks |
 | `blueprint update` | Update `Blueprint.lock` to the latest nixpkgs and overlays |
 | `blueprint check` | Validate `Blueprint.roc` |
-| `blueprint ir` / `blueprint flake` | Print the intermediate form, or the generated flake |
+| `blueprint ir` / `blueprint flake` | Print the intermediate form, or the generated files |
 | `blueprint --help` | Help for this project: `run --help` lists its tasks, `shell --help` its shells and their tools |
 
 - **Commit** `Blueprint.roc` and `Blueprint.lock`. The lock pins nixpkgs and
