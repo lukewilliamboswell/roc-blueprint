@@ -19,9 +19,9 @@
       rocTag = lib.trim (builtins.readFile ./.roc-version);
       roc = roc-overlay.packages.${system}.${rocTag};
 
-      # Roc packages cli/main.roc downloads. Fetched here and unpacked into
+      # Roc packages blueprint-cli/main.roc downloads. Fetched here and unpacked into
       # Roc's package cache so the sandboxed build needs no network.
-      # These are the `pf:` and `weaver:` URLs in cli/main.roc plus their own
+      # These are the `pf:` and `weaver:` URLs in blueprint-cli/main.roc plus their own
       # dependencies (http, roc-ansi, path). A missing one shows up as
       # "package download failed" in `nix build .#blueprint`.
       rocPackages = [
@@ -64,8 +64,10 @@
         src = lib.fileset.toSource {
           root = ./.;
           fileset = lib.fileset.unions [
-            ./cli
-            ./ir
+            ./blueprint-cli
+            ./blueprint-ir-package/main.roc
+            ./blueprint-ir-package/Ir.roc
+            ./blueprint-ir-package/Sexpr.roc
           ];
         };
         nativeBuildInputs = [
@@ -80,7 +82,7 @@
           runHook preBuild
           export HOME="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache"
           ${lib.concatMapStrings unpackRocPackage rocPackages}
-          roc build cli/main.roc --output=blueprint
+          roc build blueprint-cli/main.roc --output=blueprint
           runHook postBuild
         '';
         installPhase = ''

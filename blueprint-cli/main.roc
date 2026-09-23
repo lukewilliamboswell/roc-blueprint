@@ -6,7 +6,7 @@
 app [main!] {
 	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.23.0-rc1/3hT3SoHZ6qbEsa9qVFLUW3547U5LeoNd1KbpqLpz4r1i.tar.zst",
 	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
-	ir: "../ir/main.roc",
+	ir: "../blueprint-ir-package/main.roc",
 }
 
 import pf.Cmd
@@ -162,7 +162,7 @@ run! = |command, loaded|
 
 ## Type-check Blueprint.roc, then run it so whole-config rules are checked too.
 ## TODO(compile-time-render): `roc check` alone is enough once the platform
-## renders the IR at compile time again (see platform/main.roc).
+## renders the IR at compile time again (see blueprint-ir-platform/main.roc).
 check! : () => Try({}, _)
 check! = || {
 	Cmd.new_str(roc!()).args_str(["check", "Blueprint.roc"]).exec_cmd!()?

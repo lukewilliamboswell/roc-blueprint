@@ -5,12 +5,12 @@ examples/Blueprint.lock
 .zig-cache/
 zig-out/
 dist/
-platform/targets/x64musl/libhost.a
+blueprint-ir-platform/targets/x64musl/libhost.a
 /blueprint
-cli/main
+blueprint-cli/main
 .bundle-stage/
-fuzz/*/ir-*
-!fuzz/*/main.roc
+blueprint-ir-package/fuzz/*/ir-*
+!blueprint-ir-package/fuzz/*/main.roc
 .roc-fuzz/
 fuzz-artifacts/
 crash-*

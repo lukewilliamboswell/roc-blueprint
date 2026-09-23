@@ -16,4 +16,4 @@ release `link-inputs-sha256-2df3df339dfb1ad4ae1fad0f382cc100c5b31b3921cdeff939f6
 (`link-inputs-all.tar`, sha256 `e54e6ed10fd433f55c9ab9d1b8ff346739b5c9d21f24c833cd0be4785393aef4`),
 built from commit `4051337809b72aedddf87dbcf7d885cdbcf13309`.
 
-Verify with `sha256sum -c platform/targets/x64musl.sha256`.
+Verify with `(cd blueprint-ir-platform/targets && sha256sum -c x64musl.sha256)`.

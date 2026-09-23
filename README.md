@@ -6,13 +6,13 @@ it.
 
 ```roc
 # Blueprint.roc
-app [config] { pf: platform "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.1.0-rc4/ELkWqfGuQMEnwDyEVykHuCzQv9DrKSzHfAAFEzW7dh72.tar.zst" }
+app [config] { pf: platform "<platform URL from the latest release>" }
 
 config = [
 	Name("my-project"),
 	Overlay("github:roc-lang/roc-overlay"),
-	Shell("default", [Tools(["rocpkgs.nightly", "zig_0_16", "python3", "sqlite"])]),
-	Shell("ci", [Tools(["rocpkgs.nightly", "zig_0_16"])]),
+	Shell("default", [Tools(["rocpkgs.nightly", "zig", "python3", "sqlite"])]),
+	Shell("ci", [Tools(["rocpkgs.nightly", "zig"])]),
 	Task("test", [Run(["python3", "scripts/test.py"])]),
 	Task("check", [Run(["python3", "scripts/check.py"]), In("ci")]),
 ]
@@ -42,7 +42,7 @@ nix develop github:lukewilliamboswell/roc-blueprint
 or add `packages.x86_64-linux.blueprint` from this flake to your own flake.
 Each [release](https://github.com/lukewilliamboswell/roc-blueprint/releases)
 also has a prebuilt `blueprint-x86_64-linux`; that one needs the Roc nightly
-named in the release notes on your `PATH`, or its path in `ROC`.
+named in the release notes, on your `PATH` or in `ROC`.
 
 Only x86_64 Linux is supported for now.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build each roc-fuzz target in fuzz/ with coverage instrumentation and run it
+# Build each roc-fuzz target in blueprint-ir-package/fuzz/ with coverage instrumentation and run it
 # for a while from its corpus. A crash fails the script and libFuzzer prints
 # the reproducing input.
 #
@@ -7,7 +7,7 @@
 #
 # The corpus is copied to a scratch directory, so new inputs libFuzzer finds
 # don't land in the repo. To keep them, run the target binary yourself on
-# fuzz/<target>/corpus.
+# blueprint-ir-package/fuzz/<target>/corpus.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROC="${ROC:-roc}"
@@ -18,7 +18,7 @@ ARTIFACTS="${FUZZ_ARTIFACTS:-fuzz-artifacts}"
 mkdir -p "$ARTIFACTS"
 trap 'rm -rf "$WORK"' EXIT
 
-for dir in fuzz/*/; do
+for dir in blueprint-ir-package/fuzz/*/; do
 	target="$(basename "$dir")"
 	echo "==> $target (${SECONDS_PER_TARGET}s)"
 	# roc exits non-zero on warnings; roc-fuzz's own nightly pin warns, so

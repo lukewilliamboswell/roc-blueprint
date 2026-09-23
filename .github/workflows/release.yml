@@ -4,7 +4,7 @@ name: Release roc-blueprint
 # prebuilt x86_64 Linux `blueprint` CLI.
 #
 # The platform depends on a published roc-blueprint-ir release, whose bundle
-# URL is pinned in platform/ir-release (ir has its own release cycle; see
+# URL is pinned in blueprint-ir-platform/ir-release (ir has its own release cycle; see
 # release-ir.yml).
 on:
   push:
@@ -40,14 +40,14 @@ jobs:
         run: ./scripts/test.sh
 
       - name: Bundle against the pinned ir release
-        run: scripts/bundle.sh platform "$(cat platform/ir-release)"
+        run: scripts/bundle.sh platform "$(cat blueprint-ir-platform/ir-release)"
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           read -r _ pf < <(grep '^roc-blueprint ' dist/bundles.txt)
-          ir_url="$(cat platform/ir-release)"
+          ir_url="$(cat blueprint-ir-platform/ir-release)"
           cp blueprint dist/blueprint-x86_64-linux
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           cat > notes.md <<NOTES

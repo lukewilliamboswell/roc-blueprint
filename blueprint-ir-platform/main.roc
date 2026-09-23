@@ -4,7 +4,7 @@
 ## working environment.
 ##
 ## ```roc
-## app [config] { pf: platform "platform/main.roc" }
+## app [config] { pf: platform "blueprint-ir-platform/main.roc" }
 ##
 ## config = [
 ## 	Name("my-project"),
@@ -21,7 +21,7 @@ platform ""
 	}
 	exposes [Config, EnvName, FlakeRef, TaskName, Tool]
 	packages {
-		ir: "../ir/main.roc",
+		ir: "../blueprint-ir-package/main.roc",
 	}
 	provides { "roc_main": main_for_host! }
 	hosted {

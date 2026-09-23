@@ -1,7 +1,7 @@
 # An example using every setting. CI runs blueprint against it, and
 # scripts/bundle.sh swaps the platform path for a bundle URL to smoke-test
 # the platform bundle.
-app [config] { pf: platform "../platform/main.roc" }
+app [config] { pf: platform "../blueprint-ir-platform/main.roc" }
 
 config = [
 	Name("fixture"),
