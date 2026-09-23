@@ -1,0 +1,7 @@
+((format ((major 1) (minor 0)))
+ (name "sample \"quoted\"")
+ (systems ("x86_64-linux" "aarch64-darwin"))
+ (inputs (((name "nixpkgs") (url "github:NixOS/nixpkgs/nixos-unstable") (kind Packages))
+          ((name "roc") (url "github:roc-lang/roc-overlay") (kind Overlay))))
+ (shells (((name "default") (packages (((source "nixpkgs") (path ("git"))) ((source "nixpkgs") (path ("llvmPackages" "bintools"))))))
+          ((name "ci") (packages (((source "nixpkgs") (path ("git")))))))))

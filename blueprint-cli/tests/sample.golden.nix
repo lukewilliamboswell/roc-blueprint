@@ -3,42 +3,42 @@
   description = "Development environments for sample \"quoted\"";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    overlay0.url = "github:roc-lang/roc-overlay";
+    "nixpkgs".url = "github:NixOS/nixpkgs/nixos-unstable";
+    "roc".url = "github:roc-lang/roc-overlay";
   };
 
-  outputs = { nixpkgs, ... }@inputs:
+  outputs = { self, ... }@inputs:
     let
-      pkgsFor = system: import nixpkgs {
-        inherit system;
-        overlays = [ inputs.overlay0.overlays.default ];
+      overlays = [ inputs."roc".overlays.default ];
+      setsFor = system: {
+        "nixpkgs" = import inputs."nixpkgs" { inherit system overlays; };
       };
     in
     {
       devShells = {
-        "x86_64-linux" = let pkgs = pkgsFor "x86_64-linux"; in {
-          "default" = pkgs.mkShell {
+        "x86_64-linux" = let sets = setsFor "x86_64-linux"; in {
+          "default" = sets."nixpkgs".mkShell {
             packages = [
-              pkgs."git"
-              pkgs."llvmPackages"."bintools"
+              sets."nixpkgs"."git"
+              sets."nixpkgs"."llvmPackages"."bintools"
             ];
           };
-          "ci" = pkgs.mkShell {
+          "ci" = sets."nixpkgs".mkShell {
             packages = [
-              pkgs."git"
+              sets."nixpkgs"."git"
             ];
           };
         };
-        "aarch64-darwin" = let pkgs = pkgsFor "aarch64-darwin"; in {
-          "default" = pkgs.mkShell {
+        "aarch64-darwin" = let sets = setsFor "aarch64-darwin"; in {
+          "default" = sets."nixpkgs".mkShell {
             packages = [
-              pkgs."git"
-              pkgs."llvmPackages"."bintools"
+              sets."nixpkgs"."git"
+              sets."nixpkgs"."llvmPackages"."bintools"
             ];
           };
-          "ci" = pkgs.mkShell {
+          "ci" = sets."nixpkgs".mkShell {
             packages = [
-              pkgs."git"
+              sets."nixpkgs"."git"
             ];
           };
         };

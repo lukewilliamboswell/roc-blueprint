@@ -19,10 +19,15 @@ import weaver.Cli
 import weaver.Param
 import weaver.SubCmd
 import ir.Ir
-import Flake
+import Backend
+import NixBackend
 
 version : Str
 version = "0.1.0"
+
+## The backend every command goes through.
+backend : Backend
+backend = NixBackend.backend
 
 Command : [
 	Gen,
@@ -40,32 +45,42 @@ Command : [
 ## actually defines. Otherwise the parser is generic and says why.
 cli_for : Try(Ir, _) -> Cli.CliParser(Try(Command, [NoSubcommand]))
 cli_for = |loaded| {
+	generic_shell_cmd = SubCmd.finish(
+		Cli.map(Param.maybe_str({ name: "name", help: "The shell to enter (default: \"default\")." }), |name| Shell(name ?? "default")),
+		{ name: "shell", description: "Generate, then enter a dev shell", mapper: |c| c },
+	)
+	generic_run_cmd = SubCmd.finish(
+		{
+			task: Param.str({ name: "task", help: "The task to run.", default: NoDefault }),
+			args: Param.str_list({ name: "args", help: "Extra arguments for the task; put them after --." }),
+		}.Cli,
+		{ name: "run", description: "Generate, then run a task in its shell", mapper: |r| Run(r) },
+	)
 	{ shell_cmd, run_cmd, about } =
 		match loaded {
 			Ok(ir) => {
-				shell_cmd: SubCmd.finish(
-					Cli.map(SubCmd.optional(ir.shells.map(shell_choice)), |picked| Shell(picked ?? "default")),
-					{ name: "shell", description: "Generate, then enter a dev shell (default: \"default\")", mapper: |c| c },
-				),
-				run_cmd: SubCmd.finish(
-					SubCmd.required(ir.tasks.map(task_choice)),
-					{ name: "run", description: "Generate, then run a task in its shell", mapper: |r| Run(r) },
-				),
+				# Weaver rejects an empty subcommand list, so fall back to the
+				# generic parsers when there are no shells or tasks.
+				shell_cmd: if ir.shells.is_empty()
+					generic_shell_cmd
+				else
+					SubCmd.finish(
+						Cli.map(SubCmd.optional(ir.shells.map(shell_choice)), |picked| Shell(picked ?? "default")),
+						{ name: "shell", description: "Generate, then enter a dev shell (default: \"default\")", mapper: |c| c },
+					),
+				run_cmd: if ir.tasks.is_empty()
+					generic_run_cmd
+				else
+					SubCmd.finish(
+						SubCmd.required(ir.tasks.map(task_choice)),
+						{ name: "run", description: "Generate, then run a task in its shell", mapper: |r| Run(r) },
+					),
 				about: summary(ir),
 			}
 
 			Err(err) => {
-				shell_cmd: SubCmd.finish(
-					Cli.map(Param.maybe_str({ name: "name", help: "The shell to enter (default: \"default\")." }), |name| Shell(name ?? "default")),
-					{ name: "shell", description: "Generate, then enter a dev shell", mapper: |c| c },
-				),
-				run_cmd: SubCmd.finish(
-					{
-						task: Param.str({ name: "task", help: "The task to run.", default: NoDefault }),
-						args: Param.str_list({ name: "args", help: "Extra arguments for the task; put them after --." }),
-					}.Cli,
-					{ name: "run", description: "Generate, then run a task in its shell", mapper: |r| Run(r) },
-				),
+				shell_cmd: generic_shell_cmd,
+				run_cmd: generic_run_cmd,
 				about: match err {
 					NoBlueprint => "There is no Blueprint.roc in this directory."
 					_ => "Blueprint.roc could not be loaded, so its shells and tasks aren't listed; run `blueprint check` for details."
@@ -76,14 +91,14 @@ cli_for = |loaded| {
 	Cli.assert_valid(
 		Cli.finish(
 			SubCmd.optional([
-				SubCmd.empty({ name: "gen", description: "Write .blueprint/flake.nix and sync Blueprint.lock (the default)", value: Gen }),
+				SubCmd.empty({ name: "gen", description: "Generate .blueprint/ and sync Blueprint.lock (the default)", value: Gen }),
 				shell_cmd,
 				run_cmd,
 				SubCmd.empty({ name: "tasks", description: "List the tasks", value: Tasks }),
 				SubCmd.empty({ name: "update", description: "Update Blueprint.lock to the latest inputs", value: Update }),
 				SubCmd.empty({ name: "check", description: "Validate Blueprint.roc", value: Check }),
 				SubCmd.empty({ name: "ir", description: "Print the blueprint IR", value: PrintIr }),
-				SubCmd.empty({ name: "flake", description: "Print the generated flake.nix", value: PrintFlake }),
+				SubCmd.empty({ name: "flake", description: "Print the generated files", value: PrintFlake }),
 			]),
 			{
 				name: "blueprint",
@@ -107,7 +122,7 @@ summary = |ir| {
 
 shell_choice : Ir.Shell -> SubCmd.SubcommandParserConfig(Str)
 shell_choice = |shell| {
-	tools = shell.tools.map(|p| Str.join_with(p, "."))
+	tools = shell.packages_.map(|p| Str.join_with(p.path, "."))
 	SubCmd.empty({ name: shell.name, description: Str.join_with(tools, ", "), value: shell.name })
 }
 
@@ -154,7 +169,7 @@ run! = |command, loaded|
 				Tasks => list_tasks!(ir)
 				Update => update!(ir)
 				PrintIr => Stdout.write!(ir.to_str())
-				PrintFlake => Stdout.write!(Flake.render(ir))
+				PrintFlake => print_files!(ir)
 				Check => check!()
 			}
 		}
@@ -177,7 +192,48 @@ load_ir! = || {
 		return Err(NoBlueprint)
 	}
 	output = Cmd.new_str(roc!()).args_str(["Blueprint.roc"]).exec_output!()?
-	Ir.parse(output.stdout_utf8).map_err(|err| BadIr(err))
+	ir = Ir.parse(output.stdout_utf8).map_err(|err| BadIr(err))?
+	missing = ir.unsupported_features(backend.features)
+	if !missing.is_empty() {
+		return Err(NeedsFeatures(missing))
+	}
+	Ok(ir)
+}
+
+render : Ir -> Try(List(Backend.File), _)
+render = |ir| (backend.render)(ir).map_err(|msg| RenderFailed(msg))
+
+## Run an argv from the backend.
+exec! : List(Str) => Try({}, _)
+exec! = |argv|
+	match argv {
+		[program, .. as args] =>
+			Cmd.new_str(program)
+				.args_str(args)
+				.exec_cmd!()
+				.map_err(
+					|err|
+						match err {
+							ExecCmdFailed({ exit_code, .. }) => CommandFailed(argv, exit_code)
+							other => other
+						},
+				)
+
+		[] => Ok({})
+	}
+
+print_files! : Ir => Try({}, _)
+print_files! = |ir| {
+	files = render(ir)?
+	match files {
+		[only] => Stdout.write!(only.contents)
+		_ => {
+			for file in files {
+				Stdout.write!("# ${file.path}\n${file.contents}")?
+			}
+			Ok({})
+		}
+	}
 }
 
 roc! : () => Str
@@ -186,17 +242,21 @@ roc! = || Env.var_str!("ROC") ?? "roc"
 dir : Str
 dir = ".blueprint"
 
-## Write the flake and lock it, keeping Blueprint.lock in sync.
+## Write the backend's files and lock them, keeping Blueprint.lock in sync.
 gen! : Ir => Try({}, _)
 gen! = |ir| {
+	files = render(ir)?
 	path(dir).create_all!()?
-	path("${dir}/flake.nix").write_utf8!(Flake.render(ir))?
-	lock = path("Blueprint.lock")
-	if lock.exists!()? {
-		lock.copy!(path("${dir}/flake.lock"))?
+	for file in files {
+		path("${dir}/${file.path}").write_utf8!(file.contents)?
 	}
-	Cmd.exec!("nix", ["flake", "lock", "path:${dir}"])?
-	path("${dir}/flake.lock").copy!(lock)
+	lock = path("Blueprint.lock")
+	backend_lock = path("${dir}/${backend.lock_file}")
+	if lock.exists!()? {
+		lock.copy!(backend_lock)?
+	}
+	exec!((backend.lock)(dir))?
+	backend_lock.copy!(lock)
 }
 
 shell! : Ir, Str => Try({}, _)
@@ -205,7 +265,7 @@ shell! = |ir, name| {
 		return Err(UnknownShell(name, ir.shells.map(|s| s.name)))
 	}
 	gen!(ir)?
-	Cmd.exec!("nix", ["develop", "path:${dir}#${name}"])
+	exec!((backend.enter_shell)(dir, name))
 }
 
 run_task! : Ir, Str, List(Str) => Try({}, _)
@@ -213,8 +273,9 @@ run_task! = |ir, name, extra|
 	match ir.tasks.keep_if(|t| t.name == name) {
 		[task, ..] => {
 			gen!(ir)?
-			Cmd.new_str("nix")
-				.args_str(["develop", "path:${dir}#${task.shell}", "-c"].concat(task.run).concat(extra))
+			argv = (backend.run_in_shell)(dir, task.shell, task.run.concat(extra))
+			Cmd.new_str(argv.first() ?? "")
+				.args_str(argv.drop_first(1))
 				.exec_cmd!()
 				.map_err(
 					|err|
@@ -237,8 +298,8 @@ list_tasks! = |ir| {
 update! : Ir => Try({}, _)
 update! = |ir| {
 	gen!(ir)?
-	Cmd.exec!("nix", ["flake", "update", "--flake", "path:${dir}"])?
-	path("${dir}/flake.lock").copy!(path("Blueprint.lock"))
+	exec!((backend.update)(dir))?
+	path("${dir}/${backend.lock_file}").copy!(path("Blueprint.lock"))
 }
 
 path : Str -> Path
@@ -249,13 +310,17 @@ describe = |err|
 	match err {
 		NoBlueprint => "there is no Blueprint.roc in this directory"
 		BadIr(InvalidSexpr(msg)) => "could not read the IR from Blueprint.roc: ${msg}"
-		BadIr(UnsupportedVersion(v)) => "Blueprint.roc uses IR version ${v.to_str()}, but this blueprint understands version ${Ir.current_version.to_str()}; update blueprint or the platform"
+		BadIr(UnsupportedFormat({ major, minor })) => "IR format ${U64.to_str(major)}.${U64.to_str(minor)} is not supported by this blueprint (understands major ${Ir.current_format.major.to_str()}); upgrade blueprint or change the platform version"
+		NeedsFeatures(missing) => "Blueprint.roc needs features: ${Str.join_with(missing, ", ")}; upgrade blueprint"
+		RenderFailed(msg) => "cannot generate the ${backend.name} files: ${msg}"
+		BadIr(MissingRequiredField("format")) => "Blueprint.roc uses an older roc-blueprint platform that this blueprint can't read; update the platform URL in its app header to a current release"
 		BadIr(MissingRequiredField(field)) => "the IR from Blueprint.roc is missing ${field}"
 		NonZeroExitCode({ stderr_utf8_lossy, .. }) => "roc Blueprint.roc failed:\n${stderr_utf8_lossy}"
 		TaskFailed(name, code) => "task ${name} exited with code ${code.to_str()}"
 		UnknownTask(name, known) => "no task named \"${name}\"; Blueprint.roc defines: ${Str.join_with(known, ", ")}"
 		UnknownShell(name, known) => "no shell named \"${name}\"; Blueprint.roc defines: ${Str.join_with(known, ", ")}"
-		ExecFailed({ command, exit_code }) => "`${command}` exited with code ${exit_code.to_str()}"
+		ExecFailed({ command, exit_code }) => "`${command}` exited with code ${I32.to_str(exit_code)}"
+		CommandFailed(argv, code) => "`${Str.join_with(argv, " ")}` exited with code ${code.to_str()}"
 		ExecCmdFailed({ command, exit_code }) => "`${command}` exited with code ${exit_code.to_str()}"
 		other => Str.inspect(other)
 	}
