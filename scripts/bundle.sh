@@ -101,7 +101,7 @@ platform)
 	mkdir -p "$STAGE/serve/0.0.1-smoke" "$STAGE/app"
 	cp "$DIST/$pf_bundle" "$STAGE/serve/0.0.1-smoke/"
 	sed "s#platform \"platform/main.roc\"#platform \"http://localhost:$PORT/0.0.1-smoke/$pf_bundle\"#" "$ROOT/Blueprint.roc" >"$STAGE/app/Blueprint.roc"
-	(cd "$STAGE/app" && "$ROC" Blueprint.roc) | grep -q '(version 1)'
+	(cd "$STAGE/app" && "$ROC" Blueprint.roc) | grep -q '(version [0-9]*))$'
 	echo "    ok"
 	;;
 *)

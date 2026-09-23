@@ -27,6 +27,9 @@ usage =
 	\\Commands:
 	\\  gen            Write .blueprint/flake.nix and sync Blueprint.lock (default)
 	\\  shell [NAME]   Generate, then enter a dev shell (default: "default")
+	\\  run TASK [ARGS...]
+	\\                 Generate, then run a task in its shell, with extra ARGS
+	\\  tasks          List the tasks
 	\\  update         Update Blueprint.lock to the latest inputs
 	\\  check          Validate Blueprint.roc
 	\\  ir             Print the blueprint IR
@@ -54,6 +57,8 @@ run! = |args|
 		[] | ["gen"] => gen!().map_ok(|_| {})
 		["shell"] => shell!("default")
 		["shell", name] => shell!(name)
+		["run", task, .. as extra] => run_task!(task, extra)
+		["tasks"] => list_tasks!()
 		["update"] => update!()
 		["check"] => check!()
 		["ir"] => Stdout.write!(load_ir!()?.to_str())
@@ -110,6 +115,32 @@ shell! = |name| {
 	Cmd.exec!("nix", ["develop", "path:${dir}#${name}"])
 }
 
+run_task! : Str, List(Str) => Try({}, _)
+run_task! = |name, extra| {
+	ir = gen!()?
+	match ir.tasks.keep_if(|t| t.name == name) {
+		[task, ..] =>
+			Cmd.new_str("nix")
+				.args_str(["develop", "path:${dir}#${task.shell}", "-c"].concat(task.run).concat(extra))
+				.exec_cmd!()
+				.map_err(
+					|err|
+						match err {
+							ExecCmdFailed({ exit_code, .. }) => TaskFailed(name, exit_code)
+							other => other
+						},
+				)
+		[] => Err(UnknownTask(name, ir.tasks.map(|t| t.name)))
+	}
+}
+
+list_tasks! : () => Try({}, _)
+list_tasks! = || {
+	ir = load_ir!()?
+	lines = ir.tasks.map(|t| "${t.name}\t(${t.shell})\t${Str.join_with(t.run, " ")}")
+	Stdout.line!(Str.join_with(lines, "\n"))
+}
+
 update! : () => Try({}, _)
 update! = || {
 	_ = gen!()?
@@ -128,6 +159,8 @@ describe = |err|
 		BadIr(UnsupportedVersion(v)) => "Blueprint.roc uses IR version ${v.to_str()}, but this blueprint understands version ${Ir.current_version.to_str()}; update blueprint or the platform"
 		BadIr(MissingRequiredField(field)) => "the IR from Blueprint.roc is missing ${field}"
 		NonZeroExitCode({ stderr_utf8_lossy, .. }) => "roc Blueprint.roc failed:\n${stderr_utf8_lossy}"
+		TaskFailed(name, code) => "task ${name} exited with code ${code.to_str()}"
+		UnknownTask(name, known) => "no task named \"${name}\"; Blueprint.roc defines: ${Str.join_with(known, ", ")}"
 		UnknownShell(name, known) => "no shell named \"${name}\"; Blueprint.roc defines: ${Str.join_with(known, ", ")}"
 		ExecFailed({ command, exit_code }) => "`${command}` exited with code ${exit_code.to_str()}"
 		ExecCmdFailed({ command, exit_code }) => "`${command}` exited with code ${exit_code.to_str()}"

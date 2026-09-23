@@ -13,12 +13,15 @@ config = [
 	Systems([X86_64Linux]),
 	Shell("default", [Tools(["rocpkgs.nightly", "zig_0_16", "git", "python3", "zstd", "nixfmt"])]),
 	Shell("ci", [Tools(["rocpkgs.nightly", "zig_0_16", "git"])]),
+	Task("test", [Run(["./ci/test.sh"])]),
+	Task("bundle", [Run(["scripts/bundle.sh", "platform"])]),
 ]
 ```
 
 ```sh
 blueprint shell        # enter the default shell
 blueprint shell ci     # or another one
+blueprint run test     # run a task in its shell
 ```
 
 ## How it fits together
@@ -51,6 +54,9 @@ working on roc-blueprint.
 | `Overlay(FlakeRef)` | A flake whose `overlays.default` is applied to nixpkgs |
 | `Shell(EnvName, List(ShellSetting))` | A dev shell; names must be unique |
 | `Tools(List(Tool))` | nixpkgs attribute paths, e.g. `"llvmPackages.bintools"` |
+| `Task(TaskName, List(TaskSetting))` | A named command; names must be unique |
+| `Run(List(Str))` | The task's command and arguments (required, once) |
+| `In(EnvName)` | The shell the task runs in (optional, default `"default"`) |
 
 ### The IR
 
@@ -64,7 +70,11 @@ working on roc-blueprint.
 		(name "ci")
 		(tools (("rocpkgs" "nightly") ("zig_0_16") ("git"))))))
 	(systems (X86_64Linux))
-	(version 1))
+	(tasks ((
+		(name "test")
+		(run ("./ci/test.sh"))
+		(shell "default"))))
+	(version 2))
 ```
 
 Records are `((field value) ...)`, lists are `(a b)`, tags are `Tag` or
@@ -76,6 +86,8 @@ Records are `((field value) ...)`, lists are `(a b)`, tags are `Tag` or
 |---|---|
 | `blueprint` / `blueprint gen` | Write `.blueprint/flake.nix`, lock it, sync `Blueprint.lock` |
 | `blueprint shell [NAME]` | `gen`, then `nix develop` into the shell (default `default`) |
+| `blueprint run TASK [ARGS...]` | `gen`, then run a task in its shell, appending `ARGS` |
+| `blueprint tasks` | List the tasks |
 | `blueprint update` | Update `Blueprint.lock` to the latest inputs |
 | `blueprint check` | Type-check and run `Blueprint.roc` to validate it |
 | `blueprint ir` | Print the IR |

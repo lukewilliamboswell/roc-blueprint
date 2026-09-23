@@ -9,6 +9,7 @@ Ir := {
 	systems : List([Aarch64Darwin, Aarch64Linux, X86_64Darwin, X86_64Linux]),
 	overlays : List(Str),
 	shells : List({ name : Str, tools : List(List(Str)) }),
+	tasks : List({ name : Str, shell : Str, run : List(Str) }),
 }.{
 	is_eq : _
 	encoder_for : _
@@ -16,10 +17,13 @@ Ir := {
 
 	## Bumped whenever the IR changes shape.
 	current_version : U64
-	current_version = 1
+	current_version = 2
 
 	## One dev shell: its name, and nixpkgs attribute paths split on `.`.
 	Shell : { name : Str, tools : List(List(Str)) }
+
+	## A named command, run inside one of the shells.
+	Task : { name : Str, shell : Str, run : List(Str) }
 
 	System : [Aarch64Darwin, Aarch64Linux, X86_64Darwin, X86_64Linux]
 
@@ -51,11 +55,12 @@ Ir := {
 
 sample : Ir
 sample = Ir.{
-	version: 1,
+	version: 2,
 	name: "demo",
 	systems: [X86_64Linux, Aarch64Darwin],
 	overlays: ["github:roc-lang/roc-overlay"],
 	shells: [{ name: "default", tools: [["git"], ["llvmPackages", "bintools"]] }],
+	tasks: [{ name: "test", shell: "default", run: ["python3", "-c", "print(\"hi\")"] }],
 }
 
 expect Ir.parse(sample.to_str()) == Ok(sample)
@@ -65,4 +70,4 @@ expect {
 	text.contains("(systems (X86_64Linux Aarch64Darwin))")
 }
 
-expect Ir.parse(Str.replace_each(sample.to_str(), "(version 1)", "(version 9)")) == Err(UnsupportedVersion(9))
+expect Ir.parse(Str.replace_each(sample.to_str(), "(version 2)", "(version 9)")) == Err(UnsupportedVersion(9))

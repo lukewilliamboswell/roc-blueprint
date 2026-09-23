@@ -9,6 +9,7 @@
 ## config = [
 ## 	Name("my-project"),
 ## 	Shell("default", [Tools(["git", "python3"])]),
+## 	Task("test", [Run(["python3", "-m", "pytest"])]),
 ## ]
 ## ```
 ##
@@ -18,7 +19,7 @@ platform ""
 	requires {
 		config : List(Config.Setting)
 	}
-	exposes [Config, EnvName, FlakeRef, Tool]
+	exposes [Config, EnvName, FlakeRef, TaskName, Tool]
 	packages {
 		ir: "../ir/main.roc",
 	}
@@ -38,6 +39,7 @@ import Lower
 import Tool
 import FlakeRef
 import EnvName
+import TaskName
 import ir.Ir
 
 # TODO(compile-time-render): restore compile-time rendering once upstream is fixed.

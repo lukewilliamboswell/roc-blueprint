@@ -74,7 +74,7 @@ import "tests/sample.golden.nix" as golden : Str
 
 expect {
 	ir = Ir.{
-		version: 1,
+		version: 2,
 		name: "sample \"quoted\"",
 		systems: [X86_64Linux, Aarch64Darwin],
 		overlays: ["github:roc-lang/roc-overlay"],
@@ -82,6 +82,7 @@ expect {
 			{ name: "default", tools: [["git"], ["llvmPackages", "bintools"]] },
 			{ name: "ci", tools: [["git"]] },
 		],
+		tasks: [],
 	}
 	Flake.render(ir) == golden
 }
