@@ -6,3 +6,4 @@ dist/
 platform/targets/x64musl/libhost.a
 /blueprint
 cli/main
+.bundle-stage/

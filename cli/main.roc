@@ -28,7 +28,7 @@ usage =
 	\\  gen            Write .blueprint/flake.nix and sync Blueprint.lock (default)
 	\\  shell [NAME]   Generate, then enter a dev shell (default: "default")
 	\\  update         Update Blueprint.lock to the latest inputs
-	\\  check          Validate Blueprint.roc without running it
+	\\  check          Validate Blueprint.roc
 	\\  ir             Print the blueprint IR
 	\\  flake          Print the generated flake.nix
 	\\  version        Print the blueprint version
@@ -55,13 +55,23 @@ run! = |args|
 		["shell"] => shell!("default")
 		["shell", name] => shell!(name)
 		["update"] => update!()
-		["check"] => Cmd.new_str(roc!()).args_str(["check", "Blueprint.roc"]).exec_cmd!()
+		["check"] => check!()
 		["ir"] => Stdout.write!(load_ir!()?.to_str())
 		["flake"] => Stdout.write!(Flake.render(load_ir!()?))
 		["version"] => Stdout.line!(version)
 		["help"] | ["--help"] | ["-h"] => Stdout.line!(usage)
 		_ => Err(Usage(Str.join_with(args, " ")))
 	}
+
+## Type-check Blueprint.roc, then run it so whole-config rules are checked too.
+## TODO(compile-time-render): `roc check` alone is enough once the platform
+## renders the IR at compile time again (see platform/main.roc).
+check! : () => Try({}, _)
+check! = || {
+	Cmd.new_str(roc!()).args_str(["check", "Blueprint.roc"]).exec_cmd!()?
+	_ = load_ir!()?
+	Stdout.line!("Blueprint.roc is valid")
+}
 
 ## Compile and run Blueprint.roc, then parse the IR it prints.
 load_ir! : () => Try(Ir, _)
