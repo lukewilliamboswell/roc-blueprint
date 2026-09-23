@@ -105,9 +105,11 @@ came from and its checksums.
 ### Releasing
 
 Push a tag like `0.1.0`. `.github/workflows/release.yml` runs the tests,
-then `scripts/bundle.sh <release-url>`, and publishes the
-`roc-blueprint-ir` bundle, the `roc-blueprint` platform bundle and a
-prebuilt `blueprint` binary.
+bundles, and publishes two releases: `0.1.0` with the `roc-blueprint`
+platform bundle and a prebuilt `blueprint` binary, and `0.1.0-ir` with the
+`roc-blueprint-ir` bundle. They're separate because Roc identifies a package
+by its URL minus the version and hash, so two bundles under one tag look like
+one package served with two hashes.
 
 `roc bundle` only packs files below the entry point's directory, so the
 platform can't carry `../ir` inside its bundle. `scripts/bundle.sh` bundles

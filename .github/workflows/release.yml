@@ -1,10 +1,13 @@
 name: Release
 
 # Push a tag like 0.1.0 to publish:
-#   - the roc-blueprint-ir package bundle
-#   - the roc-blueprint platform bundle (its `ir` dependency points at the
-#     ir bundle in this same release)
-#   - a prebuilt x86_64 Linux `blueprint` CLI
+#   - release <tag>: the roc-blueprint platform bundle and a prebuilt
+#     x86_64 Linux `blueprint` CLI
+#   - release <tag>-ir: the roc-blueprint-ir package bundle
+#
+# The two bundles need separate releases: Roc identifies a package by its URL
+# with the version and hash removed, so two bundles under the same tag would
+# look like one package version served with two different hashes.
 on:
   push:
     tags: ["[0-9]+.[0-9]+.[0-9]+*"]
@@ -39,7 +42,7 @@ jobs:
         run: ./ci/test.sh
 
       - name: Bundle against the release URL
-        run: scripts/bundle.sh "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+        run: scripts/bundle.sh "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}-ir"
 
       - name: Publish
         env:
@@ -49,6 +52,7 @@ jobs:
           read -r _ pf < <(grep '^roc-blueprint ' dist/bundles.txt)
           cp blueprint dist/blueprint-x86_64-linux
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          ir_url="${url}-ir"
           cat > notes.md <<NOTES
           Platform (use in \`Blueprint.roc\`):
 
@@ -59,12 +63,15 @@ jobs:
           IR package (for tools that read the blueprint IR):
 
           \`\`\`roc
-          ir: "${url}/${ir}"
+          ir: "${ir_url}/${ir}"
           \`\`\`
 
           Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl only.
           NOTES
           prerelease=()
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "${GITHUB_REF_NAME}-ir" "${prerelease[@]}" --target "$GITHUB_SHA" \
+            --title "${GITHUB_REF_NAME}-ir" --notes "roc-blueprint-ir for roc-blueprint ${GITHUB_REF_NAME}: \`${ir_url}/${ir}\`" \
+            "dist/${ir}"
           gh release create "$GITHUB_REF_NAME" "${prerelease[@]}" --title "$GITHUB_REF_NAME" --notes-file notes.md \
-            "dist/${ir}" "dist/${pf}" dist/blueprint-x86_64-linux
+            "dist/${pf}" dist/blueprint-x86_64-linux

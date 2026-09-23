@@ -11,7 +11,8 @@
 # With no IR_BASE_URL the ir bundle is served from localhost, and an app is
 # built against the platform bundle as a smoke test. For a release, pass the
 # release download URL, e.g.
-#   https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.1.0
+#   https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.1.0-ir
+# (the ir bundle needs its own release; see .github/workflows/release.yml).
 #
 # Environment: ROC (default: roc), PORT (default: 8765).
 set -euo pipefail
@@ -51,9 +52,15 @@ IR_BUNDLE="$(bundle "$ROOT/ir" main.roc Ir.roc Sexpr.roc)"
 echo "    $IR_BUNDLE"
 
 if [[ -z "$IR_BASE_URL" ]]; then
-	(cd "$DIST" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1) &
+	# Serve with the same versioned layout as a release (<tag>/ and <tag>-ir/),
+	# so the smoke test resolves packages the way a release does.
+	SERVE="$STAGE/serve"
+	mkdir -p "$SERVE/0.0.1-smoke" "$SERVE/0.0.1-smoke-ir"
+	cp "$DIST/$IR_BUNDLE" "$SERVE/0.0.1-smoke-ir/"
+	(cd "$SERVE" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1) &
 	SERVER_PID=$!
-	IR_BASE_URL="http://localhost:$PORT"
+	PF_BASE_URL="http://localhost:$PORT/0.0.1-smoke"
+	IR_BASE_URL="$PF_BASE_URL-ir"
 	for _ in $(seq 50); do curl -sf -o /dev/null "$IR_BASE_URL/$IR_BUNDLE" && break; sleep 0.1; done
 	SMOKE_TEST=1
 fi
@@ -69,8 +76,9 @@ echo "    $PF_BUNDLE"
 
 if [[ -n "${SMOKE_TEST:-}" ]]; then
 	echo "==> Smoke test: running Blueprint.roc against the platform bundle"
+	cp "$DIST/$PF_BUNDLE" "$SERVE/0.0.1-smoke/"
 	mkdir -p "$STAGE/app"
-	sed "s#platform \"platform/main.roc\"#platform \"$IR_BASE_URL/$PF_BUNDLE\"#" "$ROOT/Blueprint.roc" >"$STAGE/app/Blueprint.roc"
+	sed "s#platform \"platform/main.roc\"#platform \"$PF_BASE_URL/$PF_BUNDLE\"#" "$ROOT/Blueprint.roc" >"$STAGE/app/Blueprint.roc"
 	(cd "$STAGE/app" && "$ROC" Blueprint.roc) | grep -q '(version 1)'
 	echo "    ok"
 fi
