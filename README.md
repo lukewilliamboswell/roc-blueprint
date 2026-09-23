@@ -80,6 +80,20 @@ working on roc-blueprint.
 Records are `((field value) ...)`, lists are `(a b)`, tags are `Tag` or
 `(Tag payload ...)`. The CLI refuses an IR `version` it doesn't know.
 
+## Getting `blueprint`
+
+With Nix, this repository's flake has a dev shell with `blueprint` and the Roc
+nightly it's pinned to:
+
+```sh
+nix develop github:lukewilliamboswell/roc-blueprint
+blueprint shell
+```
+
+or add `packages.x86_64-linux.blueprint` from the flake to your own. It sets
+`ROC` to the pinned compiler unless `ROC` is already set. Each release also
+attaches a prebuilt `blueprint-x86_64-linux`.
+
 ## CLI
 
 | Command | |
@@ -99,7 +113,11 @@ ignored by git; `Blueprint.lock` is committed.
 
 ## Development
 
-Needs the Roc nightly in `.roc-version`, Zig 0.16 and Nix.
+Needs the Roc nightly in `.roc-version`, Zig 0.16 and Nix. The flake reads
+`.roc-version` and gets that nightly from
+[roc-overlay](https://github.com/roc-lang/roc-overlay), so `nix build
+.#roc` gives the right compiler. If you change the basic-cli version in
+`cli/main.roc`, update `rocPackages` in `flake.nix` to match.
 
 ```sh
 zig build                                   # platform/targets/x64musl/libhost.a
