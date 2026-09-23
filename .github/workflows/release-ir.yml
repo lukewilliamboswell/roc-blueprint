@@ -1,0 +1,54 @@
+name: Release roc-blueprint-ir
+
+# Push a tag like ir-0.1.0 to publish the roc-blueprint-ir package bundle.
+# The package is released independently of the platform; to use a new ir
+# release in the platform, put its URL in blueprint-ir-platform/ir-release.
+on:
+  push:
+    tags: ["ir-[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read pinned Roc nightly
+        run: printf 'ROC_NIGHTLY_TAG=%s\n' "$(sed -n '1p' .roc-version)" >> "$GITHUB_ENV"
+
+      - name: Install Roc
+        uses: roc-lang/setup-roc@f5a74bf90aa694b43ab4a7cbfdb19273bc6aa697
+        with:
+          version: nightly-new-compiler
+          nightly-tag: ${{ env.ROC_NIGHTLY_TAG }}
+
+      - name: Test
+        run: |
+          roc fmt --check blueprint-ir-package
+          roc test blueprint-ir-package/main.roc
+
+      - name: Bundle
+        run: scripts/bundle.sh ir
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          read -r _ ir < <(grep '^roc-blueprint-ir ' dist/bundles.txt)
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${ir}"
+          cat > notes.md <<NOTES
+          The blueprint IR and its S-expression format.
+
+          \`\`\`roc
+          ir: "${url}"
+          \`\`\`
+
+          Built with Roc \`${ROC_NIGHTLY_TAG}\`.
+          NOTES
+          prerelease=()
+          if [[ "${GITHUB_REF_NAME#ir-}" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" "${prerelease[@]}" --latest=false \
+            --title "roc-blueprint-ir ${GITHUB_REF_NAME#ir-}" --notes-file notes.md "dist/${ir}"

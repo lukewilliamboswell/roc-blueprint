@@ -1,0 +1,1 @@
+((format ((major 1) (minor 0))) (name "m") (shells (((name "a") (packages ())) ((name "b") (packages (((source "nixpkgs") (path ("x" "y" "z"))) ((source "o") (path ("w")))))) ((name "c") (packages (((source "") (path ()))))))))

@@ -1,77 +1,144 @@
-# Roc Blueprint
+# roc-blueprint
 
-Two pure Roc packages for describing portable development environments and rendering them as Nix flakes.
-
-<!-- BEGIN LATEST RELEASE -->
-## Latest release
-
-Version `0.0.3` publishes two packages. Copy these URLs into your application header:
+Describe your project's development environment in a small Roc file,
+`Blueprint.roc`, and get a reproducible Nix dev shell and project tasks from
+it.
 
 ```roc
-app [main!] {
-	pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/1.0.0/AnZoxzoGPtSGQ15EQh6pBeeaHJ7aizP9MQhK81dES3Uq.tar.zst",
-	blueprint: "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.0.3-blueprint/HmTRQhvSpRQsj78WCR7j5y3anhqMVB4zuMejydrdAGeV.tar.zst",
-	blueprint_nix: "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.0.3-blueprint-nix/5stkC8nuQYzCjQueDhBLQrFPvfk6MP1byVq8nR3ET72h.tar.zst",
-}
+# Blueprint.roc
+app [config] { pf: platform "<platform URL from the latest release>" }
+
+config = [
+	Name("my-project"),
+	Overlay("github:roc-lang/roc-overlay"),
+	Shell("default", [Tools(["rocpkgs.nightly", "zig", "python3", "sqlite"])]),
+	Shell("ci", [Tools(["rocpkgs.nightly", "zig"])]),
+	Task("test", [Run(["python3", "scripts/test.py"])]),
+	Task("check", [Run(["python3", "scripts/check.py"]), In("ci")]),
+]
 ```
-<!-- END LATEST RELEASE -->
-
-## Packages
-
-- `blueprint` owns portable requirements, target systems, environments, construction, and validation.
-- `blueprint-nix` depends on `blueprint`, validates exact Nix bindings, and deterministically renders a complete flake through a typed Nix expression tree.
-
-Neither package performs effects or invokes Nix.
-
-## Example catalog
-
-Use these as copy-paste starting points for real projects:
-
-1. `examples/hello-shell/main.roc` - minimal hello-world dev shell.
-2. `examples/dev-shell/main.roc` - the canonical baseline example.
-3. `examples/rust-tooling/main.roc` - Rust tools (`rustc`, `cargo`, `git`).
-4. `examples/node-tooling/main.roc` - JavaScript tooling (`nodejs`, `git`).
-5. `examples/python-tooling/main.roc` - Python tooling (`python3`, `git`).
-6. `examples/dev-and-ci-workflow/main.roc` - multiple environments (`default`, `ci`) in one workspace.
-7. `examples/multi-platform-shell/main.roc` - same environment across `x86_64-linux` and `aarch64-darwin`.
-
-Each example is self-contained with its Roc application, golden generated
-source, and locked Nix input:
-
-```text
-example/
-├── main.roc
-├── flake.golden.nix
-└── flake.lock
-```
-
-### How to run an example
-
-From the repo root:
 
 ```sh
-cd examples/hello-shell
-roc main.roc > flake.nix
-nix flake check "path:$PWD" --no-write-lock-file
-nix develop "path:$PWD#default" --command hello
+blueprint shell          # enter the default dev shell
+blueprint shell ci       # or another one
+blueprint run test       # run a task inside its shell
+blueprint --help         # lists this project's shells and tasks
 ```
 
-Swap `hello-shell` for any other folder to try the other examples.
+`Blueprint.roc` is plain data. Roc checks it as it compiles, so a mistyped
+setting, a tool name with a space in it, or a malformed flake reference is an
+error in your editor, pointing at the line.
 
-## Development
+## Install
 
-With Roc and Nix installed, run the complete package, documentation, example,
-generated-flake, and bundle checks with:
+You need [Nix](https://nixos.org/download) with flakes enabled.
+
+Enter a shell with `blueprint` and the Roc compiler it's built for:
 
 ```sh
-./ci/all_tests.sh
+nix develop github:lukewilliamboswell/roc-blueprint
 ```
 
-The test runner recursively discovers every example, bundles both packages,
-rewrites the temporary application copies to localhost bundle URLs, and then
-checks and tests them. It compares repeat generation with the golden source,
-verifies each example's lockfile, runs `nix flake check`, builds the
-application, compares compiled stdout, and confirms `rustc` is available from
-the canonical development shell.
+or add `packages.x86_64-linux.blueprint` from this flake to your own flake.
+Each [release](https://github.com/lukewilliamboswell/roc-blueprint/releases)
+also has a prebuilt `blueprint-x86_64-linux`; that one needs the Roc nightly
+named in the release notes, on your `PATH` or in `ROC`.
 
-See [design.md](design.md) for the architecture, boundaries, and later phases.
+Only x86_64 Linux is supported for now.
+
+## Writing `Blueprint.roc`
+
+The file is a Roc app whose platform is a roc-blueprint release. Copy the
+`app` line from the [latest
+release](https://github.com/lukewilliamboswell/roc-blueprint/releases). The
+app provides one value, `config`, a list of settings:
+
+| Setting | Meaning |
+|---|---|
+| `Name(Str)` | Project name. Required, once. |
+| `Systems(List(System))` | Systems to generate shells for, e.g. `"x86_64-linux"`, `"aarch64-darwin"`. Default: x86_64 and aarch64, Linux and macOS. |
+| `Packages(InputName, FlakeRef)` | A package set. `"nixpkgs"` (nixos-unstable) is always there; declare it to pin a different one, or add more, e.g. `Packages("stable", "github:NixOS/nixpkgs/nixos-24.05")`. |
+| `Overlay(FlakeRef)` | A flake whose `overlays.default` is applied to every package set, e.g. `"github:roc-lang/roc-overlay"`. |
+| `Input(InputName, FlakeRef)` | Any other flake input. |
+| `Shell(Name, List(ShellSetting))` | A dev shell. Names must be unique; `"default"` is the one `blueprint shell` enters. |
+| `Task(Name, List(TaskSetting))` | A named command. Names must be unique. |
+| `Raw(backend, target, Val)` | Settings passed straight to a backend, for anything the other settings don't cover. See below. |
+| `Custom(kind, name, Val)` | A block for a future or third-party feature. The current `blueprint` refuses configs that use one. |
+
+Inside a `Shell`:
+
+| Setting | Meaning |
+|---|---|
+| `Tools(List(Tool))` | Package attribute paths, e.g. `"git"` or `"llvmPackages.bintools"`, from `nixpkgs`; `"stable#jq"` takes `jq` from the `stable` package set. Repeat to add more. |
+
+Inside a `Task`:
+
+| Setting | Meaning |
+|---|---|
+| `Run(List(Str))` | The command and its arguments. Required, once. |
+| `In(Name)` | The shell to run it in. Default: `"default"`. |
+
+It's still Roc, so you can share values:
+
+```roc
+common = ["git", "python3"]
+
+config = [
+	Name("my-project"),
+	Shell("default", [Tools(common), Tools(["sqlite"])]),
+	Shell("ci", [Tools(common)]),
+]
+```
+
+### Raw settings
+
+`Raw` passes data straight to a backend. The Nix backend understands two
+targets:
+
+```roc
+Raw("nix", "shell:default", Attrs([
+	("shellHook", Str("echo ready")),
+	("RUST_LOG", Str("debug")),    # environment variables are just attributes
+])),
+Raw("nix", "flake", Attrs([("formatter", Str("nixpkgs-fmt"))])),
+```
+
+- `shell:<name>` adds attributes to that shell's `mkShell` call.
+- `flake` adds attributes to the flake's outputs.
+
+Values are `Str`, `Int`, `Bool`, `List([...])` and `Attrs([(name, value), ...])`.
+They're data, not Nix code, so they can't refer to packages or inputs.
+
+See [`examples/Blueprint.roc`](examples/Blueprint.roc) for every setting in
+one file.
+
+## Commands
+
+Run these in the directory that contains `Blueprint.roc`.
+
+| Command | |
+|---|---|
+| `blueprint` / `blueprint gen` | Write `.blueprint/flake.nix`, lock it, and keep `Blueprint.lock` in sync |
+| `blueprint shell [NAME]` | Generate, then enter a dev shell (default `default`) |
+| `blueprint run TASK [-- ARGS...]` | Generate, then run a task in its shell, with extra arguments |
+| `blueprint tasks` | List the tasks |
+| `blueprint update` | Update `Blueprint.lock` to the latest nixpkgs and overlays |
+| `blueprint check` | Validate `Blueprint.roc` |
+| `blueprint ir` / `blueprint flake` | Print the intermediate form, or the generated files |
+| `blueprint --help` | Help for this project: `run --help` lists its tasks, `shell --help` its shells and their tools |
+
+- **Commit** `Blueprint.roc` and `Blueprint.lock`. The lock pins nixpkgs and
+  every overlay, so everyone gets the same tools.
+- **Ignore** `.blueprint/`. It's generated on every run.
+- **`ROC`** chooses the Roc compiler. The Nix package sets it to the right one.
+
+## How it works
+
+`blueprint` compiles and runs `Blueprint.roc`. The roc-blueprint platform
+checks the settings and prints them as an S-expression, defined by the
+`roc-blueprint-ir` package. `blueprint` reads that, writes a Nix flake to
+`.blueprint/`, and runs `nix develop` with it.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
