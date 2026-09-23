@@ -132,11 +132,6 @@ def main() -> None:
             "```roc",
             "app [main!] {",
             (
-                "\tpf: platform \"https://github.com/lukewilliamboswell/"
-                "roc-platform-template-zig/releases/download/1.0.0/"
-                "AnZoxzoGPtSGQ15EQh6pBeeaHJ7aizP9MQhK81dES3Uq.tar.zst\","
-            ),
-            (
                 "\tblueprint: \"https://github.com/owner/project/releases/"
                 "download/1.2.3-blueprint/blueprint-hash.tar.zst\","
             ),

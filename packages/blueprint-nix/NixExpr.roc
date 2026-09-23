@@ -3,6 +3,7 @@ NixExpr := [
 	AttrSet(List(Field)),
 	Identifier(Str),
 	Lambda(List(Str), NixExpr),
+	Let(List(Field), NixExpr),
 	ListExpr(List(NixExpr)),
 	Select(NixExpr, List(Str)),
 	String(Str),
@@ -21,6 +22,10 @@ render_at = |expression, depth|
 		String(value) => quote_string(value)
 		ListExpr(items) => render_list(items, depth)
 		AttrSet(fields) => render_attr_set(fields, depth)
+		Let(bindings, body) => {
+			lines = bindings.map(|{ name, value }| "${indent(depth + 1)}${name} = ${render_at(value, depth + 1)};")
+			"let\n${Str.join_with(lines, "\n")}\n${indent(depth)}in\n${indent(depth)}${render_at(body, depth)}"
+		}
 		Lambda(arguments, body) => "{ ${Str.join_with(arguments, ", ")}, ... }:\n${indent(depth + 1)}${render_at(body, depth + 1)}"
 		Select(base, path) => "${render_select_base(base, depth)}${render_path(path)}"
 		Apply(function, argument) => "${render_apply_function(function, depth)} ${render_apply_argument(argument, depth)}"

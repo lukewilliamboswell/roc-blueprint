@@ -12,11 +12,6 @@ PACKAGE_ALIASES = {
     "blueprint": "blueprint",
     "blueprint-nix": "blueprint_nix",
 }
-PLATFORM_URL = (
-    "https://github.com/lukewilliamboswell/roc-platform-template-zig/"
-    "releases/download/1.0.0/"
-    "AnZoxzoGPtSGQ15EQh6pBeeaHJ7aizP9MQhK81dES3Uq.tar.zst"
-)
 
 
 def require_single_line(value: str, description: str) -> str:
@@ -74,7 +69,6 @@ def app_header(repo: str, version: str, bundles: dict[str, str]) -> str:
             "",
             "```roc",
             "app [main!] {",
-            f'\tpf: platform "{PLATFORM_URL}",',
             *package_lines,
             "}",
             "```",

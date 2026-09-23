@@ -1,10 +1,8 @@
 app [main!] {
-	pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/1.0.0/AnZoxzoGPtSGQ15EQh6pBeeaHJ7aizP9MQhK81dES3Uq.tar.zst",
 	blueprint: "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.0.3-blueprint/HmTRQhvSpRQsj78WCR7j5y3anhqMVB4zuMejydrdAGeV.tar.zst",
 	blueprint_nix: "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.0.3-blueprint-nix/5stkC8nuQYzCjQueDhBLQrFPvfk6MP1byVq8nR3ET72h.tar.zst",
 }
 
-import pf.Stdout
 import blueprint.Blueprint
 import blueprint.Environment
 import blueprint.Requirement
@@ -42,13 +40,24 @@ nix_config = Nix.config({
 	],
 })
 
-main! : List(Str) => Try({}, _)
-main! = |_args| {
-	valid = Blueprint.validate(workspace) ? |errors| BlueprintInvalid(errors)
-	source = Nix.render(valid, nix_config) ? |errors| NixInvalid(errors)
-	Stdout.line!(source)?
-	Ok({})
+main! : List(Str) => Try({}, [Exit(I8)])
+main! = |_args| print!(render(workspace, nix_config))
+
+render : Blueprint.Draft, Nix.Config -> Try(Str, [BlueprintInvalid(List(Blueprint.Error)), NixInvalid(List(Nix.Error))])
+render = |draft, config| {
+	valid = Blueprint.validate(draft) ? |errors| BlueprintInvalid(errors)
+	Nix.render(valid, config).map_err(|errors| NixInvalid(errors))
 }
+
+print! : Try(Str, [BlueprintInvalid(List(Blueprint.Error)), NixInvalid(List(Nix.Error))]) => Try({}, [Exit(I8)])
+print! = |result|
+	match result {
+		Ok(source) => {
+			echo!("${source}\n")
+			Ok({})
+		}
+		Err(errors) => crash Str.inspect(errors)
+	}
 
 ## Rendering the same values twice produces byte-identical source.
 expect {

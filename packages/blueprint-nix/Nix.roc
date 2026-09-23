@@ -34,7 +34,7 @@ Nix := [].{
 	##
 	## Environment structure and requirement order are intentionally absent: the
 	## renderer reads them from the portable Blueprint.
-	Config := { nixpkgs : Input, bindings : List(Binding) }
+	Config := { nixpkgs : Input, bindings : List(Binding), overlays : List(Str) }
 
 	## Structured Nix configuration failures returned by `render`.
 	##
@@ -52,6 +52,8 @@ Nix := [].{
 	## one target-specific binding.
 	##
 	## `EmptyInputField(field)` names an empty `owner`, `repo`, or `ref` field.
+	##
+	## `EmptyOverlay(index)` gives the zero-based position of an empty overlay flake reference.
 	##
 	## `EmptyPackagePath(binding, requirement)` identifies a binding with no
 	## package path segments.
@@ -74,6 +76,7 @@ Nix := [].{
 		DuplicateBinding(Str, Str, Target),
 		DuplicateBindingTarget(U64, Target),
 		EmptyInputField(Str),
+		EmptyOverlay(U64),
 		EmptyPackagePath(U64, Str),
 		EmptyPackagePathSegment(U64, Str, U64),
 		InvalidNixpkgsInputName(Str),
@@ -112,7 +115,14 @@ Nix := [].{
 	## The supplied binding order does not determine generated package order;
 	## each environment's portable requirement order does.
 	config : { nixpkgs : Input, bindings : List(Binding) } -> Config
-	config = |fields| fields
+	config = |fields| { nixpkgs: fields.nixpkgs, bindings: fields.bindings, overlays: [] }
+
+	## Applies flake overlays to nixpkgs on every target, in order.
+	##
+	## Each entry is a flake reference such as `github:roc-lang/roc-overlay`
+	## whose `overlays.default` output is applied with `appendOverlays`.
+	with_overlays : Config, List(Str) -> Config
+	with_overlays = |config_value, overlays| { nixpkgs: config_value.nixpkgs, bindings: config_value.bindings, overlays }
 
 	## Renders a complete flake, or returns all unambiguous backend errors.
 	##
@@ -134,7 +144,7 @@ Nix := [].{
 
 validate_config : Blueprint.Draft, Nix.Config -> List(Nix.Error)
 validate_config = |workspace, config_value| {
-	input_errors = validate_input(config_value.nixpkgs)
+	input_errors = validate_overlays(config_value.overlays, 0, validate_input(config_value.nixpkgs))
 	binding_errors = validate_bindings(config_value.bindings, workspace.target_systems, 0, input_errors)
 	completeness_errors = validate_environments(workspace.envs, workspace.target_systems, config_value.bindings, binding_errors)
 	validate_unused_bindings(config_value.bindings, workspace, 0, completeness_errors)
@@ -147,6 +157,26 @@ validate_input = |input| {
 	with_repo = if input.repo == "" with_owner.append(Nix.Error.EmptyInputField("repo")) else with_owner
 	if input.ref == "" with_repo.append(Nix.Error.EmptyInputField("ref")) else with_repo
 }
+
+validate_overlays : List(Str), U64, List(Nix.Error) -> List(Nix.Error)
+validate_overlays = |remaining, index, errors|
+	match remaining {
+		[] => errors
+		[overlay, .. as rest] => {
+			next = if overlay == "" errors.append(Nix.Error.EmptyOverlay(index)) else errors
+			validate_overlays(rest, index + 1, next)
+		}
+	}
+
+overlay_names : List(Str) -> List(Str)
+overlay_names = |overlays| name_overlays(overlays, 0, [])
+
+name_overlays : List(Str), U64, List(Str) -> List(Str)
+name_overlays = |remaining, index, names|
+	match remaining {
+		[] => names
+		[_, .. as rest] => name_overlays(rest, index + 1, names.append("overlay${index.to_str()}"))
+	}
 
 validate_bindings : List(Nix.Binding), List(Target), U64, List(Nix.Error) -> List(Nix.Error)
 validate_bindings = |remaining, workspace_targets, index, errors|
@@ -259,25 +289,38 @@ binding_is_used = |binding, environments, declared_targets| {
 render_flake : Blueprint.Draft, Nix.Config -> Str
 render_flake = |workspace, config_value| {
 	input = config_value.nixpkgs
+	names = overlay_names(config_value.overlays)
+	overlay_inputs = List.map2(
+		names,
+		config_value.overlays,
+		|name, url| { name, value: NixExpr.AttrSet([{ name: "url", value: NixExpr.String(url) }]) },
+	)
+	nixpkgs_input = {
+		name: "nixpkgs",
+		value: NixExpr.AttrSet([{ name: "url", value: NixExpr.String("github:${input.owner}/${input.repo}/${input.ref}") }]),
+	}
+	var $inputs = [nixpkgs_input]
+	for overlay_input in overlay_inputs {
+		$inputs = $inputs.append(overlay_input)
+	}
+	inputs = $inputs
+	var $arguments = ["nixpkgs"]
+	for name in names {
+		$arguments = $arguments.append(name)
+	}
+	arguments = $arguments
 	flake = NixExpr.AttrSet([
 		{ name: "description", value: NixExpr.String("Development environments for ${workspace.name}") },
 		{
 			name: "inputs",
-			value: NixExpr.AttrSet([
-				{
-					name: "nixpkgs",
-					value: NixExpr.AttrSet([
-						{ name: "url", value: NixExpr.String("github:${input.owner}/${input.repo}/${input.ref}") },
-					]),
-				},
-			]),
+			value: NixExpr.AttrSet(inputs),
 		},
 		{
 			name: "outputs",
 			value: NixExpr.Lambda(
-				["nixpkgs"],
+				arguments,
 				NixExpr.AttrSet([
-					{ name: "devShells", value: render_dev_shells(workspace, config_value.bindings) },
+					{ name: "devShells", value: render_dev_shells(workspace, config_value.bindings, names) },
 				]),
 			),
 		},
@@ -285,34 +328,40 @@ render_flake = |workspace, config_value| {
 	"# Generated by roc-blueprint and roc-blueprint-nix. Do not edit.\n${NixExpr.format(flake)}"
 }
 
-render_dev_shells : Blueprint.Draft, List(Nix.Binding) -> NixExpr
-render_dev_shells = |workspace, bindings|
+render_dev_shells : Blueprint.Draft, List(Nix.Binding), List(Str) -> NixExpr
+render_dev_shells = |workspace, bindings, overlay_inputs|
 	NixExpr.AttrSet(
 		workspace.target_systems.map(
 			|target| {
-				name: Target.to_str(target),
-				value: NixExpr.AttrSet(
+				legacy = NixExpr.Select(NixExpr.Identifier("nixpkgs"), ["legacyPackages", Target.to_str(target)])
+				pkgs = if overlay_inputs.is_empty() legacy else NixExpr.Identifier("pkgs")
+				shells = NixExpr.AttrSet(
 					workspace.envs.map(
 						|environment| {
 							name: Environment.name(environment),
-							value: render_environment(environment, target, bindings),
+							value: render_environment(environment, target, bindings, pkgs),
 						},
 					),
-				),
+				)
+				overlays = overlay_inputs.map(|name| NixExpr.Select(NixExpr.Identifier(name), ["overlays", "default"]))
+				with_overlays = NixExpr.Apply(NixExpr.Select(legacy, ["appendOverlays"]), NixExpr.ListExpr(overlays))
+				{
+					name: Target.to_str(target),
+					value: if overlay_inputs.is_empty() shells else NixExpr.Let([{ name: "pkgs", value: with_overlays }], shells),
+				}
 			},
 		),
 	)
 
-render_environment : Environment, Target, List(Nix.Binding) -> NixExpr
-render_environment = |environment, target, bindings| {
-	target_name = Target.to_str(target)
+render_environment : Environment, Target, List(Nix.Binding), NixExpr -> NixExpr
+render_environment = |environment, target, bindings, pkgs| {
 	package_exprs = environment.requirements.map(
 		|requirement| {
 			binding = find_binding(Requirement.id(requirement), target, bindings)
-			NixExpr.Select(NixExpr.Identifier(binding.input), ["legacyPackages", target_name].concat(binding.path))
+			NixExpr.Select(pkgs, binding.path)
 		},
 	)
-	mk_shell = NixExpr.Select(NixExpr.Identifier("nixpkgs"), ["legacyPackages", target_name, "mkShell"])
+	mk_shell = NixExpr.Select(pkgs, ["mkShell"])
 	NixExpr.Apply(mk_shell, NixExpr.AttrSet([{ name: "packages", value: NixExpr.ListExpr(package_exprs) }]))
 }
 

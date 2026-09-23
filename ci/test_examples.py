@@ -91,7 +91,6 @@ def rewrite_examples(
     source_dir: Path,
     target_dir: Path,
     urls: dict[str, str],
-    platform_url: str | None,
 ) -> None:
     shutil.copytree(source_dir, target_dir)
     examples = discover_examples(target_dir)
@@ -112,18 +111,6 @@ def rewrite_examples(
                     f"{package_name} dependency"
                 )
 
-        if platform_url is not None:
-            platform_pattern = re.compile(r'(?m)^(\s*pf:\s*platform\s*)"[^"]+"')
-            source, count = platform_pattern.subn(
-                lambda match: f'{match.group(1)}"{platform_url}"',
-                source,
-                count=1,
-            )
-            if count != 1:
-                raise SystemExit(
-                    f"{example_dir.name} does not declare the expected "
-                    "platform dependency"
-                )
         main_path.write_text(source, encoding="utf-8")
 
 
@@ -233,24 +220,11 @@ def main() -> None:
                 name: f"{base_url}/{path.relative_to(bundle_dir).as_posix()}"
                 for name, path in bundles.items()
             }
-            platform_url = None
-            platform_bundle_text = os.environ.get("ROC_PLATFORM_BUNDLE")
-            if platform_bundle_text:
-                platform_bundle = Path(platform_bundle_text).resolve()
-                if not platform_bundle.is_file():
-                    raise SystemExit(
-                        f"platform bundle does not exist: {platform_bundle}"
-                    )
-                served_platform = bundle_dir / platform_bundle.name
-                shutil.copy2(platform_bundle, served_platform)
-                platform_url = f"{base_url}/{served_platform.name}"
-
             rewritten_examples = tmp_dir / "examples"
             rewrite_examples(
                 ROOT / "examples",
                 rewritten_examples,
                 urls,
-                platform_url,
             )
             exercise_examples(rewritten_examples, tmp_dir / "example-tests")
         finally:
