@@ -2,12 +2,17 @@
 FlakeRef :: { url : Str }.{
 	from_quote : Str -> Try(FlakeRef, [BadQuotedBytes(Str)])
 	from_quote = |raw| {
-		schemes = ["github:", "gitlab:", "git+", "path:", "https://", "tarball+"]
-		if schemes.any(|s| raw.starts_with(s)) {
-			Ok(FlakeRef.{ url: raw })
-		} else {
-			Err(BadQuotedBytes("\"${raw}\" is not a flake reference; expected one starting with github:, gitlab:, git+, path:, https:// or tarball+"))
-		}
+		schemes = ["github:", "gitlab:", "sourcehut:", "flake:", "git+", "path:", "file:", "https://", "http://", "tarball+"]
+		match schemes.find_first(|s| raw.starts_with(s)) {
+			Err(_) =>
+				Err(BadQuotedBytes("\"${raw}\" is not a flake reference; expected one starting with ${Str.join_with(schemes, ", ")}"))
+			Ok(scheme) =>
+				if raw.contains(" ") or raw.drop_prefix(scheme).is_empty() {
+					Err(BadQuotedBytes("\"${raw}\" is not a flake reference; it is empty after ${scheme} or contains a space"))
+				} else {
+					Ok(FlakeRef.{ url: raw })
+				}
+			}
 	}
 
 	to_str : FlakeRef -> Str

@@ -52,7 +52,7 @@ bundle() { # bundle <dir> <files...>; prints the created archive name
 bundle_ir() {
 	echo "==> Bundling roc-blueprint-ir" >&2
 	local name
-	name="$(bundle "$ROOT/blueprint-ir-package" main.roc Ir.roc Sexpr.roc)"
+	name="$(bundle "$ROOT/blueprint-ir-package" main.roc Ir.roc Sexpr.roc Value.roc)"
 	echo "    $name" >&2
 	echo "roc-blueprint-ir $name" >>"$DIST/bundles.txt"
 	echo "$name"
@@ -101,7 +101,7 @@ platform)
 	mkdir -p "$STAGE/serve/0.0.1-smoke" "$STAGE/app"
 	cp "$DIST/$pf_bundle" "$STAGE/serve/0.0.1-smoke/"
 	sed "s#platform \"../blueprint-ir-platform/main.roc\"#platform \"http://localhost:$PORT/0.0.1-smoke/$pf_bundle\"#" "$ROOT/examples/Blueprint.roc" >"$STAGE/app/Blueprint.roc"
-	(cd "$STAGE/app" && "$ROC" Blueprint.roc) | grep -q '(version [0-9]*))$'
+	(cd "$STAGE/app" && "$ROC" Blueprint.roc) | grep -qF '(format ('
 	echo "    ok"
 	;;
 *)

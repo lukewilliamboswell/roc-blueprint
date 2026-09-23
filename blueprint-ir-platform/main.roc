@@ -8,18 +8,27 @@
 ##
 ## config = [
 ## 	Name("my-project"),
-## 	Shell("default", [Tools(["git", "python3"])]),
+## 	Systems(["x86_64-linux", "aarch64-darwin"]),
+## 	Packages("stable", "github:NixOS/nixpkgs/nixos-24.05"),
+## 	Shell("default", [Tools(["git", "python3", "stable#nodejs"])]),
 ## 	Task("test", [Run(["python3", "-m", "pytest"])]),
+## 	Raw("nix", "shell:default", Attrs([("shellHook", Str("echo hi"))])),
 ## ]
 ## ```
 ##
+## Tools come from "nixpkgs" (nixos-unstable unless `Packages("nixpkgs", ...)`
+## overrides it) or from a set named as "set#attr.path". `Custom` and `Raw`
+## take a `Val`, written with bare tags: `Str`, `Int`, `Bool`, `List` and
+## `Attrs` (a list of (name, value) pairs).
+##
 ## Every quoted value is checked as it compiles, through the `from_quote` of
-## `Tool`, `FlakeRef` or `EnvName`. Whole-config rules are checked when the app runs (see the TODO below).
+## `Tool`, `System`, `FlakeRef`, `InputName`, `EnvName` or `TaskName`.
+## Whole-config rules are checked when the app runs (see the TODO below).
 platform ""
 	requires {
 		config : List(Config.Setting)
 	}
-	exposes [Config, EnvName, FlakeRef, TaskName, Tool]
+	exposes [Config, EnvName, FlakeRef, InputName, System, TaskName, Tool, Val]
 	packages {
 		ir: "../blueprint-ir-package/main.roc",
 	}
@@ -39,7 +48,10 @@ import Lower
 import Tool
 import FlakeRef
 import EnvName
+import InputName
+import System
 import TaskName
+import Val
 import ir.Ir
 
 # TODO(compile-time-render): restore compile-time rendering once upstream is fixed.
@@ -58,7 +70,7 @@ import ir.Ir
 #
 # Until then the IR is built when the app runs, so whole-config errors are
 # reported at run time (`blueprint check` runs Blueprint.roc for that).
-# Per-value checks (Tool, FlakeRef, EnvName `from_quote`) remain compile time.
+# Per-value checks (the `from_quote` of Tool, System, FlakeRef, ...) remain compile time.
 or_crash : Try(Ir, List(Lower.Error)) -> Ir
 or_crash = |result|
 	match result {
