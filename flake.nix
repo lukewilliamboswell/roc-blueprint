@@ -21,7 +21,9 @@
 
       # Roc packages cli/main.roc downloads. Fetched here and unpacked into
       # Roc's package cache so the sandboxed build needs no network.
-      # Keep in sync with the `pf:` URL in cli/main.roc.
+      # These are the `pf:` and `weaver:` URLs in cli/main.roc plus their own
+      # dependencies (http, roc-ansi, path). A missing one shows up as
+      # "package download failed" in `nix build .#blueprint`.
       rocPackages = [
         {
           url = "https://github.com/roc-lang/basic-cli/releases/download/0.23.0-rc1/3hT3SoHZ6qbEsa9qVFLUW3547U5LeoNd1KbpqLpz4r1i.tar.zst";
@@ -30,6 +32,18 @@
         {
           url = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst";
           hash = "sha256-6e+qlQ5y9vds326vAEJFcvppsEumEnMjV6wEU2ePArQ=";
+        }
+        {
+          url = "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst";
+          hash = "sha256-GjWtVaxW7tYwwcd8ZNTogTmyKshRC4YE8IksP6ty+Wg=";
+        }
+        {
+          url = "https://github.com/lukewilliamboswell/roc-ansi/releases/download/0.13.0/JXLM47L6CzrLXB5HBfqc27VnU6CD4jMm5Mk6dgbbovL.tar.zst";
+          hash = "sha256-g1Um8JrYgyBSP+3TWkdXVp3hSN29ENPxtXnev5f8vqQ=";
+        }
+        {
+          url = "https://github.com/roc-lang/path/releases/download/4.0.0/7YfABZPwJAXtLBY2vm8FqMyGAtNxncCJ65HdNKHFGNnE.tar.zst";
+          hash = "sha256-Q1SZx/+081fSlW47soAqgSZPby9QyJbJkT+4b3vHUrs=";
         }
       ];
 

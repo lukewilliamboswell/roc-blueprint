@@ -36,7 +36,7 @@ nix develop path:.blueprint#ci -c git --version
 
 step "Nix flake: blueprint builds with the pinned Roc"
 nix build .#blueprint --no-link
-nix develop . -c blueprint version
+nix develop . -c blueprint --version
 
 step "Bundle ir and the platform against it"
 scripts/bundle.sh platform

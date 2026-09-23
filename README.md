@@ -40,7 +40,7 @@ Blueprint.roc ──roc──▶ roc-blueprint platform ──prints──▶ IR
 |---|---|---|
 | `roc-blueprint` | `platform/` | The platform a `Blueprint.roc` uses. It supplies the setting types, checks each quoted value while compiling (`Tool`, `FlakeRef`, `EnvName`), lowers `config` to the IR and prints it. |
 | `roc-blueprint-ir` | `ir/` | The IR types (`Ir`) and an S-expression format (`Sexpr`) with `encoder_for`/`parser_for` support. The platform encodes with it and the CLI parses with it, so both sides share one definition. |
-| `blueprint` | `cli/` | A [basic-cli](https://github.com/roc-lang/basic-cli) app that runs `Blueprint.roc`, parses the IR, renders the flake and drives `nix`. |
+| `blueprint` | `cli/` | A [basic-cli](https://github.com/roc-lang/basic-cli) app, with arguments parsed by [weaver](https://github.com/lukewilliamboswell/weaver), that runs `Blueprint.roc`, parses the IR, renders the flake and drives `nix`. |
 
 The repository uses itself: `Blueprint.roc` at the root defines the shells for
 working on roc-blueprint.
@@ -100,13 +100,13 @@ attaches a prebuilt `blueprint-x86_64-linux`.
 |---|---|
 | `blueprint` / `blueprint gen` | Write `.blueprint/flake.nix`, lock it, sync `Blueprint.lock` |
 | `blueprint shell [NAME]` | `gen`, then `nix develop` into the shell (default `default`) |
-| `blueprint run TASK [ARGS...]` | `gen`, then run a task in its shell, appending `ARGS` |
+| `blueprint run TASK [-- ARGS...]` | `gen`, then run a task in its shell, appending `ARGS` |
 | `blueprint tasks` | List the tasks |
 | `blueprint update` | Update `Blueprint.lock` to the latest inputs |
 | `blueprint check` | Type-check and run `Blueprint.roc` to validate it |
 | `blueprint ir` | Print the IR |
 | `blueprint flake` | Print the generated flake |
-| `blueprint version` | Print the version |
+| `blueprint --help`, `--version` | Help (also per command, e.g. `blueprint run --help`) and version |
 
 `ROC` selects the compiler (default `roc`). `.blueprint/` is generated and
 ignored by git; `Blueprint.lock` is committed.
@@ -116,8 +116,8 @@ ignored by git; `Blueprint.lock` is committed.
 Needs the Roc nightly in `.roc-version`, Zig 0.16 and Nix. The flake reads
 `.roc-version` and gets that nightly from
 [roc-overlay](https://github.com/roc-lang/roc-overlay), so `nix build
-.#roc` gives the right compiler. If you change the basic-cli version in
-`cli/main.roc`, update `rocPackages` in `flake.nix` to match.
+.#roc` gives the right compiler. If you change the basic-cli or weaver version
+in `cli/main.roc`, update `rocPackages` in `flake.nix` to match.
 
 ```sh
 zig build                                   # platform/targets/x64musl/libhost.a
