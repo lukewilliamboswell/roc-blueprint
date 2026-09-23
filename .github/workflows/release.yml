@@ -64,5 +64,7 @@ jobs:
 
           Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl only.
           NOTES
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md \
+          prerelease=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" "${prerelease[@]}" --title "$GITHUB_REF_NAME" --notes-file notes.md \
             "dist/${ir}" "dist/${pf}" dist/blueprint-x86_64-linux
