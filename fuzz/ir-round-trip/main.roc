@@ -31,6 +31,13 @@ shell = {
 	tools: Fuzz.list(Fuzz.list(Fuzz.str, 4), 4),
 }.Fuzz
 
+task : Fuzz.Generator(Ir.Task)
+task = {
+	name: Fuzz.str,
+	shell: Fuzz.str,
+	run: Fuzz.list(Fuzz.str, 4),
+}.Fuzz
+
 ir_generator : Fuzz.Generator(Ir)
 ir_generator = Fuzz.map(
 	{
@@ -38,8 +45,9 @@ ir_generator = Fuzz.map(
 		systems: Fuzz.list(system, 4),
 		overlays: Fuzz.list(Fuzz.str, 3),
 		shells: Fuzz.list(shell, 3),
+		tasks: Fuzz.list(task, 3),
 	}.Fuzz,
-	|r| Ir.{ version: Ir.current_version, name: r.name, systems: r.systems, overlays: r.overlays, shells: r.shells },
+	|r| Ir.{ version: Ir.current_version, name: r.name, systems: r.systems, overlays: r.overlays, shells: r.shells, tasks: r.tasks },
 )
 
 target = Fuzz.target_with({

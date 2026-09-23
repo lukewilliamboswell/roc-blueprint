@@ -1,1 +1,1 @@
-((name "demo") (overlays ("github:roc-lang/roc-overlay")) (shells (((name "default") (tools (("git") ("llvmPackages" "bintools")))))) (systems (X86_64Linux Aarch64Darwin)) (version 1))
+((name "demo") (overlays ("github:roc-lang/roc-overlay")) (shells (((name "default") (tools (("git") ("llvmPackages" "bintools")))))) (systems (X86_64Linux Aarch64Darwin)) (tasks ()) (version 2))

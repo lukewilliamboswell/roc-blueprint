@@ -110,11 +110,26 @@
 
       # `nix develop github:lukewilliamboswell/roc-blueprint` gives `blueprint`
       # and the Roc it was built with.
-      devShells.${system}.default = pkgs.mkShell {
-        packages = [
-          blueprint
-          roc
-        ];
+      devShells.${system} = {
+        default = pkgs.mkShell {
+          packages = [
+            blueprint
+            roc
+          ];
+        };
+
+        # For working on roc-blueprint itself; see CONTRIBUTING.md.
+        contributor = pkgs.mkShell {
+          packages = [
+            blueprint
+            roc
+            pkgs.zig_0_16
+            pkgs.python3
+            pkgs.zstd
+            pkgs.git
+            pkgs.curl
+          ];
+        };
       };
     };
 }

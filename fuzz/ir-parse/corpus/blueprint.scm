@@ -7,4 +7,5 @@
 		(name "ci")
 		(tools (("rocpkgs" "nightly") ("zig_0_16") ("git"))))))
 	(systems (X86_64Linux))
-	(version 1))
+	(tasks ())
+	(version 2))

@@ -7,7 +7,7 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "platform",
-        "src",
+        "host",
+        "targets",
     },
 }

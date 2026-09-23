@@ -1,1 +1,1 @@
-((name "x") (overlays ()) (shells (((name "d") (tools (("git")))) (systems ()) (version 1)
+((name "x") (overlays ()) (shells (((name "d") (tools (("git")))) (systems ()) (tasks ()) (version 2)

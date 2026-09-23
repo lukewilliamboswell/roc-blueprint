@@ -1,4 +1,6 @@
 .blueprint/
+examples/Blueprint.lock
+.roc_bundle_tmp/
 .roc-blueprint-tmp/
 .zig-cache/
 zig-out/

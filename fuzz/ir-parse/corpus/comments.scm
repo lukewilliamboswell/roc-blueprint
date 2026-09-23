@@ -2,4 +2,5 @@
 (
 	(name "c") ; trailing
 	(overlays ()) (shells ())
-	(systems (X86_64Linux)) (version 1)) ; end
+	(systems (X86_64Linux)) (tasks ())
+	(version 2)) ; end

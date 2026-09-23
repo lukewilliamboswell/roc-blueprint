@@ -19,7 +19,7 @@
 # as-is; a staged copy of the platform gets `ir: IR_URL` instead.
 #
 # Every platform bundle is smoke-tested: it is served from localhost with a
-# release-like versioned path, and Blueprint.roc is run against it.
+# release-like versioned path, and examples/Blueprint.roc is run against it.
 #
 # Environment: ROC (default: roc), PORT (default: 8765).
 set -euo pipefail
@@ -82,7 +82,7 @@ platform)
 	fi
 
 	echo "==> Building libhost.a"
-	(cd "$ROOT" && zig build)
+	(cd "$ROOT/platform" && zig build)
 
 	echo "==> Checking vendored linker inputs"
 	(cd "$ROOT/platform/targets" && sha256sum --quiet -c x64musl.sha256)
@@ -100,7 +100,7 @@ platform)
 	echo "==> Smoke test: running Blueprint.roc against the platform bundle"
 	mkdir -p "$STAGE/serve/0.0.1-smoke" "$STAGE/app"
 	cp "$DIST/$pf_bundle" "$STAGE/serve/0.0.1-smoke/"
-	sed "s#platform \"platform/main.roc\"#platform \"http://localhost:$PORT/0.0.1-smoke/$pf_bundle\"#" "$ROOT/Blueprint.roc" >"$STAGE/app/Blueprint.roc"
+	sed "s#platform \"../platform/main.roc\"#platform \"http://localhost:$PORT/0.0.1-smoke/$pf_bundle\"#" "$ROOT/examples/Blueprint.roc" >"$STAGE/app/Blueprint.roc"
 	(cd "$STAGE/app" && "$ROC" Blueprint.roc) | grep -q '(version [0-9]*))$'
 	echo "    ok"
 	;;

@@ -1,1 +1,1 @@
-((name "x") (overlays ()) (shells ()) (systems (Riscv64Linux)) (version 1))
+((name "x") (overlays ()) (shells ()) (systems (Riscv64Linux)) (tasks ()) (version 2))

@@ -1,0 +1,1 @@
+((name "tasks") (overlays ()) (shells (((name "default") (tools (("git")))))) (systems (X86_64Linux)) (tasks (((name "test") (run ("python3" "-c" "print(\"hi\")")) (shell "default")))) (version 2))
