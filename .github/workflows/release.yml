@@ -1,0 +1,68 @@
+name: Release
+
+# Push a tag like 0.1.0 to publish:
+#   - the roc-blueprint-ir package bundle
+#   - the roc-blueprint platform bundle (its `ir` dependency points at the
+#     ir bundle in this same release)
+#   - a prebuilt x86_64 Linux `blueprint` CLI
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read pinned Roc nightly
+        run: printf 'ROC_NIGHTLY_TAG=%s\n' "$(sed -n '1p' .roc-version)" >> "$GITHUB_ENV"
+
+      - name: Install Roc
+        uses: roc-lang/setup-roc@f5a74bf90aa694b43ab4a7cbfdb19273bc6aa697
+        with:
+          version: nightly-new-compiler
+          nightly-tag: ${{ env.ROC_NIGHTLY_TAG }}
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+
+      - name: Test (including a localhost bundle smoke test)
+        run: ./ci/test.sh
+
+      - name: Bundle against the release URL
+        run: scripts/bundle.sh "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          read -r _ ir < <(grep '^roc-blueprint-ir ' dist/bundles.txt)
+          read -r _ pf < <(grep '^roc-blueprint ' dist/bundles.txt)
+          cp blueprint dist/blueprint-x86_64-linux
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          cat > notes.md <<NOTES
+          Platform (use in \`Blueprint.roc\`):
+
+          \`\`\`roc
+          app [config] { pf: platform "${url}/${pf}" }
+          \`\`\`
+
+          IR package (for tools that read the blueprint IR):
+
+          \`\`\`roc
+          ir: "${url}/${ir}"
+          \`\`\`
+
+          Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl only.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md \
+            "dist/${ir}" "dist/${pf}" dist/blueprint-x86_64-linux
