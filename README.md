@@ -108,6 +108,11 @@ attaches a prebuilt `blueprint-x86_64-linux`.
 | `blueprint flake` | Print the generated flake |
 | `blueprint --help`, `--version` | Help (also per command, e.g. `blueprint run --help`) and version |
 
+Help is specific to the project: `blueprint` loads `Blueprint.roc` first, so
+`blueprint --help` summarizes its shells and tasks, `blueprint run --help` lists
+each task with its command and shell, and `blueprint shell --help` lists each
+shell's tools. An unknown task or shell is a usage error.
+
 `ROC` selects the compiler (default `roc`). `.blueprint/` is generated and
 ignored by git; `Blueprint.lock` is committed.
 

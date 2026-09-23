@@ -26,7 +26,7 @@ version = "0.1.0"
 
 Command : [
 	Gen,
-	Shell(Try(Str, [NoValue])),
+	Shell(Str),
 	Run({ task : Str, args : List(Str) }),
 	Tasks,
 	Update,
@@ -35,23 +35,50 @@ Command : [
 	PrintFlake,
 ]
 
-cli : Cli.CliParser(Try(Command, [NoSubcommand]))
-cli =
-	Cli.assert_valid(
-		Cli.finish(
-			SubCmd.optional([
-				SubCmd.empty({ name: "gen", description: "Write .blueprint/flake.nix and sync Blueprint.lock (the default)", value: Gen }),
-				SubCmd.finish(
-					Cli.map(Param.maybe_str({ name: "name", help: "The shell to enter (default: \"default\")." }), |name| Shell(name)),
+## The command-line parser. When Blueprint.roc loads, its shells and tasks
+## become subcommands, so `--help` and usage errors list what this project
+## actually defines. Otherwise the parser is generic and says why.
+cli_for : Try(Ir, _) -> Cli.CliParser(Try(Command, [NoSubcommand]))
+cli_for = |loaded| {
+	{ shell_cmd, run_cmd, about } =
+		match loaded {
+			Ok(ir) => {
+				shell_cmd: SubCmd.finish(
+					Cli.map(SubCmd.optional(ir.shells.map(shell_choice)), |picked| Shell(picked ?? "default")),
+					{ name: "shell", description: "Generate, then enter a dev shell (default: \"default\")", mapper: |c| c },
+				),
+				run_cmd: SubCmd.finish(
+					SubCmd.required(ir.tasks.map(task_choice)),
+					{ name: "run", description: "Generate, then run a task in its shell", mapper: |r| Run(r) },
+				),
+				about: summary(ir),
+			}
+
+			Err(err) => {
+				shell_cmd: SubCmd.finish(
+					Cli.map(Param.maybe_str({ name: "name", help: "The shell to enter (default: \"default\")." }), |name| Shell(name ?? "default")),
 					{ name: "shell", description: "Generate, then enter a dev shell", mapper: |c| c },
 				),
-				SubCmd.finish(
+				run_cmd: SubCmd.finish(
 					{
 						task: Param.str({ name: "task", help: "The task to run.", default: NoDefault }),
 						args: Param.str_list({ name: "args", help: "Extra arguments for the task; put them after --." }),
 					}.Cli,
 					{ name: "run", description: "Generate, then run a task in its shell", mapper: |r| Run(r) },
 				),
+				about: match err {
+					NoBlueprint => "There is no Blueprint.roc in this directory."
+					_ => "Blueprint.roc could not be loaded, so its shells and tasks aren't listed; run `blueprint check` for details."
+				},
+			}
+		}
+
+	Cli.assert_valid(
+		Cli.finish(
+			SubCmd.optional([
+				SubCmd.empty({ name: "gen", description: "Write .blueprint/flake.nix and sync Blueprint.lock (the default)", value: Gen }),
+				shell_cmd,
+				run_cmd,
 				SubCmd.empty({ name: "tasks", description: "List the tasks", value: Tasks }),
 				SubCmd.empty({ name: "update", description: "Update Blueprint.lock to the latest inputs", value: Update }),
 				SubCmd.empty({ name: "check", description: "Validate Blueprint.roc", value: Check }),
@@ -62,22 +89,50 @@ cli =
 				name: "blueprint",
 				version,
 				authors: [],
-				description: "Turn a Blueprint.roc into a Nix dev shell. Set ROC to choose the roc compiler (default: roc).",
+				description: "Turn a Blueprint.roc into a Nix dev shell. Set ROC to choose the roc compiler (default: roc).\n\n${about}",
 				text_style: Color,
 			},
 		),
 	)
+}
+
+summary : Ir -> Str
+summary = |ir| {
+	count = |n, one, many| if n == 1 "1 ${one}" else "${n.to_str()} ${many}"
+	shells = ir.shells.map(|s| s.name)
+	tasks = ir.tasks.map(|t| t.name)
+	task_part = if tasks.is_empty() "no tasks" else "${count(tasks.len(), "task", "tasks")} (${Str.join_with(tasks, ", ")})"
+	"${ir.name}: ${count(shells.len(), "shell", "shells")} (${Str.join_with(shells, ", ")}), ${task_part}."
+}
+
+shell_choice : Ir.Shell -> SubCmd.SubcommandParserConfig(Str)
+shell_choice = |shell| {
+	tools = shell.tools.map(|p| Str.join_with(p, "."))
+	SubCmd.empty({ name: shell.name, description: Str.join_with(tools, ", "), value: shell.name })
+}
+
+task_choice : Ir.Task -> SubCmd.SubcommandParserConfig({ task : Str, args : List(Str) })
+task_choice = |task|
+	SubCmd.finish(
+		Param.str_list({ name: "args", help: "Extra arguments appended to the command; put them after --." }),
+		{
+			name: task.name,
+			description: "${Str.join_with(task.run, " ")}  [${task.shell}]",
+			mapper: |args| { task: task.name, args },
+		},
+	)
 
 main! : List(OsStr) => Try({}, [Exit(I32), ..])
-main! = |raw_args|
-	match Cli.parse_or_display_message(cli, raw_args.drop_first(1), OsStr.to_raw) {
+main! = |raw_args| {
+	loaded = load_ir!()
+	match Cli.parse_or_display_message(cli_for(loaded), raw_args.drop_first(1), OsStr.to_raw) {
 		Err(Help(message)) | Err(Version(message)) => Stdout.line!(message).map_err(|_| Exit(1))
 		Err(InvalidUsage(message)) => {
 			_ = Stderr.line!(message)
 			Err(Exit(2))
 		}
 		Ok(command) =>
-			match run!(command ?? Gen) {
+			match run!(command ?? Gen, loaded) {
 				Ok({}) => Ok({})
 				Err(err) => {
 					_ = Stderr.line!("blueprint: ${describe(err)}")
@@ -85,17 +140,24 @@ main! = |raw_args|
 				}
 			}
 		}
+}
 
-run! = |command|
+run! = |command, loaded|
 	match command {
-		Gen => gen!().map_ok(|_| {})
-		Shell(name) => shell!(name ?? "default")
-		Run({ task, args }) => run_task!(task, args)
-		Tasks => list_tasks!()
-		Update => update!()
 		Check => check!()
-		PrintIr => Stdout.write!(load_ir!()?.to_str())
-		PrintFlake => Stdout.write!(Flake.render(load_ir!()?))
+		_ => {
+			ir = loaded?
+			match command {
+				Gen => gen!(ir)
+				Shell(name) => shell!(ir, name)
+				Run({ task, args }) => run_task!(ir, task, args)
+				Tasks => list_tasks!(ir)
+				Update => update!(ir)
+				PrintIr => Stdout.write!(ir.to_str())
+				PrintFlake => Stdout.write!(Flake.render(ir))
+				Check => check!()
+			}
+		}
 	}
 
 ## Type-check Blueprint.roc, then run it so whole-config rules are checked too.
@@ -111,6 +173,9 @@ check! = || {
 ## Compile and run Blueprint.roc, then parse the IR it prints.
 load_ir! : () => Try(Ir, _)
 load_ir! = || {
+	if !(path("Blueprint.roc").exists!() ?? False) {
+		return Err(NoBlueprint)
+	}
 	output = Cmd.new_str(roc!()).args_str(["Blueprint.roc"]).exec_output!()?
 	Ir.parse(output.stdout_utf8).map_err(|err| BadIr(err))
 }
@@ -122,9 +187,8 @@ dir : Str
 dir = ".blueprint"
 
 ## Write the flake and lock it, keeping Blueprint.lock in sync.
-gen! : () => Try(Ir, _)
-gen! = || {
-	ir = load_ir!()?
+gen! : Ir => Try({}, _)
+gen! = |ir| {
 	path(dir).create_all!()?
 	path("${dir}/flake.nix").write_utf8!(Flake.render(ir))?
 	lock = path("Blueprint.lock")
@@ -132,24 +196,23 @@ gen! = || {
 		lock.copy!(path("${dir}/flake.lock"))?
 	}
 	Cmd.exec!("nix", ["flake", "lock", "path:${dir}"])?
-	path("${dir}/flake.lock").copy!(lock)?
-	Ok(ir)
+	path("${dir}/flake.lock").copy!(lock)
 }
 
-shell! : Str => Try({}, _)
-shell! = |name| {
-	ir = gen!()?
+shell! : Ir, Str => Try({}, _)
+shell! = |ir, name| {
 	if !ir.shells.any(|s| s.name == name) {
 		return Err(UnknownShell(name, ir.shells.map(|s| s.name)))
 	}
+	gen!(ir)?
 	Cmd.exec!("nix", ["develop", "path:${dir}#${name}"])
 }
 
-run_task! : Str, List(Str) => Try({}, _)
-run_task! = |name, extra| {
-	ir = gen!()?
+run_task! : Ir, Str, List(Str) => Try({}, _)
+run_task! = |ir, name, extra|
 	match ir.tasks.keep_if(|t| t.name == name) {
-		[task, ..] =>
+		[task, ..] => {
+			gen!(ir)?
 			Cmd.new_str("nix")
 				.args_str(["develop", "path:${dir}#${task.shell}", "-c"].concat(task.run).concat(extra))
 				.exec_cmd!()
@@ -160,20 +223,20 @@ run_task! = |name, extra| {
 							other => other
 						},
 				)
+		}
+
 		[] => Err(UnknownTask(name, ir.tasks.map(|t| t.name)))
 	}
-}
 
-list_tasks! : () => Try({}, _)
-list_tasks! = || {
-	ir = load_ir!()?
+list_tasks! : Ir => Try({}, _)
+list_tasks! = |ir| {
 	lines = ir.tasks.map(|t| "${t.name}\t(${t.shell})\t${Str.join_with(t.run, " ")}")
 	Stdout.line!(Str.join_with(lines, "\n"))
 }
 
-update! : () => Try({}, _)
-update! = || {
-	_ = gen!()?
+update! : Ir => Try({}, _)
+update! = |ir| {
+	gen!(ir)?
 	Cmd.exec!("nix", ["flake", "update", "--flake", "path:${dir}"])?
 	path("${dir}/flake.lock").copy!(path("Blueprint.lock"))
 }
@@ -184,6 +247,7 @@ path = |p| Path.from_os_str(OsStr.from_str(p))
 describe : _ -> Str
 describe = |err|
 	match err {
+		NoBlueprint => "there is no Blueprint.roc in this directory"
 		BadIr(InvalidSexpr(msg)) => "could not read the IR from Blueprint.roc: ${msg}"
 		BadIr(UnsupportedVersion(v)) => "Blueprint.roc uses IR version ${v.to_str()}, but this blueprint understands version ${Ir.current_version.to_str()}; update blueprint or the platform"
 		BadIr(MissingRequiredField(field)) => "the IR from Blueprint.roc is missing ${field}"
