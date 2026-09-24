@@ -37,9 +37,10 @@
       # Temporary source pin to basic-cli PR #499 until a compatible release.
       rustToolchain = pkgs.rust-bin.fromRustupToolchain {
         channel = (builtins.fromTOML (builtins.readFile "${basic-cli-src}/rust-toolchain.toml")).toolchain.channel;
+        components = [ "llvm-tools-preview" ];
         targets = [ "x86_64-unknown-linux-musl" ];
       };
-      rustPlatform = pkgs.pkgsStatic.makeRustPlatform {
+      rustPlatform = pkgs.makeRustPlatform {
         cargo = rustToolchain;
         rustc = rustToolchain;
       };
@@ -48,7 +49,15 @@
         version = "0.23.0-pr499";
         src = basic-cli-src;
         cargoLock.lockFile = "${basic-cli-src}/Cargo.lock";
-        cargoBuildFlags = [ "--lib" ];
+        nativeBuildInputs = [ pkgs.python3 pkgs.zig_0_16 ];
+        # Keep Cargo's build helpers native; upstream uses Zig for musl C code.
+        buildPhase = ''
+          runHook preBuild
+          export CARGO_NET_OFFLINE=true
+          export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+          python3 scripts/build.py --target x64musl
+          runHook postBuild
+        '';
         # Roc supplies the host's unresolved symbols when linking an app.
         doCheck = false;
         dontStrip = true;
