@@ -50,6 +50,9 @@
         src = basic-cli-src;
         cargoLock.lockFile = "${basic-cli-src}/Cargo.lock";
         nativeBuildInputs = [ pkgs.python3 pkgs.zig_0_16 ];
+        postPatch = ''
+          patchShebangs ci scripts
+        '';
         # Keep Cargo's build helpers native; upstream uses Zig for musl C code.
         buildPhase = ''
           runHook preBuild
