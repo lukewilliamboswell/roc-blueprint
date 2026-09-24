@@ -23,7 +23,8 @@
 ##
 ## Every quoted value is checked as it compiles, through the `from_quote` of
 ## `Tool`, `System`, `FlakeRef`, `InputName`, `EnvName` or `TaskName`.
-## Whole-config rules are checked when the app runs (see the TODO below).
+## Whole-config rules, including missing names and duplicate shells, are
+## also checked at compile time by lowering `config` to the rendered IR.
 platform ""
 	requires {
 		config : List(Config.Setting)
@@ -55,22 +56,11 @@ import TaskName
 import Val
 import ir.Ir
 
-# TODO(compile-time-render): revalidate bundling before restoring compile-time rendering.
-#
-# The IR should be a top-level constant so whole-config errors (duplicate
-# shells, a missing Name, ...) are reported by `roc check Blueprint.roc`:
-#
-#     rendered : Str
-#     rendered = or_crash(Lower.lower(config)).to_str()
-#
-# Older compilers crashed when bundling a top-level constant that depends
-# on the app's `config` (segfault on September 4–19, trap on September 22).
-# The source-pinned basic-cli now permits newer compilers; verify both local
-# and published-IR bundle smoke tests before moving rendering back here.
-#
-# Until then the IR is built when the app runs, so whole-config errors are
-# reported at run time (`blueprint check` runs Blueprint.roc for that).
-# Per-value checks (the `from_quote` of Tool, System, FlakeRef, ...) remain compile time.
+# Keep lowering at the top level so `roc check` validates the whole config.
+# scripts/test-config.sh exercises both this platform and its bundled form.
+rendered : Str
+rendered = or_crash(Lower.lower(config)).to_str()
+
 or_crash : Try(Ir, List(Lower.Error)) -> Ir
 or_crash = |result|
 	match result {
@@ -80,7 +70,7 @@ or_crash = |result|
 
 main_for_host! : List(Str) => I32
 main_for_host! = |_args|
-	match Host.stdout_line!(Str.drop_suffix(or_crash(Lower.lower(config)).to_str(), "\n")) {
+	match Host.stdout_line!(Str.drop_suffix(rendered, "\n")) {
 		Ok({}) => 0
 		Err(_) => 1
 	}

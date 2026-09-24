@@ -16,7 +16,8 @@ step "roc-blueprint-ir tests"
 step "Build the platform host"
 (cd blueprint-ir-platform && zig build)
 
-step "Check examples/all-settings/Blueprint.roc"
+step "Compile-time configuration validation"
+scripts/test-config.sh
 "$ROC" check examples/all-settings/Blueprint.roc
 
 step "CLI tests"

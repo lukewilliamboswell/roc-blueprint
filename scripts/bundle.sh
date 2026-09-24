@@ -19,7 +19,8 @@
 # as-is; a staged copy of the platform gets `ir: IR_URL` instead.
 #
 # Every platform bundle is smoke-tested: it is served from localhost with a
-# release-like versioned path, and examples/all-settings/Blueprint.roc is run against it.
+# release-like versioned path, valid/invalid configs are checked, and
+# examples/all-settings/Blueprint.roc is run against it.
 #
 # Environment: ROC (default: roc), PORT (default: 8765).
 set -euo pipefail
@@ -102,6 +103,9 @@ platform)
 	mkdir -p "$STAGE/serve/0.0.1-smoke" "$STAGE/app"
 	cp "$DIST/$pf_bundle" "$STAGE/serve/0.0.1-smoke/"
 	sed "s#platform \"../../blueprint-ir-platform/main.roc\"#platform \"http://localhost:$PORT/0.0.1-smoke/$pf_bundle\"#" "$ROOT/examples/all-settings/Blueprint.roc" >"$STAGE/app/Blueprint.roc"
+	echo "==> Compile-time validation against the platform bundle"
+	ROC="$ROC" "$ROOT/scripts/test-config.sh" "http://localhost:$PORT/0.0.1-smoke/$pf_bundle"
+	(cd "$STAGE/app" && "$ROC" check Blueprint.roc)
 	(cd "$STAGE/app" && "$ROC" Blueprint.roc) | grep -qF '(format ('
 	echo "    ok"
 	;;
