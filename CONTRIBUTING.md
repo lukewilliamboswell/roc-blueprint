@@ -100,8 +100,9 @@ This source includes both [PR #495](https://github.com/roc-lang/basic-cli/pull/4
 As of September 24, 2026, no published basic-cli release includes both fixes;
 0.23.0-rc1 remains the newest prerelease and stalls with this compiler.
 Keep the reproducible source pin until a compatible release is published.
-The pinned source passes the CLI and imported platform tests. Nix builds its Rust host for
-x64musl on Linux and arm64mac on macOS using the upstream Rust toolchain version and locked Cargo dependencies.
+The pinned source passes the CLI and imported platform tests. Nix builds its
+Rust host for x64musl on Linux and arm64mac on macOS using the upstream Rust
+toolchain version and locked Cargo dependencies.
 The Rust host is reused across Roc nightly updates.
 
 The complete suite requires x86_64 Linux, Zig 0.16 and a running Nix daemon. To test the CLI alone on macOS,
@@ -190,8 +191,13 @@ minus the version and hash, so two bundles under one tag look like one
 package served with two hashes.
 
 Update the basic-cli source revision in `flake.nix` and refresh its lock input
-when adopting a newer commit. When switching back to a released platform,
-restore its URL in `blueprint-cli/main.roc` and add its archive to `rocPackages`.
+when adopting a newer commit. Switching back to a released platform is blocked
+on publication of a release containing both #495 and #498; the committed Nix
+source build does not require that release or a machine-local override.
+Once published, restore the release URL in `blueprint-cli/main.roc`, add the
+same archive URL and verified hash to `rocPackages` in `flake.nix`, and remove
+the source-host build and unused flake inputs (refresh `flake.lock`). Rerun
+`scripts/test.sh`, including both bundle variants, before adopting that release.
 If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
 
 ## Upstream workarounds
