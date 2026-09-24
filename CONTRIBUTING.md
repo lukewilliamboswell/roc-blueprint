@@ -5,7 +5,7 @@
 ```
 blueprint-ir-platform/   the roc-blueprint platform that Blueprint.roc apps use
   *.roc                  setting types, checked values, lowering to the IR
-  host/, build.zig       Zig host, built into targets/x64musl/libhost.a
+  host/, build.zig       Zig host, built into targets/{x64musl,arm64mac}/libhost.a
   targets/               linker inputs; all but libhost.a are vendored (see its README)
   ir-release             the released IR bundle URL a platform release uses
 blueprint-ir-package/    roc-blueprint-ir: the IR types, Value, and the S-expression format
@@ -44,7 +44,7 @@ runs this setup. The Nix blueprint package includes the platform automatically.
 
 ```sh
 scripts/prepare-basic-cli.sh                # basic-cli source + Rust host
-(cd blueprint-ir-platform && zig build)      # blueprint-ir-platform/targets/x64musl/libhost.a
+(cd blueprint-ir-platform && zig build)      # targets/{x64musl,arm64mac}/libhost.a
 roc test blueprint-ir-package/main.roc      # IR round trips and format tests
 roc test blueprint-cli/main.roc             # includes the golden flake test
 roc build blueprint-cli/main.roc --output=./blueprint
@@ -88,11 +88,10 @@ The September 23 nightly (`nightly-2026-09-23-c7852fd`) uses basic-cli
 `473caa2cc4f3fe9ce4e4682158bb80ebc2e19169` in `flake.nix` and `flake.lock`.
 The released 0.23.0-rc1 platform stalls with this compiler; the pinned source
 passes the CLI and imported platform tests. Nix builds its Rust host for
-x64musl using the upstream Rust toolchain version and locked Cargo dependencies.
+x64musl on Linux and arm64mac on macOS using the upstream Rust toolchain version and locked Cargo dependencies.
 The Rust host is reused across Roc nightly updates.
 
-The complete suite requires x86_64 Linux (the blueprint platform's supported
-target), Zig 0.16 and a running Nix daemon. To test the CLI alone on macOS,
+The complete suite requires x86_64 Linux, Zig 0.16 and a running Nix daemon. To test the CLI alone on macOS,
 check out that exact basic-cli commit, run `python3 scripts/build.py` there,
 and link its `platform` directory at `.basic-cli` in this repository. Then
 run the CLI unit tests and build with the September 23 Roc binary. The native

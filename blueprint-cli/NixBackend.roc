@@ -178,7 +178,9 @@ NixBackend :: [].{
 	render_shell = |shell, extra| {
 		pkg_lines = shell.packages_.map(|p| "              sets.${quote(p.source)}.${attr_path(p.path)}")
 		extra_lines = extra.map(|a| "            ${quote(a.name)} = ${value_to_nix(a.value)};")
-		lines(["          ${quote(shell.name)} = sets.\"nixpkgs\".mkShell {", "            packages = ["])
+		# A package whose meta.platforms excludes this system (such as Wayland
+		# on macOS) is left out of that system's shell rather than failing it.
+		lines(["          ${quote(shell.name)} = sets.\"nixpkgs\".mkShell {", "            packages = builtins.filter (sets.\"nixpkgs\".lib.meta.availableOn sets.\"nixpkgs\".stdenv.hostPlatform) ["])
 			.concat(lines(pkg_lines))
 			.concat(lines(["            ];"]))
 			.concat(lines(extra_lines))

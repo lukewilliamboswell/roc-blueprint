@@ -8,10 +8,13 @@ const std = @import("std");
 const Target = struct {
     dir: []const u8,
     query: std.Target.Query,
+    /// Linux links the vendored musl runtime's compiler-rt; macOS has none.
+    bundle_compiler_rt: bool,
 };
 
 const targets = [_]Target{
-    .{ .dir = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
+    .{ .dir = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }, .bundle_compiler_rt = false },
+    .{ .dir = "arm64mac", .query = .{ .cpu_arch = .aarch64, .os_tag = .macos }, .bundle_compiler_rt = true },
 };
 
 pub fn build(b: *std.Build) void {
@@ -31,8 +34,7 @@ pub fn build(b: *std.Build) void {
                 .pic = true,
             }),
         });
-        // Linux gets compiler-rt from the vendored runtime.
-        lib.bundle_compiler_rt = false;
+        lib.bundle_compiler_rt = t.bundle_compiler_rt;
         copy.addCopyFileToSource(lib.getEmittedBin(), b.pathJoin(&.{ "targets", t.dir, "libhost.a" }));
     }
 }

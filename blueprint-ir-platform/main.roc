@@ -40,6 +40,7 @@ platform ""
 	targets: {
 		inputs_dir: "targets/",
 		x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a", "libzigc.a", "libcompiler_rt.a"] },
+		arm64mac: { inputs: ["libhost.a", app] },
 	}
 
 import Config
