@@ -7,6 +7,7 @@ app [main!] {
 	pf: platform "../.basic-cli/main.roc",
 	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
 	ir: "../blueprint-ir-package/main.roc",
+	nix: "../blueprint-nix-package/main.roc",
 }
 
 import pf.Cmd
@@ -19,8 +20,8 @@ import weaver.Cli
 import weaver.Param
 import weaver.SubCmd
 import ir.Ir
-import Backend
-import NixBackend
+import nix.Backend
+import nix.NixBackend
 
 version : Str
 version = "0.2.0"

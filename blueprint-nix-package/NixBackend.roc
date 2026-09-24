@@ -52,6 +52,36 @@ NixBackend :: [].{
 	default_nixpkgs : Str
 	default_nixpkgs = "github:NixOS/nixpkgs/nixos-unstable"
 
+	## Stage the shared renderer and a caller-supplied lock without effects.
+	## Returned paths are absolute; no workspace name or nesting is assumed.
+	render_files : Ir, Str, Backend.Layout, Backend.LockedInputs -> Try(List(Backend.File), Str)
+	render_files = |ir, target, layout, locked_inputs| {
+		if !ir.systems.contains(target) {
+			return Err("target ${target} is not declared by the project")
+		}
+		for p in [layout.project_root, layout.workspace, layout.generated_root, layout.lock_path] {
+			if !p.starts_with("/") or p.to_utf8().contains(0) or p.split_on("/").contains("..") {
+				return Err("layout paths must be absolute and contain neither NUL nor parent traversal")
+			}
+		}
+		# Local input rebasing and relocatable source locks belong to B2.
+		# Refuse them here instead of resolving against the generated directory.
+		for input in ir.inputs {
+			if input.url.starts_with("path:") or input.url.contains("file:") or input.url.starts_with("/") or input.url.starts_with(".") {
+				return Err("render_files does not yet support local input ${input.name}")
+			}
+		}
+		missing = ir.unsupported_features(backend.features)
+		if !missing.is_empty() {
+			return Err("unsupported features: ${Str.join_with(missing, ", ")}")
+		}
+		contents = render(ir)?
+		Ok([
+			{ path: "${layout.generated_root}/flake.nix", contents },
+			{ path: "${layout.generated_root}/flake.lock", contents: locked_inputs.contents },
+		])
+	}
+
 	## Render the IR as the text of flake.nix.
 	render : Ir -> Try(Str, Str)
 	render = |ir| {

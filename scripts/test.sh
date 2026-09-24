@@ -8,7 +8,7 @@ ROOT="$PWD"
 step() { printf '\n==> %s\n' "$*"; }
 
 step "Formatting"
-"$ROC" fmt --check blueprint-ir-package blueprint-ir-platform blueprint-cli examples
+"$ROC" fmt --check blueprint-ir-package blueprint-ir-platform blueprint-nix-package blueprint-cli fixtures examples
 
 step "roc-blueprint-ir tests"
 "$ROC" test blueprint-ir-package/main.roc
@@ -27,6 +27,9 @@ scripts/prepare-basic-cli.sh
 step "Build the blueprint CLI"
 "$ROC" build blueprint-cli/main.roc --output=./blueprint
 
+step "Independent library consumer"
+scripts/test-consumer.sh
+
 step "CLI argument and validation regressions"
 python3 scripts/test-cli.py
 
@@ -42,7 +45,7 @@ step "blueprint against examples/all-settings/Blueprint.roc"
 )
 
 step "Golden flakes parse as Nix"
-for f in blueprint-cli/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done
+for f in blueprint-nix-package/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done
 
 step "Extensions example: the platform emits them, this blueprint refuses them clearly"
 "$ROC" check examples/extensions/Blueprint.roc

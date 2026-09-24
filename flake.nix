@@ -135,6 +135,7 @@
               root = ./.;
               fileset = lib.fileset.unions [
                 ./blueprint-cli
+                ./blueprint-nix-package
                 ./blueprint-ir-package/main.roc
                 ./blueprint-ir-package/Ir.roc
                 ./blueprint-ir-package/Sexpr.roc

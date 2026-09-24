@@ -38,6 +38,13 @@ Backend := {
 	run_in_shell : Str, Str, List(Str) -> List(Str),
 }.{
 
-	## A generated file, relative to the generated directory.
+	## A generated file. `backend.render` returns relative paths;
+	## `NixBackend.render_files` returns absolute, caller-layout paths.
 	File : { path : Str, contents : Str }
+
+	## Caller-owned paths. The renderer never reads these locations.
+	Layout : { project_root : Str, workspace : Str, generated_root : Str, lock_path : Str }
+
+	## Already-resolved Nix lock bytes; obtaining them is the caller's job.
+	LockedInputs : { contents : Str }
 }

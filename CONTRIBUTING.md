@@ -10,10 +10,12 @@ blueprint-ir-platform/   the roc-blueprint platform that Blueprint.roc apps use
   ir-release             the released IR bundle URL a platform release uses
 blueprint-ir-package/    roc-blueprint-ir: the IR types, Value, and the S-expression format
   fuzz/                  roc-fuzz targets: ir-parse, ir-round-trip
-blueprint-cli/           the blueprint CLI (basic-cli + weaver)
-  Backend.roc            the backend interface: render files, argv for lock/shell/run
-  NixBackend.roc         the Nix backend (flake.nix)
+blueprint-nix-package/   importable pure Nix backend (depends only on the IR)
+  Backend.roc            backend interface, caller layout and resolved lock data
+  NixBackend.roc          shared flake renderer and staging function
   tests/                 IR fixtures and golden flakes
+blueprint-cli/           the blueprint CLI (basic-cli + weaver)
+fixtures/consumer/      independent consumer of the IR and Nix packages
 examples/all-settings/   uses every setting; CI runs blueprint against it
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
 scripts/                 prepare-basic-cli.sh, test.sh, bundle.sh, fuzz.sh
@@ -148,7 +150,7 @@ and parser are hand-written to avoid recursive-codec derivation problems.
 
 ### Backends
 
-`blueprint-cli/Backend.roc` is the interface: a backend is pure. It renders the
+`blueprint-nix-package/Backend.roc` is the interface: a backend is pure. It renders the
 IR into files and gives the argv for locking, updating, entering a shell and
 running a task; `main.roc` does the effects. `NixBackend.roc` is the only
 backend. It:
@@ -159,6 +161,17 @@ backend. It:
   `flake`) as data, and ignores raw entries for other backends;
 - refuses any `extensions` (it supports none yet) and advertises the
   `"raw"` feature.
+
+The source package `blueprint-nix-package/main.roc` exports `Backend` and
+`NixBackend`, without importing the CLI or an effectful platform.
+`NixBackend.render_files(ir, target, layout, locked_inputs)` returns absolute
+file paths and contents using caller-owned paths and already-resolved Nix lock
+bytes. It shares `NixBackend.render` with the CLI. The new staging seam rejects
+local input URLs until project-root rebasing and relocatable locks are implemented;
+its initial consumer fixture uses remote pinned inputs. At this initial extraction
+stage, supplied lock bytes are trusted data, not a validated lock protocol;
+normal reference CLI lock behavior is unchanged. `scripts/test-consumer.sh`
+compiles a separate app and compares its staged files byte-for-byte.
 
 A new feature usually means: a setting in the platform (`Config.roc`,
 `Lower.roc`), then either an `extensions` kind or a new optional IR field
