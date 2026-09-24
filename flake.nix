@@ -5,30 +5,80 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     roc-overlay.url = "github:roc-lang/roc-overlay";
     roc-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    basic-cli-src = {
+      url = "github:roc-lang/basic-cli/473caa2cc4f3fe9ce4e4682158bb80ebc2e19169";
+      flake = false;
+    };
+    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
-    { self, nixpkgs, roc-overlay }:
+    {
+      self,
+      nixpkgs,
+      roc-overlay,
+      basic-cli-src,
+      rust-overlay,
+    }:
     let
       # Only x86_64 Linux for now: the platform targets x64musl only.
       system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [ rust-overlay.overlays.default ];
+      };
       lib = pkgs.lib;
 
       # The Roc nightly pinned in .roc-version, from roc-overlay.
       rocTag = lib.trim (builtins.readFile ./.roc-version);
       roc = roc-overlay.packages.${system}.${rocTag};
 
+      # Temporary source pin to basic-cli PR #499 until a compatible release.
+      rustToolchain = pkgs.rust-bin.fromRustupToolchain {
+        channel = (builtins.fromTOML (builtins.readFile "${basic-cli-src}/rust-toolchain.toml")).toolchain.channel;
+        components = [ "llvm-tools-preview" ];
+        targets = [ "x86_64-unknown-linux-musl" ];
+      };
+      rustPlatform = pkgs.makeRustPlatform {
+        cargo = rustToolchain;
+        rustc = rustToolchain;
+      };
+      basic-cli = rustPlatform.buildRustPackage {
+        pname = "basic-cli-platform";
+        version = "0.23.0-pr499";
+        src = basic-cli-src;
+        cargoLock.lockFile = "${basic-cli-src}/Cargo.lock";
+        nativeBuildInputs = [ pkgs.python3 pkgs.zig_0_16 ];
+        postPatch = ''
+          patchShebangs ci scripts
+        '';
+        # Keep Cargo's build helpers native; upstream uses Zig for musl C code.
+        buildPhase = ''
+          runHook preBuild
+          export CARGO_NET_OFFLINE=true
+          export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+          python3 scripts/build.py --target x64musl
+          runHook postBuild
+        '';
+        # Roc supplies the host's unresolved symbols when linking an app.
+        doCheck = false;
+        dontStrip = true;
+        installPhase = ''
+          runHook preInstall
+          mkdir -p "$out"
+          cp -R platform/. "$out/"
+          cp target/x86_64-unknown-linux-musl/release/libhost.a "$out/targets/x64musl/libhost.a"
+          runHook postInstall
+        '';
+      };
+
       # Roc packages blueprint-cli/main.roc downloads. Fetched here and unpacked into
       # Roc's package cache so the sandboxed build needs no network.
-      # These are the `pf:` and `weaver:` URLs in blueprint-cli/main.roc plus their own
+      # These are the `weaver:` URL in blueprint-cli/main.roc plus transitive
       # dependencies (http, roc-ansi, path). A missing one shows up as
       # "package download failed" in `nix build .#blueprint`.
       rocPackages = [
-        {
-          url = "https://github.com/roc-lang/basic-cli/releases/download/0.23.0-rc1/3hT3SoHZ6qbEsa9qVFLUW3547U5LeoNd1KbpqLpz4r1i.tar.zst";
-          hash = "sha256-3vjAUtcCdgS1DWfyCanTOzqDHhcoEdPjHqHzqHMiMBg=";
-        }
         {
           url = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst";
           hash = "sha256-6e+qlQ5y9vds326vAEJFcvppsEumEnMjV6wEU2ePArQ=";
@@ -83,6 +133,7 @@
           runHook preBuild
           export HOME="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache"
           ${lib.concatMapStrings unpackRocPackage rocPackages}
+          cp -R ${basic-cli} .basic-cli
           roc build blueprint-cli/main.roc --output=blueprint
           runHook postBuild
         '';
@@ -102,7 +153,7 @@
     in
     {
       packages.${system} = {
-        inherit blueprint roc;
+        inherit blueprint roc basic-cli;
         default = blueprint;
       };
 

@@ -1,12 +1,12 @@
 .blueprint/
-examples/Blueprint.lock
+examples/**/Blueprint.lock
 .roc_bundle_tmp/
-.roc-blueprint-tmp/
 .zig-cache/
 zig-out/
 dist/
 blueprint-ir-platform/targets/x64musl/libhost.a
 /blueprint
+/.basic-cli
 blueprint-cli/main
 .bundle-stage/
 blueprint-ir-package/fuzz/*/ir-*
