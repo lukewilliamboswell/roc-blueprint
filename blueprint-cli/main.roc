@@ -20,6 +20,7 @@ import weaver.Cli
 import weaver.Param
 import weaver.SubCmd
 import ir.Ir
+import ir.Project
 import nix.Backend
 import nix.NixBackend
 
@@ -123,8 +124,7 @@ summary = |ir| {
 
 shell_choice : Ir.Shell -> SubCmd.SubcommandParserConfig(Str)
 shell_choice = |shell| {
-	tools = shell.packages_.map(|p| Str.join_with(p.path, "."))
-	SubCmd.empty({ name: shell.name, description: Str.join_with(tools, ", "), value: shell.name })
+	SubCmd.empty({ name: shell.name, description: "Environment ${shell.environment}", value: shell.name })
 }
 
 task_choice : Ir.Task -> SubCmd.SubcommandParserConfig({ task : Str, args : List(Str) })
@@ -133,7 +133,7 @@ task_choice = |task|
 		Param.str_list({ name: "args", help: "Extra arguments appended to the command; put them after --." }),
 		{
 			name: task.name,
-			description: "${Str.join_with(task.run, " ")}  [${task.shell}]",
+			description: "${Str.join_with(task.run, " ")}  [${task.environment}]",
 			mapper: |args| { task: task.name, args },
 		},
 	)
@@ -183,7 +183,7 @@ run! = |command, loaded|
 check! : Try(Ir, _) => Try({}, _)
 check! = |loaded| {
 	Cmd.new_str(roc!()).args_str(["check", "Blueprint.roc"]).exec_cmd!()?
-	_ = loaded?
+	_ = render(loaded?)?
 	Stdout.line!("Blueprint.roc is valid")
 }
 
@@ -199,7 +199,7 @@ load_ir! = || {
 	if !missing.is_empty() {
 		return Err(NeedsFeatures(missing))
 	}
-	Ok(ir)
+	Project.validate(ir).map_err(|message| InvalidProject(message))
 }
 
 render : Ir -> Try(List(Backend.File), _)
@@ -246,8 +246,11 @@ dir = ".blueprint"
 
 ## Write the backend's files and lock them, keeping Blueprint.lock in sync.
 gen! : Ir => Try({}, _)
-gen! = |ir| {
-	files = render(ir)?
+gen! = |ir| stage!(render(ir)?)
+
+## Stage only after the pure request renderer has checked its entire closure.
+stage! : List(Backend.File) => Try({}, _)
+stage! = |files| {
 	path(dir).create_all!()?
 	for file in files {
 		path("${dir}/${file.path}").write_utf8!(file.contents)?
@@ -263,10 +266,10 @@ gen! = |ir| {
 
 shell! : Ir, Str => Try({}, _)
 shell! = |ir, name| {
-	if !ir.shells.any(|s| s.name == name) {
-		return Err(UnknownShell(name, ir.shells.map(|s| s.name)))
-	}
-	gen!(ir)?
+	shell = ir.shells.find_first(|s| s.name == name)
+		.map_err(|_| UnknownShell(name, ir.shells.map(|s| s.name)))?
+	contents = NixBackend.render_environment(ir, shell.environment).map_err(|msg| RenderFailed(msg))?
+	stage!([{ path: "flake.nix", contents }])?
 	exec!((backend.enter_shell)(dir, name))
 }
 
@@ -274,8 +277,9 @@ run_task! : Ir, Str, List(Str) => Try({}, _)
 run_task! = |ir, name, extra|
 	match ir.tasks.keep_if(|t| t.name == name) {
 		[task, ..] => {
-			gen!(ir)?
-			argv = (backend.run_in_shell)(dir, task.shell, task.run.concat(extra))
+			contents = NixBackend.render_environment(ir, task.environment).map_err(|msg| RenderFailed(msg))?
+			stage!([{ path: "flake.nix", contents }])?
+			argv = (backend.run_in_shell)(dir, NixBackend.environment_shell(task.environment), task.run.concat(extra))
 			Cmd.new_str(argv.first() ?? "")
 				.args_str(argv.drop_first(1))
 				.exec_cmd!()
@@ -293,7 +297,7 @@ run_task! = |ir, name, extra|
 
 list_tasks! : Ir => Try({}, _)
 list_tasks! = |ir| {
-	lines = ir.tasks.map(|t| "${t.name}\t(${t.shell})\t${Str.join_with(t.run, " ")}")
+	lines = ir.tasks.map(|t| "${t.name}\t(${t.environment})\t${Str.join_with(t.run, " ")}")
 	Stdout.line!(Str.join_with(lines, "\n"))
 }
 
@@ -314,6 +318,7 @@ describe = |err|
 		BadIr(InvalidSexpr(msg)) => "could not read the IR from Blueprint.roc: ${msg}"
 		BadIr(UnsupportedFormat({ major, minor })) => "IR format ${U64.to_str(major)}.${U64.to_str(minor)} is not supported by this blueprint (understands major ${Ir.current_format.major.to_str()}); upgrade blueprint or change the platform version"
 		NeedsFeatures(missing) => "Blueprint.roc needs features: ${Str.join_with(missing, ", ")}; upgrade blueprint"
+		InvalidProject(msg) => "invalid IR project: ${msg}"
 		RenderFailed(msg) => "cannot generate the ${backend.name} files: ${msg}"
 		BadIr(MissingRequiredField("format")) => "Blueprint.roc uses an older roc-blueprint platform that this blueprint can't read; update the platform URL in its app header to a current release"
 		BadIr(MissingRequiredField(field)) => "the IR from Blueprint.roc is missing ${field}"

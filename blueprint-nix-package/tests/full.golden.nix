@@ -3,7 +3,7 @@
   description = "Development environments for full";
 
   inputs = {
-    "nixpkgs".url = "github:NixOS/nixpkgs/nixos-unstable";
+    "default".url = "github:NixOS/nixpkgs/nixos-unstable";
     "stable".url = "github:NixOS/nixpkgs/nixos-24.05";
     "roc".url = "github:roc-lang/roc-overlay";
     "utils".url = "github:numtide/flake-utils";
@@ -11,55 +11,77 @@
 
   outputs = { self, ... }@inputs:
     let
-      overlays = [ inputs."roc".overlays.default ];
-      setsFor = system: {
-        "nixpkgs" = import inputs."nixpkgs" { inherit system overlays; };
-        "stable" = import inputs."stable" { inherit system overlays; };
+      environmentsFor = system: {
+        "dev" = let
+          overlays = [ inputs."roc".overlays.default ];
+          sets = {
+            "default" = import inputs."default" { inherit system overlays; };
+            "stable" = import inputs."stable" { inherit system overlays; };
+          };
+        in extra: sets."default".mkShell ({
+          packages = [
+            sets."default"."hello"
+            sets."stable"."jq"
+          ];
+        } // extra);
+        "empty" = let
+          overlays = [  ];
+          sets = {
+            "default" = import inputs."default" { inherit system overlays; };
+          };
+        in extra: sets."default".mkShell ({
+          packages = [
+          ];
+        } // extra);
+        "headless" = let
+          overlays = [  ];
+          sets = {
+            "stable" = import inputs."stable" { inherit system overlays; };
+          };
+        in extra: sets."stable".mkShell ({
+          packages = [
+            sets."stable"."jq"
+          ];
+        } // extra);
       };
     in
     {
       devShells = {
-        "x86_64-linux" = let sets = setsFor "x86_64-linux"; in {
-          "default" = sets."nixpkgs".mkShell {
-            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
-              sets."nixpkgs"."hello"
-              sets."stable"."jq"
-            ];
-            "shellHook" = "echo \"hi \${USER}\"\nexport FOO=bar\n";
-            "GREETING" = "hello";
-          };
-          "empty" = sets."nixpkgs".mkShell {
-            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
-            ];
-          };
+        "x86_64-linux" = let
+          environments = environmentsFor "x86_64-linux";
+        in {
+          "blueprint-env-dev" = environments."dev" { };
+          "blueprint-env-empty" = environments."empty" { };
+          "blueprint-env-headless" = environments."headless" { };
+          "default" = environments."dev" { "shellHook" = "echo \"hi \${USER}\"\nexport FOO=bar\n"; "GREETING" = "hello"; };
+          "empty" = environments."empty" { };
         };
-        "aarch64-linux" = let sets = setsFor "aarch64-linux"; in {
-          "default" = sets."nixpkgs".mkShell {
-            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
-              sets."nixpkgs"."hello"
-              sets."stable"."jq"
-            ];
-            "shellHook" = "echo \"hi \${USER}\"\nexport FOO=bar\n";
-            "GREETING" = "hello";
-          };
-          "empty" = sets."nixpkgs".mkShell {
-            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
-            ];
-          };
+        "aarch64-linux" = let
+          environments = environmentsFor "aarch64-linux";
+        in {
+          "blueprint-env-dev" = environments."dev" { };
+          "blueprint-env-empty" = environments."empty" { };
+          "blueprint-env-headless" = environments."headless" { };
+          "default" = environments."dev" { "shellHook" = "echo \"hi \${USER}\"\nexport FOO=bar\n"; "GREETING" = "hello"; };
+          "empty" = environments."empty" { };
         };
-        "riscv64-linux" = let sets = setsFor "riscv64-linux"; in {
-          "default" = sets."nixpkgs".mkShell {
-            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
-              sets."nixpkgs"."hello"
-              sets."stable"."jq"
-            ];
-            "shellHook" = "echo \"hi \${USER}\"\nexport FOO=bar\n";
-            "GREETING" = "hello";
-          };
-          "empty" = sets."nixpkgs".mkShell {
-            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
-            ];
-          };
+        "x86_64-darwin" = let
+          environments = environmentsFor "x86_64-darwin";
+        in {
+          "blueprint-env-dev" = environments."dev" { };
+          "blueprint-env-empty" = environments."empty" { };
+          "blueprint-env-headless" = environments."headless" { };
+          "default" = environments."dev" { "shellHook" = "echo \"hi \${USER}\"\nexport FOO=bar\n"; "GREETING" = "hello"; };
+          "empty" = environments."empty" { };
+        };
+        "aarch64-darwin" = let
+          environments = environmentsFor "aarch64-darwin";
+        in {
+          "blueprint-env-dev" = environments."dev" { };
+          "blueprint-env-empty" = environments."empty" { };
+          "blueprint-env-headless" = environments."headless" { };
+          "default" = environments."dev" { "shellHook" = "echo \"hi \${USER}\"\nexport FOO=bar\n"; "GREETING" = "hello"; };
+          "empty" = environments."empty" { };
         };
       };
       "blueprint" = { "version" = 1; };

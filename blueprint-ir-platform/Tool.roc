@@ -1,40 +1,25 @@
-## A package: an attribute path in a package set, checked when the literal is
-## compiled. "python3" and "python3Packages.ruff" come from "nixpkgs";
-## "stable#python3" comes from the package set declared as
-## `Packages("stable", ...)`.
-Tool :: { source : Str, path : List(Str) }.{
+import ir.Ir
+import ir.Project
+
+## A provider-native tool name, optionally qualified as "source#name".
+## Generic syntax is checked here; explicit source grammar is checked during
+## whole-project validation. Auto sources are interpreted by the chosen backend.
+Tool :: { source : Str, name : Str }.{
 	from_quote : Str -> Try(Tool, [BadQuotedBytes(Str)])
-	from_quote = |raw| {
-		(source, attr) =
-			match raw.split_on("#") {
-				[a] => ("nixpkgs", a)
-				[s, a] => (s, a)
-				_ => return Err(BadQuotedBytes("\"${raw}\" has more than one #; expected \"path\" or \"set#path\""))
-			}
-		parts = attr.split_on(".")
-		if raw.contains(" ") {
-			Err(BadQuotedBytes("package paths cannot contain spaces: \"${raw}\""))
-		} else if source.is_empty() or source.contains(".") {
-			Err(BadQuotedBytes("\"${raw}\" has no valid package set before #, like \"stable#python3\""))
-		} else if parts.any(|p| p.is_empty()) {
-			Err(BadQuotedBytes("\"${raw}\" is not an attribute path, like \"git\", \"python3Packages.ruff\" or \"stable#python3\""))
-		} else {
-			Ok(Tool.{ source, path: parts })
+	from_quote = |raw|
+		match Project.tool(raw) {
+			Ok(tool) => Ok(Tool.{ source: tool.source, name: tool.name })
+			Err(error) => Err(BadQuotedBytes(error))
 		}
-	}
 
-	## The package set it comes from, "nixpkgs" unless written as "set#path".
-	source : Tool -> Str
-	source = |tool| tool.source
-
-	to_path : Tool -> List(Str)
-	to_path = |tool| tool.path
+	to_ir : Tool -> Ir.Tool
+	to_ir = |tool| { source: tool.source, name: tool.name }
 
 	to_str : Tool -> Str
 	to_str = |tool|
-		if tool.source == "nixpkgs" {
-			Str.join_with(tool.path, ".")
+		if tool.source == "default" {
+			tool.name
 		} else {
-			"${tool.source}#${Str.join_with(tool.path, ".")}"
+			"${tool.source}#${tool.name}"
 		}
 }

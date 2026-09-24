@@ -138,6 +138,7 @@
                 ./blueprint-nix-package
                 ./blueprint-ir-package/main.roc
                 ./blueprint-ir-package/Ir.roc
+                ./blueprint-ir-package/Project.roc
                 ./blueprint-ir-package/Sexpr.roc
                 ./blueprint-ir-package/Value.roc
               ];

@@ -1,1 +1,1 @@
-((extensions ()) (format ((major 1) (minor 0))) (inputs ()) (name "") (raw ()) (requires ()) (shells ()) (systems ()) (tasks ()))
+((extensions ()) (format ((major 2) (minor 0))) (sources ()) (inputs ()) (environments ()) (name "") (raw ()) (requires ()) (shells ()) (systems ()) (tasks ()))

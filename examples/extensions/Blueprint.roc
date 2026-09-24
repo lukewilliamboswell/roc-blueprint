@@ -4,8 +4,9 @@ app [config] { pf: platform "../../blueprint-ir-platform/main.roc" }
 
 config = [
 	Name("extensions"),
-	Packages("nixpkgs", "github:NixOS/nixpkgs/nixos-24.05"),
-	Shell("default", [Tools(["git", "llvmPackages.bintools"])]),
+	Packages("default", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
+	Environment("dev", [Tools(["git", "llvmPackages.bintools"])]),
+	Shell("default", [Use("dev")]),
 	Custom(
 		"services",
 		"postgres",

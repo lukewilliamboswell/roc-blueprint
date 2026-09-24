@@ -6,36 +6,36 @@ import TaskName
 import Tool
 import Val
 
-## The types a `Blueprint.roc` `config` is made of.
+## Pure settings that compose through ordinary Roc lists and functions.
 Config :: [].{
 
-	## One top-level blueprint setting.
-	##
-	## - `Packages(name, ref)` declares a package set that tools can name as
-	##   "name#attr.path". "nixpkgs" (nixos-unstable) is declared by default;
-	##   `Packages("nixpkgs", ...)` replaces it.
-	## - `Input(name, ref)` declares any other flake input, for `Raw` values.
-	## - `Overlay(ref)` applies a flake's default overlay to the package sets.
-	## - `Custom(kind, name, value)` is extension data for a consumer that
-	##   knows `kind`; `Raw(backend, target, value)` is passed to one backend
-	##   verbatim (for nix: target "shell:<name>" or "flake").
+	## Named sources describe provider intent, not host discovery. Omitting the
+	## "default" source is equivalent to `Packages("default", Auto)`.
+	## Overlay inputs apply only where an environment selects them.
+	## `Custom` and `Raw` retain consumer-specific extension data.
 	Setting : [
 		Name(Str),
 		Systems(List(System)),
-		Packages(InputName, FlakeRef),
+		Packages(InputName, PackageSource),
 		Input(InputName, FlakeRef),
-		Overlay(FlakeRef),
+		Overlay(InputName, FlakeRef),
+		Environment(EnvName, List(EnvironmentSetting)),
 		Shell(EnvName, List(ShellSetting)),
 		Task(TaskName, List(TaskSetting)),
 		Custom(Str, Str, Val),
 		Raw(Str, Str, Val),
 	]
 
-	## One setting inside a `Shell`.
-	ShellSetting : [Tools(List(Tool))]
+	PackageSource : [Auto, From(Provider)]
+	Provider : [NixPackages(FlakeRef), GuixPackages(Str)]
 
-	## One setting inside a `Task`. `Run` (required, once) is the command and
-	## its arguments; `In` (optional) names the shell it runs in, which
-	## defaults to "default".
-	TaskSetting : [Run(List(Str)), In(EnvName)]
+	## Each setting occurs at most once. Extend inherits tools and overlays
+	## parent first; an omitted or empty list does not clear inherited values.
+	EnvironmentSetting : [Tools(List(Tool)), Overlays(List(InputName)), Extend(EnvName)]
+
+	## A shell is an alias for exactly one environment.
+	ShellSetting : [Use(EnvName)]
+
+	## Tasks require exactly one Use and one nonempty argv Run.
+	TaskSetting : [Use(EnvName), Run(List(Str))]
 }

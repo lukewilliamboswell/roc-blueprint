@@ -9,38 +9,47 @@
 
   outputs = { self, ... }@inputs:
     let
-      overlays = [ inputs."roc".overlays.default ];
-      setsFor = system: {
-        "nixpkgs" = import inputs."nixpkgs" { inherit system overlays; };
+      environmentsFor = system: {
+        "base" = let
+          overlays = [  ];
+          sets = {
+            "nixpkgs" = import inputs."nixpkgs" { inherit system overlays; };
+          };
+        in extra: sets."nixpkgs".mkShell ({
+          packages = [
+            sets."nixpkgs"."git"
+          ];
+        } // extra);
+        "dev" = let
+          overlays = [ inputs."roc".overlays.default ];
+          sets = {
+            "nixpkgs" = import inputs."nixpkgs" { inherit system overlays; };
+          };
+        in extra: sets."nixpkgs".mkShell ({
+          packages = [
+            sets."nixpkgs"."git"
+            sets."nixpkgs"."llvmPackages"."bintools"
+          ];
+        } // extra);
       };
     in
     {
       devShells = {
-        "x86_64-linux" = let sets = setsFor "x86_64-linux"; in {
-          "default" = sets."nixpkgs".mkShell {
-            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
-              sets."nixpkgs"."git"
-              sets."nixpkgs"."llvmPackages"."bintools"
-            ];
-          };
-          "ci" = sets."nixpkgs".mkShell {
-            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
-              sets."nixpkgs"."git"
-            ];
-          };
+        "x86_64-linux" = let
+          environments = environmentsFor "x86_64-linux";
+        in {
+          "blueprint-env-base" = environments."base" { };
+          "blueprint-env-dev" = environments."dev" { };
+          "default" = environments."dev" { };
+          "ci" = environments."base" { };
         };
-        "aarch64-darwin" = let sets = setsFor "aarch64-darwin"; in {
-          "default" = sets."nixpkgs".mkShell {
-            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
-              sets."nixpkgs"."git"
-              sets."nixpkgs"."llvmPackages"."bintools"
-            ];
-          };
-          "ci" = sets."nixpkgs".mkShell {
-            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
-              sets."nixpkgs"."git"
-            ];
-          };
+        "aarch64-darwin" = let
+          environments = environmentsFor "aarch64-darwin";
+        in {
+          "blueprint-env-base" = environments."base" { };
+          "blueprint-env-dev" = environments."dev" { };
+          "default" = environments."dev" { };
+          "ci" = environments."base" { };
         };
       };
     };

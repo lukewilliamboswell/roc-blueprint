@@ -8,7 +8,8 @@ blueprint-ir-platform/   the roc-blueprint platform that Blueprint.roc apps use
   host/, build.zig       Zig host, built into targets/{x64musl,arm64mac}/libhost.a
   targets/               linker inputs; all but libhost.a are vendored (see its README)
   ir-release             the released IR bundle URL a platform release uses
-blueprint-ir-package/    roc-blueprint-ir: the IR types, Value, and the S-expression format
+blueprint-ir-package/    roc-blueprint-ir: semantic IR, shared validation, Value and codec
+  Project.roc            pure normalization, references and provider capability checks
   fuzz/                  roc-fuzz targets: ir-parse, ir-round-trip
 blueprint-nix-package/   importable pure Nix backend (depends only on the IR)
   Backend.roc            backend interface, caller layout and resolved lock data
@@ -16,14 +17,19 @@ blueprint-nix-package/   importable pure Nix backend (depends only on the IR)
   tests/                 IR fixtures and golden flakes
 blueprint-cli/           the blueprint CLI (basic-cli + weaver)
 fixtures/consumer/      independent consumer of the IR and Nix packages
-examples/all-settings/   uses every setting; CI runs blueprint against it
+examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
+examples/composition/    imported pure module returning reusable task settings
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
 scripts/                 prepare-basic-cli.sh, test.sh, bundle.sh, fuzz.sh
 flake.nix                builds blueprint with the pinned Roc; user and contributor shells
 ```
 
-The platform encodes the IR and the CLI parses it, both with
-`blueprint-ir-package`, so the two always agree on the format.
+The local platform and CLI share `blueprint-ir-package`, including
+`Project.validate`. B1 changes the wire format to major 2; published major-1
+bundles are not compatible. This is a source-only, not release-qualified
+snapshot. Both bundle gates remain required; the unchanged `ir-release` gate
+is expected to block until an actual compatible IR artifact is available.
+See [B1 boundaries](docs/b1.md).
 
 ## Setup
 
@@ -55,16 +61,26 @@ roc build blueprint-cli/main.roc --output=./blueprint
 scripts/fuzz.sh 300                         # fuzz each target for 5 minutes
 ```
 
-CI runs `scripts/test.sh`, which also builds the flake, bundles the platform
-twice (see below), and runs each fuzz target for 30 seconds.
-`scripts/test-config.sh` checks that valid configurations pass `roc check`
-and that missing names and duplicate shells fail during compile-time
-validation. Both bundle smoke tests run the same assertions against the
-served platform, in addition to checking and running the all-settings example.
+`scripts/test.sh` is the full CI entry point: it builds the flake, invokes both
+platform bundle modes (see below), and then runs each fuzz target for 30 seconds.
+B1's released-IR incompatibility is an expected blocking failure, not a passing
+full-suite result; it can prevent later steps from running.
+`scripts/test-config.sh` checks valid configurations, imported-module composition,
+required settings, duplicates, unknown references, cycles and explicit-provider
+tool grammar at compile time. It compares emitted IR for inherited versus inline
+environments, omitted versus explicit Auto, and composed versus inline settings.
+Both bundle gates retain those assertions against the served platform, plus the
+all-settings example; the old released IR cannot yet satisfy the B1 gate.
 `python3 scripts/test-cli.py` exercises the built CLI with and without a
 configuration, checks validation and help/version handling, and records Nix
 argv to verify shell selection and task arguments without entering a shell.
 The all-settings integration tests separately run tasks through real Nix.
+`scripts/test-b1.sh` executes imported composition tasks with exact argv-byte
+assertions and noncommutative overlays in both orders, including inheritance
+and an unselected-overlay native failure. `scripts/test-consumer.sh` checks
+staged bytes, supplied-lock preservation, scoped overlay evaluation, native
+missing-package diagnostics and package-target rejection. Parse fuzzing also
+checks successful semantic normalization for idempotence.
 
 ## Nightly updates
 
@@ -122,14 +138,17 @@ blueprint platform's Linux target.
 
 In outline:
 
-- `format` — `((major 1) (minor 0))`; see the compatibility rules below.
+- `format` — `((major 2) (minor 0))`; see compatibility below.
 - `name`, `systems` (strings such as `"x86_64-linux"`).
-- `inputs` — `{ name, url, kind }`, where kind is `Packages` (a package set),
-  `Overlay` or `Flake`. The IR implies no inputs; the platform always writes an
-  explicit `nixpkgs`.
-- `shells` — `{ name, packages }`, each package `{ source, path }` where
-  `source` names a `Packages` input.
-- `tasks` — `{ name, shell, run }`.
+- `sources` — `{ name, provider }`, where provider is `Auto`,
+  `NixPackages(Str)` or `GuixPackages(Str)`. Validation supplies
+  `{ name: "default", provider: Auto }` if omitted; it does not select a backend.
+- `inputs` — `{ name, url, kind }`, where kind is `Overlay` or `Flake`.
+- `environments` — `{ name, parents, tools, overlays }`; tools are
+  `{ source, name }`, overlays are ordered input names. Validation resolves a
+  single parent, deduplicates parent-first selections and clears `parents`.
+- `shells` — `{ name, environment }` aliases.
+- `tasks` — `{ name, environment, run }`, with nonempty executable argv.
 - `raw` — `{ backend, target, value }`, passed through to one backend.
 - `extensions` — `{ kind, name, value }`, blocks a backend may understand.
 - `requires` — features the config uses beyond the core (`"raw"`,
@@ -137,12 +156,25 @@ In outline:
 
 `Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its S-expression encoder
 and parser are hand-written to avoid recursive-codec derivation problems.
-`requires` and `packages` are reserved words in Roc; the Roc fields are
-`requires_` and `packages_`, and `Sexpr` drops a trailing `_` on the wire.
+`requires` is reserved in Roc; the Roc field is `requires_`, and `Sexpr` drops
+a trailing `_` on the wire. There is no major-1 shell `packages` field in B1.
+
+`Lower.lower` checks authoring-setting cardinality and calls `Project.validate`
+as a top-level constant. The CLI calls that same semantic validator after
+`Ir.parse` and required-feature checks, so external IR does not bypass reference
+or graph rules. `Ir.parse` rejects other majors before decoding nested records;
+parsing alone does not establish semantic validity.
+
+Static checks cover generic references, duplicates, inheritance cycles, argv
+and provider-specific tool grammar when a source is explicit. `Auto` grammar is
+checked after explicit backend selection, before staging effects. Package
+existence and target availability are Nix runtime checks. Core validation never
+probes the host or installs/fetches anything.
 
 ### Compatibility
 
-- A consumer accepts any IR with the same `major`, whatever the `minor`.
+- The decoder accepts the same `major`, whatever the `minor`; consumers must
+  still reject unsupported required features and semantically invalid data.
 - **Minor** (compatible): a new optional top-level field (missing fields
   default to empty, unknown ones are ignored), or a new `requires` feature.
 - **Major** (breaking): anything else, such as a new required field, a new
@@ -155,12 +187,26 @@ IR into files and gives the argv for locking, updating, entering a shell and
 running a task; `main.roc` does the effects. `NixBackend.roc` is the only
 backend. It:
 
-- imports every `Packages` input once per system and applies every overlay to
-  each;
-- renders `raw` entries for backend `"nix"` (targets `shell:<name>` and
-  `flake`) as data, and ignores raw entries for other backends;
-- refuses any `extensions` (it supports none yet) and advertises the
-  `"raw"` feature.
+- resolves Auto to its default nixpkgs source, without backend autodetection;
+- imports each selected environment's package sources per system with only
+  that environment's ordered overlay stack; aliases and task entries share it;
+- checks provider compatibility for the requested environment closure, not
+  unrelated valid source/environment declarations. `render` selects all
+  shell/task environments; `render_environment` selects one. Whole-project
+  structure, required features, declared targets and Nix Raw remain checked;
+- emits native package attributes without translation, fallback or availability
+  filtering: missing/unavailable packages fail in Nix;
+- rejects unsupported Nix target declarations. Supported x86_64/aarch64
+  Linux/Darwin output shapes are not evidence of execution on those hosts;
+- renders `raw` for backend `"nix"` at `shell:<alias>` and `flake` as data,
+  rejecting invalid targets, duplicate attributes and managed-field overrides.
+  Alias Raw does not affect other aliases or tasks; other backends' Raw is inert;
+- refuses any `extensions` and advertises only the `"raw"` feature.
+
+`Project.check_environment(project, Nix | Guix, name)` is a pure compatibility
+check. Guix source intent, native tool grammar and overlay-capability rejection
+are modeled; no Guix renderer, task implementation or executor exists. The
+reference CLI explicitly selects Nix; selection policy belongs to consumers.
 
 The source package `blueprint-nix-package/main.roc` exports `Backend` and
 `NixBackend`, without importing the CLI or an effectful platform.
@@ -168,10 +214,18 @@ The source package `blueprint-nix-package/main.roc` exports `Backend` and
 file paths and contents using caller-owned paths and already-resolved Nix lock
 bytes. It shares `NixBackend.render` with the CLI. The new staging seam rejects
 local input URLs until project-root rebasing and relocatable locks are implemented;
-its initial consumer fixture uses remote pinned inputs. At this initial extraction
-stage, supplied lock bytes are trusted data, not a validated lock protocol;
-normal reference CLI lock behavior is unchanged. `scripts/test-consumer.sh`
-compiles a separate app and compares its staged files byte-for-byte.
+its consumer fixture uses remote pinned inputs. Supplied lock bytes are trusted
+data, not a validated lock protocol. `scripts/test-consumer.sh` compiles a
+separate app and compares its staged files byte-for-byte.
+
+The reference CLI does not use that supplied-lock seam for ordinary commands.
+`gen`, `shell` and `run` still stage a flake, copy in `Blueprint.lock`, invoke
+`nix flake lock`, and copy the result back. Selecting a different environment
+closure can change the input set and lock bytes. `update` additionally upgrades
+pins. Immutable ordinary execution, relocatable local-source identity and the
+stricter explicit-update lifecycle remain B2/B3 work, together with locked
+non-flake sources, artifact builds and workflows. B1 exports none of those
+operations.
 
 A new feature usually means: a setting in the platform (`Config.roc`,
 `Lower.roc`), then either an `extensions` kind or a new optional IR field
@@ -196,8 +250,21 @@ only packs files below the entry point's directory, so `scripts/bundle.sh
 platform <ir-url>` bundles a staged copy whose `ir:` is the given URL. With
 no URL it bundles the local `blueprint-ir-package/` and serves it from localhost. Either way
 it then serves the platform bundle from localhost and runs
-`examples/all-settings/Blueprint.roc` against it. CI does both, so a platform change that
-needs an unreleased ir fails before a release.
+`examples/all-settings/Blueprint.roc` against it, plus the shared configuration
+and composition regressions. Keep both gates:
+
+```sh
+scripts/bundle.sh platform
+scripts/bundle.sh platform "$(< blueprint-ir-platform/ir-release)"
+```
+
+The committed `ir-release` still names `ir-0.2.0`, whose major-1 schema is
+incompatible with B1's major 2 and shared `Project` export. Its gate is expected
+to fail until a real compatible IR artifact is published and the pin deliberately
+updated. Do not skip it, substitute a local URL for the release check, or invent
+a release. Local-IR success permits a source-only snapshot, not a release-qualified
+platform. The [B0 validation record](docs/foundation-validation.md) describes
+historical major-1 results, not a passing B1 release gate.
 
 The two packages need separate tags: Roc identifies a package by its URL
 minus the version and hash, so two bundles under one tag look like one
@@ -222,8 +289,11 @@ crashed while bundling a top-level constant dependent on the app's `config`;
 the local-IR and released-IR bundle tests guard against that regression.
 `blueprint check` retains a compiler check for diagnostics and reuses the IR
 already loaded for CLI parsing, rather than running the configuration again.
-The loaded IR is still needed to reject unsupported backend features and to
-support older platforms that validate only at run time.
+The loaded IR is still needed for shared semantic validation and backend
+compatibility checks. Runtime validation also protects consumers from external
+IR; it does not make major-1 platforms compatible with the B1 CLI. Loading the
+IR still executes Roc, so retain compiler provisioning in the Nix wrapper and
+support for the `ROC` override.
 
 These remaining dependencies and workarounds still apply:
 

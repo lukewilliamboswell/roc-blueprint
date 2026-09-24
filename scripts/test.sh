@@ -44,6 +44,9 @@ step "blueprint against examples/all-settings/Blueprint.roc"
 	"$ROOT/blueprint" run hello
 )
 
+step "B1 composed tasks and scoped overlays through real Nix"
+scripts/test-b1.sh
+
 step "Golden flakes parse as Nix"
 for f in blueprint-nix-package/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done
 

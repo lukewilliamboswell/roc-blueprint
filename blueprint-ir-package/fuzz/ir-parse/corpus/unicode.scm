@@ -1,1 +1,6 @@
-((format ((major 1) (minor 0))) (name "λ→🦊 ünï") (inputs (((kind Overlay) (name "ü") (url "github:ü/ñ")))) (shells (((name "日本") (packages (((source "ü") (path ("ç" "ø")))))))))
+((format ((major 2) (minor 0))) (name "λ→🦊 ünï")
+ (sources (((name "ü") (provider (NixPackages "github:ü/ñ")))))
+ (inputs (((kind Overlay) (name "ø") (url "github:ü/ñ"))))
+ (environments (((name "日本") (parents ()) (overlays ("ø"))
+   (tools (((source "ü") (name "ç.ø")))))))
+ (shells (((name "日本") (environment "日本")))))
