@@ -18,26 +18,26 @@
       devShells = {
         "x86_64-linux" = let sets = setsFor "x86_64-linux"; in {
           "default" = sets."nixpkgs".mkShell {
-            packages = [
+            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
               sets."nixpkgs"."git"
               sets."nixpkgs"."llvmPackages"."bintools"
             ];
           };
           "ci" = sets."nixpkgs".mkShell {
-            packages = [
+            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
               sets."nixpkgs"."git"
             ];
           };
         };
         "aarch64-darwin" = let sets = setsFor "aarch64-darwin"; in {
           "default" = sets."nixpkgs".mkShell {
-            packages = [
+            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
               sets."nixpkgs"."git"
               sets."nixpkgs"."llvmPackages"."bintools"
             ];
           };
           "ci" = sets."nixpkgs".mkShell {
-            packages = [
+            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
               sets."nixpkgs"."git"
             ];
           };

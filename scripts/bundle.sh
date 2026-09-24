@@ -88,12 +88,13 @@ platform)
 	(cd "$ROOT/blueprint-ir-platform/targets" && sha256sum --quiet -c x64musl.sha256)
 
 	echo "==> Bundling roc-blueprint (ir: $IR_URL)"
-	mkdir -p "$STAGE/platform/targets/x64musl"
+	mkdir -p "$STAGE/platform/targets/x64musl" "$STAGE/platform/targets/arm64mac"
 	cp "$ROOT"/blueprint-ir-platform/*.roc "$STAGE/platform/"
 	cp "$ROOT"/blueprint-ir-platform/targets/x64musl/{crt1.o,libhost.a,libc.a,libzigc.a,libcompiler_rt.a} "$STAGE/platform/targets/x64musl/"
+	cp "$ROOT"/blueprint-ir-platform/targets/arm64mac/libhost.a "$STAGE/platform/targets/arm64mac/"
 	sed -i "s#\"../blueprint-ir-package/main.roc\"#\"$IR_URL\"#" "$STAGE/platform/main.roc"
 	grep -qF "\"$IR_URL\"" "$STAGE/platform/main.roc" || { echo "failed to rewrite the ir dependency" >&2; exit 1; }
-	pf_bundle="$(cd "$STAGE/platform" && bundle . main.roc $(ls *.roc | grep -v '^main.roc$') targets/x64musl/*)"
+	pf_bundle="$(cd "$STAGE/platform" && bundle . main.roc $(ls *.roc | grep -v '^main.roc$') targets/x64musl/* targets/arm64mac/*)"
 	echo "    $pf_bundle"
 	echo "roc-blueprint $pf_bundle" >>"$DIST/bundles.txt"
 

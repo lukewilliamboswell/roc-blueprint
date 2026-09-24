@@ -50,6 +50,12 @@ step "Nix flake: blueprint builds with the pinned Roc"
 nix build .#blueprint --no-link
 nix develop . -c blueprint --version
 
+step "Nix flake: every system's outputs evaluate (no build)"
+for system in x86_64-linux aarch64-darwin; do
+	nix eval --raw ".#packages.$system.blueprint.drvPath" >/dev/null
+	nix eval --raw ".#devShells.$system.default.drvPath" >/dev/null
+done
+
 step "Bundle ir and the platform against it"
 scripts/bundle.sh platform
 

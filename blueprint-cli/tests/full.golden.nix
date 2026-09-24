@@ -21,7 +21,7 @@
       devShells = {
         "x86_64-linux" = let sets = setsFor "x86_64-linux"; in {
           "default" = sets."nixpkgs".mkShell {
-            packages = [
+            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
               sets."nixpkgs"."hello"
               sets."stable"."jq"
             ];
@@ -29,13 +29,13 @@
             "GREETING" = "hello";
           };
           "empty" = sets."nixpkgs".mkShell {
-            packages = [
+            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
             ];
           };
         };
         "aarch64-linux" = let sets = setsFor "aarch64-linux"; in {
           "default" = sets."nixpkgs".mkShell {
-            packages = [
+            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
               sets."nixpkgs"."hello"
               sets."stable"."jq"
             ];
@@ -43,13 +43,13 @@
             "GREETING" = "hello";
           };
           "empty" = sets."nixpkgs".mkShell {
-            packages = [
+            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
             ];
           };
         };
         "riscv64-linux" = let sets = setsFor "riscv64-linux"; in {
           "default" = sets."nixpkgs".mkShell {
-            packages = [
+            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
               sets."nixpkgs"."hello"
               sets."stable"."jq"
             ];
@@ -57,7 +57,7 @@
             "GREETING" = "hello";
           };
           "empty" = sets."nixpkgs".mkShell {
-            packages = [
+            packages = builtins.filter (sets."nixpkgs".lib.meta.availableOn sets."nixpkgs".stdenv.hostPlatform) [
             ];
           };
         };
