@@ -59,7 +59,7 @@ jobs:
 
           The \`blueprint\` CLI for x86_64 Linux is attached.
 
-          Uses roc-blueprint-ir \`${ir_url}\`. Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl only.
+          Uses roc-blueprint-ir \`${ir_url}\`. Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl and arm64mac.
           NOTES
           prerelease=()
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
