@@ -9,21 +9,27 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/pinned" "$WORK/composed" "$WORK/overlays"
 cp "$ROOT/blueprint-nix-package/tests/sample.golden.nix" "$WORK/pinned/flake.nix"
 cp "$ROOT/fixtures/consumer/inputs.lock" "$WORK/pinned/flake.lock"
-PKGS="$(nix eval --offline --impure --raw --expr "(builtins.getFlake \"path:$WORK/pinned\").inputs.nixpkgs.outPath")"
-python3 - "$ROOT" "$WORK" "$PKGS" <<'PY'
+python3 - "$ROOT" "$WORK" <<'PY'
+import json
 import os
 from pathlib import Path
 import sys
 
-root, work, pkgs = map(Path, sys.argv[1:])
+root, work = map(Path, sys.argv[1:])
+lock = json.loads((root / 'fixtures/consumer/inputs.lock').read_text())
+pin = lock['nodes']['nixpkgs']['locked']
+assert pin['type'] == 'github'
+pkgs_ref = f"github:{pin['owner']}/{pin['repo']}/{pin['rev']}"
 platform = root / 'blueprint-ir-platform/main.roc'
 composed = work / 'composed'
 source = (root / 'examples/composition/Blueprint.roc').read_text()
 source = source.replace('../../blueprint-ir-platform/main.roc',
                         os.path.relpath(platform, composed))
 # The reusable module is unchanged. Supply the fixture's already-resolved set.
-source = source.replace('Name("composed"),',
-                        f'Name("composed"), Packages("default", From(NixPackages("path:{pkgs}"))),')
+source = source.replace(
+    'Name("composed"),',
+    f'Name("composed"), Packages("default", From(NixPackages("{pkgs_ref}"))),',
+)
 (composed / 'Blueprint.roc').write_text(source)
 (composed / 'ProjectTasks.roc').write_bytes(
     (root / 'examples/composition/ProjectTasks.roc').read_bytes())
@@ -58,10 +64,10 @@ for directory in (first, patch, unused):
 config = [
     Name("overlay-execution"),
     Systems(["x86_64-linux"]),
-    Packages("default", From(NixPackages("path:{pkgs}"))),
-    Overlay("first", "path:{first}"),
-    Overlay("patch", "path:{patch}"),
-    Overlay("unused", "path:{unused}"),
+    Packages("default", From(NixPackages("{pkgs_ref}"))),
+    Overlay("first", "path:./first"),
+    Overlay("patch", "path:./patch"),
+    Overlay("unused", "path:./unused"),
     Environment("base", [Tools(["fixtureTool"]), Overlays(["first"])]),
     Environment("patched", [Extend("base"), Tools(["fixtureTool"]), Overlays(["first", "patch"])]),
     Environment("reverse", [Tools(["fixtureTool"]), Overlays(["patch", "first"])]),
@@ -74,12 +80,21 @@ config = [
 ''')
 PY
 
+# Only explicit update resolves pins. The throwing unused overlay must remain
+# unevaluated during both update and every selected request that follows.
+for project in composed overlays; do
+    (cd "$WORK/$project" && "$ROOT/blueprint" update)
+    cp "$WORK/$project/Blueprint.lock" "$WORK/$project.lock.before"
+    chmod a-w "$WORK/$project/Blueprint.lock"
+done
 (cd "$WORK/composed" && "$ROOT/blueprint" run args -- 'two words' '' '--literal') > "$WORK/args.out"
+cmp "$WORK/composed.lock.before" "$WORK/composed/Blueprint.lock"
 printf '%s\n' '["configured argument", "two words", "", "--literal"]' > "$WORK/args.expected"
 cmp "$WORK/args.expected" "$WORK/args.out"
 
 for task in base patched reverse; do
     (cd "$WORK/overlays" && "$ROOT/blueprint" run "$task") > "$WORK/$task.out"
+    cmp "$WORK/overlays.lock.before" "$WORK/overlays/Blueprint.lock"
 done
 printf 'base\n' > "$WORK/base.expected"
 printf 'patch:base\n' > "$WORK/patched.expected"
@@ -93,9 +108,17 @@ if (cd "$WORK/overlays" && "$ROOT/blueprint" run plain) > "$WORK/plain.out" 2> "
     exit 1
 fi
 grep -qF "attribute 'fixtureTool' missing" "$WORK/plain.err"
-if grep -qF 'unused' "$WORK/overlays/.blueprint/flake.nix"; then
-    echo 'unused overlay was emitted into the requested closure' >&2
-    exit 1
-fi
+cmp "$WORK/overlays.lock.before" "$WORK/overlays/Blueprint.lock"
+# Stable input declarations keep lock identity across requests. Only outputs
+# select/evaluate overlays; plain must import its tools with an empty stack.
+python3 - "$WORK/overlays/.blueprint/flake.nix" <<'PY'
+from pathlib import Path
+import sys
+
+outputs = Path(sys.argv[1]).read_text().split('  outputs =', 1)[1]
+assert 'unused' not in outputs, 'unused overlay entered the requested closure'
+assert 'overlays = [  ];' in outputs, 'plain selected an overlay stack'
+assert '.overlays.default' not in outputs, 'plain selected a declared overlay'
+PY
 cmp "$ROOT/fixtures/consumer/inputs.lock" "$WORK/pinned/flake.lock"
-echo 'B1 real Nix: composed argv bytes, ordered/inherited/scoped overlays and native failure passed'
+echo 'B1 Nix: argv, scoped overlays, native failure, immutable locks passed'

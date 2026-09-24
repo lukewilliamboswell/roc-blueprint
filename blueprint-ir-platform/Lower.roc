@@ -15,6 +15,8 @@ Lower :: [].{
 		environments : List(Ir.Environment),
 		shells : List(Ir.Shell),
 		tasks : List(Ir.Task),
+		build_sources : List(Ir.BuildSource),
+		builds : List(Ir.Build),
 		extensions : List(Ir.Extension),
 		raw : List(Ir.Raw),
 	}
@@ -26,7 +28,7 @@ Lower :: [].{
 	lower : List(Config.Setting) -> Try(Ir, Str)
 	lower = |settings| {
 		initial : Acc
-		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], shells: [], tasks: [], extensions: [], raw: [] }
+		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], shells: [], tasks: [], build_sources: [], builds: [], extensions: [], raw: [] }
 		acc = settings.fold(Ok(initial), |result, setting| add(result?, setting))?
 		name = match acc.names {
 			[] => return Err("MissingName: declare Name once")
@@ -41,6 +43,8 @@ Lower :: [].{
 		requires_ =
 			(if acc.extensions.is_empty() [] else ["extensions"])
 				.concat(if acc.raw.is_empty() [] else ["raw"])
+				.concat(if acc.build_sources.is_empty() [] else ["sources"])
+				.concat(if acc.builds.is_empty() [] else ["builds"])
 		Project.validate(
 			Ir.{
 				format: Ir.current_format,
@@ -52,6 +56,8 @@ Lower :: [].{
 				environments: acc.environments,
 				shells: acc.shells,
 				tasks: acc.tasks,
+				build_sources: acc.build_sources,
+				builds: acc.builds,
 				extensions: acc.extensions,
 				raw: acc.raw,
 			},
@@ -69,6 +75,8 @@ Lower :: [].{
 			Environment(name, inner) => { ..acc, environments: acc.environments.append(environment(name.to_str(), inner)?) }
 			Shell(name, inner) => { ..acc, shells: acc.shells.append(shell(name.to_str(), inner)?) }
 			Task(name, inner) => { ..acc, tasks: acc.tasks.append(task(name.to_str(), inner)?) }
+			Source(name, ref) => { ..acc, build_sources: acc.build_sources.append({ name: name.to_str(), ref: ref.to_str() }) }
+			Build(name, inner) => { ..acc, builds: acc.builds.append(build(name.to_str(), inner)?) }
 			Custom(kind, name, value) => { ..acc, extensions: acc.extensions.append({ kind, name, value: to_value(value) }) }
 			Raw(backend, target, value) => { ..acc, raw: acc.raw.append({ backend, target, value: to_value(value) }) }
 		}
@@ -141,6 +149,43 @@ Lower :: [].{
 			_ => return Err("DuplicateRun: task ${name}")
 		}
 		Ok({ name, environment: environment_name, run })
+	}
+
+	build : Str, List(Config.BuildSetting) -> Try(Ir.Build, Str)
+	build = |name, inner| {
+		draft = inner.fold(
+			{ environments: [], inputs: [], needs: [], runs: [], outputs: [] },
+			|acc, setting|
+				match setting {
+					Use(env) => { ..acc, environments: acc.environments.append(env.to_str()) }
+					Inputs(inputs) => { ..acc, inputs: acc.inputs.append(inputs.map(|input| input.to_str())) }
+					Needs(needs) => { ..acc, needs: acc.needs.append(needs.map(|need| need.to_str())) }
+					Run(argv) => { ..acc, runs: acc.runs.append(argv) }
+					Output(path) => { ..acc, outputs: acc.outputs.append(path) }
+				},
+		)
+		environment_name = match draft.environments {
+			[one] => one
+			[] => return Err("MissingUse: build ${name}")
+			_ => return Err("DuplicateUse: build ${name}")
+		}
+		run = match draft.runs {
+			[one] => one
+			[] => return Err("MissingRun: build ${name}")
+			_ => return Err("DuplicateRun: build ${name}")
+		}
+		output = match draft.outputs {
+			[one] => one
+			[] => return Err("MissingOutput: build ${name}")
+			_ => return Err("DuplicateOutput: build ${name}")
+		}
+		if draft.inputs.len() > 1 {
+			return Err("DuplicateInputs: build ${name}")
+		}
+		if draft.needs.len() > 1 {
+			return Err("DuplicateNeeds: build ${name}")
+		}
+		Ok({ name, environment: environment_name, inputs: draft.inputs.first() ?? [], needs: draft.needs.first() ?? [], run, output })
 	}
 
 	to_value : Val -> Value

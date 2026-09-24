@@ -135,10 +135,15 @@
               root = ./.;
               fileset = lib.fileset.unions [
                 ./blueprint-cli
+                ./.roc-version
+                ./scripts/blueprint-runtime.py
                 ./blueprint-nix-package
                 ./blueprint-ir-package/main.roc
                 ./blueprint-ir-package/Ir.roc
                 ./blueprint-ir-package/Project.roc
+                ./blueprint-ir-package/Request.roc
+                ./blueprint-ir-package/Plan.roc
+                ./blueprint-ir-package/Layout.roc
                 ./blueprint-ir-package/Sexpr.roc
                 ./blueprint-ir-package/Value.roc
               ];
@@ -163,7 +168,9 @@
               runHook preInstall
               install -Dm755 blueprint "$out/bin/blueprint"
               # Default to the pinned Roc; ROC in the environment still wins.
-              wrapProgram "$out/bin/blueprint" --set-default ROC ${lib.getExe roc}
+              wrapProgram "$out/bin/blueprint" \
+                --set-default ROC ${lib.getExe roc} \
+                --prefix PATH : ${lib.makeBinPath [ pkgs.python3 ]}
               runHook postInstall
             '';
             meta = {

@@ -82,6 +82,20 @@ task = {
 	run: Fuzz.list(Fuzz.str, 4),
 }.Fuzz
 
+# B2 adds optional records; arbitrary strings/graphs must still round-trip.
+build_source : Fuzz.Generator(Ir.BuildSource)
+build_source = { name: Fuzz.str, ref: Fuzz.str }.Fuzz
+
+build : Fuzz.Generator(Ir.Build)
+build = {
+	name: Fuzz.str,
+	environment: Fuzz.str,
+	inputs: Fuzz.list(Fuzz.str, 3),
+	needs: Fuzz.list(Fuzz.str, 3),
+	run: Fuzz.list(Fuzz.str, 4),
+	output: Fuzz.str,
+}.Fuzz
+
 extension : Fuzz.Generator(Ir.Extension)
 extension = {
 	kind: Fuzz.str,
@@ -108,6 +122,8 @@ ir_generator = Fuzz.map(
 		environments: Fuzz.list(environment, 3),
 		shells: Fuzz.list(shell, 3),
 		tasks: Fuzz.list(task, 3),
+		build_sources: Fuzz.list(build_source, 3),
+		builds: Fuzz.list(build, 3),
 		extensions: Fuzz.list(extension, 3),
 		raw: Fuzz.list(raw, 3),
 	}.Fuzz,
@@ -121,6 +137,8 @@ ir_generator = Fuzz.map(
 		environments: r.environments,
 		shells: r.shells,
 		tasks: r.tasks,
+		build_sources: r.build_sources,
+		builds: r.builds,
 		extensions: r.extensions,
 		raw: r.raw,
 	},

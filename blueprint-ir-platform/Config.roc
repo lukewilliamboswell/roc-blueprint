@@ -22,6 +22,8 @@ Config :: [].{
 		Environment(EnvName, List(EnvironmentSetting)),
 		Shell(EnvName, List(ShellSetting)),
 		Task(TaskName, List(TaskSetting)),
+		Source(InputName, FlakeRef),
+		Build(InputName, List(BuildSetting)),
 		Custom(Str, Str, Val),
 		Raw(Str, Str, Val),
 	]
@@ -38,4 +40,9 @@ Config :: [].{
 
 	## Tasks require exactly one Use and one nonempty argv Run.
 	TaskSetting : [Use(EnvName), Run(List(Str))]
+
+	## Builds require Use, Run and one relative Output. Optional Inputs select
+	## locked non-flake Sources; Needs selects build artifacts, not task names.
+	## Sources and artifacts remain separate read-only inputs, never merged.
+	BuildSetting : [Use(EnvName), Inputs(List(InputName)), Needs(List(InputName)), Run(List(Str)), Output(Str)]
 }

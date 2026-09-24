@@ -21,8 +21,17 @@ trap 'rm -rf "$WORK"' EXIT
 for dir in blueprint-ir-package/fuzz/*/; do
 	target="$(basename "$dir")"
 	echo "==> $target (${SECONDS_PER_TARGET}s)"
+	# A compiler can emit a fuzz binary containing runtime-error placeholders
+	# after type errors. Accept the dependency's known warnings, never errors.
+	status=0
+	"$ROC" check "$dir/main.roc" >"$WORK/$target.check" 2>&1 || status=$?
+	if [[ $status -ne 0 ]] &&
+		! grep -Eq '^── 0 errors and [0-9]+ warnings' "$WORK/$target.check"; then
+		cat "$WORK/$target.check" >&2
+		exit 1
+	fi
 	# roc exits non-zero on warnings; roc-fuzz's own nightly pin warns, so
-	# judge the build by whether it produced the binary.
+	# after type checking, require that the instrumented build emitted a binary.
 	"$ROC" build --fuzz "$dir/main.roc" --output="$WORK/$target" >"$WORK/$target.log" 2>&1 || true
 	[[ -x "$WORK/$target" ]] || { cat "$WORK/$target.log" >&2; exit 1; }
 	mkdir -p "$WORK/$target-corpus"

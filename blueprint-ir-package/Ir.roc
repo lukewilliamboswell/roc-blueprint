@@ -18,6 +18,8 @@ Ir := {
 	environments : List({ name : Str, parents : List(Str), tools : List({ source : Str, name : Str }), overlays : List(Str) }),
 	shells : List({ name : Str, environment : Str }),
 	tasks : List({ name : Str, environment : Str, run : List(Str) }),
+	build_sources : List({ name : Str, ref : Str }),
+	builds : List({ name : Str, environment : Str, inputs : List(Str), needs : List(Str), run : List(Str), output : Str }),
 	extensions : List({ kind : Str, name : Str, value : Value }),
 	raw : List({ backend : Str, target : Str, value : Value }),
 }.{
@@ -32,11 +34,18 @@ Ir := {
 	Environment : { name : Str, parents : List(Str), tools : List(Tool), overlays : List(Str) }
 	Shell : { name : Str, environment : Str }
 	Task : { name : Str, environment : Str, run : List(Str) }
+
+	## Non-flake locked inputs, distinct from package-provider sources.
+	BuildSource : { name : Str, ref : Str }
+
+	## Run is exact argv. Output is a relative file or directory path; dependencies
+	## expose only that artifact, separately from the writable project snapshot.
+	Build : { name : Str, environment : Str, inputs : List(Str), needs : List(Str), run : List(Str), output : Str }
 	Extension : { kind : Str, name : Str, value : Value }
 	Raw : { backend : Str, target : Str, value : Value }
 
 	current_format : Format
-	current_format = { major: 2, minor: 0 }
+	current_format = { major: 2, minor: 1 }
 
 	empty : Str -> Ir
 	empty = |name| Ir.{
@@ -49,6 +58,8 @@ Ir := {
 		environments: [],
 		shells: [],
 		tasks: [],
+		build_sources: [],
+		builds: [],
 		extensions: [],
 		raw: [],
 	}
@@ -77,6 +88,8 @@ Ir := {
 				environments: wire.environments ?? [],
 				shells: wire.shells ?? [],
 				tasks: wire.tasks ?? [],
+				build_sources: wire.build_sources ?? [],
+				builds: wire.builds ?? [],
 				extensions: wire.extensions ?? [],
 				raw: wire.raw ?? [],
 			},
@@ -97,6 +110,8 @@ Wire : {
 	environments : Try(List(Ir.Environment), [Missing]),
 	shells : Try(List(Ir.Shell), [Missing]),
 	tasks : Try(List(Ir.Task), [Missing]),
+	build_sources : Try(List(Ir.BuildSource), [Missing]),
+	builds : Try(List(Ir.Build), [Missing]),
 	extensions : Try(List(Ir.Extension), [Missing]),
 	raw : Try(List(Ir.Raw), [Missing]),
 }
@@ -104,9 +119,18 @@ Wire : {
 expect Ir.parse(Ir.empty("x").to_str()) == Ok(Ir.empty("x"))
 expect Ir.parse("((format ((major 1) (minor 0))) (shells 42))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
 expect Ir.parse("((format ((major 3) (minor 0))))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))
-expect Ir.parse("((format ((major 2) (minor 0))) (name \"x\"))") == Ok(Ir.empty("x"))
+expect match Ir.parse("((format ((major 2) (minor 0))) (name \"x\"))") {
+	Ok(ir) => ir.format == { major: 2, minor: 0 } and ir.build_sources.is_empty() and ir.builds.is_empty()
+	Err(_) => False
+}
 expect Ir.parse("((format ((major 2) (minor 0))))").is_err()
 expect Ir.parse("((name \"x\"))").is_err()
+expect Ir.parse("((format ((major 2) (minor 1))) (name \"x\") (build_sources (((name \"assets\")))))").is_err()
+expect Ir.parse("((format ((major 2) (minor 1))) (name \"x\") (builds (((name \"app\") (environment \"dev\") (inputs ()) (needs ()) (run (\"true\"))))))").is_err()
+expect match Ir.parse("((format ((major 2) (minor 99))) (name \"x\") (requires (\"sources\" \"builds\" \"future\")))") {
+	Ok(ir) => Ir.unsupported_features(ir, ["sources", "builds"]) == ["future"] and Ir.unsupported_features(ir, []) == ["sources", "builds", "future"]
+	Err(_) => False
+}
 expect match Ir.parse("((future (Tag 1)) (format ((major 2) (minor 99))) (name \"x\") (shells (((name \"s\") (environment \"dev\") (future 1)))))") {
 	Ok(ir) => ir.format.minor == 99 and ir.shells == [{ name: "s", environment: "dev" }]
 	Err(_) => False

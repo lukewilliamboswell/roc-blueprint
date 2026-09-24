@@ -4,13 +4,13 @@
   <img src="docs/blueprint-gemini-gen.jpeg" alt="Blueprint illustration of robotic arms" width="560">
 </p>
 
-Describe reusable development environments and argv tasks in a small Roc file,
-`Blueprint.roc`. The reference CLI turns them into Nix dev shells.
+Describe reusable environments, argv tasks and sandboxed artifact builds in
+`Blueprint.roc`. The reference CLI executes pure Nix plans.
 
-**Development API (B1, IR major 2):** these examples use the local source
+**Development API (B2, IR 2.1):** these examples use the local source
 platform, not the latest published release. This snapshot is source-only and
 not release-qualified; the pinned released-IR bundle gate is expected to block
-until an actual compatible IR release exists. See [B1 boundaries](docs/b1.md).
+until an actual compatible IR release exists. See [B2 boundaries](docs/b2.md).
 
 ```roc
 # Blueprint.roc at the repository root
@@ -34,6 +34,7 @@ config = [
 ```
 
 ```sh
+blueprint update         # explicitly initialize/update dependency pins
 blueprint shell          # enter the default shell's environment
 blueprint shell ci       # enter base, without the roc overlay
 blueprint run version    # run argv directly in dev
@@ -67,8 +68,9 @@ The upstream flake is available via
 listed under [releases](https://github.com/lukewilliamboswell/roc-blueprint/releases).
 Do not assume either accepts this development API. A prebuilt
 `blueprint-x86_64-linux` needs the compatible Roc nightly named in its release
-notes, on `PATH` or in `ROC`. Compile-time validation does **not** eliminate
-that runtime compiler requirement: loading a configuration still invokes Roc.
+notes, on `PATH` or in `ROC`, plus Nix and Python 3.9+ for runtime effects.
+The source Nix package supplies Roc and Python. Compile-time validation does
+**not** eliminate the compiler requirement: loading a configuration invokes Roc.
 
 `Systems` controls generated Nix output shapes; it neither installs platform
 host targets nor proves execution support. Only x86_64 Linux execution is
@@ -91,6 +93,8 @@ settings:
 | `Environment(EnvName, List(EnvironmentSetting))` | Named tools and scoped overlays, optionally inherited. |
 | `Shell(EnvName, List(ShellSetting))` | Named alias with exactly one `Use(environment)`. `blueprint shell` selects alias `"default"`. |
 | `Task(TaskName, List(TaskSetting))` | Named argv command with exactly one `Use(environment)` and one `Run(argv)`. No shell alias is required. |
+| `Source(InputName, FlakeRef)` | Locked non-flake input, e.g. `Source("assets", "path:./assets")`. |
+| `Build(InputName, List(BuildSetting))` | Sandboxed artifact with required `Use`, exact argv `Run`, relative `Output`; optional `Inputs` and `Needs`. |
 | `Raw(backend, target, Val)` | Backend-specific data; see below. |
 | `Custom(kind, name, Val)` | Extension data. The current CLI rejects unsupported extensions. |
 
@@ -129,6 +133,34 @@ Use ordinary Roc lists and functions for composition, not a plugin registry.
 concatenates those settings into `config`. Imports do not install tools or add
 runtime operations to the CLI.
 
+### Artifact builds
+
+Inside `config`, with `scripts/build.py` in the project:
+
+```roc
+Source("assets", "path:./assets"),
+Build("app", [
+	Use("dev"),
+	Inputs(["assets"]),
+	Run(["python3", "scripts/build.py"]),
+	Output("dist/app"),
+]),
+```
+
+Run `blueprint update`, then `blueprint build app`. The printed store path is
+resolved by Nix and contains exactly the declared file or directory. Missing
+outputs fail. `Needs(["library"])` adds build dependencies; cycles fail during
+configuration validation. Sources live under `$BLUEPRINT_INPUTS/<name>` and
+needed artifacts under `$BLUEPRINT_ARTIFACTS/<name>`, both read-only and separate
+from the writable project copy.
+
+Each build snapshots current project files, including untracked/task-generated
+files, excluding VCS metadata, caller-generated roots, authority and all local
+input trees. Changing a locked local source requires explicit update. Initial
+source/output policy rejects symlinks and special files. Only local x86_64 Linux
+sandboxed execution is verified; tasks/config compilation are not sandboxed.
+See the [real build fixture](fixtures/builds/README.md) and [API](docs/b2.md).
+
 ### Raw settings
 
 The Nix backend accepts attribute data at two targets:
@@ -151,40 +183,46 @@ managed `packages`/`devShells` are rejected. Raw for other backends is ignored.
 
 ## Commands
 
-Run these in the directory containing `Blueprint.roc`.
+Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 
 | Command | Meaning |
 |---|---|
-| `blueprint` / `blueprint gen` | Generate `.blueprint/flake.nix`, lock it, and sync `Blueprint.lock` |
+| `blueprint` / `blueprint gen` | Generate `.blueprint/` from existing matching authoritative pins |
 | `blueprint shell [NAME]` | Generate the selected alias's environment, then enter it (default alias `default`) |
 | `blueprint run TASK [-- ARGS...]` | Generate the task's environment, then run its argv with extra arguments |
+| `blueprint build NAME` | Snapshot and build an artifact plus dependencies; print its actual store path |
 | `blueprint tasks` | List tasks and their environments |
-| `blueprint update` | Generate, then update the Nix input pins and sync `Blueprint.lock` |
-| `blueprint check` | Run the compiler check and validate Nix rendering for all shell/task environments |
+| `blueprint update` | Explicitly initialize/update and atomically publish the authoritative lock |
+| `blueprint check` | Run the compiler check and validate all shell/task/build environments without requiring a lock |
 | `blueprint ir` / `blueprint flake` | Print semantic IR or the generated flake |
-| `blueprint --help` | Project help; `run --help` and `shell --help` list tasks and aliases |
+| `blueprint --help` | Project help; subcommand help lists tasks, aliases and builds |
 
 Backend capability checks follow the requested environment closure; unrelated
-valid provider declarations do not block `shell`/`run`. Whole-project structural
-validation and required-feature checks still apply. Full rendering (`gen`,
-`update`, `check`, `flake`) checks environments referenced by all shells/tasks.
+valid provider declarations do not block selected operations. Whole-project
+structural validation and required-feature checks still apply. Full rendering
+(`gen`, `update`, `check`, `flake`) checks all shell/task/build environments.
 
-- **Commit** `Blueprint.roc` and `Blueprint.lock`; **ignore** `.blueprint/`.
-- Ordinary `gen`, `shell` and `run` still invoke `nix flake lock` and copy the
-  result back to `Blueprint.lock`. Switching requested closures can change the
-  input set and lock bytes. B1 does **not** promise lock immutability outside
-  `update`.
-- **`ROC`** chooses the compiler; the Nix wrapper supplies the pinned one.
-- Locked non-flake sources, artifact builds, workflows and the stricter lock
-  lifecycle are deferred to B2/B3. There are no `build` or `workflow` commands.
+- **Commit** `Blueprint.roc` and the authority (default `Blueprint.lock`);
+  **ignore** generated state (default `.blueprint/`).
+- Normal `gen`, `shell`, `run` and `build` require matching pins and never
+  rewrite authority or independently update derived locks. B1 raw locks need
+  an explicit `update` to become the validated versioned B2 envelope.
+- **`BLUEPRINT_WORKSPACE`**, **`BLUEPRINT_GENERATED_ROOT`**, **`BLUEPRINT_LOCK`**
+  choose caller paths; relative values resolve against the selected project
+  root, not the invocation directory. Out-of-tree generated roots are supported.
+- **`BLUEPRINT_TARGET`** selects a declared target (default `x86_64-linux`).
+  **`ROC`** selects the pinned compatible compiler; the Nix wrapper supplies it.
+- Workflows (B3) and handoff qualification (B4) remain pending. No `workflow`
+  command or Guix executor is implemented.
 
 ## How it works
 
 The platform lowers and validates the whole config at top level, then prints
-IR major 2 as an S-expression. The CLI invokes Roc, parses and revalidates that
+IR 2.1 as an S-expression. The CLI invokes Roc, parses and revalidates that
 IR through the shared pure `Project` boundary, explicitly selects Nix, and
 owns file writes, locking and execution. The importable core and Nix renderer
 perform no host discovery or effects.
 
-See [B1 boundaries](docs/b1.md), [examples](examples/README.md) and
+See [B2 API and guarantees](docs/b2.md), [B1 history](docs/b1.md),
+[examples](examples/README.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md).

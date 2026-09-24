@@ -12,8 +12,9 @@ blueprint-ir-package/    roc-blueprint-ir: semantic IR, shared validation, Value
   Project.roc            pure normalization, references and provider capability checks
   fuzz/                  roc-fuzz targets: ir-parse, ir-round-trip
 blueprint-nix-package/   importable pure Nix backend (depends only on the IR)
-  Backend.roc            backend interface, caller layout and resolved lock data
-  NixBackend.roc          shared flake renderer and staging function
+  NixBackend.roc          shared pure request planning and flake rendering
+  Locks.roc              validated authority/native Nix lock translation
+  build-runner.py        in-derivation argv/output/isolation checks
   tests/                 IR fixtures and golden flakes
 blueprint-cli/           the blueprint CLI (basic-cli + weaver)
 fixtures/consumer/      independent consumer of the IR and Nix packages
@@ -29,7 +30,8 @@ The local platform and CLI share `blueprint-ir-package`, including
 bundles are not compatible. This is a source-only, not release-qualified
 snapshot. Both bundle gates remain required; the unchanged `ir-release` gate
 is expected to block until an actual compatible IR artifact is available.
-See [B1 boundaries](docs/b1.md).
+B2 adds compatible IR 2.1 fields. See [B2 API](docs/b2.md) and the
+historical [B1 record](docs/b1.md).
 
 ## Setup
 
@@ -81,6 +83,11 @@ and an unselected-overlay native failure. `scripts/test-consumer.sh` checks
 staged bytes, supplied-lock preservation, scoped overlay evaluation, native
 missing-package diagnostics and package-target rejection. Parse fuzzing also
 checks successful semantic normalization for idempotence.
+`scripts/test-b2.py` adds real offline-capable artifact/dependency/source tests,
+including host-file and TCP isolation with positive host controls, fail-closed
+runner checks, exact argv, immutable locks, freshness and relocation.
+`scripts/test-update.py` checks local-source preflight and concurrent publication.
+Normal execution tests explicitly initialize authority with `update` first.
 
 ## Nightly updates
 
@@ -138,7 +145,7 @@ blueprint platform's Linux target.
 
 In outline:
 
-- `format` — `((major 2) (minor 0))`; see compatibility below.
+- `format` — `((major 2) (minor 1))`; see compatibility below.
 - `name`, `systems` (strings such as `"x86_64-linux"`).
 - `sources` — `{ name, provider }`, where provider is `Auto`,
   `NixPackages(Str)` or `GuixPackages(Str)`. Validation supplies
@@ -149,10 +156,14 @@ In outline:
   single parent, deduplicates parent-first selections and clears `parents`.
 - `shells` — `{ name, environment }` aliases.
 - `tasks` — `{ name, environment, run }`, with nonempty executable argv.
+- `build_sources` — `{ name, ref }`, locked non-flake sources, separate from
+  package-provider `sources`.
+- `builds` — `{ name, environment, inputs, needs, run, output }`; named source
+  and build references, exact argv and contained relative file/directory output.
 - `raw` — `{ backend, target, value }`, passed through to one backend.
 - `extensions` — `{ kind, name, value }`, blocks a backend may understand.
 - `requires` — features the config uses beyond the core (`"raw"`,
-  `"extensions"`), so an older `blueprint` can say what's missing.
+  `"extensions"`, `"sources"`, `"builds"`), so an older `blueprint` can say what's missing.
 
 `Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its S-expression encoder
 and parser are hand-written to avoid recursive-codec derivation problems.
@@ -182,50 +193,54 @@ probes the host or installs/fetches anything.
 
 ### Backends
 
-`blueprint-nix-package/Backend.roc` is the interface: a backend is pure. It renders the
-IR into files and gives the argv for locking, updating, entering a shell and
-running a task; `main.roc` does the effects. `NixBackend.roc` is the only
-backend. It:
+`Request`, `Plan` and `Layout` are importable pure core types.
+`NixBackend.plan(project, request, target, layout, locks)` derives generated
+files, exact argv, artifact descriptions and explicit materialization operations.
+The caller owns all effects; no backend registry or serialized config recipes
+are involved. `Backend.roc` retains only inspection metadata. Nix is the only
+implemented backend. It:
 
 - resolves Auto to its default nixpkgs source, without backend autodetection;
 - imports each selected environment's package sources per system with only
   that environment's ordered overlay stack; aliases and task entries share it;
-- checks provider compatibility for the requested environment closure, not
+- checks provider compatibility for the requested environment/build closure, not
   unrelated valid source/environment declarations. `render` selects all
-  shell/task environments; `render_environment` selects one. Whole-project
+  shell/task/build environments; `render_environment` selects one. Whole-project
   structure, required features, declared targets and Nix Raw remain checked;
 - emits native package attributes without translation, fallback or availability
   filtering: missing/unavailable packages fail in Nix;
-- rejects unsupported Nix target declarations. Supported x86_64/aarch64
-  Linux/Darwin output shapes are not evidence of execution on those hosts;
+- rejects unsupported Nix target declarations and restricts build requests to
+  x86_64 Linux. Other supported output shapes are not execution evidence;
 - renders `raw` for backend `"nix"` at `shell:<alias>` and `flake` as data,
   rejecting invalid targets, duplicate attributes and managed-field overrides.
   Alias Raw does not affect other aliases or tasks; other backends' Raw is inert;
-- refuses any `extensions` and advertises only the `"raw"` feature.
+- refuses any `extensions` and advertises `"raw"`, `"sources"` and `"builds"`;
+- builds ordinary derivations with exact argv, filtered project snapshots,
+  read-only declared sources/artifacts and checked file/directory outputs.
 
 `Project.check_environment(project, Nix | Guix, name)` is a pure compatibility
 check. Guix source intent, native tool grammar and overlay-capability rejection
 are modeled; no Guix renderer, task implementation or executor exists. The
 reference CLI explicitly selects Nix; selection policy belongs to consumers.
 
-The source package `blueprint-nix-package/main.roc` exports `Backend` and
-`NixBackend`, without importing the CLI or an effectful platform.
-`NixBackend.render_files(ir, target, layout, locked_inputs)` returns absolute
-file paths and contents using caller-owned paths and already-resolved Nix lock
-bytes. It shares `NixBackend.render` with the CLI. The new staging seam rejects
-local input URLs until project-root rebasing and relocatable locks are implemented;
-its consumer fixture uses remote pinned inputs. Supplied lock bytes are trusted
-data, not a validated lock protocol. `scripts/test-consumer.sh` compiles a
-separate app and compares its staged files byte-for-byte.
+The source package exports `NixBackend` and `Locks`, without importing the CLI
+or an effectful platform. `Locks.decode` validates the versioned authority and
+native Nix graph; `Locks.derive` validates declaration/ordered-overlay identity
+and translates local project-relative paths into a disposable working lock.
+`NixBackend.plan` uses that translation. The former opaque-text `render_files`
+seam was removed, not retained as a bypass. `scripts/test-consumer.sh` compiles
+an independent app using these APIs, including caller-selected paths, decoded
+supplied authority and exact argv. `scripts/test-b2.py` separately proves actual
+relocated local-source translation.
 
-The reference CLI does not use that supplied-lock seam for ordinary commands.
-`gen`, `shell` and `run` still stage a flake, copy in `Blueprint.lock`, invoke
-`nix flake lock`, and copy the result back. Selecting a different environment
-closure can change the input set and lock bytes. `update` additionally upgrades
-pins. Immutable ordinary execution, relocatable local-source identity and the
-stricter explicit-update lifecycle remain B2/B3 work, together with locked
-non-flake sources, artifact builds and workflows. B1 exports none of those
-operations.
+`gen`, `shell`, `run` and `build` require existing matching authority. Only
+explicit `update` resolves new pins and publishes authority; normal commands
+stage derivatives and prohibit native lock updates. Named input declarations
+remain stable across selected closures; selected overlays remain scoped and
+ordered. Local authority contains relative identity and NAR hashes, not checkout
+paths. Dirty local inputs fail until explicit update. See [B2](docs/b2.md) for
+the complete lock, snapshot, output and isolation contracts. Workflows (B3)
+and handoff qualification (B4) remain pending.
 
 A new feature usually means: a setting in the platform (`Config.roc`,
 `Lower.roc`), then either an `extensions` kind or a new optional IR field

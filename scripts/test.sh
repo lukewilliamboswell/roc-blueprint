@@ -33,6 +33,9 @@ scripts/test-consumer.sh
 step "CLI argument and validation regressions"
 python3 scripts/test-cli.py
 
+step "Explicit update source safety and concurrent authority publication"
+python3 scripts/test-update.py
+
 step "blueprint against examples/all-settings/Blueprint.roc"
 (
 	cd examples/all-settings
@@ -40,12 +43,16 @@ step "blueprint against examples/all-settings/Blueprint.roc"
 	"$ROOT/blueprint" tasks
 	"$ROOT/blueprint" --help >/dev/null
 	"$ROOT/blueprint" run --help | grep -q ci-hello
+	"$ROOT/blueprint" update
 	"$ROOT/blueprint" run ci-hello
 	"$ROOT/blueprint" run hello
 )
 
 step "B1 composed tasks and scoped overlays through real Nix"
 scripts/test-b1.sh
+
+step "B2 sandboxed artifacts, isolation, sources and immutable locks"
+python3 scripts/test-b2.py
 
 step "Golden flakes parse as Nix"
 for f in blueprint-nix-package/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done

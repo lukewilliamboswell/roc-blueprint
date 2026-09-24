@@ -1,5 +1,5 @@
 package
-	[Backend, NixBackend]
+	[Backend, NixBackend, Locks]
 	{
 		ir: "../blueprint-ir-package/main.roc",
 	}
