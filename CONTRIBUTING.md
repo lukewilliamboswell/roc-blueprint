@@ -72,11 +72,11 @@ workflow checks the consumer configuration on pull requests.
 
 The shared controller creates a signed pin-only PR and merges it only after
 validation and repository rules pass. The required check for this CI is `test`.
-When rolling out the restored updater, replace the obsolete required contexts
-`Build release bundles`, `Test blueprint (ubuntu-latest)` and
-`Test blueprint-nix (ubuntu-latest)` with the current check; retain the strict
-up-to-date requirement and pull-request rule. Once the workflows are on `main`,
-manually dispatch the updater and inspect the candidate's validation results.
+The active main-branch ruleset requires that check from GitHub Actions, strict
+up-to-date checks, and pull requests. Keep its required check names aligned
+with the validation workflow when changing CI. Once the workflows are on
+`main`, manually dispatch the updater and inspect the candidate's validation
+results.
 
 The Nix overlay is independently locked. A nightly absent from the locked
 overlay will fail Nix validation and cannot auto-merge. Update the `roc-overlay`
