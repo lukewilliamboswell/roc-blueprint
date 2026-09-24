@@ -20,7 +20,7 @@ NixBackend :: [].{
 	backend : Backend
 	backend = Backend.{
 		name: "nix",
-		features: ["raw", "sources", "builds"],
+		features: ["raw", "sources", "builds", "workflows"],
 		render: |ir| render(ir).map_ok(
 			|contents| [{ path: "flake.nix", contents }],
 		),
@@ -45,24 +45,83 @@ NixBackend :: [].{
 
 	## Validate and select the request before a consumer reads lock authority.
 	## Planning reuses this same selection and renderer, without CLI semantics.
-	preflight : Ir,
-	Request,
-	Str,
-	Layout -> Try(
-		{
-			project : Ir,
-			inputs : List(Locks.Input),
-			builds : List(Ir.Build),
-			argv : List(Str),
-			contents : Str,
-		},
-		Str,
-	)
+	preflight : Ir, Request, Str, Layout -> Try({}, Str)
 	preflight = |ir, request, target, layout| {
+		_ = prepare(ir, request, target, layout)?
+		Ok({})
+	}
+
+	Prepared : {
+		project : Ir,
+		inputs : List(Locks.Input),
+		builds : List(Ir.Build),
+		argv : List(Str),
+		contents : Str,
+		action : [Generate, Shell(Str), Run(Str), Build(Str)],
+	}
+
+	## Expand only semantic requests. Every atomic request shares this selection
+	## and renderer; never reload config or defer later capability/layout checks.
+	prepare : Ir, Request, Str, Layout -> Try(List(Prepared), Str)
+	prepare = |ir, request, target, layout| {
 		project = Project.validate(ir)?
+		match request {
+			Request.Workflow(name) => {
+				var $prepared = []
+				var $templates = []
+				var $bytes = 0.U64
+				for step in Project.workflow_steps(project, name)? {
+					atomic = match step {
+						RunTask(task, extra) => Request.Run(task, extra)
+						BuildArtifact(build) => Request.Build(build)
+					}
+					# Share immutable recipes, NEVER runtime artifacts or snapshots.
+					# Repeated requests still append a complete executable step.
+					selected = match $templates.find_first(|entry| entry.request == atomic) {
+						Ok(entry) => entry.selected
+						Err(_) => {
+							fresh = prepare_atomic(
+								project,
+								atomic,
+								target,
+								layout,
+								Limited(16777216 - $bytes),
+							)?
+							$bytes = $bytes + fresh.contents.to_utf8().len()
+								+ fresh.argv.fold(0, |n, arg| n + arg.to_utf8().len())
+							$templates = $templates.append({ request: atomic, selected: fresh })
+							fresh
+						}
+					}
+					$prepared = $prepared.append(selected)
+				}
+				# Empty workflows still check global features, declarations and layout.
+				if $prepared.is_empty() {
+					inputs = Locks.inputs(project)?
+					_ = render_selected(
+						project,
+						[],
+						[],
+						"",
+						Some({ inputs, layout }),
+						Limited(16777216),
+					)?
+					check_layout(project, target, layout, False)?
+				}
+				return Ok($prepared)
+			}
+			_ => {}
+		}
+		Ok([prepare_atomic(project, request, target, layout, Unlimited)?])
+	}
+
+	## Structural validation belongs to prepare, before selecting any steps.
+	prepare_atomic : Ir, Request, Str, Layout, RenderBudget -> Try(Prepared, Str)
+	prepare_atomic = |project, request, target, layout, budget| {
 		var $names = []
 		var $builds = []
 		var $argv = []
+		var $action = Generate
 		base_ref = "path:${layout.generated_root}"
 		read_only = ["--no-update-lock-file", "--no-write-lock-file"]
 		match request {
@@ -81,6 +140,7 @@ NixBackend :: [].{
 				}
 			}
 			Request.Shell(name) => {
+				$action = Shell(name)
 				shell = project.shells.find_first(|s| s.name == name)
 					.map_err(|_| "unknown shell: ${name}")?
 				$names = [shell.environment]
@@ -89,6 +149,7 @@ NixBackend :: [].{
 				)
 			}
 			Request.Run(name, extra) => {
+				$action = Run(name)
 				task = project.tasks.find_first(|t| t.name == name)
 					.map_err(|_| "unknown task: ${name}")?
 				command = task.run.concat(extra)
@@ -100,6 +161,7 @@ NixBackend :: [].{
 					.concat(command)
 			}
 			Request.Build(name) => {
+				$action = Build(name)
 				if target != "x86_64-linux" {
 					return Err("sandboxed builds currently require target x86_64-linux")
 				}
@@ -122,32 +184,59 @@ NixBackend :: [].{
 						"${base_ref}#packages.${target}.${name}",
 					])
 			}
+			Request.Workflow(_) => return Err("workflow must expand into atomic requests")
 		}
 		inputs = Locks.inputs(project)?
 		snapshot = "${layout.workspace}/snapshot"
+		remaining = charge_rendered(
+			budget,
+			$argv.fold(0, |n, arg| n + arg.to_utf8().len()),
+		)?
 		contents = render_selected(
 			project,
 			$names,
 			$builds,
 			snapshot,
 			Some({ inputs, layout }),
+			remaining,
 		)?
 		check_layout(project, target, layout, !$builds.is_empty())?
-		Ok({ project, inputs, builds: $builds, argv: $argv, contents })
+		Ok({ project, inputs, builds: $builds, argv: $argv, contents, action: $action })
 	}
 
 	## Derive executable data only after complete structure, selected capability,
 	## target, caller layout and authoritative lock checks. No effects occur here.
 	plan : Ir, Request, Str, Layout, Locks -> Try(Plan, Str)
 	plan = |ir, request, target, layout, locks| {
-		{ project, inputs, builds, argv, contents } =
-			preflight(ir, request, target, layout)?
+		prepared = prepare(ir, request, target, layout)?
+		derived = Locks.derive(locks, Project.validate(ir)?, layout)?
+		var $steps = []
+		var $templates = []
+		for selected in prepared {
+			step = match $templates.find_first(
+				|entry| entry.action == selected.action and entry.argv == selected.argv,
+			) {
+				Ok(entry) => entry
+				Err(_) => {
+					entry = materialize_plan(selected, target, layout, derived)
+					$templates = $templates.append(entry)
+					entry
+				}
+			}
+			$steps = $steps.append(step)
+		}
+		Ok(Plan.{ steps: $steps })
+	}
+
+	## A snapshot operation belongs to one explicit build, never an artifact name.
+	## Recheck supplied local pins on every step, including after source-editing tasks.
+	materialize_plan = |selected, target, layout, derived| {
+		{ inputs, builds, argv, contents, action, .. } = selected
 		snapshot = "${layout.workspace}/snapshot"
 		base_ref = "path:${layout.generated_root}"
-		derived = Locks.derive(locks, project, layout)?
 		var $operations = derived.operations
-		match request {
-			Request.Build(_) => {
+		match action {
+			Build(_) => {
 				local = inputs.keep_if(|i| i.ref.starts_with("path:"))
 					.map(|i| "${layout.project_root}/${Locks.local_path(i)}")
 				exclude = [
@@ -175,21 +264,20 @@ NixBackend :: [].{
 				path: "${layout.generated_root}/flake.lock",
 				contents: derived.contents,
 			})
-		Ok(
-			Plan.{
-				files,
-				argv,
-				operations: $operations,
-				artifacts: builds.map(
-					|build| {
-						name: build.name,
-						installable: "${base_ref}#packages.${target}.${build.name}",
-						output: build.output,
-						dependencies: build.needs,
-					},
-				),
-			},
-		)
+		{
+			action,
+			files,
+			argv,
+			operations: $operations,
+			artifacts: builds.map(
+				|build| {
+					name: build.name,
+					installable: "${base_ref}#packages.${target}.${build.name}",
+					output: build.output,
+					dependencies: build.needs,
+				},
+			),
+		}
 	}
 
 	## Update consumers check these source roots before staging or fetching.
@@ -221,6 +309,7 @@ NixBackend :: [].{
 			project.builds,
 			"${layout.workspace}/snapshot",
 			Some({ inputs, layout }),
+			Unlimited,
 		)?
 		Ok(staged_files(layout, contents, !project.builds.is_empty()))
 	}
@@ -285,7 +374,7 @@ NixBackend :: [].{
 		names = project.shells.map(|s| s.environment)
 			.concat(project.tasks.map(|t| t.environment))
 			.concat(project.builds.map(|b| b.environment))
-		render_selected(project, names, project.builds, "", None)
+		render_selected(project, names, project.builds, "", None, Unlimited)
 	}
 
 	## A Shell/Run consumer selects one environment before staging any effects.
@@ -298,7 +387,30 @@ NixBackend :: [].{
 	}
 
 	render_closure : Ir, List(Str) -> Try(Str, Str)
-	render_closure = |ir, names| render_selected(ir, names, [], "", None)
+	render_closure = |ir, names|
+		render_selected(ir, names, [], "", None, Unlimited)
+
+	## Charge exact emitted UTF-8 bytes before retaining a renderer chunk.
+	## Unlimited keeps standalone/inspection rendering on this same code path.
+	RenderBudget : [Unlimited, Limited(U64)]
+
+	charge_rendered : RenderBudget, U64 -> Try(RenderBudget, Str)
+	charge_rendered = |budget, bytes| match budget {
+		Unlimited => Ok(Unlimited)
+		Limited(remaining) => if bytes > remaining {
+			Err("workflow plan exceeds 16 MiB of distinct rendered requests")
+		} else Ok(Limited(remaining - bytes))
+	}
+
+	## Accepted chunks stay within the remaining workflow text allowance.
+	Rendered : { chunks : List(Str), budget : RenderBudget }
+
+	## Never join a closure/system before checking its individual definitions.
+	append_rendered : Rendered, Str -> Try(Rendered, Str)
+	append_rendered = |rendered, chunk| {
+		budget = charge_rendered(rendered.budget, chunk.to_utf8().len())?
+		Ok({ chunks: rendered.chunks.append(chunk), budget })
+	}
 
 	## Inspection and executable plans share one renderer. Plans supply the full
 	## stable input set and explicit snapshot path; inspection never guesses one.
@@ -309,8 +421,9 @@ NixBackend :: [].{
 	[
 		None,
 		Some({ inputs : List(Locks.Input), layout : Layout }),
-	] -> Try(Str, Str)
-	render_selected = |ir, names, builds, snapshot, staging| {
+	],
+	RenderBudget -> Try(Str, Str)
+	render_selected = |ir, names, builds, snapshot, staging, budget| {
 		missing = ir.unsupported_features(backend.features)
 		if !missing.is_empty() {
 			return Err("unsupported features: ${Str.join_with(missing, ", ")}")
@@ -375,120 +488,146 @@ NixBackend :: [].{
 				["packages"],
 			)?
 		}
-		# Inspection retains scoped input views. Executable plans replace these
-		# declarations with the full stable supported input set below.
-		sources = ir.sources.keep_if(
-			|s| environments.any(|e| source_names(e).contains(s.name)),
-		)
-		var $input_lines = []
-		for source in sources {
-			url = match source.provider {
-				Auto => default_nixpkgs
-				NixPackages(ref) => ref
-				GuixPackages(_) => return Err("Nix cannot use Guix source ${source.name}")
-			}
-			$input_lines = $input_lines.append(
-				"    ${quote(source.name)}.url = ${quote(url)};",
-			)
-		}
-		$input_lines = $input_lines.concat(
-			ir.inputs.keep_if(
-				|i| i.kind == Flake
-					or environments.any(|e| e.overlays.contains(i.name)),
-			)
-				.map(|i| "    ${quote(i.name)}.url = ${quote(i.url)};"),
-		)
-		match staging {
-			None => {
-				$input_lines = $input_lines.concat(
-					ir.build_sources.map(
-						|source|
-							"    ${quote(source.name)} = { url = ${quote(source.ref)}; "
-								.concat("flake = false; };"),
-					),
-				)
-			}
-			Some(data) => {
-				$input_lines = data.inputs.map(
-					|input| {
-						url = quote(Locks.input_url(input, data.layout))
-						flake = if input.flake "true" else "false"
-						"    ${quote(input.name)} = { url = ${url}; "
-							.concat("flake = ${flake}; };")
-					},
-				)
-			}
-		}
-		env_lines = environments.map(render_environment_definition)
-		entries = environments.map(
-			|e| "          ${quote(environment_shell(e.name))} = "
-				.concat("environments.${quote(e.name)} { };"),
-		).concat(
-			shells.map(
-				|s| {
-					extra = $shell_raw.keep_if(|x| x.shell == s.name).map(|x| x.attr)
-					"          ${quote(s.name)} = environments.${quote(s.environment)} "
-						.concat("${value_to_nix(Value.Attrs(extra))};")
-				},
-			),
-		)
-		systems = ir.systems.map(
-			|system|
-				lines([
-					"        ${quote(system)} = let",
-					"          environments = environmentsFor ${quote(system)};",
-					"        in {",
-				]).concat(lines(entries)).concat(lines(["        };"])),
-		)
-		package_lines = if builds.is_empty() "" else {
-			var $systems = []
-			for system in ir.systems {
-				var $definitions = []
-				for build in builds {
-					env = environments.find_first(|e| e.name == build.environment)
-						.map_err(|_| "unknown build environment")?
-					$definitions = $definitions.append(
-						render_build(build, env, system, snapshot),
-					)
-				}
-				$systems = $systems.append(
-					"        ${quote(system)} = let artifacts = {\n"
-						.concat(Str.join_with($definitions, ""))
-						.concat("        }; in artifacts;\n"),
-				)
-			}
-			"      packages = {\n".concat(Str.join_with($systems, ""))
-				.concat("      };\n")
-		}
-		flake_lines = $flake_raw.map(
-			|a| "      ${quote(a.name)} = ${value_to_nix(a.value)};",
-		)
-		Ok(
+		var $rendered = { chunks: [], budget }
+		$rendered = append_rendered(
+			$rendered,
 			lines([
 				"# Generated by blueprint from Blueprint.roc. Do not edit.",
 				"{",
 				"  description = ${quote("Development environments for ${ir.name}")};",
 				"",
 				"  inputs = {",
-			]).concat(lines($input_lines)).concat(
+			]),
+		)?
+		# Inspection retains scoped inputs; plans emit stable full declarations.
+		match staging {
+			None => {
+				for source in ir.sources.keep_if(
+					|s| environments.any(|e| source_names(e).contains(s.name)),
+				) {
+					url = match source.provider {
+						Auto => default_nixpkgs
+						NixPackages(ref) => ref
+						GuixPackages(_) => return Err("Nix cannot use Guix source ${source.name}")
+					}
+					$rendered = append_rendered(
+						$rendered,
+						"    ${quote(source.name)}.url = ${quote(url)};\n",
+					)?
+				}
+				for input in ir.inputs.keep_if(
+					|i| i.kind == Flake
+						or environments.any(|e| e.overlays.contains(i.name)),
+				) {
+					$rendered = append_rendered(
+						$rendered,
+						"    ${quote(input.name)}.url = ${quote(input.url)};\n",
+					)?
+				}
+				for source in ir.build_sources {
+					$rendered = append_rendered(
+						$rendered,
+						"    ${quote(source.name)} = { url = ${quote(source.ref)}; "
+							.concat("flake = false; };\n"),
+					)?
+				}
+			}
+			Some(data) => {
+				for input in data.inputs {
+					url = quote(Locks.input_url(input, data.layout))
+					flake = if input.flake "true" else "false"
+					$rendered = append_rendered(
+						$rendered,
+						"    ${quote(input.name)} = { url = ${url}; "
+							.concat("flake = ${flake}; };\n"),
+					)?
+				}
+			}
+		}
+		$rendered = append_rendered(
+			$rendered,
+			lines([
+				"  };",
+				"",
+				"  outputs = { self, ... }@inputs:",
+				"    let",
+				"      environmentsFor = system: {",
+			]),
+		)?
+		for environment in environments {
+			$rendered = append_rendered(
+				$rendered,
+				render_environment_definition(environment),
+			)?
+		}
+		$rendered = append_rendered(
+			$rendered,
+			lines([
+				"      };",
+				"    in",
+				"    {",
+				"      devShells = {",
+			]),
+		)?
+		for system in ir.systems {
+			$rendered = append_rendered(
+				$rendered,
 				lines([
-					"  };",
-					"",
-					"  outputs = { self, ... }@inputs:",
-					"    let",
-					"      environmentsFor = system: {",
+					"        ${quote(system)} = let",
+					"          environments = environmentsFor ${quote(system)};",
+					"        in {",
 				]),
-			).concat(Str.join_with(env_lines, "")).concat(
-				lines([
-					"      };",
-					"    in",
-					"    {",
-					"      devShells = {",
-				]),
-			).concat(Str.join_with(systems, "")).concat(lines(["      };"]))
-				.concat(package_lines)
-				.concat(lines(flake_lines)).concat(lines(["    };", "}"])),
-		)
+			)?
+			for environment in environments {
+				$rendered = append_rendered(
+					$rendered,
+					"          ${quote(environment_shell(environment.name))} = "
+						.concat("environments.${quote(environment.name)} { };\n"),
+				)?
+			}
+			for shell in shells {
+				extra = $shell_raw.keep_if(|x| x.shell == shell.name)
+					.map(|x| x.attr)
+				$rendered = append_rendered(
+					$rendered,
+					"          ${quote(shell.name)} = "
+						.concat("environments.${quote(shell.environment)} ")
+						.concat("${value_to_nix(Value.Attrs(extra))};\n"),
+				)?
+			}
+			$rendered = append_rendered($rendered, "        };\n")?
+		}
+		$rendered = append_rendered($rendered, "      };\n")?
+		if !builds.is_empty() {
+			$rendered = append_rendered($rendered, "      packages = {\n")?
+			for system in ir.systems {
+				$rendered = append_rendered(
+					$rendered,
+					"        ${quote(system)} = let artifacts = {\n",
+				)?
+				for build in builds {
+					env = environments.find_first(|e| e.name == build.environment)
+						.map_err(|_| "unknown build environment")?
+					$rendered = append_rendered(
+						$rendered,
+						render_build(build, env, system, snapshot),
+					)?
+				}
+				$rendered = append_rendered(
+					$rendered,
+					"        }; in artifacts;\n",
+				)?
+			}
+			$rendered = append_rendered($rendered, "      };\n")?
+		}
+		for attr in $flake_raw {
+			$rendered = append_rendered(
+				$rendered,
+				"      ${quote(attr.name)} = ${value_to_nix(attr.value)};\n",
+			)?
+		}
+		$rendered = append_rendered($rendered, lines(["    };", "}"]))?
+		Ok(Str.join_with($rendered.chunks, ""))
 	}
 
 	## mkShell comes from the first tool's source, keeping unrelated providers
@@ -744,6 +883,7 @@ mk = |t| Ir.{
 	tasks: t.tasks,
 	build_sources: [],
 	builds: [],
+	workflows: [],
 	requires_: t.requires_,
 	raw: t.raw,
 	extensions: t.extensions,
@@ -1036,7 +1176,7 @@ expect NixBackend.preflight(
 
 # A build plans dependency-first artifacts and exact, immutable sandbox argv.
 expect match plan_fixture(Request.Build("app")) {
-	Ok(plan) => plan.artifacts == [
+	Ok({ steps: [plan] }) => plan.action == Build("app") and plan.artifacts == [
 		{
 			name: "library",
 			installable: "path:/generated#packages.x86_64-linux.library",
@@ -1067,12 +1207,12 @@ expect match plan_fixture(Request.Build("app")) {
 		"--impure",
 		"path:/generated#packages.x86_64-linux.app",
 	]
-	Err(_) => False
+	_ => False
 }
 
 # Inputs are verified before each fresh snapshot, including every excluded root.
 expect match plan_fixture(Request.Build("app")) {
-	Ok(plan) => plan.operations == [
+	Ok({ steps: [plan] }) => plan.operations == [
 		VerifyLocal({
 			path: "/project/assets",
 			nar_hash: "sha256-mhO52EWOvxHOyTFt0V1hM6Oo6mlpNo2PFlxQtcmCJBc=",
@@ -1096,12 +1236,12 @@ expect match plan_fixture(Request.Build("app")) {
 		"/generated/build-runner.py",
 		"/generated/flake.lock",
 	]
-	Err(_) => False
+	_ => False
 }
 
 # User argv is data; source/dependency views are immutable store farms.
 expect match plan_fixture(Request.Build("app")) {
-	Ok(plan) => match plan.files.first() {
+	Ok({ steps: [plan] }) => match plan.files.first() {
 		Ok(file) => file.contents.contains(
 			"\"\" \"two words\" \"line\\nbreak\" \"$HOME\"",
 		)
@@ -1115,7 +1255,7 @@ expect match plan_fixture(Request.Build("app")) {
 								and !file.contents.contains("outputHash")
 		Err(_) => False
 	}
-	Err(_) => False
+	_ => False
 }
 
 # Task extras preserve empty arguments, controls and option-looking literals.
@@ -1125,7 +1265,7 @@ expect match plan_fixture(
 		["", "two words", "--flag", "a\nb"],
 	),
 ) {
-	Ok(plan) => plan.argv == [
+	Ok({ steps: [plan] }) => plan.action == Run("check") and plan.argv == [
 		"nix",
 		"develop",
 		"--no-update-lock-file",
@@ -1141,12 +1281,12 @@ expect match plan_fixture(
 		"a\nb",
 	] and plan.artifacts.is_empty()
 		and plan.operations.len() == 1 and plan.files.len() == 2
-	Err(_) => False
+	_ => False
 }
 
 # Aliases use the caller target, never the host's implicit default output shape.
 expect match plan_fixture(Request.Shell("default")) {
-	Ok(plan) => plan.argv == [
+	Ok({ steps: [plan] }) => plan.action == Shell("default") and plan.argv == [
 		"nix",
 		"develop",
 		"--no-update-lock-file",
@@ -1154,14 +1294,15 @@ expect match plan_fixture(Request.Shell("default")) {
 		"path:/generated#devShells.x86_64-linux.default",
 	]
 		and plan.artifacts.is_empty()
-	Err(_) => False
+	_ => False
 }
 
 # Generate produces no backend command or snapshot and never writes authority.
 expect match plan_fixture(Request.Generate) {
-	Ok(plan) => plan.argv.is_empty() and plan.operations.len() == 1
-		and !plan.files.any(|file| file.path == TestData.layout.lock_path)
-	Err(_) => False
+	Ok({ steps: [plan] }) => plan.action == Generate
+		and plan.argv.is_empty() and plan.operations.len() == 1
+			and !plan.files.any(|file| file.path == TestData.layout.lock_path)
+	_ => False
 }
 
 # Generate orders all builds dependency-first, sharing dependencies once even
@@ -1170,12 +1311,25 @@ expect match plan_locks {
 	Ok(locks) => {
 		project = TestData.project({
 			..TestData.data,
-			builds: [TestData.application, { ..TestData.application, name: "other" }, TestData.library],
+			builds: [
+				TestData.application,
+				{ ..TestData.application, name: "other" },
+				TestData.library,
+			],
 		})
-		match NixBackend.plan(project, Request.Generate, "x86_64-linux", TestData.layout, locks) {
-			Ok(plan) => plan.artifacts.map(|artifact| artifact.name) == ["library", "app", "other"]
-				and plan.artifacts.map(|artifact| artifact.dependencies) == [[], ["library"], ["library"]]
-			Err(_) => False
+		match NixBackend.plan(
+			project,
+			Request.Generate,
+			"x86_64-linux",
+			TestData.layout,
+			locks,
+		) {
+			Ok({ steps: [plan] }) =>
+				plan.artifacts.map(|artifact| artifact.name) ==
+					["library", "app", "other"]
+					and plan.artifacts.map(|artifact| artifact.dependencies) ==
+						[[], ["library"], ["library"]]
+			_ => False
 		}
 	}
 	Err(_) => False
@@ -1186,7 +1340,7 @@ expect match (
 	plan_fixture(Request.Build("library")),
 	plan_fixture(Request.Shell("default")),
 ) {
-	(Ok(build), Ok(shell)) => {
+	(Ok({ steps: [build] }), Ok({ steps: [shell] })) => {
 		build_lock = build.files.find_first(|f| f.path == "/generated/flake.lock")
 		shell_lock = shell.files.find_first(|f| f.path == "/generated/flake.lock")
 		build_lock == shell_lock and match shell.files.first() {
@@ -1388,8 +1542,18 @@ expect ["flake.nix", "flake.lock", "build-runner.py"].all(
 					lock_path: "/authority/inputs.lock",
 				}
 				project = TestData.project(TestData.data)
-				NixBackend.preflight(project, Request.Build("app"), "x86_64-linux", layout).is_err()
-					and NixBackend.preflight(project, Request.Generate, "x86_64-linux", layout).is_err()
+				NixBackend.preflight(
+					project,
+					Request.Build("app"),
+					"x86_64-linux",
+					layout,
+				).is_err()
+					and NixBackend.preflight(
+						project,
+						Request.Generate,
+						"x86_64-linux",
+						layout,
+					).is_err()
 						and NixBackend.local_checks(project, "x86_64-linux", layout).is_err()
 							and NixBackend.update_files(project, "x86_64-linux", layout).is_err()
 			},
@@ -1402,7 +1566,12 @@ expect NixBackend.preflight(
 	TestData.project(TestData.data),
 	Request.Build("app"),
 	"x86_64-linux",
-	Layout.{ project_root: "/project", workspace: "/generated/work", generated_root: "/generated", lock_path: "/authority/inputs.lock" },
+	Layout.{
+		project_root: "/project",
+		workspace: "/generated/work",
+		generated_root: "/generated",
+		lock_path: "/authority/inputs.lock",
+	},
 ).is_ok()
 
 # Update exposes all local source paths for pre-effect consumer safety checks.
@@ -1423,4 +1592,766 @@ expect match NixBackend.update_files(
 		"/generated/build-runner.py",
 	]
 	Err(_) => False
+}
+
+# Shared workflow input uses the same supplied authority as atomic requests.
+workflow_project : Ir
+workflow_project = TestData.project(TestData.workflow_data)
+
+workflow_plan : Request -> Try(Plan, Str)
+workflow_plan = |request| NixBackend.plan(
+	workflow_project,
+	request,
+	"x86_64-linux",
+	TestData.layout,
+	plan_locks?,
+)
+
+# The maximum repeated build sequence shares a large immutable recipe, not
+# artifacts: all 4096 explicit operations still carry their own snapshot step.
+expect {
+	var $payload = "x"
+	while $payload.to_utf8().len() < 524288 {
+		$payload = $payload.concat($payload)
+	}
+	var $steps = [BuildArtifact("library")]
+	while $steps.len() < 4096 {
+		$steps = $steps.concat($steps)
+	}
+	project = TestData.project({
+		..TestData.workflow_data,
+		builds: [{ ..TestData.library, run: ["true", $payload] }],
+		workflows: [{ name: "large", steps: $steps }],
+	})
+	plan = NixBackend.plan(
+		project,
+		Request.Workflow("large"),
+		"x86_64-linux",
+		TestData.layout,
+		plan_locks?,
+	)?
+	plan.steps.len() == 4096 and plan.steps.all(
+		|step| step.action == Build("library")
+			and step.artifacts.map(|artifact| artifact.name) == ["library"]
+				and step.operations.keep_if(
+					|operation| match operation {
+						Snapshot(_) => True
+						VerifyLocal(_) => False
+					},
+				).len() == 1,
+	) and match plan.steps.first() {
+		Ok(step) => match step.files.first() {
+			Ok(file) => file.contents.to_utf8().len() > 524288
+			Err(_) => False
+		}
+		Err(_) => False
+	}
+}
+
+# Sharing one task's templates must key on exact extras, including repetitions
+# separated by different argv, empty strings, controls and literal shell text.
+expect {
+	extras = [
+		["", "two words", "--literal", "a\nb", "$HOME"],
+		["two", "words", "", "a\tb", "\\", "\""],
+		[],
+		["", "two words", "--literal", "a\nb", "$HOME"],
+	]
+	project = {
+		..workflow_project,
+		workflows: [
+			{
+				name: "argv",
+				steps: extras.map(
+					|extra| RunTask("check", extra),
+				),
+			},
+		],
+	}
+	plan = NixBackend.plan(
+		project,
+		Request.Workflow("argv"),
+		"x86_64-linux",
+		TestData.layout,
+		plan_locks?,
+	)?
+	prefix = [
+		"nix",
+		"develop",
+		"--no-update-lock-file",
+		"--no-write-lock-file",
+		"path:/generated#devShells.x86_64-linux.blueprint-env-builder",
+		"--command",
+		"python3",
+		"check.py",
+		"configured argument",
+	]
+	plan.steps.map(|step| step.argv) == extras.map(|extra| prefix.concat(extra))
+		and plan.steps.map(|step| step.action) == [
+			Run("check"),
+			Run("check"),
+			Run("check"),
+			Run("check"),
+		]
+}
+
+# Distinct requests count all rendered systems toward the 16 MiB budget.
+# Four valid near-1-MiB build argv render over budget; three remain below it.
+expect {
+	var $payload = "x"
+	while $payload.to_utf8().len() < 1048576 {
+		$payload = $payload.concat($payload)
+	}
+	names = ["one", "two", "three", "four"]
+	project = TestData.project({
+		..TestData.workflow_data,
+		systems: NixBackend.supported_systems,
+		builds: names.map(
+			|name| {
+				..TestData.library,
+				name,
+				run: ["x", $payload.drop_prefix("x")],
+			},
+		),
+		workflows: [
+			{
+				name: "below",
+				steps: [
+					BuildArtifact("one"),
+					BuildArtifact("two"),
+					BuildArtifact("three"),
+				],
+			},
+			{ name: "over", steps: names.map(|name| BuildArtifact(name)) },
+		],
+	})
+	locks = plan_locks?
+	below = NixBackend.plan(
+		project,
+		Request.Workflow("below"),
+		"x86_64-linux",
+		TestData.layout,
+		locks,
+	)?
+	diagnostic = "workflow plan exceeds 16 MiB of distinct rendered requests"
+	below.steps.len() == 3 and NixBackend.preflight(
+		project,
+		Request.Workflow("over"),
+		"x86_64-linux",
+		TestData.layout,
+	) == Err(diagnostic) and NixBackend.plan(
+		project,
+		Request.Workflow("over"),
+		"x86_64-linux",
+		TestData.layout,
+		locks,
+	).map_ok(|plan| plan.steps) == Err(diagnostic)
+}
+
+# One valid atomic step can exceed the budget through its dependency closure.
+# Reject during definition emission, not after assembling 126 MiB of argv.
+expect {
+	var $payload = "x"
+	while $payload.to_utf8().len() < 524288 {
+		$payload = $payload.concat($payload)
+	}
+	var $dependencies = []
+	var $index = 0.U64
+	while $index < 63 {
+		$dependencies = $dependencies.append({
+			..TestData.library,
+			name: "dep-${$index.to_str()}",
+			run: ["x", $payload],
+		})
+		$index = $index + 1
+	}
+	project = TestData.project({
+		..TestData.workflow_data,
+		systems: NixBackend.supported_systems,
+		builds: $dependencies.append({
+			..TestData.library,
+			name: "root",
+			needs: $dependencies.map(|build| build.name),
+		}),
+		workflows: [{ name: "large", steps: [BuildArtifact("root")] }],
+	})
+	diagnostic = "workflow plan exceeds 16 MiB of distinct rendered requests"
+	Project.validate(project).is_ok()
+		and Project.build_closure(project, "root").map_ok(List.len) == Ok(64)
+			and NixBackend.preflight(
+				project,
+				Request.Workflow("large"),
+				"x86_64-linux",
+				TestData.layout,
+			) == Err(diagnostic)
+				and NixBackend.plan(
+					project,
+					Request.Workflow("large"),
+					"x86_64-linux",
+					TestData.layout,
+					plan_locks?,
+				).map_ok(|plan| plan.steps) == Err(diagnostic)
+}
+
+# A closure exactly at the public cap succeeds (even repeated); adding one
+# byte to its last definition fails before returning any executable prefix.
+expect {
+	var $payload = "x"
+	while $payload.to_utf8().len() < 1048576 {
+		$payload = $payload.concat($payload)
+	}
+	var $dependencies = []
+	var $index = 0.U64
+	while $index < 15 {
+		$dependencies = $dependencies.append({
+			..TestData.library,
+			name: "dep-${$index.to_str()}",
+			run: ["x", $payload.drop_prefix("x")],
+		})
+		$index = $index + 1
+	}
+	project = Project.validate(
+		TestData.project({
+			..TestData.workflow_data,
+			builds: $dependencies.append({
+				..TestData.library,
+				name: "root",
+				run: ["x", ""],
+				needs: $dependencies.map(|build| build.name),
+			}),
+			workflows: [
+				{
+					name: "limit",
+					steps: [BuildArtifact("root"), BuildArtifact("root")],
+				},
+			],
+		}),
+	)?
+	baseline = NixBackend.prepare_atomic(
+		project,
+		Request.Build("root"),
+		"x86_64-linux",
+		TestData.layout,
+		Unlimited,
+	)?
+	bytes = baseline.contents.to_utf8().len()
+		+ baseline.argv.fold(0, |n, arg| n + arg.to_utf8().len())
+	padding = Str.from_utf8($payload.to_utf8().take_first(16777216 - bytes)) ?? ""
+	at_limit = {
+		..project,
+		builds: project.builds.map(
+			|build| if build.name == "root" {
+				{ ..build, run: ["x", padding] }
+			} else build,
+		),
+	}
+	over_limit = {
+		..at_limit,
+		builds: at_limit.builds.map(
+			|build| if build.name == "root" {
+				{ ..build, run: ["x", padding.concat("x")] }
+			} else build,
+		),
+	}
+	locks = plan_locks?
+	plan = NixBackend.plan(
+		at_limit,
+		Request.Workflow("limit"),
+		"x86_64-linux",
+		TestData.layout,
+		locks,
+	)?
+	diagnostic = "workflow plan exceeds 16 MiB of distinct rendered requests"
+	plan.steps.len() == 2 and plan.steps.all(
+		|step| match step.files.first() {
+			Ok(flake) => flake.contents.to_utf8().len()
+				+ step.argv.fold(0, |n, arg| n + arg.to_utf8().len()) == 16777216
+			Err(_) => False
+		},
+	) and Project.validate(over_limit).is_ok() and NixBackend.preflight(
+		at_limit,
+		Request.Workflow("limit"),
+		"x86_64-linux",
+		TestData.layout,
+	) == Ok({}) and NixBackend.preflight(
+		over_limit,
+		Request.Workflow("limit"),
+		"x86_64-linux",
+		TestData.layout,
+	) == Err(diagnostic) and NixBackend.plan(
+		over_limit,
+		Request.Workflow("limit"),
+		"x86_64-linux",
+		TestData.layout,
+		locks,
+	).map_ok(|sequence| sequence.steps) == Err(diagnostic)
+}
+
+# The shared renderer charges every actual byte, including escaped Raw,
+# environment/system scaffolding and command argv: exact fits, one less fails.
+expect {
+	project = Project.validate({
+		..workflow_project,
+		systems: NixBackend.supported_systems,
+		requires_: workflow_project.requires_.append("raw"),
+		raw: [
+			{
+				backend: "nix",
+				target: "flake",
+				value: Value.Attrs([{ name: "note", value: Value.Str("é\n\\\"") }]),
+			},
+		],
+	})?
+	request = Request.Run("check", ["", "é\n\\\"", "--"])
+	unlimited = NixBackend.prepare_atomic(
+		project,
+		request,
+		"x86_64-linux",
+		TestData.layout,
+		Unlimited,
+	)?
+	bytes = unlimited.contents.to_utf8().len()
+		+ unlimited.argv.fold(0, |n, arg| n + arg.to_utf8().len())
+	NixBackend.prepare_atomic(
+		project,
+		request,
+		"x86_64-linux",
+		TestData.layout,
+		Limited(bytes),
+	) == Ok(unlimited) and NixBackend.prepare_atomic(
+		project,
+		request,
+		"x86_64-linux",
+		TestData.layout,
+		Limited(bytes - 1),
+	) == Err("workflow plan exceeds 16 MiB of distinct rendered requests")
+}
+
+# Nested workflows preserve order, repetitions, argv, files and operations
+# exactly: each returned step equals its independently requested atomic plan.
+expect {
+	sequence = workflow_plan(Request.Workflow("ci"))?
+	library = workflow_plan(Request.Build("library"))?
+	edit = workflow_plan(
+		Request.Run("check", ["", "two words", "--literal", "a\nb", "$HOME"]),
+	)?
+	check = workflow_plan(Request.Run("check", []))?
+	bundle = workflow_plan(Request.Build("bundle"))?
+	sequence.steps == library.steps.concat(edit.steps).concat(check.steps)
+		.concat(bundle.steps).concat(check.steps).concat(bundle.steps)
+		.concat(bundle.steps)
+		and sequence.steps.map(|step| step.action) == [
+			Build("library"),
+			Run("check"),
+			Run("check"),
+			Build("bundle"),
+			Run("check"),
+			Build("bundle"),
+			Build("bundle"),
+		]
+}
+
+# Diamond dependencies occur once per build operation, not once per workflow.
+# Every explicit build snapshots again, even consecutive builds of one name.
+expect {
+	sequence = workflow_plan(Request.Workflow("ci"))?
+	sequence.steps.map(|step| step.artifacts.map(|artifact| artifact.name)) == [
+		["library"],
+		[],
+		[],
+		["library", "app", "other", "bundle"],
+		[],
+		["library", "app", "other", "bundle"],
+		["library", "app", "other", "bundle"],
+	] and sequence.steps.map(
+		|step| step.operations.keep_if(
+			|operation| match operation {
+				Snapshot(_) => True
+				VerifyLocal(_) => False
+			},
+		).len(),
+	) == [1, 0, 0, 1, 0, 1, 1]
+}
+
+# Each step reverifies local pins before staging; all derived locks are equal
+# and none of the planned writes replaces the caller's authority.
+expect {
+	locks = plan_locks?
+	before = Locks.encode(locks)
+	sequence = workflow_plan(Request.Workflow("ci"))?
+	atomic = workflow_plan(Request.Build("library"))?
+	match atomic.steps {
+		[library] => sequence.steps.all(
+			|step| step.operations.first() == library.operations.first()
+				and step.files.last() == library.files.last()
+					and !step.files.any(
+						|file| file.path == TestData.layout.lock_path,
+					),
+		) and Locks.encode(locks) == before
+		_ => False
+	}
+}
+
+# A selected task-only workflow ignores unrelated valid Guix environments.
+# Selecting that environment later in a nested workflow rejects the whole plan.
+expect {
+	data = {
+		..TestData.workflow_data,
+		sources: [{ name: "guix", provider: GuixPackages("channels") }],
+		environments: [TestData.builder, foreign],
+		tasks: TestData.data.tasks.append(
+			{ name: "foreign", environment: "foreign", run: ["python"] },
+		),
+		workflows: TestData.workflow_data.workflows.concat([
+			{
+				name: "later",
+				steps: [RunWorkflow("one"), RunWorkflow("foreign")],
+			},
+			{ name: "foreign", steps: [RunTask("foreign", [])] },
+		]),
+	}
+	project = TestData.project(data)
+	locks = Locks.from_nix(project, TestData.layout, native_lock)?
+	first = NixBackend.plan(
+		project,
+		Request.Workflow("one"),
+		"x86_64-linux",
+		TestData.layout,
+		locks,
+	)?
+	later = NixBackend.plan(
+		project,
+		Request.Workflow("later"),
+		"x86_64-linux",
+		TestData.layout,
+		locks,
+	)
+	first.steps.map(|step| step.action) == [Run("check")]
+		and later.is_err() and later.map_ok(|plan| plan.steps) == NixBackend.plan(
+			project,
+			Request.Run("foreign", []),
+			"x86_64-linux",
+			TestData.layout,
+			locks,
+		).map_ok(|plan| plan.steps)
+			and NixBackend.preflight(
+				project,
+				Request.Workflow("later"),
+				"x86_64-linux",
+				TestData.layout,
+			).is_err()
+}
+
+# A later build's transitive dependency provider is checked before returning
+# even the valid first task, not just the explicitly named build environment.
+expect {
+	project = TestData.project({
+		..TestData.workflow_data,
+		sources: [{ name: "guix", provider: GuixPackages("channels") }],
+		environments: [TestData.builder, foreign],
+		builds: [
+			TestData.application,
+			{ ..TestData.library, environment: "foreign" },
+		],
+		workflows: [
+			{ name: "ci", steps: [RunTask("check", []), BuildArtifact("app")] },
+		],
+	})
+	locks = Locks.from_nix(project, TestData.layout, native_lock)?
+	first = NixBackend.plan(
+		project,
+		Request.Run("check", []),
+		"x86_64-linux",
+		TestData.layout,
+		locks,
+	)?
+	later = NixBackend.plan(
+		project,
+		Request.Workflow("ci"),
+		"x86_64-linux",
+		TestData.layout,
+		locks,
+	)
+	first.steps.map(|step| step.action) == [Run("check")]
+		and later.is_err() and later.map_ok(|plan| plan.steps) == NixBackend.plan(
+			project,
+			Request.Build("app"),
+			"x86_64-linux",
+			TestData.layout,
+			locks,
+		).map_ok(|plan| plan.steps)
+			and NixBackend.preflight(
+				project,
+				Request.Workflow("ci"),
+				"x86_64-linux",
+				TestData.layout,
+			).is_err()
+}
+
+# A task-safe layout can collide only with a later build's generated runner.
+# Full preflight and planning must catch that collision before the first task.
+expect {
+	project = TestData.project({
+		..TestData.workflow_data,
+		workflows: [
+			{ name: "ci", steps: [RunTask("check", []), BuildArtifact("app")] },
+		],
+	})
+	layout = { ..TestData.layout, workspace: "/generated/build-runner.py" }
+	locks = plan_locks?
+	NixBackend.preflight(
+		project,
+		Request.Run("check", []),
+		"x86_64-linux",
+		layout,
+	) == Ok({}) and NixBackend.plan(
+		project,
+		Request.Run("check", []),
+		"x86_64-linux",
+		layout,
+		locks,
+	).is_ok() and NixBackend.preflight(
+		project,
+		Request.Workflow("ci"),
+		"x86_64-linux",
+		layout,
+	) == Err("generated files, snapshot and authority must not overlap")
+		and NixBackend.plan(
+			project,
+			Request.Workflow("ci"),
+			"x86_64-linux",
+			layout,
+			locks,
+		).map_ok(|plan| plan.steps) ==
+			Err("generated files, snapshot and authority must not overlap")
+}
+
+# Task-compatible target selection cannot hide a later unsupported build.
+expect {
+	project = { ..workflow_project, systems: ["aarch64-darwin"] }
+	locks = plan_locks?
+	NixBackend.plan(
+		project,
+		Request.Run("check", []),
+		"aarch64-darwin",
+		TestData.layout,
+		locks,
+	).is_ok() and NixBackend.plan(
+		project,
+		Request.Workflow("verify"),
+		"aarch64-darwin",
+		TestData.layout,
+		locks,
+	).map_ok(|plan| plan.steps) ==
+		Err("sandboxed builds currently require target x86_64-linux")
+		and NixBackend.preflight(
+			project,
+			Request.Workflow("verify"),
+			"aarch64-darwin",
+			TestData.layout,
+		) == Err("sandboxed builds currently require target x86_64-linux")
+}
+
+# Missing or cyclic later build dependencies are whole-project failures,
+# never partial plans that leave a valid first task available to execute.
+expect {
+	locks = plan_locks?
+	[
+		{ ..TestData.library, needs: ["missing"] },
+		{ ..TestData.library, needs: ["app"] },
+	].all(
+		|library| {
+			project = TestData.project({
+				..TestData.workflow_data,
+				builds: [TestData.application, library],
+				workflows: [
+					{
+						name: "ci",
+						steps: [RunTask("check", []), BuildArtifact("app")],
+					},
+				],
+			})
+			NixBackend.preflight(
+				project,
+				Request.Workflow("ci"),
+				"x86_64-linux",
+				TestData.layout,
+			).is_err() and NixBackend.plan(
+				project,
+				Request.Workflow("ci"),
+				"x86_64-linux",
+				TestData.layout,
+				locks,
+			).is_err()
+		},
+	)
+}
+
+# A changed source needed by a later build rejects the supplied authority
+# after successful pure preflight; planning cannot return a runnable prefix.
+expect {
+	project = {
+		..workflow_project,
+		build_sources: [{ name: "assets", ref: "path:./changed-assets" }],
+	}
+	NixBackend.preflight(
+		project,
+		Request.Workflow("verify"),
+		"x86_64-linux",
+		TestData.layout,
+	) == Ok({}) and match NixBackend.plan(
+		project,
+		Request.Workflow("verify"),
+		"x86_64-linux",
+		TestData.layout,
+		plan_locks?,
+	) {
+		Err(message) => message.contains("update")
+		Ok(_) => False
+	}
+}
+
+# Empty workflows, including nested empty expansion, return zero steps rather
+# than an invented Generate request or a requirement to select an environment.
+expect ["empty", "nothing"].all(
+	|name| workflow_plan(Request.Workflow(name))
+		.map_ok(|plan| plan.steps) == Ok([])
+		and NixBackend.preflight(
+			workflow_project,
+			Request.Workflow(name),
+			"x86_64-linux",
+			TestData.layout,
+		) == Ok({}),
+)
+
+# Empty expansion skips unrelated provider capability checks, not global
+# required features, Raw, extensions, target declarations or semantic validity.
+expect {
+	project = TestData.project({
+		..TestData.workflow_data,
+		sources: [{ name: "guix", provider: GuixPackages("channels") }],
+		environments: [TestData.builder, foreign],
+	})
+	locks = Locks.from_nix(project, TestData.layout, native_lock)?
+	NixBackend.plan(
+		project,
+		Request.Workflow("empty"),
+		"x86_64-linux",
+		TestData.layout,
+		locks,
+	).map_ok(|plan| plan.steps) == Ok([]) and [
+		{
+			..project,
+			raw: [{ backend: "nix", target: "missing", value: Value.Attrs([]) }],
+		},
+		{
+			..project,
+			extensions: [{ kind: "service", name: "db", value: Value.Attrs([]) }],
+		},
+		{ ..project, systems: ["x86_64-linux", "riscv64-linux"] },
+		{ ..project, tasks: [{ name: "bad", environment: "missing", run: ["x"] }] },
+	].all(
+		|invalid| NixBackend.preflight(
+			invalid,
+			Request.Workflow("empty"),
+			"x86_64-linux",
+			TestData.layout,
+		).is_err() and NixBackend.plan(
+			invalid,
+			Request.Workflow("empty"),
+			"x86_64-linux",
+			TestData.layout,
+			locks,
+		).is_err(),
+	)
+}
+
+# Keep all known markers so this no-op reaches backend feature preflight,
+# rather than failing structural validation for missing build/workflow markers.
+expect {
+	project = {
+		..workflow_project,
+		requires_: workflow_project.requires_.append("future"),
+	}
+	Project.validate(project).is_ok() and NixBackend.preflight(
+		project,
+		Request.Workflow("empty"),
+		"x86_64-linux",
+		TestData.layout,
+	) == Err("unsupported features: future") and NixBackend.plan(
+		project,
+		Request.Workflow("empty"),
+		"x86_64-linux",
+		TestData.layout,
+		plan_locks?,
+	).map_ok(|plan| plan.steps) == Err("unsupported features: future")
+}
+
+# No-op workflows still require a declared target, a safe caller layout and
+# matching authority; absence of runnable steps never bypasses global checks.
+expect {
+	locks = plan_locks?
+	unsafe = { ..TestData.layout, generated_root: "/work/snapshot/nix" }
+	changed = {
+		..workflow_project,
+		build_sources: [{ name: "assets", ref: "path:./changed-assets" }],
+	}
+	NixBackend.preflight(
+		workflow_project,
+		Request.Workflow("empty"),
+		"aarch64-linux",
+		TestData.layout,
+	).is_err() and NixBackend.plan(
+		workflow_project,
+		Request.Workflow("empty"),
+		"aarch64-linux",
+		TestData.layout,
+		locks,
+	).is_err() and NixBackend.preflight(
+		workflow_project,
+		Request.Workflow("empty"),
+		"x86_64-linux",
+		unsafe,
+	).is_err() and NixBackend.plan(
+		workflow_project,
+		Request.Workflow("empty"),
+		"x86_64-linux",
+		unsafe,
+		locks,
+	).is_err() and NixBackend.plan(
+		changed,
+		Request.Workflow("empty"),
+		"x86_64-linux",
+		TestData.layout,
+		locks,
+	).is_err()
+}
+
+# Unknown workflows, bad nested references, cycles and NUL extras are rejected
+# through the backend boundary even when callers did not validate the IR first.
+expect {
+	locks = plan_locks?
+	workflow_plan(Request.Workflow("missing")).is_err() and [
+		[RunWorkflow("missing")],
+		[RunWorkflow("ci")],
+		[RunTask("missing", [])],
+		[BuildArtifact("missing")],
+		[RunTask("check", [Str.from_utf8([0]) ?? ""])],
+	].all(
+		|steps| {
+			project = { ..workflow_project, workflows: [{ name: "ci", steps }] }
+			NixBackend.preflight(
+				project,
+				Request.Workflow("ci"),
+				"x86_64-linux",
+				TestData.layout,
+			).is_err() and NixBackend.plan(
+				project,
+				Request.Workflow("ci"),
+				"x86_64-linux",
+				TestData.layout,
+				locks,
+			).is_err()
+		},
+	)
 }

@@ -45,7 +45,10 @@ plan = |ir, request, target, paths| NixBackend.plan(
 files : {} -> Try(List(Plan.File), Str)
 files = |_| {
 	planned = plan(project(wire)?, Request.Generate, "x86_64-linux", layout)?
-	Ok(planned.files)
+	match planned.steps {
+		[step] => Ok(step.files)
+		_ => Err("Generate must produce one step")
+	}
 }
 
 # B2 emits unused Auto too; alias it to the existing identical nixpkgs pin.
@@ -93,9 +96,10 @@ expect match files({}) {
 
 # Generate needs neither backend commands nor filesystem observations here.
 expect match plan(project(wire)?, Request.Generate, "x86_64-linux", layout) {
-	Ok(planned) => planned.argv.is_empty() and planned.operations.is_empty()
-		and planned.artifacts.is_empty()
-	Err(_) => False
+	Ok({ steps: [step] }) => step.action == Generate
+		and step.argv.is_empty() and step.operations.is_empty()
+			and step.artifacts.is_empty()
+	_ => False
 }
 
 # Native locks and malformed authorities cannot bypass the decoding protocol.
@@ -110,13 +114,13 @@ expect match plan(
 	"x86_64-linux",
 	layout,
 ) {
-	Ok(planned) => match planned.files.first() {
+	Ok({ steps: [step] }) => match step.files.first() {
 		Ok(file) => file.contents.contains("\"blueprint-env-base\"")
 			and !file.contents.contains("\"blueprint-env-dev\"")
 				and !file.contents.contains("llvmPackages")
 		Err(_) => False
 	}
-	Err(_) => False
+	_ => False
 }
 
 # Staging cannot quietly select an undeclared target.
@@ -197,19 +201,22 @@ expect {
 		"x86_64-linux",
 		layout,
 	)?
-	planned.argv == [
-		"nix",
-		"develop",
-		"--no-update-lock-file",
-		"--no-write-lock-file",
-		"path:/consumer/work/generated#devShells.x86_64-linux.blueprint-env-base",
-		"--command",
-		"printf",
-		"%s",
-		"two words",
-		"",
-		"--literal",
-	]
+	match planned.steps {
+		[step] => step.action == Run("print") and step.argv == [
+			"nix",
+			"develop",
+			"--no-update-lock-file",
+			"--no-write-lock-file",
+			"path:/consumer/work/generated#devShells.x86_64-linux.blueprint-env-base",
+			"--command",
+			"printf",
+			"%s",
+			"two words",
+			"",
+			"--literal",
+		]
+		_ => False
+	}
 }
 
 # Switching the selected closure preserves both lock bytes and authority.
@@ -217,8 +224,50 @@ expect {
 	ir = project(wire)?
 	all = plan(ir, Request.Generate, "x86_64-linux", layout)?
 	selected = plan(ir, Request.Shell("ci"), "x86_64-linux", layout)?
-	all.files.last() == selected.files.last()
-		and Locks.decode(authority).map_ok(Locks.encode) == Ok(authority)
+	match (all.steps, selected.steps) {
+		([full], [shell]) => full.files.last() == shell.files.last()
+			and Locks.decode(authority).map_ok(Locks.encode) == Ok(authority)
+		_ => False
+	}
+}
+
+# Consumers receive the entire ordered workflow through the same pure API.
+# Nested repetitions equal standalone steps without a Blueprint subprocess.
+expect {
+	ir = project(wire)?
+	workflow_project = {
+		..ir,
+		requires_: ir.requires_.append("workflows"),
+		tasks: [{ name: "print", environment: "base", run: ["printf", "%s"] }],
+		workflows: [
+			{
+				name: "ci",
+				steps: [RunWorkflow("print"), RunWorkflow("print")],
+			},
+			{
+				name: "print",
+				steps: [RunTask("print", ["two words", "", "--literal"])],
+			},
+		],
+	}
+	atomic = plan(
+		workflow_project,
+		Request.Run("print", ["two words", "", "--literal"]),
+		"x86_64-linux",
+		layout,
+	)?
+	sequence = plan(
+		workflow_project,
+		Request.Workflow("ci"),
+		"x86_64-linux",
+		layout,
+	)?
+	match atomic.steps {
+		[step] => sequence.steps == [step, step]
+			and step.action == Run("print")
+				and Locks.decode(authority).map_ok(Locks.encode) == Ok(authority)
+		_ => False
+	}
 }
 
 main! = |_args| {

@@ -42,6 +42,7 @@ Command : [
 	Shell(Str),
 	Run({ task : Str, args : List(Str) }),
 	Build(Str),
+	Workflow(Str),
 	Tasks,
 	Update,
 	Check,
@@ -79,6 +80,13 @@ cli_for = |loaded| {
 			description: "Build a sandboxed artifact and its dependencies",
 			mapper: |c| c,
 		},
+	)
+	workflow_cmd = SubCmd.finish(
+		Cli.map(
+			Param.str({ name: "name", help: "The ordered workflow to execute.", default: NoDefault }),
+			|name| Workflow(name),
+		),
+		{ name: "workflow", description: "Execute an ordered task/build workflow", mapper: |c| c },
 	)
 	build_cmd = match loaded {
 		Ok(ir) if !ir.builds.is_empty() => SubCmd.finish(
@@ -142,6 +150,7 @@ cli_for = |loaded| {
 				shell_cmd,
 				run_cmd,
 				build_cmd,
+				workflow_cmd,
 				SubCmd.empty({ name: "tasks", description: "List the tasks", value: Tasks }),
 				SubCmd.empty({ name: "update", description: "Update Blueprint.lock to the latest inputs", value: Update }),
 				SubCmd.empty({ name: "check", description: "Validate Blueprint.roc", value: Check }),
@@ -223,6 +232,7 @@ run! = |command, loaded, context| {
 				Shell(name) => execute_request!(ir, Request.Shell(name), ctx)
 				Run({ task, args }) => execute_request!(ir, Request.Run(task, args), ctx)
 				Build(name) => execute_request!(ir, Request.Build(name), ctx)
+				Workflow(name) => execute_request!(ir, Request.Workflow(name), ctx)
 				Tasks => list_tasks!(ir)
 				Update => update!(ir, ctx)
 				PrintIr => Stdout.write!(ir.to_str())
@@ -455,7 +465,17 @@ execute_request! = |ir, request, ctx| {
 		.map_err(|message| LockFailed(message))?
 	plan = NixBackend.plan(ir, request, ctx.target, layout, locks)
 		.map_err(|message| RenderFailed(message))?
-	for operation in plan.operations {
+	for step in plan.steps {
+		execute_step!(step, layout)?
+	}
+	Ok({})
+}
+
+## One consumer-owned executor for standalone requests and workflow steps.
+## All planning has succeeded before the first materialization or task effect.
+execute_step! : Plan.Step, Layout => Try({}, _)
+execute_step! = |step, layout| {
+	for operation in step.operations {
 		match operation {
 			VerifyLocal({ path: local, nar_hash }) => {
 				safe_source!(local)?
@@ -480,13 +500,13 @@ execute_request! = |ir, request, ctx| {
 			}
 		}
 	}
-	stage!(plan.files, layout)?
-	match request {
-		Request.Build(name) => report_build!(plan, name, layout.project_root)
-		_ => exec!(plan.argv, layout.project_root).map_err(
+	stage!(step.files, layout)?
+	match step.action {
+		Build(name) => report_build!(step, name, layout.project_root)
+		_ => exec!(step.argv, layout.project_root).map_err(
 			|err|
-				match (request, err) {
-					(Request.Run(name, _), CommandFailed(_, code)) => TaskFailed(name, code)
+				match (step.action, err) {
+					(Run(name), CommandFailed(_, code)) => TaskFailed(name, code)
 					_ => err
 				},
 		)
@@ -495,7 +515,7 @@ execute_request! = |ir, request, ctx| {
 
 ## Resolve the selected installable with the exact planned build command.
 ## Dependency metadata stays descriptive; no store paths are guessed for it.
-report_build! : Plan, Str, Str => Try({}, _)
+report_build! : Plan.Step, Str, Str => Try({}, _)
 report_build! = |plan, name, root| {
 	for artifact in plan.artifacts {
 		Stderr.line!(

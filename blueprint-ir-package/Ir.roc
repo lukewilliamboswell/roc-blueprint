@@ -1,3 +1,4 @@
+# Canonical configuration data and its versioned, optional-field wire codec.
 import Sexpr
 import Value
 
@@ -20,6 +21,18 @@ Ir := {
 	tasks : List({ name : Str, environment : Str, run : List(Str) }),
 	build_sources : List({ name : Str, ref : Str }),
 	builds : List({ name : Str, environment : Str, inputs : List(Str), needs : List(Str), run : List(Str), output : Str }),
+	workflows : List(
+		{
+			name : Str,
+			steps : List(
+				[
+					RunTask(Str, List(Str)),
+					BuildArtifact(Str),
+					RunWorkflow(Str),
+				],
+			),
+		},
+	),
 	extensions : List({ kind : Str, name : Str, value : Value }),
 	raw : List({ backend : Str, target : Str, value : Value }),
 }.{
@@ -41,11 +54,19 @@ Ir := {
 	## Run is exact argv. Output is a relative file or directory path; dependencies
 	## expose only that artifact, separately from the writable project snapshot.
 	Build : { name : Str, environment : Str, inputs : List(Str), needs : List(Str), run : List(Str), output : Str }
+
+	## Ordered declarations, not command strings or executor recipes.
+	Workflow : { name : Str, steps : List(WorkflowStep) }
+	WorkflowStep : [RunTask(Str, List(Str)), BuildArtifact(Str), RunWorkflow(Str)]
+
+	## Expansion retains repetitions and extra argv without shell parsing.
+	AtomicStep : [RunTask(Str, List(Str)), BuildArtifact(Str)]
+
 	Extension : { kind : Str, name : Str, value : Value }
 	Raw : { backend : Str, target : Str, value : Value }
 
 	current_format : Format
-	current_format = { major: 2, minor: 1 }
+	current_format = { major: 2, minor: 2 }
 
 	empty : Str -> Ir
 	empty = |name| Ir.{
@@ -60,6 +81,7 @@ Ir := {
 		tasks: [],
 		build_sources: [],
 		builds: [],
+		workflows: [],
 		extensions: [],
 		raw: [],
 	}
@@ -90,6 +112,7 @@ Ir := {
 				tasks: wire.tasks ?? [],
 				build_sources: wire.build_sources ?? [],
 				builds: wire.builds ?? [],
+				workflows: wire.workflows ?? [],
 				extensions: wire.extensions ?? [],
 				raw: wire.raw ?? [],
 			},
@@ -112,6 +135,7 @@ Wire : {
 	tasks : Try(List(Ir.Task), [Missing]),
 	build_sources : Try(List(Ir.BuildSource), [Missing]),
 	builds : Try(List(Ir.Build), [Missing]),
+	workflows : Try(List(Ir.Workflow), [Missing]),
 	extensions : Try(List(Ir.Extension), [Missing]),
 	raw : Try(List(Ir.Raw), [Missing]),
 }
@@ -119,8 +143,11 @@ Wire : {
 expect Ir.parse(Ir.empty("x").to_str()) == Ok(Ir.empty("x"))
 expect Ir.parse("((format ((major 1) (minor 0))) (shells 42))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
 expect Ir.parse("((format ((major 3) (minor 0))))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))
+# Earlier minor records omit newer optional build and workflow fields.
 expect match Ir.parse("((format ((major 2) (minor 0))) (name \"x\"))") {
-	Ok(ir) => ir.format == { major: 2, minor: 0 } and ir.build_sources.is_empty() and ir.builds.is_empty()
+	Ok(ir) => ir.format == { major: 2, minor: 0 } and
+		ir.build_sources.is_empty() and ir.builds.is_empty() and
+			ir.workflows.is_empty()
 	Err(_) => False
 }
 expect Ir.parse("((format ((major 2) (minor 0))))").is_err()
@@ -135,3 +162,44 @@ expect match Ir.parse("((future (Tag 1)) (format ((major 2) (minor 99))) (name \
 	Ok(ir) => ir.format.minor == 99 and ir.shells == [{ name: "s", environment: "dev" }]
 	Err(_) => False
 }
+
+# An older consumer must reject workflows via the required-feature marker.
+expect match Ir.parse(
+	\\((format ((major 2) (minor 2))) (name "x")
+	\\ (requires ("workflows")) (workflows (((name "ci") (steps ())))))
+	,
+) {
+	Ok(ir) => ir.workflows == [{ name: "ci", steps: [] }] and
+		Ir.unsupported_features(ir, ["sources", "builds"]) == ["workflows"]
+	Err(_) => False
+}
+
+# Omitted workflow fields remain compatible with both earlier minor versions.
+expect ["0", "1"].all(
+	|minor|
+		match Ir.parse("((format ((major 2) (minor ${minor}))) (name \"x\"))") {
+			Ok(ir) => ir.workflows == []
+			Err(_) => False
+		},
+)
+
+# Unknown step tags cannot be silently dropped as optional top-level data.
+expect Ir.parse(
+	\\((format ((major 2) (minor 2))) (name "x")
+	\\ (workflows (((name "ci") (steps ((FutureStep "check")))))))
+	,
+).is_err()
+
+# Task extra argv is required in every RunTask record on the wire.
+expect Ir.parse(
+	\\((format ((major 2) (minor 2))) (name "x")
+	\\ (workflows (((name "ci") (steps ((RunTask "check")))))))
+	,
+).is_err()
+
+# A workflow must contain a typed steps list, even when intentionally empty.
+expect Ir.parse(
+	\\((format ((major 2) (minor 2))) (name "x")
+	\\ (workflows (((name "ci")))))
+	,
+).is_err()

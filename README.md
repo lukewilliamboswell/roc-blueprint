@@ -4,13 +4,13 @@
   <img src="docs/blueprint-gemini-gen.jpeg" alt="Blueprint illustration of robotic arms" width="560">
 </p>
 
-Describe reusable environments, argv tasks and sandboxed artifact builds in
-`Blueprint.roc`. The reference CLI executes pure Nix plans.
+Describe reusable environments, argv tasks, sandboxed artifact builds and ordered
+workflows in `Blueprint.roc`. The reference CLI executes pure Nix plans.
 
-**Development API (B2, IR 2.1):** these examples use the local source
+**Development API (B3, IR 2.2):** these examples use the local source
 platform, not the latest published release. This snapshot is source-only and
 not release-qualified; the pinned released-IR bundle gate is expected to block
-until an actual compatible IR release exists. See [B2 boundaries](docs/b2.md).
+until an actual compatible IR release exists. See [B3 API](docs/b3.md).
 
 ```roc
 # Blueprint.roc at the repository root
@@ -95,6 +95,7 @@ settings:
 | `Task(TaskName, List(TaskSetting))` | Named argv command with exactly one `Use(environment)` and one `Run(argv)`. No shell alias is required. |
 | `Source(InputName, FlakeRef)` | Locked non-flake input, e.g. `Source("assets", "path:./assets")`. |
 | `Build(InputName, List(BuildSetting))` | Sandboxed artifact with required `Use`, exact argv `Run`, relative `Output`; optional `Inputs` and `Needs`. |
+| `Workflow(WorkflowName, List(WorkflowStep))` | Ordered `RunTask(name, extra_argv)`, `BuildArtifact(name)` and `RunWorkflow(name)` steps. |
 | `Raw(backend, target, Val)` | Backend-specific data; see below. |
 | `Custom(kind, name, Val)` | Extension data. The current CLI rejects unsupported extensions. |
 
@@ -161,6 +162,24 @@ source/output policy rejects symlinks and special files. Only local x86_64 Linux
 sandboxed execution is verified; tasks/config compilation are not sandboxed.
 See the [real build fixture](fixtures/builds/README.md) and [API](docs/b2.md).
 
+### Ordered workflows
+
+Inside `config`, referring to existing tasks and builds:
+
+```roc
+Workflow("ci", [RunTask("check", ["--verbose"]), BuildArtifact("app"), RunWorkflow("verify")]),
+Workflow("verify", [RunTask("version", [])]),
+```
+
+`blueprint workflow ci` plans the complete dependency/capability/layout/lock
+closure before executing any task. Steps run in order and stop on the first
+failure. Repeated explicit tasks and builds repeat; every build snapshots current
+project files and rebuilds its dependency graph from that snapshot. Nix may reuse
+unchanged inputs, but Blueprint never caches artifact results across tasks.
+Locked sources are verified again; task edits to them require explicit update.
+Cycles and excessive depth/expansion fail during configuration validation.
+See the [real workflow fixture](fixtures/workflows/README.md) and [limits/API](docs/b3.md).
+
 ### Raw settings
 
 The Nix backend accepts attribute data at two targets:
@@ -191,6 +210,7 @@ Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 | `blueprint shell [NAME]` | Generate the selected alias's environment, then enter it (default alias `default`) |
 | `blueprint run TASK [-- ARGS...]` | Generate the task's environment, then run its argv with extra arguments |
 | `blueprint build NAME` | Snapshot and build an artifact plus dependencies; print its actual store path |
+| `blueprint workflow NAME` | Execute an ordered task/build workflow, stopping on failure |
 | `blueprint tasks` | List tasks and their environments |
 | `blueprint update` | Explicitly initialize/update and atomically publish the authoritative lock |
 | `blueprint check` | Run the compiler check and validate all shell/task/build environments without requiring a lock |
@@ -204,7 +224,7 @@ structural validation and required-feature checks still apply. Full rendering
 
 - **Commit** `Blueprint.roc` and the authority (default `Blueprint.lock`);
   **ignore** generated state (default `.blueprint/`).
-- Normal `gen`, `shell`, `run` and `build` require matching pins and never
+- Normal `gen`, `shell`, `run`, `build` and `workflow` require matching pins and never
   rewrite authority or independently update derived locks. B1 raw locks need
   an explicit `update` to become the validated versioned B2 envelope.
 - **`BLUEPRINT_WORKSPACE`**, **`BLUEPRINT_GENERATED_ROOT`**, **`BLUEPRINT_LOCK`**
@@ -212,17 +232,17 @@ structural validation and required-feature checks still apply. Full rendering
   root, not the invocation directory. Out-of-tree generated roots are supported.
 - **`BLUEPRINT_TARGET`** selects a declared target (default `x86_64-linux`).
   **`ROC`** selects the pinned compatible compiler; the Nix wrapper supplies it.
-- Workflows (B3) and handoff qualification (B4) remain pending. No `workflow`
-  command or Guix executor is implemented.
+- Handoff qualification (B4) remains pending. No Guix executor or parallel
+  workflow scheduler is implemented.
 
 ## How it works
 
 The platform lowers and validates the whole config at top level, then prints
-IR 2.1 as an S-expression. The CLI invokes Roc, parses and revalidates that
+IR 2.2 as an S-expression. The CLI invokes Roc, parses and revalidates that
 IR through the shared pure `Project` boundary, explicitly selects Nix, and
 owns file writes, locking and execution. The importable core and Nix renderer
 perform no host discovery or effects.
 
-See [B2 API and guarantees](docs/b2.md), [B1 history](docs/b1.md),
+See [B3 API and validation](docs/b3.md), [B2 build guarantees](docs/b2.md), [B1 history](docs/b1.md),
 [examples](examples/README.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md).

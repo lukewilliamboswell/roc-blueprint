@@ -24,14 +24,15 @@
 ## `Bool`, `List` and `Attrs` (a list of (name, value) pairs).
 ##
 ## Every quoted value is checked as it compiles, through the `from_quote` of
-## `Tool`, `System`, `FlakeRef`, `InputName`, `EnvName` or `TaskName`.
+## `Tool`, `System`, `FlakeRef`, `InputName`, `EnvName`, `TaskName`, or
+## `WorkflowName`.
 ## Whole-config rules, including missing names and duplicate shells, are
 ## also checked at compile time by lowering `config` to the rendered IR.
 platform ""
 	requires {
 		config : List(Config.Setting)
 	}
-	exposes [Config, EnvName, FlakeRef, InputName, System, TaskName, Tool, Val]
+	exposes [Config, EnvName, FlakeRef, InputName, System, TaskName, Tool, Val, WorkflowName]
 	packages {
 		ir: "../blueprint-ir-package/main.roc",
 	}
@@ -56,6 +57,7 @@ import InputName
 import System
 import TaskName
 import Val
+import WorkflowName
 import ir.Ir
 
 # Keep lowering at the top level so `roc check` validates the whole config.

@@ -1,3 +1,4 @@
+# Authoring cardinality checks feed the shared whole-project validator.
 import Config
 import Val
 import ir.Ir
@@ -17,6 +18,7 @@ Lower :: [].{
 		tasks : List(Ir.Task),
 		build_sources : List(Ir.BuildSource),
 		builds : List(Ir.Build),
+		workflows : List(Ir.Workflow),
 		extensions : List(Ir.Extension),
 		raw : List(Ir.Raw),
 	}
@@ -28,7 +30,7 @@ Lower :: [].{
 	lower : List(Config.Setting) -> Try(Ir, Str)
 	lower = |settings| {
 		initial : Acc
-		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], shells: [], tasks: [], build_sources: [], builds: [], extensions: [], raw: [] }
+		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
 		acc = settings.fold(Ok(initial), |result, setting| add(result?, setting))?
 		name = match acc.names {
 			[] => return Err("MissingName: declare Name once")
@@ -45,6 +47,7 @@ Lower :: [].{
 				.concat(if acc.raw.is_empty() [] else ["raw"])
 				.concat(if acc.build_sources.is_empty() [] else ["sources"])
 				.concat(if acc.builds.is_empty() [] else ["builds"])
+				.concat(if acc.workflows.is_empty() [] else ["workflows"])
 		Project.validate(
 			Ir.{
 				format: Ir.current_format,
@@ -58,6 +61,7 @@ Lower :: [].{
 				tasks: acc.tasks,
 				build_sources: acc.build_sources,
 				builds: acc.builds,
+				workflows: acc.workflows,
 				extensions: acc.extensions,
 				raw: acc.raw,
 			},
@@ -77,11 +81,26 @@ Lower :: [].{
 			Task(name, inner) => { ..acc, tasks: acc.tasks.append(task(name.to_str(), inner)?) }
 			Source(name, ref) => { ..acc, build_sources: acc.build_sources.append({ name: name.to_str(), ref: ref.to_str() }) }
 			Build(name, inner) => { ..acc, builds: acc.builds.append(build(name.to_str(), inner)?) }
+			Workflow(name, steps) => {
+				..acc,
+				workflows: acc.workflows.append({
+					name: name.to_str(),
+					steps: steps.map(workflow_step),
+				}),
+			}
 			Custom(kind, name, value) => { ..acc, extensions: acc.extensions.append({ kind, name, value: to_value(value) }) }
 			Raw(backend, target, value) => { ..acc, raw: acc.raw.append({ backend, target, value: to_value(value) }) }
 		}
 		Ok(next)
 	}
+
+	workflow_step : Config.WorkflowStep -> Ir.WorkflowStep
+	workflow_step = |step|
+		match step {
+			RunTask(name, argv) => RunTask(name.to_str(), argv)
+			BuildArtifact(name) => BuildArtifact(name.to_str())
+			RunWorkflow(name) => RunWorkflow(name.to_str())
+		}
 
 	provider : Config.PackageSource -> Ir.Provider
 	provider = |source|

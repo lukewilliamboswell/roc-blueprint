@@ -145,7 +145,9 @@ else:
 
     # These must work without Blueprint.roc: dropping argv[0] used to lose them.
     assert re.fullmatch(r"\d+\.\d+\.\d+(?:-\S+)?\s*", run("--version"))
-    assert "blueprint" in run("--help")
+    assert "workflow" in run("--help")
+    assert "workflow" in run("workflow", "--help")
+    run("workflow", status=2)
     run("unknown-command", status=2)
     assert "there is no Blueprint.roc" in run("tasks", status=1)
 
@@ -268,6 +270,9 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
         (shells (((name "default") (environment "ci"))))
         (tasks (((name "echo-args") (environment "ci") (run ("true"))))))'''
     environment = '((name "ci") (parents ()) (tools ()) (overlays ()))'
+    workflow = '((name "ci") (steps ((RunTask "echo-args" ()))))'
+    workflow_wire = (wire.replace("(minor 0)", "(minor 2)")[:-1]
+                     + f'(requires ("workflows")) (workflows ({workflow})))')
     rejected = [
         ("major-1", wire.replace("(major 2)", "(major 1)"), "IR format 1.0"),
         ("major-3", wire.replace("(major 2)", "(major 3)"), "IR format 3.0"),
@@ -282,6 +287,22 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
          "empty argv: echo-args"),
         ("empty-program", wire.replace('(run ("true"))', '(run (""))'),
          "empty argv: echo-args"),
+        ("workflow-marker", workflow_wire.replace(
+            '(requires ("workflows"))', ''),
+         "workflows require feature: workflows"),
+        ("workflow-tag", workflow_wire.replace('RunTask "echo-args" ()',
+                                              'FutureStep "echo-args"'),
+         "could not read the IR from Blueprint.roc"),
+        ("workflow-cycle", workflow_wire.replace(
+            workflow, workflow + ' ((name "unused") '
+            '(steps ((RunWorkflow "unused"))))'),
+         "workflow cycle: unused -> unused"),
+        ("workflow-requires", workflow_wire.replace(
+            '(requires ("workflows"))',
+            '(requires ("workflows" "workflows-v2"))'),
+         "needs features: workflows-v2"),
+        ("workflow-major", workflow_wire.replace('(major 2)', '(major 3)'),
+         "IR format 3.2"),
     ]
     for name, text, diagnostic in rejected:
         cwd = isolated(f"wire-{name}")
@@ -302,6 +323,17 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
     output = run("ir", cwd=cwd, overrides={"ROC": str(wire_roc)})
     assert "(minor 999)" in output, output
     assert '(name "wire")' in output, output
+    untouched(cwd)
+
+    # A future minor preserves known workflow steps, rather than ignoring them.
+    cwd = isolated("wire-workflow-future-minor")
+    (cwd / "Blueprint.roc").touch()
+    (cwd / "wire.scm").write_text(
+        workflow_wire.replace("(minor 2)", "(minor 999)")
+    )
+    output = run("ir", cwd=cwd, overrides={"ROC": str(wire_roc)})
+    assert "(minor 999)" in output and '(RunTask "echo-args" ())' in output
+    assert '(workflows (' in output, output
     untouched(cwd)
 
     # Request checks precede every Nix, workspace and lock effect. These use
@@ -390,5 +422,23 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
                                "configured argument")
         assert calls("nix", cwd) == [expected]
         assert calls("guix", cwd) == []
+
+    # The workflow executor consumes one complete plan, never reloads per step.
+    cwd = isolated("workflow-single-load")
+    settings(valid + '''Workflow("ci", [RunTask("echo-args", ["", "--"]),
+                                      RunWorkflow("again")]),
+        Workflow("again", [RunTask("echo-args", ["line\\nbreak", "a'b\\\"c"])]),''', cwd)
+    assert "unknown workflow: absent" in run("workflow", "absent", cwd=cwd, status=1)
+    untouched(cwd)
+    update(cwd)
+    (cwd / "roc-calls.jsonl").unlink()
+    run("workflow", "ci", cwd=cwd)
+    assert calls("roc", cwd) == [["version"], ["Blueprint.roc"]]
+    assert calls("nix", cwd) == [
+        develop(cwd, "blueprint-env-ci", "printf", "%s\n", "configured argument",
+                "", "--"),
+        develop(cwd, "blueprint-env-ci", "printf", "%s\n", "configured argument",
+                "line\nbreak", "a'b\"c"),
+    ]
 
 print("CLI compiler/loader, validation and stubbed process-boundary tests passed")

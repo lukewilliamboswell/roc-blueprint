@@ -96,6 +96,20 @@ build = {
 	output: Fuzz.str,
 }.Fuzz
 
+# Exercise every workflow tag with arbitrary literal argument bytes.
+workflow_step : Fuzz.Generator(Ir.WorkflowStep)
+workflow_step = Fuzz.map(
+	{ kind: Fuzz.u8_in(0, 2), name: Fuzz.str, argv: Fuzz.list(Fuzz.str, 4) }.Fuzz,
+	|r| match r.kind {
+		0 => RunTask(r.name, r.argv)
+		1 => BuildArtifact(r.name)
+		_ => RunWorkflow(r.name)
+	},
+)
+
+workflow : Fuzz.Generator(Ir.Workflow)
+workflow = { name: Fuzz.str, steps: Fuzz.list(workflow_step, 4) }.Fuzz
+
 extension : Fuzz.Generator(Ir.Extension)
 extension = {
 	kind: Fuzz.str,
@@ -124,6 +138,7 @@ ir_generator = Fuzz.map(
 		tasks: Fuzz.list(task, 3),
 		build_sources: Fuzz.list(build_source, 3),
 		builds: Fuzz.list(build, 3),
+		workflows: Fuzz.list(workflow, 3),
 		extensions: Fuzz.list(extension, 3),
 		raw: Fuzz.list(raw, 3),
 	}.Fuzz,
@@ -139,6 +154,7 @@ ir_generator = Fuzz.map(
 		tasks: r.tasks,
 		build_sources: r.build_sources,
 		builds: r.builds,
+		workflows: r.workflows,
 		extensions: r.extensions,
 		raw: r.raw,
 	},

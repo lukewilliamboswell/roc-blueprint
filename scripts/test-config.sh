@@ -15,10 +15,15 @@ fi
 valid=()
 invalid=()
 messages=()
+quote_invalid=()
+quote_messages=()
 fixture() {
 	printf 'app [config] { pf: platform "%s" }\n\nconfig = %s\n' "$PLATFORM" "$2" >"$WORK/$1.roc"
 	if [[ $# == 2 ]]; then
 		valid+=("$1")
+	elif [[ $# == 4 ]]; then
+		quote_invalid+=("$1")
+		quote_messages+=("$3")
 	else
 		invalid+=("$1")
 		messages+=("$3")
@@ -128,6 +133,66 @@ ROC
 printf 'app [config] { pf: platform "%s" }\nimport ProjectBuilds\nconfig = [Name("builds"), Environment("builder", []), Source("assets", "path:./assets")].concat(ProjectBuilds.settings)\n' "$PLATFORM" >"$WORK/ComposedBuilds.roc"
 valid+=(ComposedBuilds)
 
+# Typed workflow references preserve argv and repeated task/build operations.
+workflow_base='Name("workflows"), Environment("dev", []), Task("check.all", [Use("dev"), Run(["true"])]), Build("app", [Use("dev"), Run(["true"]), Output("out")])'
+workflow_steps='Workflow("ci", [RunWorkflow("leaf"), BuildArtifact("app"), RunWorkflow("leaf"), BuildArtifact("app")]), Workflow("leaf", [RunTask("check.all", ["", "two words", "\"quoted\"", "$HOME", "line\nbreak", "--flag"])])'
+fixture Workflows "[$workflow_base, $workflow_steps]"
+fixture EmptyWorkflow '[Name("empty"), Workflow("ci", [])]'
+fixture BadWorkflowName '[Name("bad"), Workflow("bad/name", [])]' 'invalid workflow name' quote
+fixture BadRunWorkflowName '[Name("bad"), Workflow("ci", [RunWorkflow("bad/name")])]' 'invalid workflow name' quote
+fixture BadRunTaskName '[Name("bad"), Workflow("ci", [RunTask("bad..name", [])])]' 'is not a task name' quote
+fixture BadArtifactName '[Name("bad"), Workflow("ci", [BuildArtifact("bad/name")])]' 'is not an input name' quote
+fixture DuplicateWorkflow '[Name("bad"), Workflow("ci", []), Workflow("ci", [])]' 'DuplicateWorkflow'
+fixture UnknownWorkflowTask "[$workflow_base, Workflow(\"ci\", [RunTask(\"missing\", [])])]" 'unknown task'
+fixture UnknownWorkflowBuild "[$workflow_base, Workflow(\"ci\", [BuildArtifact(\"missing\")])]" 'unknown build'
+fixture UnknownWorkflow "[$workflow_base, Workflow(\"ci\", [RunWorkflow(\"missing\")])]" 'unknown workflow'
+fixture WorkflowSelfCycle '[Name("bad"), Workflow("ci", [RunWorkflow("ci")])]' 'workflow cycle'
+fixture UnusedWorkflowCycle '[Name("bad"), Workflow("safe", []), Workflow("a", [RunWorkflow("b")]), Workflow("b", [RunWorkflow("a")])]' 'workflow cycle'
+fixture WorkflowTaskIsNotBuild '[Name("bad"), Environment("dev", []), Task("check", [Use("dev"), Run(["true"])]), Workflow("ci", [BuildArtifact("check")])]' 'unknown build'
+fixture WorkflowBuildIsNotTask "[$workflow_base, Workflow(\"ci\", [RunTask(\"app\", [])])]" 'unknown task'
+fixture WorkflowNul "[$workflow_base, Workflow(\"ci\", [RunTask(\"check.all\", [Str.from_utf8([0]) ?? \"\"])])]" 'NUL in argv'
+
+# Count/depth gates run against the local and served platform, not only pure IR.
+workflow_graph() {
+	python3 - "$1" "$2" "$3" <<'PY'
+import sys
+count, double, atomic = map(int, sys.argv[1:])
+items = ['Name("graph")', 'Environment("dev", [])',
+         'Task("check", [Use("dev"), Run(["true"])])']
+for i in range(count):
+    steps = ['RunTask("check", [])'] if atomic else []
+    if i:
+        steps = [f'RunWorkflow("w{i-1}")'] * (2 if double else 1)
+    items.append(f'Workflow("w{i}", [{",".join(steps)}])')
+print('[' + ','.join(items) + ']')
+PY
+}
+fixture WorkflowEmptyDiamond "$(workflow_graph 128 1 0)"
+fixture WorkflowDepth "$(workflow_graph 129 0 0)" 'workflow dependencies exceed 128 levels'
+fixture WorkflowExpansion "$(workflow_graph 14 1 1)" 'workflow expansion exceeds 4096 atomic steps'
+fixture WorkflowDeclarations "$(workflow_graph 1025 0 0)" 'workflows exceed 1024 declarations'
+fixture WorkflowSteps '[Name("wide"), Workflow("empty", []), Workflow("wide", {
+ var $steps = []
+ while $steps.len() <= 8192 { $steps = $steps.append(RunWorkflow("empty")) }
+ $steps
+})]' 'workflow graph exceeds 8192 steps'
+fixture WorkflowArgv '[Name("args"), Environment("dev", []), Task("check", [Use("dev"), Run(["true"])]), Workflow("ci", [RunTask("check", {
+ var $argv = []
+ while $argv.len() < 4096 { $argv = $argv.append("") }
+ $argv
+})])]' 'argv exceeds 4096 arguments'
+
+fixture WorkflowArgvBytes "[$workflow_base, Workflow(\"leaf\", [RunTask(\"check.all\", {
+ var \$arg = \"x\"
+ while \$arg.to_utf8().len() < 524288 { \$arg = \$arg.concat(\$arg) }
+ [\$arg]
+})]), Workflow(\"twice\", [RunWorkflow(\"leaf\"), RunWorkflow(\"leaf\")])]" 'workflow expansion exceeds 1 MiB argv bytes'
+
+# Imported workflow helpers use the same public checked constructors.
+printf '# Reusable typed workflows compose as ordinary settings.\nimport pf.Config\nProjectWorkflows :: [].{\n settings : List(Config.Setting)\n settings = [%s]\n}\n' "$workflow_steps" >"$WORK/ProjectWorkflows.roc"
+printf 'app [config] { pf: platform "%s" }\nimport ProjectWorkflows\nconfig = [%s].concat(ProjectWorkflows.settings)\n' "$PLATFORM" "$workflow_base" >"$WORK/ComposedWorkflows.roc"
+valid+=(ComposedWorkflows)
+
 # Capability support is checked for a selected request, not globally.
 fixture GuixOverlay '[Name("deferred-capability"), Packages("default", From(GuixPackages("current"))), Overlay("tools", "github:example/tools"), Environment("dev", [Tools(["git"]), Overlays(["tools"])])]'
 
@@ -156,6 +221,20 @@ for index in "${!invalid[@]}"; do
 	fi
 done
 
+# Checked constructor strings fail with their specific from_quote diagnostic.
+for index in "${!quote_invalid[@]}"; do
+	name="${quote_invalid[$index]}"
+	status=0
+	"$ROC" check "$WORK/$name.roc" >"$WORK/check.log" 2>&1 || status=$?
+	if [[ "$status" != 1 ]] ||
+		! grep -qF 'invalid string' "$WORK/check.log" ||
+		! grep -qF "${quote_messages[$index]}" "$WORK/check.log"; then
+		cat "$WORK/check.log" >&2
+		echo "expected checked-name rejection for $name, got exit $status" >&2
+		exit 1
+	fi
+done
+
 # Compare actual emitted semantic IR, not private lowering implementation details.
 # This also proves inheritance is resolved, deduplicated, and parent-first;
 # empty child Overlays does not clear the parent selection.
@@ -172,12 +251,18 @@ same_ir ForwardInheritance EquivalentInline
 same_ir Valid EquivalentDefault
 same_ir Composed EquivalentComposition
 same_ir Builds ComposedBuilds
+same_ir Workflows ComposedWorkflows
 
 # New optional fields must be accompanied by feature markers for old consumers.
 "$ROC" "$WORK/Builds.roc" >"$WORK/builds.ir"
-grep -qF '(minor 1)' "$WORK/builds.ir"
+grep -qF '(minor 2)' "$WORK/builds.ir"
 grep -qF '(requires ("sources" "builds"))' "$WORK/builds.ir"
 grep -qF '(build_sources ' "$WORK/builds.ir"
 grep -qF '(builds ' "$WORK/builds.ir"
+"$ROC" "$WORK/Workflows.roc" >"$WORK/workflows.ir"
+grep -qF '(minor 2)' "$WORK/workflows.ir"
+grep -qF '(requires ("builds" "workflows"))' "$WORK/workflows.ir"
+grep -qF '(workflows ' "$WORK/workflows.ir"
+grep -qF '(RunTask "check.all" ("" "two words" "\"quoted\"" "$HOME" "line\nbreak" "--flag"))' "$WORK/workflows.ir"
 
-echo "    ${#valid[@]} valid configs accepted; ${#invalid[@]} semantic errors rejected at compile time; equivalent IR verified"
+echo "    ${#valid[@]} valid configs accepted; ${#invalid[@]} semantic errors and ${#quote_invalid[@]} checked-name errors rejected at compile time; equivalent IR verified"

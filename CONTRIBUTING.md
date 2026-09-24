@@ -30,7 +30,8 @@ The local platform and CLI share `blueprint-ir-package`, including
 bundles are not compatible. This is a source-only, not release-qualified
 snapshot. Both bundle gates remain required; the unchanged `ir-release` gate
 is expected to block until an actual compatible IR artifact is available.
-B2 adds compatible IR 2.1 fields. See [B2 API](docs/b2.md) and the
+B2 adds compatible IR 2.1 fields; B3 adds IR 2.2 workflows and ordered plans.
+See the current [B3 API](docs/b3.md), [B2 build/lock contracts](docs/b2.md) and
 historical [B1 record](docs/b1.md).
 
 ## Setup
@@ -86,6 +87,9 @@ checks successful semantic normalization for idempotence.
 `scripts/test-b2.py` adds real offline-capable artifact/dependency/source tests,
 including host-file and TCP isolation with positive host controls, fail-closed
 runner checks, exact argv, immutable locks, freshness and relocation.
+`scripts/test-b3.py` adds real ordered task/build workflows, nested repetitions,
+failure stops, snapshot/dependency freshness, repeated locked-source verification,
+whole-closure preflight and immutable authority, including out-of-tree layouts.
 `scripts/test-update.py` checks local-source preflight and concurrent publication.
 Normal execution tests explicitly initialize authority with `update` first.
 
@@ -145,7 +149,7 @@ blueprint platform's Linux target.
 
 In outline:
 
-- `format` — `((major 2) (minor 1))`; see compatibility below.
+- `format` — `((major 2) (minor 2))`; see compatibility below.
 - `name`, `systems` (strings such as `"x86_64-linux"`).
 - `sources` — `{ name, provider }`, where provider is `Auto`,
   `NixPackages(Str)` or `GuixPackages(Str)`. Validation supplies
@@ -160,10 +164,12 @@ In outline:
   package-provider `sources`.
 - `builds` — `{ name, environment, inputs, needs, run, output }`; named source
   and build references, exact argv and contained relative file/directory output.
+- `workflows` — `{ name, steps }`; typed `RunTask(Str, List(Str))`,
+  `BuildArtifact(Str)` or `RunWorkflow(Str)` steps, with ordered bounded expansion.
 - `raw` — `{ backend, target, value }`, passed through to one backend.
 - `extensions` — `{ kind, name, value }`, blocks a backend may understand.
 - `requires` — features the config uses beyond the core (`"raw"`,
-  `"extensions"`, `"sources"`, `"builds"`), so an older `blueprint` can say what's missing.
+  `"extensions"`, `"sources"`, `"builds"`, `"workflows"`), so an older `blueprint` can say what's missing.
 
 `Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its S-expression encoder
 and parser are hand-written to avoid recursive-codec derivation problems.
@@ -195,7 +201,11 @@ probes the host or installs/fetches anything.
 
 `Request`, `Plan` and `Layout` are importable pure core types.
 `NixBackend.plan(project, request, target, layout, locks)` derives generated
-files, exact argv, artifact descriptions and explicit materialization operations.
+an ordered `Plan.steps` sequence, each holding action, files, exact argv, artifact
+metadata and materialization operations. `Request.Workflow(name)` uses the same
+atomic planner as standalone tasks/builds. Execute each step's operations, stage
+its files, then invoke its argv; stop immediately on failure. The entire plan
+must succeed before effects. See [actual exports and limits](docs/b3.md).
 The caller owns all effects; no backend registry or serialized config recipes
 are involved. `Backend.roc` retains only inspection metadata. Nix is the only
 implemented backend. It:
@@ -214,7 +224,8 @@ implemented backend. It:
 - renders `raw` for backend `"nix"` at `shell:<alias>` and `flake` as data,
   rejecting invalid targets, duplicate attributes and managed-field overrides.
   Alias Raw does not affect other aliases or tasks; other backends' Raw is inert;
-- refuses any `extensions` and advertises `"raw"`, `"sources"` and `"builds"`;
+- refuses any `extensions` and advertises `"raw"`, `"sources"`, `"builds"` and
+  `"workflows"`;
 - builds ordinary derivations with exact argv, filtered project snapshots,
   read-only declared sources/artifacts and checked file/directory outputs.
 
@@ -233,14 +244,15 @@ an independent app using these APIs, including caller-selected paths, decoded
 supplied authority and exact argv. `scripts/test-b2.py` separately proves actual
 relocated local-source translation.
 
-`gen`, `shell`, `run` and `build` require existing matching authority. Only
+`gen`, `shell`, `run`, `build` and `workflow` require existing matching authority. Only
 explicit `update` resolves new pins and publishes authority; normal commands
 stage derivatives and prohibit native lock updates. Named input declarations
 remain stable across selected closures; selected overlays remain scoped and
 ordered. Local authority contains relative identity and NAR hashes, not checkout
 paths. Dirty local inputs fail until explicit update. See [B2](docs/b2.md) for
-the complete lock, snapshot, output and isolation contracts. Workflows (B3)
-and handoff qualification (B4) remain pending.
+the complete lock, snapshot, output and isolation contracts. B3 repeats local
+verification and fresh snapshot operations per explicit build, never reusing
+artifact results by name across tasks. Handoff qualification (B4) remains pending.
 
 A new feature usually means: a setting in the platform (`Config.roc`,
 `Lower.roc`), then either an `extensions` kind or a new optional IR field

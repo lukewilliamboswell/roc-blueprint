@@ -1,10 +1,17 @@
 # Pure backend results; only the consumer executes these constrained operations.
-Plan := {
-	files : List(File),
-	argv : List(Str),
-	artifacts : List(Artifact),
-	operations : List(Operation),
-}.{
+Plan := { steps : List(Step) }.{
+
+	## A complete ordered sequence, not a scheduler or artifact-name cache.
+	## Execute each step's operations, then stage its files, then run its argv.
+	## Stop immediately on failure. Each explicit build repeats materialization.
+	Step : {
+		action : [Generate, Shell(Str), Run(Str), Build(Str)],
+		files : List(File),
+		argv : List(Str),
+		artifacts : List(Artifact),
+		operations : List(Operation),
+	}
+
 	File : { path : Str, contents : Str }
 
 	## Installables are resolved by the backend, never guessed store paths.

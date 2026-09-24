@@ -47,6 +47,7 @@ TestData :: [].{
 		tasks : List(Ir.Task),
 		build_sources : List(Ir.BuildSource),
 		builds : List(Ir.Build),
+		workflows : List(Ir.Workflow),
 		requires_ : List(Str),
 		raw : List(Ir.Raw),
 		extensions : List(Ir.Extension),
@@ -68,9 +69,42 @@ TestData :: [].{
 		],
 		build_sources: [{ name: "assets", ref: "path:./assets" }],
 		builds: [application, library],
+		workflows: [],
 		requires_: ["sources", "builds"],
 		raw: [],
 		extensions: [],
+	}
+
+	# Repeated nested runs and diamond builds retain explicit operation identity.
+	workflow_data : Data
+	workflow_data = {
+		..data,
+		requires_: ["sources", "builds", "workflows"],
+		builds: [
+			{ ..application, name: "bundle", needs: ["app", "other"] },
+			application,
+			{ ..application, name: "other" },
+			library,
+		],
+		workflows: [
+			{
+				name: "ci",
+				steps: [
+					BuildArtifact("library"),
+					RunTask("check", ["", "two words", "--literal", "a\nb", "$HOME"]),
+					RunWorkflow("verify"),
+					RunWorkflow("verify"),
+					BuildArtifact("bundle"),
+				],
+			},
+			{
+				name: "verify",
+				steps: [RunTask("check", []), BuildArtifact("bundle")],
+			},
+			{ name: "empty", steps: [] },
+			{ name: "nothing", steps: [RunWorkflow("empty")] },
+			{ name: "one", steps: [RunTask("check", [])] },
+		],
 	}
 
 	project : Data -> Ir
@@ -85,6 +119,7 @@ TestData :: [].{
 		tasks: t.tasks,
 		build_sources: t.build_sources,
 		builds: t.builds,
+		workflows: t.workflows,
 		requires_: t.requires_,
 		raw: t.raw,
 		extensions: t.extensions,

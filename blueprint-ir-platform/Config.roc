@@ -1,3 +1,4 @@
+# Typed authoring values lower into the shared semantic project model.
 import EnvName
 import FlakeRef
 import InputName
@@ -5,6 +6,7 @@ import System
 import TaskName
 import Tool
 import Val
+import WorkflowName
 
 ## Pure settings that compose through ordinary Roc lists and functions.
 Config :: [].{
@@ -24,8 +26,16 @@ Config :: [].{
 		Task(TaskName, List(TaskSetting)),
 		Source(InputName, FlakeRef),
 		Build(InputName, List(BuildSetting)),
+		Workflow(WorkflowName, List(WorkflowStep)),
 		Custom(Str, Str, Val),
 		Raw(Str, Str, Val),
+	]
+
+	## Workflows reference declarations; argv contains literal extra arguments.
+	WorkflowStep : [
+		RunTask(TaskName, List(Str)),
+		BuildArtifact(InputName),
+		RunWorkflow(WorkflowName),
 	]
 
 	PackageSource : [Auto, From(Provider)]

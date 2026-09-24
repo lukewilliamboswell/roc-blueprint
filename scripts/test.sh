@@ -54,6 +54,9 @@ scripts/test-b1.sh
 step "B2 sandboxed artifacts, isolation, sources and immutable locks"
 python3 scripts/test-b2.py
 
+step "B3 ordered workflows, failure propagation and fresh build operations"
+python3 scripts/test-b3.py
+
 step "Golden flakes parse as Nix"
 for f in blueprint-nix-package/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done
 

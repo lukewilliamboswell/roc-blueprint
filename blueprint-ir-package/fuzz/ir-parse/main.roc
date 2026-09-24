@@ -28,6 +28,15 @@ test = |bytes|
 							if Project.validate(project) != Ok(project) or Ir.parse(project.to_str()) != Ok(project) {
 								crash "semantic normalization is not idempotent"
 							}
+							# Exercise one root without revalidating every root per input.
+							for workflow in project.workflows.take_first(1) {
+								match Project.workflow_steps(project, workflow.name) {
+									Ok(steps) => if steps.len() > 4096 {
+										crash "workflow expansion escaped its bound"
+									}
+									Err(_) => crash "validated workflow failed expansion"
+								}
+							}
 						}
 						Err(_) => {}
 					}
