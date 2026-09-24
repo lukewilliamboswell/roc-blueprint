@@ -31,7 +31,11 @@ blueprint --help         # lists this project's shells and tasks
 
 `Blueprint.roc` is plain data. Roc checks it as it compiles, so a mistyped
 setting, a tool name with a space in it, or a malformed flake reference is an
-error in your editor, pointing at the line.
+error in your editor, pointing at the line. With the development platform,
+`roc check Blueprint.roc` also rejects whole-config errors such as a missing
+project name or duplicate shells; this requires the pinned September 23, 2026
+Roc nightly or a compatible newer compiler. Older platform releases may
+require `blueprint check` for these rules.
 
 ## Install
 

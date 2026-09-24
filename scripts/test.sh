@@ -16,7 +16,8 @@ step "roc-blueprint-ir tests"
 step "Build the platform host"
 (cd blueprint-ir-platform && zig build)
 
-step "Check examples/all-settings/Blueprint.roc"
+step "Compile-time configuration validation"
+scripts/test-config.sh
 "$ROC" check examples/all-settings/Blueprint.roc
 
 step "CLI tests"
@@ -25,6 +26,9 @@ scripts/prepare-basic-cli.sh
 
 step "Build the blueprint CLI"
 "$ROC" build blueprint-cli/main.roc --output=./blueprint
+
+step "CLI argument and validation regressions"
+python3 scripts/test-cli.py
 
 step "blueprint against examples/all-settings/Blueprint.roc"
 (

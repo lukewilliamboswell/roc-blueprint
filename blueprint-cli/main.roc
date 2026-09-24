@@ -160,7 +160,7 @@ main! = |raw_args| {
 
 run! = |command, loaded|
 	match command {
-		Check => check!()
+		Check => check!(loaded)
 		_ => {
 			ir = loaded?
 			match command {
@@ -171,18 +171,18 @@ run! = |command, loaded|
 				Update => update!(ir)
 				PrintIr => Stdout.write!(ir.to_str())
 				PrintFlake => print_files!(ir)
-				Check => check!()
+				Check => check!(loaded)
 			}
 		}
 	}
 
-## Type-check Blueprint.roc, then run it so whole-config rules are checked too.
-## TODO(compile-time-render): `roc check` alone is enough once the platform
-## renders the IR at compile time again (see blueprint-ir-platform/main.roc).
-check! : () => Try({}, _)
-check! = || {
+## Type-check Blueprint.roc (including whole-config validation), then reuse
+## the IR loaded for CLI parsing to check backend compatibility. This also
+## preserves validation for older platforms that only lower at run time.
+check! : Try(Ir, _) => Try({}, _)
+check! = |loaded| {
 	Cmd.new_str(roc!()).args_str(["check", "Blueprint.roc"]).exec_cmd!()?
-	_ = load_ir!()?
+	_ = loaded?
 	Stdout.line!("Blueprint.roc is valid")
 }
 
