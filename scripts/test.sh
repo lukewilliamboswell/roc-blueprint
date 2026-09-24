@@ -27,6 +27,9 @@ scripts/prepare-basic-cli.sh
 step "Build the blueprint CLI"
 "$ROC" build blueprint-cli/main.roc --output=./blueprint
 
+step "CLI argument and validation regressions"
+python3 scripts/test-cli.py
+
 step "blueprint against examples/all-settings/Blueprint.roc"
 (
 	cd examples/all-settings

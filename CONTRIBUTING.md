@@ -59,6 +59,10 @@ twice (see below), and runs each fuzz target for 30 seconds.
 and that missing names and duplicate shells fail during compile-time
 validation. Both bundle smoke tests run the same assertions against the
 served platform, in addition to checking and running the all-settings example.
+`python3 scripts/test-cli.py` exercises the built CLI with and without a
+configuration, checks validation and help/version handling, and records Nix
+argv to verify shell selection and task arguments without entering a shell.
+The all-settings integration tests separately run tasks through real Nix.
 
 ## Nightly updates
 
@@ -197,6 +201,11 @@ Compile-time configuration lowering is restored with Roc
 errors, including a missing `Name` or duplicate shells. Older compilers
 crashed while bundling a top-level constant dependent on the app's `config`;
 the local-IR and released-IR bundle tests guard against that regression.
+`blueprint check` retains a compiler check for diagnostics and reuses the IR
+already loaded for CLI parsing, rather than running the configuration again.
+The loaded IR is still needed to reject unsupported backend features and to
+support older platforms that validate only at run time.
+
 These remaining dependencies and workarounds still apply:
 
 - **Pinned Roc and basic-cli.** `.roc-version` selects the compiler and the
