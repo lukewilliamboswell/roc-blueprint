@@ -14,9 +14,9 @@ blueprint-cli/           the blueprint CLI (basic-cli + weaver)
   Backend.roc            the backend interface: render files, argv for lock/shell/run
   NixBackend.roc         the Nix backend (flake.nix)
   tests/                 IR fixtures and golden flakes
-examples/Blueprint.roc   uses every setting; CI runs blueprint against it
+examples/all-settings/   uses every setting; CI runs blueprint against it
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
-scripts/                 test.sh (all of CI), bundle.sh, fuzz.sh
+scripts/                 prepare-basic-cli.sh, test.sh, bundle.sh, fuzz.sh
 flake.nix                builds blueprint with the pinned Roc; user and contributor shells
 ```
 
@@ -24,6 +24,8 @@ The platform encodes the IR and the CLI parses it, both with
 `blueprint-ir-package`, so the two always agree on the format.
 
 ## Setup
+
+Full development and CI require x86_64 Linux with Nix and flakes enabled.
 
 ```sh
 nix develop .#contributor
@@ -33,20 +35,69 @@ gives Roc (the nightly in `.roc-version`, from
 [roc-overlay](https://github.com/roc-lang/roc-overlay)), Zig, `blueprint`,
 python3, zstd and git. Nix itself is also needed for `blueprint`.
 
+Run `scripts/prepare-basic-cli.sh` before compiling the CLI directly. It builds
+the source-pinned basic-cli platform with Nix and creates the ignored
+`.basic-cli` symlink used by `blueprint-cli/main.roc`. `scripts/test.sh` also
+runs this setup. The Nix blueprint package includes the platform automatically.
+
 ## Building and testing
 
 ```sh
+scripts/prepare-basic-cli.sh                # basic-cli source + Rust host
 (cd blueprint-ir-platform && zig build)      # blueprint-ir-platform/targets/x64musl/libhost.a
 roc test blueprint-ir-package/main.roc      # IR round trips and format tests
 roc test blueprint-cli/main.roc             # includes the golden flake test
 roc build blueprint-cli/main.roc --output=./blueprint
-(cd examples && ../blueprint run --help)    # try the CLI
+(cd examples/all-settings && ../../blueprint run --help) # try the CLI
 ./scripts/test.sh                           # everything CI runs
 scripts/fuzz.sh 300                         # fuzz each target for 5 minutes
 ```
 
 CI runs `scripts/test.sh`, which also builds the flake, bundles the platform
 twice (see below), and runs each fuzz target for 30 seconds.
+
+## Nightly updates
+
+`.github/workflows/update-roc-nightly.yml` checks daily at 13:10 UTC, or on
+manual dispatch, using the SHA-pinned reusable workflow from
+[roc-automation](https://github.com/lukewilliamboswell/roc-automation).
+`.roc-version` remains the compiler pin for CI, releases and the Nix flake;
+the shared updater supports this file without `compiler_roots` configuration.
+
+`.github/roc-nightly.json` selects `ci.yml`, whose `nightly_validation` dispatch
+runs all of `scripts/test.sh`: tests, CLI execution, Nix builds, both platform
+bundle smoke tests and fuzzing. The tag-triggered release workflows are not
+dispatched and validation does not publish. A separate Nightly configuration
+workflow checks the consumer configuration on pull requests.
+
+The shared controller creates a signed pin-only PR and merges it only after
+validation and repository rules pass. The required check for this CI is `test`.
+When rolling out the restored updater, replace the obsolete required contexts
+`Build release bundles`, `Test blueprint (ubuntu-latest)` and
+`Test blueprint-nix (ubuntu-latest)` with the current check; retain the strict
+up-to-date requirement and pull-request rule. Once the workflows are on `main`,
+manually dispatch the updater and inspect the candidate's validation results.
+
+The Nix overlay is independently locked. A nightly absent from the locked
+overlay will fail Nix validation and cannot auto-merge. Update the `roc-overlay`
+input with `nix flake update roc-overlay` once upstream lists that nightly,
+then retry the updater. Do not skip the Nix check to accept a compiler bump.
+
+The September 23 nightly (`nightly-2026-09-23-c7852fd`) uses basic-cli
+[PR #499](https://github.com/roc-lang/basic-cli/pull/499), pinned to commit
+`473caa2cc4f3fe9ce4e4682158bb80ebc2e19169` in `flake.nix` and `flake.lock`.
+The released 0.23.0-rc1 platform stalls with this compiler; the pinned source
+passes the CLI and imported platform tests. Nix builds its Rust host for
+x64musl using the upstream Rust toolchain version and locked Cargo dependencies.
+The Rust host is reused across Roc nightly updates.
+
+The complete suite requires x86_64 Linux (the blueprint platform's supported
+target), Zig 0.16 and a running Nix daemon. To test the CLI alone on macOS,
+check out that exact basic-cli commit, run `python3 scripts/build.py` there,
+and link its `platform` directory at `.basic-cli` in this repository. Then
+run the CLI unit tests and build with the September 23 Roc binary. The native
+CLI can run on macOS, but executing a Blueprint.roc still requires the
+blueprint platform's Linux target.
 
 ## The IR
 
@@ -56,7 +107,7 @@ twice (see below), and runs each fuzz target for 30 seconds.
 
 In outline:
 
-- `format` — `(major minor)`; see the compatibility rules below.
+- `format` — `((major 1) (minor 0))`; see the compatibility rules below.
 - `name`, `systems` (strings such as `"x86_64-linux"`).
 - `inputs` — `{ name, url, kind }`, where kind is `Packages` (a package set),
   `Overlay` or `Flake`. The IR implies no inputs; the platform always writes an
@@ -69,8 +120,8 @@ In outline:
 - `requires` — features the config uses beyond the core (`"raw"`,
   `"extensions"`), so an older `blueprint` can say what's missing.
 
-`Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its codec is hand-written
-(deriving it hangs the compiler), so the IR only encodes to S-expressions.
+`Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its S-expression encoder
+and parser are hand-written to avoid recursive-codec derivation problems.
 `requires` and `packages` are reserved words in Roc; the Roc fields are
 `requires_` and `packages_`, and `Sexpr` drops a trailing `_` on the wire.
 
@@ -119,32 +170,34 @@ only packs files below the entry point's directory, so `scripts/bundle.sh
 platform <ir-url>` bundles a staged copy whose `ir:` is the given URL. With
 no URL it bundles the local `blueprint-ir-package/` and serves it from localhost. Either way
 it then serves the platform bundle from localhost and runs
-`examples/Blueprint.roc` against it. CI does both, so a platform change that
+`examples/all-settings/Blueprint.roc` against it. CI does both, so a platform change that
 needs an unreleased ir fails before a release.
 
 The two packages need separate tags: Roc identifies a package by its URL
 minus the version and hash, so two bundles under one tag look like one
 package served with two hashes.
 
-If you change the basic-cli or weaver version in `blueprint-cli/main.roc`, update
-`rocPackages` in `flake.nix` to match.
+Update the basic-cli source revision in `flake.nix` and refresh its lock input
+when adopting a newer commit. When switching back to a released platform,
+restore its URL in `blueprint-cli/main.roc` and add its archive to `rocPackages`.
+If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
 
 ## Upstream workarounds
 
 These are pinned or worked around until upstream fixes land. Search the code
 for `TODO(compile-time-render)`.
 
-- **Pinned Roc and basic-cli.** `.roc-version` and the basic-cli URL in
-  `blueprint-cli/main.roc` are the newest pair that works together; newer
-  nightlies crash the compiler on the CLI until basic-cli catches up.
+- **Pinned Roc and basic-cli.** `.roc-version` selects the compiler and the
+  `basic-cli-src` flake input selects compatible platform source. Replace this
+  temporary source dependency when a compatible basic-cli release is available.
 - **The IR is built when the app runs, not at compile time.** It should be a
   top-level constant, so that `roc check Blueprint.roc` reports whole-config
-  errors like duplicate shells, but `roc bundle` crashes on a constant that
-  depends on the app's `config` (fixed on Roc main, not yet in a nightly we
-  can use). For now `blueprint check` runs the app. Checks on individual
-  values are still done while compiling.
+  errors like duplicate shells. Runtime rendering was introduced after older
+  compilers crashed while bundling a constant that depends on the app's
+  `config`. Revalidate bundle behavior before removing this workaround. For
+  now `blueprint check` runs the app; individual values are checked at compile time.
 - **`roc bundle --output-dir` must be on the same filesystem as the working
   directory.** Otherwise the bundler fails with `CrossDevice`.
 - **Error unions in `blueprint-ir-package/Sexpr.roc` use a named extension
-  (`..others`).** The pinned nightly needs them open, and newer compilers warn
-  about a bare `..`; the named form keeps both quiet.
+  (`..others`).** These preserve open error types without the compiler
+  warning about a redundant bare `..`.

@@ -16,18 +16,19 @@ step "roc-blueprint-ir tests"
 step "Build the platform host"
 (cd blueprint-ir-platform && zig build)
 
-step "Check examples/Blueprint.roc"
-"$ROC" check examples/Blueprint.roc
+step "Check examples/all-settings/Blueprint.roc"
+"$ROC" check examples/all-settings/Blueprint.roc
 
 step "CLI tests"
+scripts/prepare-basic-cli.sh
 "$ROC" test blueprint-cli/main.roc
 
 step "Build the blueprint CLI"
 "$ROC" build blueprint-cli/main.roc --output=./blueprint
 
-step "blueprint against examples/Blueprint.roc"
+step "blueprint against examples/all-settings/Blueprint.roc"
 (
-	cd examples
+	cd examples/all-settings
 	"$ROOT/blueprint" check
 	"$ROOT/blueprint" tasks
 	"$ROOT/blueprint" --help >/dev/null

@@ -4,7 +4,7 @@
 ## this CLI parses that IR and owns everything with effects: `.blueprint/`,
 ## `Blueprint.lock` and `nix`.
 app [main!] {
-	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.23.0-rc1/3hT3SoHZ6qbEsa9qVFLUW3547U5LeoNd1KbpqLpz4r1i.tar.zst",
+	pf: platform "../.basic-cli/main.roc",
 	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
 	ir: "../blueprint-ir-package/main.roc",
 }
@@ -137,10 +137,11 @@ task_choice = |task|
 		},
 	)
 
-main! : List(OsStr) => Try({}, [Exit(I32), ..])
+main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |raw_args| {
 	loaded = load_ir!()
-	match Cli.parse_or_display_message(cli_for(loaded), raw_args.drop_first(1), OsStr.to_raw) {
+	# basic-cli supplies arguments without the executable name.
+	match Cli.parse_or_display_message(cli_for(loaded), raw_args, OsStr.to_raw) {
 		Err(Help(message)) | Err(Version(message)) => Stdout.line!(message).map_err(|_| Exit(1))
 		Err(InvalidUsage(message)) => {
 			_ = Stderr.line!(message)

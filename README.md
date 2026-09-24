@@ -1,5 +1,9 @@
 # roc-blueprint
 
+<p align="center">
+  <img src="docs/blueprint-gemini-gen.jpeg" alt="Blueprint illustration of robotic arms" width="560">
+</p>
+
 Describe your project's development environment in a small Roc file,
 `Blueprint.roc`, and get a reproducible Nix dev shell and project tasks from
 it.
@@ -44,7 +48,8 @@ Each [release](https://github.com/lukewilliamboswell/roc-blueprint/releases)
 also has a prebuilt `blueprint-x86_64-linux`; that one needs the Roc nightly
 named in the release notes, on your `PATH` or in `ROC`.
 
-Only x86_64 Linux is supported for now.
+Only x86_64 Linux is supported for running blueprint. `Systems` controls the
+shells written into the generated flake; it does not add platform host targets.
 
 ## Writing `Blueprint.roc`
 
@@ -109,8 +114,8 @@ Raw("nix", "flake", Attrs([("formatter", Str("nixpkgs-fmt"))])),
 Values are `Str`, `Int`, `Bool`, `List([...])` and `Attrs([(name, value), ...])`.
 They're data, not Nix code, so they can't refer to packages or inputs.
 
-See [`examples/Blueprint.roc`](examples/Blueprint.roc) for every setting in
-one file.
+See [the examples](examples/README.md) for a complete environment and a
+separate example of custom extensions.
 
 ## Commands
 
