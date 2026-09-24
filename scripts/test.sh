@@ -76,6 +76,9 @@ for system in x86_64-linux aarch64-darwin; do
 	nix eval --raw ".#devShells.$system.default.drvPath" >/dev/null
 done
 
+step "Detached handoff: normal core/backend package imports and shared config core"
+python3 scripts/test-handoff.py
+
 step "Bundle ir and the platform against it"
 scripts/bundle.sh platform
 

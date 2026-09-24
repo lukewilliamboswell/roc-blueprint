@@ -1,6 +1,6 @@
 # Examples
 
-These are B1 source examples using the local platform and IR major 2, not
+These are foundation source examples using the local platform and IR 2.2, not
 examples for the latest published platform. Each directory keeps its
 `Blueprint.roc` and related files together.
 
@@ -15,6 +15,10 @@ examples for the latest published platform. Each directory keeps its
   Inherited `git` is deduplicated before child `python3`. These tasks print tool
   versions or JSON argv; they do not format files or run a test suite. No plugin registration,
   generated CLI, implicit tool installation or runtime code loading is involved.
+- [artifacts](artifacts/Blueprint.roc): a complete local locked source,
+  sandboxed library/app dependency pair, and typed task/build workflow.
+  [Usage and output](artifacts/README.md) include explicit update and read-only
+  source/artifact locations. Its integration smoke runs in a temporary copy.
 - [extensions](extensions/Blueprint.roc): custom extension blocks and raw
   values. The platform emits these, and the CLI reports unsupported extensions.
 
@@ -24,7 +28,9 @@ run on x86_64 Linux from the repository root:
 ```sh
 roc check examples/all-settings/Blueprint.roc
 roc check examples/composition/Blueprint.roc
+roc check examples/artifacts/Blueprint.roc
 (cd examples/all-settings && ../../blueprint check)
+(cd examples/composition && ../../blueprint update)
 (cd examples/composition && ../../blueprint run fmt)
 (cd examples/composition && ../../blueprint run test)
 (cd examples/composition && ../../blueprint run args -- 'two words' '' '--literal')
@@ -40,9 +46,9 @@ release exists. These source examples are not a release qualification.
 The extensions example intentionally fails `blueprint check` with an
 unsupported-features error.
 
-Commands that generate a shell write `.blueprint/` and sync `Blueprint.lock`
-inside the example directory. Ordinary `gen`, `shell` and `run` still invoke
-Nix locking; switching environment closures can change the lock. These test
-outputs are ignored here; in your own projects, commit `Blueprint.lock`.
-The immutable-lock lifecycle, locked non-flake sources, builds and workflows
-remain deferred to B2/B3. See [B1 boundaries](../docs/b1.md).
+Only explicit `update` initializes or changes `Blueprint.lock`. Ordinary
+`gen`, `shell`, `run`, `build` and `workflow` require matching pins and preserve
+that authority; generated `.blueprint/flake.lock` is a derivative. Example locks
+and generated files are ignored here; commit the authority in your own project.
+See the [source handoff API](../docs/foundation-api.md) and
+[tested snapshot](../docs/foundation-snapshot.md).

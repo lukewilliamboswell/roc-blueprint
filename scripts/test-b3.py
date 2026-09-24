@@ -359,6 +359,46 @@ class Suite:
         print(f"B3 real Nix: all gates passed ({self.count} process checks)")
 
 
+def example_smoke(work):
+    """Exercise the complete public example, changing only temporary setup inputs."""
+    work.mkdir()
+    suite = Suite(work)
+    source = ROOT / "examples/artifacts"
+    original = tree(source)
+    shutil.copytree(source, suite.project, dirs_exist_ok=True)
+    config = suite.project / "Blueprint.roc"
+    text = config.read_text()
+    local_platform = '"../../blueprint-ir-platform/main.roc"'
+    require(text.count(local_platform) == 1, "example platform header changed")
+    relative = os.path.relpath(ROOT / "blueprint-ir-platform/main.roc", suite.project)
+    pin = json.loads((ROOT / "fixtures/consumer/inputs.lock").read_text())["nodes"]["nixpkgs"]["locked"]
+    ref = f'github:{pin["owner"]}/{pin["repo"]}/{pin["rev"]}'
+    require(text.count('Name("artifacts"),') == 1, "example name changed")
+    config.write_text(text.replace(local_platform, json.dumps(relative)).replace(
+        'Name("artifacts"),',
+        f'Name("artifacts"),\n\tPackages("default", From(NixPackages("{ref}"))),',
+    ))
+    suite.command([suite.env["ROC"], "check", config])
+    suite.cli("build", "app", good=False, contains="blueprint update")
+    suite.cli("update")
+    require(suite.lock.is_file(), "example update did not publish authority")
+    suite.lock.chmod(0o444)
+    built = suite.cli("build", "app")
+    output = Path(os.fsdecode(built.stdout.strip()))
+    require(str(output).startswith("/nix/store/") and output.is_file(),
+            "example must report its resolved file artifact")
+    expected = b"Artifact example\nHELLO FROM THE WORKING TREE\n"
+    require(output.read_bytes() == expected, "example artifact bytes differ")
+    workflow = suite.cli("workflow", "ci")
+    require(workflow.stdout == b"source checked\n" + built.stdout,
+            "example task/build workflow order or artifact identity differs")
+    require(output.read_bytes() == expected, "workflow changed artifact bytes")
+    require(not (suite.project / "dist").exists(), "build wrote into project checkout")
+    require(tree(source) == original, "example smoke mutated checked-in files")
+    print(f"PASS artifacts example copy: compiler, explicit update, real build/workflow, "
+          f"exact bytes and immutable authority ({suite.count} process checks)")
+
+
 def main():
     require(sys.flags.optimize == 0, "run without -O")
     require(sys.platform == "linux" and platform.machine() == "x86_64",
@@ -367,6 +407,7 @@ def main():
     work = Path(tempfile.mkdtemp(prefix="blueprint-b3-"))
     try:
         Suite(work).run()
+        example_smoke(work / "example-smoke")
     except BaseException:
         print(f"B3 FAILED; retained fixture and logs: {work}", file=sys.stderr)
         raise

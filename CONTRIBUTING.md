@@ -20,6 +20,7 @@ blueprint-cli/           the blueprint CLI (basic-cli + weaver)
 fixtures/consumer/      independent consumer of the IR and Nix packages
 examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
 examples/composition/    imported pure module returning reusable task settings
+examples/artifacts/      runnable source/dependency/workflow example and scripts
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
 scripts/                 prepare-basic-cli.sh, test.sh, bundle.sh, fuzz.sh
 flake.nix                builds blueprint with the pinned Roc; user and contributor shells
@@ -31,8 +32,9 @@ bundles are not compatible. This is a source-only, not release-qualified
 snapshot. Both bundle gates remain required; the unchanged `ir-release` gate
 is expected to block until an actual compatible IR artifact is available.
 B2 adds compatible IR 2.1 fields; B3 adds IR 2.2 workflows and ordered plans.
-See the current [B3 API](docs/b3.md), [B2 build/lock contracts](docs/b2.md) and
-historical [B1 record](docs/b1.md).
+See the [B4 handoff API](docs/foundation-api.md),
+[exact tested snapshot](docs/foundation-snapshot.md), [B3 workflow contracts](docs/b3.md),
+[B2 build/lock contracts](docs/b2.md) and historical [B1 record](docs/b1.md).
 
 ## Setup
 
@@ -92,6 +94,11 @@ failure stops, snapshot/dependency freshness, repeated locked-source verificatio
 whole-closure preflight and immutable authority, including out-of-tree layouts.
 `scripts/test-update.py` checks local-source preflight and concurrent publication.
 Normal execution tests explicitly initialize authority with `update` first.
+`scripts/test-handoff.py` verifies the frozen dependency/export manifest, bundles
+core/backend/config with one core identity, and checks/builds/runs the consumer
+outside this checkout without invoking Blueprint. It runs before the release
+bundle gate. The complete artifacts example is executed in a temporary copy by
+the B3 integration script.
 
 ## Nightly updates
 
@@ -200,7 +207,7 @@ probes the host or installs/fetches anything.
 ### Backends
 
 `Request`, `Plan` and `Layout` are importable pure core types.
-`NixBackend.plan(project, request, target, layout, locks)` derives generated
+`NixBackend.plan(project, request, target, layout, locks)` derives
 an ordered `Plan.steps` sequence, each holding action, files, exact argv, artifact
 metadata and materialization operations. `Request.Workflow(name)` uses the same
 atomic planner as standalone tasks/builds. Execute each step's operations, stage
@@ -252,7 +259,9 @@ ordered. Local authority contains relative identity and NAR hashes, not checkout
 paths. Dirty local inputs fail until explicit update. See [B2](docs/b2.md) for
 the complete lock, snapshot, output and isolation contracts. B3 repeats local
 verification and fresh snapshot operations per explicit build, never reusing
-artifact results by name across tasks. Handoff qualification (B4) remains pending.
+artifact results by name across tasks. B4 provides a source-only handoff;
+the released-IR gate remains a release blocker. Keep this staging repository
+usable until the later port passes acceptance.
 
 A new feature usually means: a setting in the platform (`Config.roc`,
 `Lower.roc`), then either an `extensions` kind or a new optional IR field

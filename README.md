@@ -7,10 +7,12 @@
 Describe reusable environments, argv tasks, sandboxed artifact builds and ordered
 workflows in `Blueprint.roc`. The reference CLI executes pure Nix plans.
 
-**Development API (B3, IR 2.2):** these examples use the local source
+**Foundation API (B4, IR 2.2):** these examples use the local source
 platform, not the latest published release. This snapshot is source-only and
 not release-qualified; the pinned released-IR bundle gate is expected to block
-until an actual compatible IR release exists. See [B3 API](docs/b3.md).
+until an actual compatible IR release exists. See the [public handoff API](docs/foundation-api.md)
+and [exact tested snapshot](docs/foundation-snapshot.md). The staging repository
+remains available until the later port succeeds.
 
 ```roc
 # Blueprint.roc at the repository root
@@ -160,7 +162,8 @@ files, excluding VCS metadata, caller-generated roots, authority and all local
 input trees. Changing a locked local source requires explicit update. Initial
 source/output policy rejects symlinks and special files. Only local x86_64 Linux
 sandboxed execution is verified; tasks/config compilation are not sandboxed.
-See the [real build fixture](fixtures/builds/README.md) and [API](docs/b2.md).
+See the [complete runnable example](examples/artifacts/README.md),
+[real build fixture](fixtures/builds/README.md) and [API](docs/b2.md).
 
 ### Ordered workflows
 
