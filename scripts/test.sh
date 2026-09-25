@@ -64,6 +64,9 @@ step "blueprint against examples/all-settings/Blueprint.roc"
 step "B1 composed tasks and scoped overlays through real Nix"
 scripts/test-b1.sh
 
+step "System-scoped tools through real Nix on Linux and macOS"
+scripts/test-system-tools.sh
+
 step "B2 sandboxed artifacts, isolation, sources and immutable locks"
 python3 scripts/test-b2.py
 

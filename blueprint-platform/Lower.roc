@@ -14,6 +14,7 @@ Lower :: [].{
 		sources : List(Spec.Source),
 		inputs : List(Spec.Input),
 		environments : List(Spec.Environment),
+		system_tools : List(Spec.SystemTools),
 		shells : List(Spec.Shell),
 		tasks : List(Spec.Task),
 		build_sources : List(Spec.BuildSource),
@@ -30,7 +31,7 @@ Lower :: [].{
 	lower : List(Config.Setting) -> Try(Spec, Str)
 	lower = |settings| {
 		initial : Acc
-		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
+		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
 		acc = settings.fold(Ok(initial), |result, setting| add(result?, setting))?
 		name = match acc.names {
 			[] => return Err("MissingName: declare Name once")
@@ -48,6 +49,7 @@ Lower :: [].{
 				.concat(if acc.build_sources.is_empty() [] else ["sources"])
 				.concat(if acc.builds.is_empty() [] else ["builds"])
 				.concat(if acc.workflows.is_empty() [] else ["workflows"])
+				.concat(if acc.system_tools.is_empty() [] else ["system-tools"])
 		Project.validate(
 			Spec.{
 				format: Spec.current_format,
@@ -57,6 +59,7 @@ Lower :: [].{
 				sources: acc.sources,
 				inputs: acc.inputs,
 				environments: acc.environments,
+				system_tools: acc.system_tools,
 				shells: acc.shells,
 				tasks: acc.tasks,
 				build_sources: acc.build_sources,
@@ -76,7 +79,10 @@ Lower :: [].{
 			Packages(name, source) => { ..acc, sources: acc.sources.append({ name: name.to_str(), provider: provider(source) }) }
 			Input(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Flake }) }
 			Overlay(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Overlay }) }
-			Environment(name, inner) => { ..acc, environments: acc.environments.append(environment(name.to_str(), inner)?) }
+			Environment(name, inner) => {
+				lowered = environment(name.to_str(), inner)?
+				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools) }
+			}
 			Shell(name, inner) => { ..acc, shells: acc.shells.append(shell(name.to_str(), inner)?) }
 			Task(name, inner) => { ..acc, tasks: acc.tasks.append(task(name.to_str(), inner)?) }
 			Source(name, ref) => { ..acc, build_sources: acc.build_sources.append({ name: name.to_str(), ref: ref.to_str() }) }
@@ -110,13 +116,14 @@ Lower :: [].{
 			From(GuixPackages(channel)) => GuixPackages(channel)
 		}
 
-	environment : Str, List(Config.EnvironmentSetting) -> Try(Spec.Environment, Str)
+	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools) }, Str)
 	environment = |name, inner| {
 		draft = inner.fold(
-			{ tools: [], overlays: [], parents: [] },
+			{ tools: [], system_tools: [], overlays: [], parents: [] },
 			|acc, setting|
 				match setting {
 					Tools(tools) => { ..acc, tools: acc.tools.append(tools.map(|tool| tool.to_spec())) }
+					ToolsFor(system, tools) => { ..acc, system_tools: acc.system_tools.append({ environment: name, system: system.to_str(), tools: tools.map(|tool| tool.to_spec()) }) }
 					Overlays(overlays) => { ..acc, overlays: acc.overlays.append(overlays.map(|overlay| overlay.to_str())) }
 					Extend(parent) => { ..acc, parents: acc.parents.append(parent.to_str()) }
 				},
@@ -130,7 +137,7 @@ Lower :: [].{
 		if draft.parents.len() > 1 {
 			return Err("DuplicateExtend: environment ${name}")
 		}
-		Ok({ name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] })
+		Ok({ environment: { name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] }, system_tools: draft.system_tools })
 	}
 
 	shell : Str, List(Config.ShellSetting) -> Try(Spec.Shell, Str)

@@ -17,6 +17,7 @@ Spec := {
 	sources : List({ name : Str, provider : [Auto, NixPackages(Str), GuixPackages(Str)] }),
 	inputs : List({ name : Str, url : Str, kind : [Overlay, Flake] }),
 	environments : List({ name : Str, parents : List(Str), tools : List({ source : Str, name : Str }), overlays : List(Str) }),
+	system_tools : List({ environment : Str, system : Str, tools : List({ source : Str, name : Str }) }),
 	shells : List({ name : Str, environment : Str }),
 	tasks : List({ name : Str, environment : Str, run : List(Str) }),
 	build_sources : List({ name : Str, ref : Str }),
@@ -45,6 +46,7 @@ Spec := {
 	Input : { name : Str, url : Str, kind : [Overlay, Flake] }
 	Tool : { source : Str, name : Str }
 	Environment : { name : Str, parents : List(Str), tools : List(Tool), overlays : List(Str) }
+	SystemTools : { environment : Str, system : Str, tools : List(Tool) }
 	Shell : { name : Str, environment : Str }
 	Task : { name : Str, environment : Str, run : List(Str) }
 
@@ -66,7 +68,7 @@ Spec := {
 	Raw : { backend : Str, target : Str, value : Value }
 
 	current_format : Format
-	current_format = { major: 2, minor: 2 }
+	current_format = { major: 2, minor: 3 }
 
 	empty : Str -> Spec
 	empty = |name| Spec.{
@@ -77,6 +79,7 @@ Spec := {
 		sources: [],
 		inputs: [],
 		environments: [],
+		system_tools: [],
 		shells: [],
 		tasks: [],
 		build_sources: [],
@@ -108,6 +111,7 @@ Spec := {
 				sources: wire.sources ?? [],
 				inputs: wire.inputs ?? [],
 				environments: wire.environments ?? [],
+				system_tools: wire.system_tools ?? [],
 				shells: wire.shells ?? [],
 				tasks: wire.tasks ?? [],
 				build_sources: wire.build_sources ?? [],
@@ -131,6 +135,7 @@ Wire : {
 	sources : Try(List(Spec.Source), [Missing]),
 	inputs : Try(List(Spec.Input), [Missing]),
 	environments : Try(List(Spec.Environment), [Missing]),
+	system_tools : Try(List(Spec.SystemTools), [Missing]),
 	shells : Try(List(Spec.Shell), [Missing]),
 	tasks : Try(List(Spec.Task), [Missing]),
 	build_sources : Try(List(Spec.BuildSource), [Missing]),
@@ -141,6 +146,11 @@ Wire : {
 }
 
 expect Spec.parse(Spec.empty("x").to_str()) == Ok(Spec.empty("x"))
+
+expect {
+	spec = { ..Spec.empty("x"), requires_: ["system-tools"], system_tools: [{ environment: "dev", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] }] }
+	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 3 }
+}
 expect Spec.parse("((format ((major 1) (minor 0))) (shells 42))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
 expect Spec.parse("((format ((major 3) (minor 0))))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))
 # Earlier minor records omit newer optional build and workflow fields.

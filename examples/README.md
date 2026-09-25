@@ -1,6 +1,6 @@
 # Examples
 
-These are foundation source examples using the local platform and Spec 2.2, not
+These are foundation source examples using the local platform and Spec 2.3, not
 examples for the latest published platform. Each directory keeps its
 `Blueprint.roc` and related files together.
 

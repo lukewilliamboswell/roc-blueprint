@@ -7,7 +7,7 @@
 Describe reusable environments, argv tasks, sandboxed artifact builds and ordered
 workflows in `Blueprint.roc`. The reference CLI executes pure Nix plans.
 
-**Status (Spec 2.2):** these examples use the local source platform, not the
+**Status (Spec 2.3):** these examples use the local source platform, not the
 latest published release. The architecture, terminology and invariants are in
 [docs/architecture.adoc](docs/architecture.adoc).
 
@@ -98,16 +98,18 @@ settings:
 | `Raw(backend, target, Val)` | Provider-specific data; see below. |
 | `Custom(kind, name, Val)` | Extension data. The current CLI rejects unsupported extensions. |
 
-Inside an `Environment`, each setting occurs at most once:
+Inside an `Environment`, `Tools` and `Overlays` occur at most once, while
+`ToolsFor` occurs at most once per System:
 
 | Setting | Meaning |
 |---|---|
 | `Tools(List(Tool))` | Native package names. `"git"` uses source `default`; `"stable#jq"` uses source `stable`. |
+| `ToolsFor(System, List(Tool))` | Add tools only for a declared target System. Each System occurs at most once per Environment. |
 | `Overlays(List(InputName))` | Ordered selection of declared overlay names. |
 | `Extend(EnvName)` | Inherit one environment's tools and overlays before appending this environment's selections. |
 
 Inheritance deduplicates by first occurrence, parent first. Omitted or empty
-`Tools`/`Overlays` lists do not clear inherited values. A standalone environment
+`Tools`/`ToolsFor`/`Overlays` lists do not clear inherited values. A standalone environment
 has no overlays unless selected. `Run` must contain a nonempty executable;
 arguments remain separate strings, including extra CLI arguments after `--`.
 There is no `In` setting or implicit task environment.
@@ -126,6 +128,20 @@ An incompatible requested environment fails; it never retries another provider.
 Missing native packages and unavailable target packages fail in Nix rather than
 being silently filtered out. Unsupported Nix target declarations fail before
 file writes or provider execution.
+
+For a shell shared by Linux and macOS, put common tools in `Tools` and declare
+platform libraries explicitly:
+
+```roc
+Environment("dev", [
+	Tools(["git", "python3"]),
+	ToolsFor("x86_64-linux", ["wayland", "alsa-lib"]),
+]),
+```
+
+`ToolsFor` is provider-neutral Spec intent. It applies to inherited environments,
+shells, tasks and builds on that System; undeclared systems and duplicate
+declarations are rejected during evaluation.
 
 Use ordinary Roc lists and functions for composition, not a plugin registry.
 [ProjectTasks.roc](examples/composition/ProjectTasks.roc) returns
@@ -238,7 +254,7 @@ structural validation and required-feature checks still apply. Full rendering
 ## How it works
 
 The platform lowers and validates the whole config at top level, then prints
-Spec 2.2 as an S-expression. The CLI invokes Roc, parses and revalidates that
+Spec 2.3 as an S-expression. The CLI invokes Roc, parses and revalidates that
 Spec through the shared pure `Project` boundary, explicitly selects Nix, and
 owns file writes, locking and execution. The importable core and Nix renderer
 perform no host discovery or effects.

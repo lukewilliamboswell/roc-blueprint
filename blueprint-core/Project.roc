@@ -139,6 +139,7 @@ Project :: [].{
 				return Err("invalid system: ${system}")
 			}
 		}
+		declared_systems = unique(spec.systems)
 		if spec.builds.len() > 1024 or spec.build_sources.len() > 1024 {
 			return Err("builds or build sources exceed 1024 declarations")
 		}
@@ -191,15 +192,37 @@ Project :: [].{
 		if !spec.workflows.is_empty() and !spec.requires_.contains("workflows") {
 			return Err("workflows require feature: workflows")
 		}
+		if !spec.system_tools.is_empty() and !spec.requires_.contains("system-tools") {
+			return Err("system tools require feature: system-tools")
+		}
+		for entry in spec.system_tools {
+			if !spec.environments.any(|e| e.name == entry.environment) {
+				return Err("unknown environment for system tools: ${entry.environment}")
+			}
+			if !declared_systems.contains(entry.system) {
+				return Err("undeclared system for system tools: ${entry.system}")
+			}
+			if spec.system_tools.keep_if(|other| other.environment == entry.environment and other.system == entry.system).len() > 1 {
+				return Err("DuplicateToolsFor: environment ${entry.environment} on ${entry.system}")
+			}
+		}
 		for input in spec.inputs {
 			if !valid_ref(input.url) {
 				return Err("invalid input reference: ${input.name}")
 			}
 		}
 		var $environments = []
+		var $system_tools = []
 		for env in spec.environments {
 			resolved = resolve(spec.environments, env.name, [])?
-			for t in resolved.tools {
+			for system in declared_systems {
+				tools_for_system = resolve_system_tools(spec.environments, spec.system_tools, env.name, system, [])?
+				if !tools_for_system.is_empty() {
+					$system_tools = $system_tools.append({ environment: env.name, system, tools: tools_for_system })
+				}
+			}
+			all_tools = resolved.tools.concat($system_tools.keep_if(|entry| entry.environment == env.name).fold([], |tools, entry| tools.concat(entry.tools)))
+			for t in all_tools {
 				parsed = tool("${t.source}#${t.name}")?
 				source = sources.find_first(|s| s.name == parsed.source).map_err(|_| "unknown source: ${t.source}")?
 				match source.provider {
@@ -267,7 +290,7 @@ Project :: [].{
 				return Err("empty Raw provider or target")
 			}
 		}
-		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: unique(spec.systems), sources, inputs: spec.inputs, environments: $environments, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
+		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
 	}
 
 	## Whole-project checks precede expansion, even for an empty request.
@@ -455,6 +478,24 @@ Project :: [].{
 		}
 	}
 
+	resolve_system_tools : List(Spec.Environment), List(Spec.SystemTools), Str, Str, List(Str) -> Try(List(Spec.Tool), Str)
+	resolve_system_tools = |environments, entries, name, system, visiting| {
+		if visiting.contains(name) or visiting.len() >= 128 {
+			return Err("environment cycle or inheritance limit: ${name}")
+		}
+		env = environments.find_first(|e| e.name == name).map_err(|_| "unknown environment: ${name}")?
+		own = entries.find_first(|entry| entry.environment == name and entry.system == system)
+			.map_ok(|entry| entry.tools) ?? []
+		match env.parents {
+			[] => Ok(unique(own))
+			[parent] => {
+				inherited = resolve_system_tools(environments, entries, parent, system, visiting.append(name))?
+				Ok(unique(inherited.concat(own)))
+			}
+			_ => Err("environment ${name} has several parents")
+		}
+	}
+
 	## Check only the requested environment's normalized dependency closure.
 	## This models Guix shell capability without implementing a Guix executor.
 	check_environment : Spec, ProviderName, Str -> Try({}, Str)
@@ -465,7 +506,8 @@ Project :: [].{
 			return Err("Guix does not support overlays in environment ${name}")
 		}
 		# An empty environment still uses the default provider's environment builder.
-		source_names = if env.tools.is_empty() ["default"] else unique(env.tools.map(|t| t.source))
+		all_tools = env.tools.concat(project.system_tools.keep_if(|entry| entry.environment == name).fold([], |tools, entry| tools.concat(entry.tools)))
+		source_names = if all_tools.is_empty() ["default"] else unique(all_tools.map(|t| t.source))
 		for source_name in source_names {
 			source = project.sources.find_first(|s| s.name == source_name).map_err(|_| "unknown source: ${source_name}")?
 			match (provider, source.provider) {
@@ -474,7 +516,7 @@ Project :: [].{
 				_ => {}
 			}
 		}
-		for t in env.tools {
+		for t in all_tools {
 			check_tool(provider, t.name)?
 		}
 		Ok({})
@@ -512,6 +554,7 @@ fixture = |environments| Spec.{
 		{ name: "data", url: "github:example/data", kind: Flake },
 	],
 	environments,
+	system_tools: [],
 	shells: [],
 	tasks: [],
 	build_sources: [],
@@ -580,6 +623,35 @@ expect {
 expect Project.check_environment(fixture([{ ..base, overlays: [], tools: [{ source: "nix", name: "git" }] }]), Guix, "base").is_err()
 expect Project.check_environment(fixture([base]), Nix, "missing").is_err()
 
+# System-specific tools inherit parent first and remain explicit intent.
+expect {
+	spec = {
+		..fixture([base, { ..child, overlays: [] }]),
+		requires_: ["system-tools"],
+		systems: ["x86_64-linux", "aarch64-darwin"],
+		system_tools: [
+			{ environment: "base", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] },
+			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "default", name: "alsa-lib" }, { source: "default", name: "wayland" }] },
+		],
+	}
+	match Project.validate(spec) {
+		Ok(valid) => valid.system_tools == [
+			{ environment: "base", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] },
+			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }, { source: "default", name: "alsa-lib" }] },
+		] and Project.validate(valid) == Ok(valid) and Project.validate({ ..spec, systems: ["x86_64-linux", "aarch64-darwin", "x86_64-linux"] }) == Ok(valid)
+		Err(_) => False
+	}
+}
+
+expect {
+	entry = { environment: "base", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] }
+	spec = { ..fixture([base]), system_tools: [entry] }
+	Project.validate(spec) == Err("system tools require feature: system-tools") and
+		Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [entry, entry] }) == Err("DuplicateToolsFor: environment base on x86_64-linux") and
+			Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [{ ..entry, system: "aarch64-darwin" }] }) == Err("undeclared system for system tools: aarch64-darwin") and
+				Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [{ ..entry, tools: [{ source: "missing", name: "wayland" }] }] }) == Err("unknown source: missing")
+}
+
 # Runtime callers must not bypass validation by constructing Spec directly.
 expect Project.validate(Spec.empty("empty")).is_err()
 expect !Project.valid_name("unsafe/name") and !Project.valid_name("line\nbreak")
@@ -594,6 +666,7 @@ build_fixture = |builds| Spec.{
 	sources: [],
 	inputs: [],
 	environments: [{ name: "builder", parents: [], tools: [], overlays: [] }],
+	system_tools: [],
 	shells: [],
 	tasks: [],
 	build_sources: [{ name: "assets", ref: "path:./assets" }],
@@ -649,7 +722,7 @@ expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../esc
 build_source_fixture : List(Spec.BuildSource), List(Str) -> Spec
 build_source_fixture = |build_sources, requires_| {
 	spec = build_fixture([library])
-	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
+	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
 }
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["builds"])) == Err("build sources require feature: sources")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["sources"])) == Err("builds require feature: builds")
@@ -712,6 +785,7 @@ workflow_features = |workflows, features| Spec.{
 	sources: [],
 	inputs: [],
 	environments: [{ name: "builder", parents: [], tools: [], overlays: [] }],
+	system_tools: [],
 	shells: [],
 	tasks: [{ name: "check.all", environment: "builder", run: ["cmd"] }],
 	build_sources: [{ name: "assets", ref: "path:./assets" }],

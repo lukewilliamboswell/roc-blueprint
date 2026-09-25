@@ -39,6 +39,7 @@ fixture TasksWithoutShells '[Name("tasks"), Environment("dev", [Tools(["git"])])
 fixture EquivalentInline '[Name("inheritance"), Overlay("tools", "github:roc-lang/roc-overlay"), Environment("dev", [Tools(["git", "python3"]), Overlays(["tools"])]), Environment("base", [Tools(["git"]), Overlays(["tools"])]), Environment("alias", [Tools(["git", "python3"]), Overlays(["tools"])]), Environment("empty", []), Shell("default", [Use("alias")]), Task("check.version", [Use("dev"), Run(["git", "--version"])])]'
 fixture EquivalentDefault '[Name("valid"), Packages("default", Auto), Environment("dev", [Tools(["git"])]), Shell("default", [Use("dev")])]'
 fixture EquivalentComposition '[Name("composed"), Systems(["x86_64-linux"]), Environment("base", [Tools(["git"])]), Environment("dev", [Tools(["git", "python3"])]), Shell("default", [Use("dev")]), Task("fmt", [Use("dev"), Run(["python3", "--version"])]), Task("test", [Use("dev"), Run(["git", "--version"])]), Task("args", [Use("dev"), Run(["python3", "-c", "import json, sys; print(json.dumps(sys.argv[1:]))", "configured argument"])])]'
+fixture SystemTools '[Name("systems"), Systems(["x86_64-linux", "aarch64-darwin"]), Environment("base", [Tools(["git"]), ToolsFor("x86_64-linux", ["wayland"])]), Environment("dev", [Extend("base"), ToolsFor("x86_64-linux", ["alsa-lib"])]), Shell("default", [Use("dev")])]'
 
 fixture MissingName '[Environment("dev", [])]' 'MissingName'
 fixture DuplicateName '[Name("one"), Name("two")]' 'DuplicateName'
@@ -59,6 +60,9 @@ fixture DuplicateRun '[Name("invalid"), Environment("dev", []), Task("check", [U
 fixture EmptyRun '[Name("invalid"), Environment("dev", []), Task("check", [Use("dev"), Run([])])]' 'empty argv'
 fixture EmptyExecutable '[Name("invalid"), Environment("dev", []), Task("check", [Use("dev"), Run([""])])]' 'empty argv'
 fixture DuplicateTools '[Name("invalid"), Environment("dev", [Tools([]), Tools([])])]' 'DuplicateTools'
+fixture DuplicateToolsFor '[Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [ToolsFor("x86_64-linux", ["git"]), ToolsFor("x86_64-linux", ["python3"])])]' 'DuplicateToolsFor'
+fixture UndeclaredToolsFor '[Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [ToolsFor("aarch64-darwin", ["git"])])]' 'undeclared system for system tools'
+fixture UnknownToolsForSource '[Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [ToolsFor("x86_64-linux", ["missing#git"])])]' 'unknown source'
 fixture DuplicateOverlays '[Name("invalid"), Environment("dev", [Overlays([]), Overlays([])])]' 'DuplicateOverlays'
 fixture DuplicateExtend '[Name("invalid"), Environment("base", []), Environment("dev", [Extend("base"), Extend("base")])]' 'DuplicateExtend'
 fixture UnknownShellEnvironment '[Name("invalid"), Shell("default", [Use("missing")])]' 'unknown environment'
@@ -263,14 +267,18 @@ cmp "$WORK/with-tools.spec" "$WORK/without-tools.spec"
 
 # New optional fields must be accompanied by feature markers for old consumers.
 "$ROC" "$WORK/Builds.roc" >"$WORK/builds.spec"
-grep -qF '(minor 2)' "$WORK/builds.spec"
+grep -qF '(minor 3)' "$WORK/builds.spec"
 grep -qF '(requires ("sources" "builds"))' "$WORK/builds.spec"
 grep -qF '(build_sources ' "$WORK/builds.spec"
 grep -qF '(builds ' "$WORK/builds.spec"
 "$ROC" "$WORK/Workflows.roc" >"$WORK/workflows.spec"
-grep -qF '(minor 2)' "$WORK/workflows.spec"
+grep -qF '(minor 3)' "$WORK/workflows.spec"
 grep -qF '(requires ("builds" "workflows"))' "$WORK/workflows.spec"
 grep -qF '(workflows ' "$WORK/workflows.spec"
 grep -qF '(RunTask "check.all" ("" "two words" "\"quoted\"" "$HOME" "line\nbreak" "--flag"))' "$WORK/workflows.spec"
+"$ROC" "$WORK/SystemTools.roc" >"$WORK/system-tools.spec"
+grep -qF '(requires ("system-tools"))' "$WORK/system-tools.spec"
+grep -qF '(system_tools ' "$WORK/system-tools.spec"
+grep -qF '(system "x86_64-linux")' "$WORK/system-tools.spec"
 
 echo "    ${#valid[@]} valid configs accepted; ${#invalid[@]} semantic errors and ${#quote_invalid[@]} checked-name errors rejected at compile time; equivalent Spec verified"

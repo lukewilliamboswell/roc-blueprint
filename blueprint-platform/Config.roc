@@ -41,9 +41,10 @@ Config :: [].{
 	PackageSource : [Auto, From(Provider)]
 	Provider : [NixPackages(FlakeRef), GuixPackages(Str)]
 
-	## Each setting occurs at most once. Extend inherits tools and overlays
-	## parent first; an omitted or empty list does not clear inherited values.
-	EnvironmentSetting : [Tools(List(Tool)), Overlays(List(InputName)), Extend(EnvName)]
+	## Tools and Overlays occur at most once. ToolsFor occurs at most once per
+	## System. Extend inherits tools and overlays parent first; an omitted or
+	## empty list does not clear inherited values.
+	EnvironmentSetting : [Tools(List(Tool)), ToolsFor(System, List(Tool)), Overlays(List(InputName)), Extend(EnvName)]
 
 	## A shell is an alias for exactly one environment.
 	ShellSetting : [Use(EnvName)]

@@ -20,7 +20,7 @@ NixProvider :: [].{
 	provider : Provider
 	provider = Provider.{
 		name: "nix",
-		features: ["raw", "sources", "builds", "workflows"],
+		features: ["raw", "sources", "builds", "workflows", "system-tools"],
 		render: |spec| render(spec).map_ok(
 			|contents| [{ path: "flake.nix", contents }],
 		),
@@ -438,11 +438,12 @@ NixProvider :: [].{
 		Some({ inputs : List(Locks.Input), layout : Layout }),
 	],
 	RenderBudget -> Try(Str, Str)
-	render_selected = |spec, names, builds, snapshot, staging, budget| {
-		missing = spec.unsupported_features(provider.features)
+	render_selected = |input_spec, names, builds, snapshot, staging, budget| {
+		missing = input_spec.unsupported_features(provider.features)
 		if !missing.is_empty() {
 			return Err("unsupported features: ${Str.join_with(missing, ", ")}")
 		}
+		spec = Project.validate(input_spec)?
 		if !spec.extensions.is_empty() {
 			kinds = spec.extensions.map(|e| "'${e.kind}' (${e.name})")
 			return Err(
@@ -518,7 +519,7 @@ NixProvider :: [].{
 		match staging {
 			None => {
 				for source in spec.sources.keep_if(
-					|s| environments.any(|e| source_names(e).contains(s.name)),
+					|s| environments.any(|e| source_names(e, spec.system_tools).contains(s.name)),
 				) {
 					url = match source.provider {
 						Auto => default_nixpkgs
@@ -572,7 +573,7 @@ NixProvider :: [].{
 		for environment in environments {
 			$rendered = append_rendered(
 				$rendered,
-				render_environment_definition(environment),
+				render_environment_definition(environment, spec.system_tools),
 			)?
 		}
 		$rendered = append_rendered(
@@ -625,7 +626,7 @@ NixProvider :: [].{
 						.map_err(|_| "unknown build environment")?
 					$rendered = append_rendered(
 						$rendered,
-						render_build(build, env, system, snapshot),
+						render_build(build, env, spec.system_tools, system, snapshot),
 					)?
 				}
 				$rendered = append_rendered(
@@ -647,21 +648,22 @@ NixProvider :: [].{
 
 	## mkShell comes from the first tool's source, keeping unrelated providers
 	## outside the request. Empty environments use the default source instead.
-	source_names : Spec.Environment -> List(Str)
-	source_names = |environment| {
-		if environment.tools.is_empty() {
-			return ["default"]
-		}
-		environment.tools.map(|t| t.source).fold(
-			[],
+	source_names : Spec.Environment, List(Spec.SystemTools) -> List(Str)
+	source_names = |environment, system_tools| {
+		all_tools = environment.tools.concat(system_tools.keep_if(|entry| entry.environment == environment.name).fold([], |tools, entry| tools.concat(entry.tools)))
+		# With no shared tools, the default source builds the shell even on
+		# Systems where none of the scoped tools apply.
+		initial = if environment.tools.is_empty() ["default"] else []
+		all_tools.map(|t| t.source).fold(
+			initial,
 			|seen, name|
 				if seen.contains(name) seen else seen.append(name),
 		)
 	}
 
-	render_environment_definition : Spec.Environment -> Str
-	render_environment_definition = |environment| {
-		sources = source_names(environment)
+	render_environment_definition : Spec.Environment, List(Spec.SystemTools) -> Str
+	render_environment_definition = |environment, system_tools| {
+		sources = source_names(environment, system_tools)
 		primary = sources.first() ?? "default"
 		overlays = environment.overlays.map(
 			|name| "inputs.${quote(name)}.overlays.default",
@@ -676,7 +678,13 @@ NixProvider :: [].{
 				"            sets.${quote(tool.source)}."
 					.concat(attr_path(tool.name.split_on("."))),
 		)
-		lines([
+		scoped = system_tools.keep_if(|entry| entry.environment == environment.name).map(
+			|entry| {
+				selected = entry.tools.map(|tool| "sets.${quote(tool.source)}.${attr_path(tool.name.split_on("."))}")
+				"          ++ (if system == ${quote(entry.system)} then [ ${Str.join_with(selected, " ")} ] else [])"
+			},
+		)
+		prefix = lines([
 			"        ${quote(environment.name)} = let",
 			"          overlays = [ ${Str.join_with(overlays, " ")} ];",
 			"          sets = {",
@@ -686,19 +694,20 @@ NixProvider :: [].{
 				"        in extra: sets.${quote(primary)}.mkShell ({",
 				"          packages = [",
 			]),
-		).concat(lines(tools)).concat(
-			lines([
-				"          ];",
-				"        } // extra);",
-			]),
-		)
+		).concat(lines(tools))
+		suffix = if scoped.is_empty() {
+			lines(["          ];", "        } // extra);"])
+		} else {
+			lines(["          ]"]).concat(lines(scoped)).concat(lines(["          ;", "        } // extra);"]))
+		}
+		prefix.concat(suffix)
 	}
 
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
 	## Runner tool paths are explicit; argv and metadata enter through JSON.
-	render_build : Spec.Build, Spec.Environment, Str, Str -> Str
-	render_build = |build, environment, system, snapshot| {
-		sources = source_names(environment)
+	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), Str, Str -> Str
+	render_build = |build, environment, system_tools, system, snapshot| {
+		sources = source_names(environment, system_tools)
 		primary = sources.first() ?? "default"
 		overlays = environment.overlays.map(
 			|name| "inputs.${quote(name)}.overlays.default",
@@ -708,7 +717,8 @@ NixProvider :: [].{
 				"            ${quote(name)} = import inputs.${quote(name)} "
 					.concat("{ inherit system overlays; };"),
 		)
-		tools = environment.tools.map(
+		selected_tools = environment.tools.concat(system_tools.keep_if(|entry| entry.environment == environment.name and entry.system == system).fold([], |tools, entry| tools.concat(entry.tools)))
+		tools = selected_tools.map(
 			|tool|
 				"sets.${quote(tool.source)}.${attr_path(tool.name.split_on("."))}",
 		)
@@ -894,6 +904,7 @@ mk = |t| Spec.{
 	sources: t.sources,
 	inputs: t.inputs,
 	environments: t.environments,
+	system_tools: [],
 	shells: t.shells,
 	tasks: t.tasks,
 	build_sources: [],
@@ -1018,6 +1029,39 @@ expect match NixProvider.render(
 	Ok(text) => text.contains("sets.\"default\".\"missingNativePackage\"")
 		and !text.contains("builtins.filter") and !text.contains("availableOn")
 	Err(_) => False
+}
+
+# Target-specific tools are selected by the declared System; other targets
+# never evaluate their package attributes.
+expect {
+	project = {
+		..mk(simple),
+		systems: ["x86_64-linux", "aarch64-darwin"],
+		requires_: ["system-tools"],
+		system_tools: [{ environment: "dev", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] }],
+	}
+	match NixProvider.render(project) {
+		Ok(text) => text.contains("if system == \"x86_64-linux\" then [ sets.\"default\".\"wayland\" ] else []") and !text.contains("builtins.filter")
+		Err(_) => False
+	}
+}
+
+# Scoped-only environments still have a shell builder on other Systems.
+expect {
+	project = {
+		..mk(simple),
+		systems: ["x86_64-linux", "aarch64-darwin"],
+		sources: [{ name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		environments: [{ ..base, tools: [] }],
+		requires_: ["system-tools"],
+		system_tools: [{ environment: "dev", system: "x86_64-linux", tools: [{ source: "stable", name: "jq" }] }],
+	}
+	match NixProvider.render(project) {
+		Ok(text) => text.contains("\"default\" = import inputs.\"default\"") and
+			text.contains("\"stable\" = import inputs.\"stable\"") and
+				text.contains("in extra: sets.\"default\".mkShell")
+		Err(_) => False
+	}
 }
 
 # Auto tool syntax is checked for the selected provider before any effects.

@@ -92,6 +92,10 @@ produces), *stages* (the steps that turn one kind of data into another) and
   software bill of materials or an attestation.
 |===
 
+Tool selections in a Spec may name a System. Evaluate records those selections
+as intent, so Realise includes them only for that System without inferring
+availability from a provider or the host.
+
 [[terms-stages]]
 === Stages
 
