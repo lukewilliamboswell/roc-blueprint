@@ -1,8 +1,10 @@
-## A flake input name, such as "nixpkgs" or "stable", checked at compile time.
+import ir.Project
+
+## A package source or flake input name, checked at compile time.
 InputName :: { name : Str }.{
 	from_quote : Str -> Try(InputName, [BadQuotedBytes(Str)])
 	from_quote = |raw|
-		if raw.is_empty() or raw.contains(" ") or raw.contains(".") or raw.contains("#") {
+		if !Project.valid_name(raw) {
 			Err(BadQuotedBytes("\"${raw}\" is not an input name; use letters, digits, - or _"))
 		} else {
 			Ok(InputName.{ name: raw })

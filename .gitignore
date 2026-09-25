@@ -15,3 +15,4 @@ blueprint-ir-package/fuzz/*/ir-*
 fuzz-artifacts/
 crash-*
 /result
+/docs/plans/

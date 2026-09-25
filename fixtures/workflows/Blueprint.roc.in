@@ -1,0 +1,51 @@
+# The integration runner supplies a local platform, pinned packages and event log.
+app [config] {
+	pf: platform "@PLATFORM@",
+}
+
+config = [
+	Name("workflow-integration"),
+	Systems(["x86_64-linux"]),
+	Packages("default", From(NixPackages("@PACKAGES@"))),
+	Packages("foreign", From(GuixPackages("https://example.invalid/guix"))),
+	Environment("builder", [Tools(["python3"])]),
+	Environment("foreign", [Tools(["foreign#python"])]),
+	Source("assets", "path:./assets"),
+	Task("record", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "record", "configured argument"])]),
+	Task("prepare", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "prepare"])]),
+	Task("edit", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "edit"])]),
+	Task("dirty", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "dirty"])]),
+	Task("fail", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "fail"])]),
+	Task("later", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "record", "unsupported task reached"])]),
+	Build("library", [Use("builder"), Run(["python3", "build.py", "library"]), Output("dist/library")]),
+	Build(
+		"app",
+		[
+			Use("builder"),
+			Inputs(["assets"]),
+			Needs(["library"]),
+			Run(["python3", "build.py", "app", "", "two words", "--", "--literal", "$HOME", "$(touch INJECTED)", "; touch INJECTED", "a'b\"c", "line\nbreak", "*", "$"]),
+			Output("dist/app"),
+		],
+	),
+	Build("fail", [Use("builder"), Run(["python3", "build.py", "fail"]), Output("dist/fail")]),
+	Build("later-library", [Use("builder"), Run(["python3", "build.py", "library"]), Output("dist/library")]),
+	Build("later-app", [Use("builder"), Needs(["later-library"]), Run(["python3", "build.py", "fail"]), Output("dist/fail")]),
+	Workflow("empty", []),
+	Workflow("nested-empty", [RunWorkflow("empty"), RunWorkflow("empty")]),
+	Workflow("ci", [RunTask("prepare", []), BuildArtifact("app"), RunTask("record", ["after build"])]),
+	Workflow(
+		"leaf",
+		[RunTask("record", ["", "two words", "--", "--literal", "$HOME", "$(touch INJECTED)", "; touch INJECTED", "a'b\"c", "line\nbreak", "*", "$"])],
+	),
+	Workflow("middle", [RunWorkflow("leaf"), RunTask("record", ["middle"]), RunWorkflow("leaf")]),
+	Workflow("nested", [RunTask("record", ["first"]), RunWorkflow("middle"), RunWorkflow("leaf"), RunTask("record", ["last"])]),
+	Workflow("fresh", [BuildArtifact("app"), RunTask("edit", []), BuildArtifact("app"), RunTask("record", ["after refresh"])]),
+	Workflow("repeat", [BuildArtifact("app"), RunTask("record", ["unchanged"]), BuildArtifact("app")]),
+	Workflow("task-failure", [RunTask("record", ["before failure"]), RunTask("fail", []), BuildArtifact("app"), RunTask("record", ["must not run"])]),
+	Workflow("build-failure", [RunTask("record", ["before failure"]), BuildArtifact("fail"), RunTask("record", ["must not run"]), BuildArtifact("app")]),
+	Workflow("dirty-source", [BuildArtifact("app"), RunTask("dirty", []), BuildArtifact("app"), RunTask("record", ["must not run"])]),
+	Workflow("unsupported-tail", [RunTask("later", [])]),
+	Workflow("unsupported-task", [RunTask("record", ["must not run"]), RunWorkflow("unsupported-tail")]),
+	Workflow("unsupported-build", [RunTask("record", ["must not run"]), BuildArtifact("later-app")]),
+]

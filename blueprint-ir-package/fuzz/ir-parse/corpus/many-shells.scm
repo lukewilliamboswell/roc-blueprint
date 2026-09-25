@@ -1,1 +1,10 @@
-((format ((major 1) (minor 0))) (name "m") (shells (((name "a") (packages ())) ((name "b") (packages (((source "nixpkgs") (path ("x" "y" "z"))) ((source "o") (path ("w")))))) ((name "c") (packages (((source "") (path ()))))))))
+((format ((major 2) (minor 0))) (name "aliases")
+ (systems ("x86_64-linux"))
+ (sources (((name "default") (provider Auto))))
+ (environments (
+   ((name "base") (parents ()) (tools ()) (overlays ()))
+   ((name "dev") (parents ("base")) (overlays ())
+    (tools (((source "default") (name "python3Packages.requests")))))))
+ (shells (((name "default") (environment "dev"))
+   ((name "ci") (environment "base"))
+   ((name "another") (environment "dev")))))

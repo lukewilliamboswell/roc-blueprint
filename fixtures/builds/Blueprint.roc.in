@@ -1,0 +1,93 @@
+# Real build graph; the runner supplies the platform and cached package set.
+app [config] {
+	pf: platform "@PLATFORM@",
+}
+
+config = [
+	Name("build-integration"),
+	Systems(["x86_64-linux"]),
+	Packages("default", From(NixPackages("@PACKAGES@"))),
+	Environment("builder", [Tools(["python3"])]),
+	Packages("foreign", From(GuixPackages("https://example.invalid/guix"))),
+	Environment("foreign", [Tools(["foreign#python"])]),
+	Shell("default", [Use("builder")]),
+	Source("assets", "path:./assets"),
+	Source("extra", "path:./packages"),
+	Task("args", [Use("builder"), Run(["python3", "task.py", "args"])]),
+	Task("edit", [Use("builder"), Run(["python3", "task.py", "edit"])]),
+	Task("control", [Use("builder"), Run(["python3", "probe.py", "host"])]),
+	Build(
+		"library",
+		[
+			Use("builder"),
+			Run(["python3", "build.py", "library"]),
+			Output("dist/library"),
+		],
+	),
+	Build(
+		"bundle",
+		[
+			Use("builder"),
+			Inputs(["assets"]),
+			Needs(["library"]),
+			Run(["python3", "build.py", "bundle"]),
+			Output("dist/bundle"),
+		],
+	),
+	Build(
+		"app",
+		[
+			Use("builder"),
+			Inputs(["assets"]),
+			Needs(["library", "bundle"]),
+			Run([
+				"python3",
+				"build.py",
+				"app",
+				"",
+				"two words",
+				"--literal",
+				"$HOME",
+				"$(touch INJECTED)",
+				"; touch INJECTED",
+				"a'b\"c",
+				"line\nbreak",
+				"*",
+				"$",
+			]),
+			Output("dist/app"),
+		],
+	),
+	Build(
+		"isolation",
+		[
+			Use("builder"),
+			Run(["python3", "probe.py", "sandbox"]),
+			Output("dist/isolation"),
+		],
+	),
+	Build(
+		"missing",
+		[
+			Use("builder"),
+			Run(["python3", "build.py", "missing"]),
+			Output("dist/missing"),
+		],
+	),
+	Build(
+		"symlink",
+		[
+			Use("builder"),
+			Run(["python3", "build.py", "symlink"]),
+			Output("dist/symlink"),
+		],
+	),
+	Build(
+		"nested-link",
+		[
+			Use("builder"),
+			Run(["python3", "build.py", "nested-link"]),
+			Output("dist/nested-link"),
+		],
+	),
+]

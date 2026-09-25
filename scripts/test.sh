@@ -8,7 +8,7 @@ ROOT="$PWD"
 step() { printf '\n==> %s\n' "$*"; }
 
 step "Formatting"
-"$ROC" fmt --check blueprint-ir-package blueprint-ir-platform blueprint-cli examples
+"$ROC" fmt --check blueprint-ir-package blueprint-ir-platform blueprint-nix-package blueprint-cli fixtures examples
 
 step "roc-blueprint-ir tests"
 "$ROC" test blueprint-ir-package/main.roc
@@ -27,8 +27,14 @@ scripts/prepare-basic-cli.sh
 step "Build the blueprint CLI"
 "$ROC" build blueprint-cli/main.roc --output=./blueprint
 
+step "Independent library consumer"
+scripts/test-consumer.sh
+
 step "CLI argument and validation regressions"
 python3 scripts/test-cli.py
+
+step "Explicit update source safety and concurrent authority publication"
+python3 scripts/test-update.py
 
 step "blueprint against examples/all-settings/Blueprint.roc"
 (
@@ -37,12 +43,22 @@ step "blueprint against examples/all-settings/Blueprint.roc"
 	"$ROOT/blueprint" tasks
 	"$ROOT/blueprint" --help >/dev/null
 	"$ROOT/blueprint" run --help | grep -q ci-hello
+	"$ROOT/blueprint" update
 	"$ROOT/blueprint" run ci-hello
 	"$ROOT/blueprint" run hello
 )
 
+step "B1 composed tasks and scoped overlays through real Nix"
+scripts/test-b1.sh
+
+step "B2 sandboxed artifacts, isolation, sources and immutable locks"
+python3 scripts/test-b2.py
+
+step "B3 ordered workflows, failure propagation and fresh build operations"
+python3 scripts/test-b3.py
+
 step "Golden flakes parse as Nix"
-for f in blueprint-cli/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done
+for f in blueprint-nix-package/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done
 
 step "Extensions example: the platform emits them, this blueprint refuses them clearly"
 "$ROC" check examples/extensions/Blueprint.roc
@@ -59,6 +75,9 @@ for system in x86_64-linux aarch64-darwin; do
 	nix eval --raw ".#packages.$system.blueprint.drvPath" >/dev/null
 	nix eval --raw ".#devShells.$system.default.drvPath" >/dev/null
 done
+
+step "Detached handoff: normal core/backend package imports and shared config core"
+python3 scripts/test-handoff.py
 
 step "Bundle ir and the platform against it"
 scripts/bundle.sh platform
