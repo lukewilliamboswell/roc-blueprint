@@ -8,13 +8,26 @@ ROOT="$PWD"
 step() { printf '\n==> %s\n' "$*"; }
 
 step "Formatting"
-"$ROC" fmt --check blueprint-ir-package blueprint-ir-platform blueprint-nix-package blueprint-cli fixtures examples
+"$ROC" fmt --check blueprint-core blueprint-platform blueprint-nix blueprint-cli fixtures examples
 
-step "roc-blueprint-ir tests"
-"$ROC" test blueprint-ir-package/main.roc
+step "The CLI reaches providers only through the Provider contract"
+# docs/architecture.adoc invariant 7: one selection site, no provider internals.
+imports="$(grep -E '^import nix\.' blueprint-cli/main.roc)"
+refs="$(grep -oE '\bNix[A-Za-z]*\.|\bLocks\.' blueprint-cli/main.roc | sort | uniq -c | tr -s ' ')"
+if [[ "$imports" != "import nix.NixProvider" || "$refs" != " 1 NixProvider." ]]; then
+	echo "blueprint-cli/main.roc must use only provider.* (found: $imports / $refs)" >&2
+	exit 1
+fi
+if grep -n '"nix"' blueprint-cli/main.roc; then
+	echo "blueprint-cli/main.roc must not run provider tools itself" >&2
+	exit 1
+fi
+
+step "roc-blueprint-core tests"
+"$ROC" test blueprint-core/main.roc
 
 step "Build the platform host"
-(cd blueprint-ir-platform && zig build)
+(cd blueprint-platform && zig build)
 
 step "Compile-time configuration validation"
 scripts/test-config.sh
@@ -51,6 +64,9 @@ step "blueprint against examples/all-settings/Blueprint.roc"
 step "B1 composed tasks and scoped overlays through real Nix"
 scripts/test-b1.sh
 
+step "System-scoped tools through real Nix on Linux and macOS"
+scripts/test-system-tools.sh
+
 step "B2 sandboxed artifacts, isolation, sources and immutable locks"
 python3 scripts/test-b2.py
 
@@ -58,7 +74,7 @@ step "B3 ordered workflows, failure propagation and fresh build operations"
 python3 scripts/test-b3.py
 
 step "Golden flakes parse as Nix"
-for f in blueprint-nix-package/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done
+for f in blueprint-nix/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done
 
 step "Extensions example: the platform emits them, this blueprint refuses them clearly"
 "$ROC" check examples/extensions/Blueprint.roc
@@ -76,15 +92,12 @@ for system in x86_64-linux aarch64-darwin; do
 	nix eval --raw ".#devShells.$system.default.drvPath" >/dev/null
 done
 
-step "Detached handoff: normal core/backend package imports and shared config core"
-python3 scripts/test-handoff.py
-
-step "Bundle ir and the platform against it"
+step "Bundle core and the platform against it"
 scripts/bundle.sh platform
 
-if [[ -f blueprint-ir-platform/ir-release ]]; then
-	step "Bundle the platform against the pinned ir release"
-	scripts/bundle.sh platform "$(cat blueprint-ir-platform/ir-release)"
+if [[ -f blueprint-platform/core-release ]]; then
+	step "Bundle the platform against the pinned core release"
+	scripts/bundle.sh platform "$(cat blueprint-platform/core-release)"
 fi
 
 step "Fuzz smoke test"

@@ -210,7 +210,7 @@ class Suite:
             shutil.copyfile(FIXTURE / relative, destination)
         require((self.project / "assets/message.txt").read_bytes() == ASSET,
                 "fixture asset differs from independent expected bytes")
-        relative = os.path.relpath(ROOT / "blueprint-ir-platform/main.roc", self.project)
+        relative = os.path.relpath(ROOT / "blueprint-platform/main.roc", self.project)
         self.config = (FIXTURE / "Blueprint.roc.in").read_text().replace(
             "@PLATFORM@", relative,
         ).replace("@PACKAGES@", ref).replace("@EVENTS@", str(self.events))
@@ -376,9 +376,9 @@ def example_smoke(work):
         shutil.copyfile(source / relative, destination)
     config = suite.project / "Blueprint.roc"
     text = config.read_text()
-    local_platform = '"../../blueprint-ir-platform/main.roc"'
+    local_platform = '"../../blueprint-platform/main.roc"'
     require(text.count(local_platform) == 1, "example platform header changed")
-    relative = os.path.relpath(ROOT / "blueprint-ir-platform/main.roc", suite.project)
+    relative = os.path.relpath(ROOT / "blueprint-platform/main.roc", suite.project)
     pin = json.loads((ROOT / "fixtures/consumer/inputs.lock").read_text())["nodes"]["nixpkgs"]["locked"]
     ref = f'github:{pin["owner"]}/{pin["repo"]}/{pin["rev"]}'
     require(text.count('Name("artifacts"),') == 1, "example name changed")

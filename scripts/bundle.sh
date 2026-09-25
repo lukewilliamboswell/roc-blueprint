@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Bundle roc-blueprint-ir or the roc-blueprint platform into dist/.
+# Bundle roc-blueprint-core or the roc-blueprint platform into dist/.
 #
-#   scripts/bundle.sh ir
-#       Bundle the ir package.
+#   scripts/bundle.sh core
+#       Bundle the core package.
 #
-#   scripts/bundle.sh platform [IR_URL]
-#       Bundle the platform with its `ir` dependency pointing at IR_URL, a
-#       published roc-blueprint-ir bundle (a release uses blueprint-ir-platform/ir-release).
-#       With no IR_URL, the local blueprint-ir-package/ is bundled and served from localhost.
+#   scripts/bundle.sh platform [CORE_URL]
+#       Bundle the platform with its `core` dependency pointing at CORE_URL, a
+#       published roc-blueprint-core bundle (a release uses blueprint-platform/core-release).
+#       With no CORE_URL, the local blueprint-core/ is bundled and served from localhost.
 #
-# The two have independent releases (tags `ir-X.Y.Z` and `X.Y.Z`). They must
+# The two have independent releases (tags `core-X.Y.Z` and `X.Y.Z`). They must
 # live under different tags: Roc identifies a package by its URL minus the
 # version and hash, so two bundles under one tag look like one package with
 # two hashes.
 #
 # `roc bundle` only packs files below the entry point's directory, so the
-# platform's development dependency `ir: "../blueprint-ir-package/main.roc"` can't be bundled
-# as-is; a staged copy of the platform gets `ir: IR_URL` instead.
+# platform's development dependency `core: "../blueprint-core/main.roc"` can't be bundled
+# as-is; a staged copy of the platform gets `core: CORE_URL` instead.
 #
 # Every platform bundle is smoke-tested: it is served from localhost with a
 # release-like versioned path, valid/invalid configs are checked, and
@@ -31,7 +31,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
 STAGE="$ROOT/.bundle-stage"
 WHAT="${1:-}"
-IR_URL="${2:-}"
+CORE_URL="${2:-}"
 
 cleanup() {
 	rm -rf "$STAGE"
@@ -50,12 +50,12 @@ bundle() { # bundle <dir> <files...>; prints the created archive name
 	(cd "$dir" && "$ROC" bundle "$@" --output-dir "$DIST") | sed -n 's#^Created: .*/##p'
 }
 
-bundle_ir() {
-	echo "==> Bundling roc-blueprint-ir" >&2
+bundle_core() {
+	echo "==> Bundling roc-blueprint-core" >&2
 	local name
-	name="$(bundle "$ROOT/blueprint-ir-package" main.roc Ir.roc Project.roc Request.roc Plan.roc Layout.roc Sexpr.roc Value.roc)"
+	name="$(bundle "$ROOT/blueprint-core" main.roc Spec.roc Project.roc Request.roc Steps.roc Layout.roc Sexpr.roc Value.roc Provider.roc Lock.roc Tree.roc)"
 	echo "    $name" >&2
-	echo "roc-blueprint-ir $name" >>"$DIST/bundles.txt"
+	echo "roc-blueprint-core $name" >>"$DIST/bundles.txt"
 	echo "$name"
 }
 
@@ -68,33 +68,33 @@ serve() {
 }
 
 case "$WHAT" in
-ir)
+core)
 	rm -f "$DIST/bundles.txt"
-	bundle_ir >/dev/null
+	bundle_core >/dev/null
 	;;
 platform)
 	rm -f "$DIST/bundles.txt"
 	serve
-	if [[ -z "$IR_URL" ]]; then
-		ir_bundle="$(bundle_ir)"
-		mkdir -p "$STAGE/serve/0.0.1-smoke-ir"
-		cp "$DIST/$ir_bundle" "$STAGE/serve/0.0.1-smoke-ir/"
-		IR_URL="http://localhost:$PORT/0.0.1-smoke-ir/$ir_bundle"
+	if [[ -z "$CORE_URL" ]]; then
+		core_bundle="$(bundle_core)"
+		mkdir -p "$STAGE/serve/0.0.1-smoke-core"
+		cp "$DIST/$core_bundle" "$STAGE/serve/0.0.1-smoke-core/"
+		CORE_URL="http://localhost:$PORT/0.0.1-smoke-core/$core_bundle"
 	fi
 
 	echo "==> Building libhost.a"
-	(cd "$ROOT/blueprint-ir-platform" && zig build)
+	(cd "$ROOT/blueprint-platform" && zig build)
 
 	echo "==> Checking vendored linker inputs"
-	(cd "$ROOT/blueprint-ir-platform/targets" && sha256sum --quiet -c x64musl.sha256)
+	(cd "$ROOT/blueprint-platform/targets" && sha256sum --quiet -c x64musl.sha256)
 
-	echo "==> Bundling roc-blueprint (ir: $IR_URL)"
+	echo "==> Bundling roc-blueprint (core: $CORE_URL)"
 	mkdir -p "$STAGE/platform/targets/x64musl" "$STAGE/platform/targets/arm64mac"
-	cp "$ROOT"/blueprint-ir-platform/*.roc "$STAGE/platform/"
-	cp "$ROOT"/blueprint-ir-platform/targets/x64musl/{crt1.o,libhost.a,libc.a,libzigc.a,libcompiler_rt.a} "$STAGE/platform/targets/x64musl/"
-	cp "$ROOT"/blueprint-ir-platform/targets/arm64mac/libhost.a "$STAGE/platform/targets/arm64mac/"
-	sed -i "s#\"../blueprint-ir-package/main.roc\"#\"$IR_URL\"#" "$STAGE/platform/main.roc"
-	grep -qF "\"$IR_URL\"" "$STAGE/platform/main.roc" || { echo "failed to rewrite the ir dependency" >&2; exit 1; }
+	cp "$ROOT"/blueprint-platform/*.roc "$STAGE/platform/"
+	cp "$ROOT"/blueprint-platform/targets/x64musl/{crt1.o,libhost.a,libc.a,libzigc.a,libcompiler_rt.a} "$STAGE/platform/targets/x64musl/"
+	cp "$ROOT"/blueprint-platform/targets/arm64mac/libhost.a "$STAGE/platform/targets/arm64mac/"
+	sed -i "s#\"../blueprint-core/main.roc\"#\"$CORE_URL\"#" "$STAGE/platform/main.roc"
+	grep -qF "\"$CORE_URL\"" "$STAGE/platform/main.roc" || { echo "failed to rewrite the core dependency" >&2; exit 1; }
 	pf_bundle="$(cd "$STAGE/platform" && bundle . main.roc $(ls *.roc | grep -v '^main.roc$') targets/x64musl/* targets/arm64mac/*)"
 	echo "    $pf_bundle"
 	echo "roc-blueprint $pf_bundle" >>"$DIST/bundles.txt"
@@ -102,7 +102,7 @@ platform)
 	echo "==> Smoke test: running Blueprint.roc against the platform bundle"
 	mkdir -p "$STAGE/serve/0.0.1-smoke" "$STAGE/app"
 	cp "$DIST/$pf_bundle" "$STAGE/serve/0.0.1-smoke/"
-	sed "s#platform \"../../blueprint-ir-platform/main.roc\"#platform \"http://localhost:$PORT/0.0.1-smoke/$pf_bundle\"#" "$ROOT/examples/all-settings/Blueprint.roc" >"$STAGE/app/Blueprint.roc"
+	sed "s#platform \"../../blueprint-platform/main.roc\"#platform \"http://localhost:$PORT/0.0.1-smoke/$pf_bundle\"#" "$ROOT/examples/all-settings/Blueprint.roc" >"$STAGE/app/Blueprint.roc"
 	echo "==> Compile-time validation against the platform bundle"
 	ROC="$ROC" "$ROOT/scripts/test-config.sh" "http://localhost:$PORT/0.0.1-smoke/$pf_bundle"
 	(cd "$STAGE/app" && "$ROC" check Blueprint.roc)
@@ -110,7 +110,7 @@ platform)
 	echo "    ok"
 	;;
 *)
-	echo "usage: scripts/bundle.sh ir | platform [IR_URL]" >&2
+	echo "usage: scripts/bundle.sh core | platform [CORE_URL]" >&2
 	exit 2
 	;;
 esac

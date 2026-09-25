@@ -1,5 +1,5 @@
 # Imported pure functions compose ordinary settings, without a plugin registry.
-app [config] { pf: platform "../../blueprint-ir-platform/main.roc" }
+app [config] { pf: platform "../../blueprint-platform/main.roc" }
 
 import ProjectTasks
 

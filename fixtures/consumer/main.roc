@@ -1,20 +1,20 @@
 # Independent consumer of pure planning and decoded authority, never the CLI.
 app [main!] {
 	pf: platform "../../.basic-cli/main.roc",
-	ir: "../../blueprint-ir-package/main.roc",
-	nix: "../../blueprint-nix-package/main.roc",
+	core: "../../blueprint-core/main.roc",
+	nix: "../../blueprint-nix/main.roc",
 }
 
 import pf.Stdout
-import ir.Ir
-import ir.Project
-import ir.Request
-import ir.Plan
-import ir.Layout
+import core.Spec
+import core.Project
+import core.Request
+import core.Steps
+import core.Layout
 import nix.Locks
-import nix.NixBackend
-import "../../blueprint-nix-package/tests/sample.ir.scm" as wire : Str
-import "../../blueprint-nix-package/tests/sample.golden.nix" as golden : Str
+import nix.NixProvider
+import "../../blueprint-nix/tests/sample.spec.scm" as wire : Str
+import "../../blueprint-nix/tests/sample.golden.nix" as golden : Str
 import "inputs.lock" as native_lock : Str
 import "authority.lock" as authority : Str
 
@@ -26,23 +26,23 @@ layout = Layout.{
 	lock_path: "/consumer/pins/inputs.lock",
 }
 
-project : Str -> Try(Ir, Str)
+project : Str -> Try(Spec, Str)
 project = |text| {
-	decoded = Ir.parse(text).map_err(|_| "invalid fixture IR")?
+	decoded = Spec.parse(text).map_err(|_| "invalid fixture Spec")?
 	Project.validate(decoded)
 }
 
 # The caller supplies serialized authority; decoding and planning are pure.
-plan : Ir, Request, Str, Layout -> Try(Plan, Str)
-plan = |ir, request, target, paths| NixBackend.plan(
-	ir,
+plan : Spec, Request, Str, Layout -> Try(Steps, Str)
+plan = |spec, request, target, paths| NixProvider.plan(
+	spec,
 	request,
 	target,
 	paths,
 	Locks.decode(authority)?,
 )
 
-files : {} -> Try(List(Plan.File), Str)
+files : {} -> Try(List(Steps.File), Str)
 files = |_| {
 	planned = plan(project(wire)?, Request.Generate, "x86_64-linux", layout)?
 	match planned.steps {
@@ -67,7 +67,7 @@ expect {
 }
 
 # Inspection preserves the B1 golden; plans add stable, explicit input kinds.
-expect NixBackend.render(project(wire)?) == Ok(golden)
+expect NixProvider.render(project(wire)?) == Ok(golden)
 
 planned_golden : Str
 planned_golden = golden.replace_each(
@@ -94,7 +94,7 @@ expect match files({}) {
 	Err(_) => False
 }
 
-# Generate needs neither backend commands nor filesystem observations here.
+# Generate needs neither provider commands nor filesystem observations here.
 expect match plan(project(wire)?, Request.Generate, "x86_64-linux", layout) {
 	Ok({ steps: [step] }) => step.action == Generate
 		and step.argv.is_empty() and step.operations.is_empty()
@@ -104,7 +104,7 @@ expect match plan(project(wire)?, Request.Generate, "x86_64-linux", layout) {
 
 # Native locks and malformed authorities cannot bypass the decoding protocol.
 expect Locks.decode(native_lock).is_err()
-	and Locks.decode(authority.replace_each("\"version\":1,", "\"version\":9,"))
+	and Locks.decode(authority.replace_each("(major 1)", "(major 9)"))
 		.is_err()
 
 # Caller-selected requests render only their environment and its shell aliases.
@@ -143,7 +143,7 @@ expect [
 	wire.replace_each("github:roc-lang/roc-overlay", "path:./overlay"),
 ].all(
 	|text| match project(text) {
-		Ok(ir) => plan(ir, Request.Generate, "x86_64-linux", layout).is_err()
+		Ok(spec) => plan(spec, Request.Generate, "x86_64-linux", layout).is_err()
 		Err(_) => False
 	},
 )
@@ -184,9 +184,9 @@ expect plan(
 
 # Task argument boundaries and read-only lock flags survive the real plan API.
 expect {
-	ir = project(wire)?
+	spec = project(wire)?
 	task_project = {
-		..ir,
+		..spec,
 		tasks: [
 			{
 				name: "print",
@@ -221,9 +221,9 @@ expect {
 
 # Switching the selected closure preserves both lock bytes and authority.
 expect {
-	ir = project(wire)?
-	all = plan(ir, Request.Generate, "x86_64-linux", layout)?
-	selected = plan(ir, Request.Shell("ci"), "x86_64-linux", layout)?
+	spec = project(wire)?
+	all = plan(spec, Request.Generate, "x86_64-linux", layout)?
+	selected = plan(spec, Request.Shell("ci"), "x86_64-linux", layout)?
 	match (all.steps, selected.steps) {
 		([full], [shell]) => full.files.last() == shell.files.last()
 			and Locks.decode(authority).map_ok(Locks.encode) == Ok(authority)
@@ -234,10 +234,10 @@ expect {
 # Consumers receive the entire ordered workflow through the same pure API.
 # Nested repetitions equal standalone steps without a Blueprint subprocess.
 expect {
-	ir = project(wire)?
+	spec = project(wire)?
 	workflow_project = {
-		..ir,
-		requires_: ir.requires_.append("workflows"),
+		..spec,
+		requires_: spec.requires_.append("workflows"),
 		tasks: [{ name: "print", environment: "base", run: ["printf", "%s"] }],
 		workflows: [
 			{

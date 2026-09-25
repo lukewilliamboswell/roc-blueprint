@@ -1,6 +1,6 @@
 # Examples
 
-These are foundation source examples using the local platform and IR 2.2, not
+These are foundation source examples using the local platform and Spec 2.3, not
 examples for the latest published platform. Each directory keeps its
 `Blueprint.roc` and related files together.
 
@@ -40,9 +40,7 @@ scripts/test-b1.sh
 
 The configuration regression script checks the imported composition module both
 locally and when invoked by the bundle smoke tests. It also compares composed
-and inline emitted IR. Both bundle gates remain required; the old `ir-release`
-pin is expected to block the released-IR variant until an actual compatible
-release exists. These source examples are not a release qualification.
+and inline emitted Spec.
 The extensions example intentionally fails `blueprint check` with an
 unsupported-features error.
 
@@ -50,5 +48,4 @@ Only explicit `update` initializes or changes `Blueprint.lock`. Ordinary
 `gen`, `shell`, `run`, `build` and `workflow` require matching pins and preserve
 that authority; generated `.blueprint/flake.lock` is a derivative. Example locks
 and generated files are ignored here; commit the authority in your own project.
-See the [source handoff API](../docs/foundation-api.md) and
-[tested snapshot](../docs/foundation-snapshot.md).
+See [the architecture](../docs/architecture.adoc).

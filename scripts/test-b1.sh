@@ -7,7 +7,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Reuse existing resolved fixture pins; do not update any repository lock.
 mkdir -p "$WORK/pinned" "$WORK/composed" "$WORK/overlays"
-cp "$ROOT/blueprint-nix-package/tests/sample.golden.nix" "$WORK/pinned/flake.nix"
+cp "$ROOT/blueprint-nix/tests/sample.golden.nix" "$WORK/pinned/flake.nix"
 cp "$ROOT/fixtures/consumer/inputs.lock" "$WORK/pinned/flake.lock"
 python3 - "$ROOT" "$WORK" <<'PY'
 import json
@@ -20,10 +20,10 @@ lock = json.loads((root / 'fixtures/consumer/inputs.lock').read_text())
 pin = lock['nodes']['nixpkgs']['locked']
 assert pin['type'] == 'github'
 pkgs_ref = f"github:{pin['owner']}/{pin['repo']}/{pin['rev']}"
-platform = root / 'blueprint-ir-platform/main.roc'
+platform = root / 'blueprint-platform/main.roc'
 composed = work / 'composed'
 source = (root / 'examples/composition/Blueprint.roc').read_text()
-source = source.replace('../../blueprint-ir-platform/main.roc',
+source = source.replace('../../blueprint-platform/main.roc',
                         os.path.relpath(platform, composed))
 # The reusable module is unchanged. Supply the fixture's already-resolved set.
 source = source.replace(

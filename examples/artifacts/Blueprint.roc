@@ -1,5 +1,5 @@
 # Two sandboxed artifacts, with locked sources separate from project files.
-app [config] { pf: platform "../../blueprint-ir-platform/main.roc" }
+app [config] { pf: platform "../../blueprint-platform/main.roc" }
 
 config = [
 	Name("artifacts"),

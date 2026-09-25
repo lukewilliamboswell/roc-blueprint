@@ -3,9 +3,9 @@ name: Release roc-blueprint
 # Push a tag like 0.1.0 to publish the roc-blueprint platform bundle and a
 # prebuilt x86_64 Linux `blueprint` CLI.
 #
-# The platform depends on a published roc-blueprint-ir release, whose bundle
-# URL is pinned in blueprint-ir-platform/ir-release (ir has its own release cycle; see
-# release-ir.yml).
+# The platform depends on a published roc-blueprint-core release, whose bundle
+# URL is pinned in blueprint-platform/core-release (ir has its own release cycle; see
+# release-core.yml).
 on:
   push:
     tags: ["[0-9]+.[0-9]+.[0-9]+*"]
@@ -40,14 +40,14 @@ jobs:
         run: ./scripts/test.sh
 
       - name: Bundle against the pinned ir release
-        run: scripts/bundle.sh platform "$(cat blueprint-ir-platform/ir-release)"
+        run: scripts/bundle.sh platform "$(cat blueprint-platform/core-release)"
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           read -r _ pf < <(grep '^roc-blueprint ' dist/bundles.txt)
-          ir_url="$(cat blueprint-ir-platform/ir-release)"
+          ir_url="$(cat blueprint-platform/core-release)"
           cp blueprint dist/blueprint-x86_64-linux
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           cat > notes.md <<NOTES
@@ -59,7 +59,7 @@ jobs:
 
           The \`blueprint\` CLI for x86_64 Linux is attached.
 
-          Uses roc-blueprint-ir \`${ir_url}\`. Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl and arm64mac.
+          Uses roc-blueprint-core \`${ir_url}\`. Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl and arm64mac.
           NOTES
           prerelease=()
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi

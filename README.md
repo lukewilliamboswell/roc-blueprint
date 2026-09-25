@@ -7,16 +7,13 @@
 Describe reusable environments, argv tasks, sandboxed artifact builds and ordered
 workflows in `Blueprint.roc`. The reference CLI executes pure Nix plans.
 
-**Foundation API (B4, IR 2.2):** these examples use the local source
-platform, not the latest published release. This snapshot is source-only and
-not release-qualified; the pinned released-IR bundle gate is expected to block
-until an actual compatible IR release exists. See the [public handoff API](docs/foundation-api.md)
-and [exact tested snapshot](docs/foundation-snapshot.md). The staging repository
-remains available until the later port succeeds.
+**Status (Spec 2.3):** these examples use the local source platform, not the
+latest published release. The architecture, terminology and invariants are in
+[docs/architecture.adoc](docs/architecture.adoc).
 
 ```roc
 # Blueprint.roc at the repository root
-app [config] { pf: platform "blueprint-ir-platform/main.roc" }
+app [config] { pf: platform "blueprint-platform/main.roc" }
 
 config = [
 	Name("my-project"),
@@ -48,7 +45,7 @@ duplicate declarations, unknown references and inheritance cycles, during
 `roc check Blueprint.roc`. This requires the pinned September 23, 2026 Roc
 nightly or a compatible compiler. Explicit sources also enable static
 provider-specific tool grammar checks; `Auto` defers those checks until the
-consumer selects a backend. Package existence is resolved by Nix, not Roc.
+consumer selects a provider. Package existence is resolved by Nix, not Roc.
 
 ## Install
 
@@ -98,19 +95,21 @@ settings:
 | `Source(InputName, FlakeRef)` | Locked non-flake input, e.g. `Source("assets", "path:./assets")`. |
 | `Build(InputName, List(BuildSetting))` | Sandboxed artifact with required `Use`, exact argv `Run`, relative `Output`; optional `Inputs` and `Needs`. |
 | `Workflow(WorkflowName, List(WorkflowStep))` | Ordered `RunTask(name, extra_argv)`, `BuildArtifact(name)` and `RunWorkflow(name)` steps. |
-| `Raw(backend, target, Val)` | Backend-specific data; see below. |
+| `Raw(backend, target, Val)` | Provider-specific data; see below. |
 | `Custom(kind, name, Val)` | Extension data. The current CLI rejects unsupported extensions. |
 
-Inside an `Environment`, each setting occurs at most once:
+Inside an `Environment`, `Tools` and `Overlays` occur at most once, while
+`ToolsFor` occurs at most once per System:
 
 | Setting | Meaning |
 |---|---|
 | `Tools(List(Tool))` | Native package names. `"git"` uses source `default`; `"stable#jq"` uses source `stable`. |
+| `ToolsFor(System, List(Tool))` | Add tools only for a declared target System. Each System occurs at most once per Environment. |
 | `Overlays(List(InputName))` | Ordered selection of declared overlay names. |
 | `Extend(EnvName)` | Inherit one environment's tools and overlays before appending this environment's selections. |
 
 Inheritance deduplicates by first occurrence, parent first. Omitted or empty
-`Tools`/`Overlays` lists do not clear inherited values. A standalone environment
+`Tools`/`ToolsFor`/`Overlays` lists do not clear inherited values. A standalone environment
 has no overlays unless selected. `Run` must contain a nonempty executable;
 arguments remain separate strings, including extra CLI arguments after `--`.
 There is no `In` setting or implicit task environment.
@@ -122,13 +121,27 @@ Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
 Environment("dev", [Tools(["git", "stable#jq"])]),
 ```
 
-The core does not inspect `PATH`, autodetect a backend or translate package
+The core does not inspect `PATH`, autodetect a provider or translate package
 names. The reference CLI explicitly selects Nix. Guix source intent and pure
 capability validation exist, but there is **no Guix renderer or executor**.
 An incompatible requested environment fails; it never retries another provider.
 Missing native packages and unavailable target packages fail in Nix rather than
 being silently filtered out. Unsupported Nix target declarations fail before
-file writes or backend execution.
+file writes or provider execution.
+
+For a shell shared by Linux and macOS, put common tools in `Tools` and declare
+platform libraries explicitly:
+
+```roc
+Environment("dev", [
+	Tools(["git", "python3"]),
+	ToolsFor("x86_64-linux", ["wayland", "alsa-lib"]),
+]),
+```
+
+`ToolsFor` is provider-neutral Spec intent. It applies to inherited environments,
+shells, tasks and builds on that System; undeclared systems and duplicate
+declarations are rejected during evaluation.
 
 Use ordinary Roc lists and functions for composition, not a plugin registry.
 [ProjectTasks.roc](examples/composition/ProjectTasks.roc) returns
@@ -163,7 +176,7 @@ input trees. Changing a locked local source requires explicit update. Initial
 source/output policy rejects symlinks and special files. Only local x86_64 Linux
 sandboxed execution is verified; tasks/config compilation are not sandboxed.
 See the [complete runnable example](examples/artifacts/README.md),
-[real build fixture](fixtures/builds/README.md) and [API](docs/b2.md).
+[real build fixture](fixtures/builds/README.md).
 
 ### Ordered workflows
 
@@ -181,11 +194,11 @@ project files and rebuilds its dependency graph from that snapshot. Nix may reus
 unchanged inputs, but Blueprint never caches artifact results across tasks.
 Locked sources are verified again; task edits to them require explicit update.
 Cycles and excessive depth/expansion fail during configuration validation.
-See the [real workflow fixture](fixtures/workflows/README.md) and [limits/API](docs/b3.md).
+See the [real workflow fixture](fixtures/workflows/README.md).
 
 ### Raw settings
 
-The Nix backend accepts attribute data at two targets:
+The Nix provider accepts attribute data at two targets:
 
 ```roc
 Raw("nix", "shell:default", Attrs([
@@ -201,7 +214,7 @@ Raw("nix", "flake", Attrs([("formatter", Str("nixpkgs-fmt"))])),
 
 Values are `Str`, `Int`, `Bool`, `List([...])` and `Attrs([(name, value), ...])`.
 They are data, not Nix expressions. Duplicate attributes and overrides of
-managed `packages`/`devShells` are rejected. Raw for other backends is ignored.
+managed `packages`/`devShells` are rejected. Raw for other providers is ignored.
 
 ## Commands
 
@@ -217,35 +230,35 @@ Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 | `blueprint tasks` | List tasks and their environments |
 | `blueprint update` | Explicitly initialize/update and atomically publish the authoritative lock |
 | `blueprint check` | Run the compiler check and validate all shell/task/build environments without requiring a lock |
-| `blueprint ir` / `blueprint flake` | Print semantic IR or the generated flake |
+| `blueprint spec` / `blueprint flake` | Print the Spec or the generated flake |
 | `blueprint --help` | Project help; subcommand help lists tasks, aliases and builds |
 
-Backend capability checks follow the requested environment closure; unrelated
+Provider capability checks follow the requested environment closure; unrelated
 valid provider declarations do not block selected operations. Whole-project
 structural validation and required-feature checks still apply. Full rendering
 (`gen`, `update`, `check`, `flake`) checks all shell/task/build environments.
 
-- **Commit** `Blueprint.roc` and the authority (default `Blueprint.lock`);
-  **ignore** generated state (default `.blueprint/`).
+- **Commit** `Blueprint.roc` and the authority (default `Blueprint.lock`, a
+  versioned S-expression listing each pinned source and its digest);
+  **ignore** generated state (default `.blueprint/`). A lock written by an
+  older `blueprint` is refused; run `blueprint update`.
 - Normal `gen`, `shell`, `run`, `build` and `workflow` require matching pins and never
-  rewrite authority or independently update derived locks. B1 raw locks need
-  an explicit `update` to become the validated versioned B2 envelope.
+  rewrite authority or independently update derived locks.
 - **`BLUEPRINT_WORKSPACE`**, **`BLUEPRINT_GENERATED_ROOT`**, **`BLUEPRINT_LOCK`**
   choose caller paths; relative values resolve against the selected project
   root, not the invocation directory. Out-of-tree generated roots are supported.
 - **`BLUEPRINT_TARGET`** selects a declared target (default `x86_64-linux`).
   **`ROC`** selects the pinned compatible compiler; the Nix wrapper supplies it.
-- B4 is a source-only handoff; the unchanged released-IR bundle remains a
-  release blocker. No Guix executor or parallel workflow scheduler is implemented.
+- No Guix executor or parallel workflow scheduler is implemented.
 
 ## How it works
 
 The platform lowers and validates the whole config at top level, then prints
-IR 2.2 as an S-expression. The CLI invokes Roc, parses and revalidates that
-IR through the shared pure `Project` boundary, explicitly selects Nix, and
+Spec 2.3 as an S-expression. The CLI invokes Roc, parses and revalidates that
+Spec through the shared pure `Project` boundary, explicitly selects Nix, and
 owns file writes, locking and execution. The importable core and Nix renderer
 perform no host discovery or effects.
 
-See [B3 API and validation](docs/b3.md), [B2 build guarantees](docs/b2.md), [B1 history](docs/b1.md),
+See [the architecture](docs/architecture.adoc),
 [examples](examples/README.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md).

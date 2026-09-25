@@ -2,7 +2,7 @@ import pf.Config
 import pf.EnvName
 
 ## A normal pure function can supply reusable settings. It neither installs
-## tools nor extends the consumer with a new backend or runtime operation.
+## tools nor extends the consumer with a new provider or runtime operation.
 ProjectTasks :: [].{
 	settings : EnvName -> List(Config.Setting)
 	settings = |environment| [

@@ -4,7 +4,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROC="${ROC:-roc}"
-PLATFORM="${1:-$ROOT/blueprint-ir-platform/main.roc}"
+PLATFORM="${1:-$ROOT/blueprint-platform/main.roc}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 # roc check accepts absolute platform paths, but evaluating an app does not.
@@ -39,6 +39,7 @@ fixture TasksWithoutShells '[Name("tasks"), Environment("dev", [Tools(["git"])])
 fixture EquivalentInline '[Name("inheritance"), Overlay("tools", "github:roc-lang/roc-overlay"), Environment("dev", [Tools(["git", "python3"]), Overlays(["tools"])]), Environment("base", [Tools(["git"]), Overlays(["tools"])]), Environment("alias", [Tools(["git", "python3"]), Overlays(["tools"])]), Environment("empty", []), Shell("default", [Use("alias")]), Task("check.version", [Use("dev"), Run(["git", "--version"])])]'
 fixture EquivalentDefault '[Name("valid"), Packages("default", Auto), Environment("dev", [Tools(["git"])]), Shell("default", [Use("dev")])]'
 fixture EquivalentComposition '[Name("composed"), Systems(["x86_64-linux"]), Environment("base", [Tools(["git"])]), Environment("dev", [Tools(["git", "python3"])]), Shell("default", [Use("dev")]), Task("fmt", [Use("dev"), Run(["python3", "--version"])]), Task("test", [Use("dev"), Run(["git", "--version"])]), Task("args", [Use("dev"), Run(["python3", "-c", "import json, sys; print(json.dumps(sys.argv[1:]))", "configured argument"])])]'
+fixture SystemTools '[Name("systems"), Systems(["x86_64-linux", "aarch64-darwin"]), Environment("base", [Tools(["git"]), ToolsFor("x86_64-linux", ["wayland"])]), Environment("dev", [Extend("base"), ToolsFor("x86_64-linux", ["alsa-lib"])]), Shell("default", [Use("dev")])]'
 
 fixture MissingName '[Environment("dev", [])]' 'MissingName'
 fixture DuplicateName '[Name("one"), Name("two")]' 'DuplicateName'
@@ -59,6 +60,9 @@ fixture DuplicateRun '[Name("invalid"), Environment("dev", []), Task("check", [U
 fixture EmptyRun '[Name("invalid"), Environment("dev", []), Task("check", [Use("dev"), Run([])])]' 'empty argv'
 fixture EmptyExecutable '[Name("invalid"), Environment("dev", []), Task("check", [Use("dev"), Run([""])])]' 'empty argv'
 fixture DuplicateTools '[Name("invalid"), Environment("dev", [Tools([]), Tools([])])]' 'DuplicateTools'
+fixture DuplicateToolsFor '[Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [ToolsFor("x86_64-linux", ["git"]), ToolsFor("x86_64-linux", ["python3"])])]' 'DuplicateToolsFor'
+fixture UndeclaredToolsFor '[Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [ToolsFor("aarch64-darwin", ["git"])])]' 'undeclared system for system tools'
+fixture UnknownToolsForSource '[Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [ToolsFor("x86_64-linux", ["missing#git"])])]' 'unknown source'
 fixture DuplicateOverlays '[Name("invalid"), Environment("dev", [Overlays([]), Overlays([])])]' 'DuplicateOverlays'
 fixture DuplicateExtend '[Name("invalid"), Environment("base", []), Environment("dev", [Extend("base"), Extend("base")])]' 'DuplicateExtend'
 fixture UnknownShellEnvironment '[Name("invalid"), Shell("default", [Use("missing")])]' 'unknown environment'
@@ -152,7 +156,7 @@ fixture WorkflowTaskIsNotBuild '[Name("bad"), Environment("dev", []), Task("chec
 fixture WorkflowBuildIsNotTask "[$workflow_base, Workflow(\"ci\", [RunTask(\"app\", [])])]" 'unknown task'
 fixture WorkflowNul "[$workflow_base, Workflow(\"ci\", [RunTask(\"check.all\", [Str.from_utf8([0]) ?? \"\"])])]" 'NUL in argv'
 
-# Count/depth gates run against the local and served platform, not only pure IR.
+# Count/depth gates run against the local and served platform, not only pure Spec.
 workflow_graph() {
 	python3 - "$1" "$2" "$3" <<'PY'
 import sys
@@ -198,7 +202,7 @@ fixture GuixOverlay '[Name("deferred-capability"), Packages("default", From(Guix
 
 # The real imported-module fixture must work with the served platform too.
 cp "$ROOT/examples/composition/ProjectTasks.roc" "$WORK/ProjectTasks.roc"
-sed "s#platform \"../../blueprint-ir-platform/main.roc\"#platform \"$PLATFORM\"#" \
+sed "s#platform \"../../blueprint-platform/main.roc\"#platform \"$PLATFORM\"#" \
 	"$ROOT/examples/composition/Blueprint.roc" >"$WORK/Composed.roc"
 valid+=(Composed)
 for name in "${valid[@]}"; do
@@ -235,15 +239,15 @@ for index in "${!quote_invalid[@]}"; do
 	fi
 done
 
-# Compare actual emitted semantic IR, not private lowering implementation details.
+# Compare actual emitted semantic Spec, not private lowering implementation details.
 # This also proves inheritance is resolved, deduplicated, and parent-first;
 # empty child Overlays does not clear the parent selection.
 same_ir() {
-	"$ROC" "$WORK/$1.roc" >"$WORK/left.ir"
-	"$ROC" "$WORK/$2.roc" >"$WORK/right.ir"
-	if ! cmp -s "$WORK/left.ir" "$WORK/right.ir"; then
-		diff -u "$WORK/left.ir" "$WORK/right.ir" >&2 || true
-		echo "expected identical semantic IR for $1 and $2" >&2
+	"$ROC" "$WORK/$1.roc" >"$WORK/left.spec"
+	"$ROC" "$WORK/$2.roc" >"$WORK/right.spec"
+	if ! cmp -s "$WORK/left.spec" "$WORK/right.spec"; then
+		diff -u "$WORK/left.spec" "$WORK/right.spec" >&2 || true
+		echo "expected identical semantic Spec for $1 and $2" >&2
 		exit 1
 	fi
 }
@@ -257,20 +261,24 @@ same_ir Workflows ComposedWorkflows
 # explicit while removing all executable discovery from the app's environment.
 compiler="$(command -v "$ROC")"
 mkdir "$WORK/no-tools"
-"$compiler" "$WORK/Valid.roc" >"$WORK/with-tools.ir"
-PATH="$WORK/no-tools" "$compiler" "$WORK/Valid.roc" >"$WORK/without-tools.ir"
-cmp "$WORK/with-tools.ir" "$WORK/without-tools.ir"
+"$compiler" "$WORK/Valid.roc" >"$WORK/with-tools.spec"
+PATH="$WORK/no-tools" "$compiler" "$WORK/Valid.roc" >"$WORK/without-tools.spec"
+cmp "$WORK/with-tools.spec" "$WORK/without-tools.spec"
 
 # New optional fields must be accompanied by feature markers for old consumers.
-"$ROC" "$WORK/Builds.roc" >"$WORK/builds.ir"
-grep -qF '(minor 2)' "$WORK/builds.ir"
-grep -qF '(requires ("sources" "builds"))' "$WORK/builds.ir"
-grep -qF '(build_sources ' "$WORK/builds.ir"
-grep -qF '(builds ' "$WORK/builds.ir"
-"$ROC" "$WORK/Workflows.roc" >"$WORK/workflows.ir"
-grep -qF '(minor 2)' "$WORK/workflows.ir"
-grep -qF '(requires ("builds" "workflows"))' "$WORK/workflows.ir"
-grep -qF '(workflows ' "$WORK/workflows.ir"
-grep -qF '(RunTask "check.all" ("" "two words" "\"quoted\"" "$HOME" "line\nbreak" "--flag"))' "$WORK/workflows.ir"
+"$ROC" "$WORK/Builds.roc" >"$WORK/builds.spec"
+grep -qF '(minor 3)' "$WORK/builds.spec"
+grep -qF '(requires ("sources" "builds"))' "$WORK/builds.spec"
+grep -qF '(build_sources ' "$WORK/builds.spec"
+grep -qF '(builds ' "$WORK/builds.spec"
+"$ROC" "$WORK/Workflows.roc" >"$WORK/workflows.spec"
+grep -qF '(minor 3)' "$WORK/workflows.spec"
+grep -qF '(requires ("builds" "workflows"))' "$WORK/workflows.spec"
+grep -qF '(workflows ' "$WORK/workflows.spec"
+grep -qF '(RunTask "check.all" ("" "two words" "\"quoted\"" "$HOME" "line\nbreak" "--flag"))' "$WORK/workflows.spec"
+"$ROC" "$WORK/SystemTools.roc" >"$WORK/system-tools.spec"
+grep -qF '(requires ("system-tools"))' "$WORK/system-tools.spec"
+grep -qF '(system_tools ' "$WORK/system-tools.spec"
+grep -qF '(system "x86_64-linux")' "$WORK/system-tools.spec"
 
-echo "    ${#valid[@]} valid configs accepted; ${#invalid[@]} semantic errors and ${#quote_invalid[@]} checked-name errors rejected at compile time; equivalent IR verified"
+echo "    ${#valid[@]} valid configs accepted; ${#invalid[@]} semantic errors and ${#quote_invalid[@]} checked-name errors rejected at compile time; equivalent Spec verified"

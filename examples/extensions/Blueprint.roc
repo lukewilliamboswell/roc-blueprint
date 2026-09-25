@@ -1,6 +1,6 @@
 # Exercises `Custom` extensions and `Raw` values of every shape. Used only for
-# IR output checks: `blueprint` rejects extension kinds it does not know.
-app [config] { pf: platform "../../blueprint-ir-platform/main.roc" }
+# Spec output checks: `blueprint` rejects extension kinds it does not know.
+app [config] { pf: platform "../../blueprint-platform/main.roc" }
 
 config = [
 	Name("extensions"),

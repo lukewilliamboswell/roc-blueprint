@@ -1,0 +1,54 @@
+name: Release roc-blueprint-core
+
+# Push a tag like core-0.1.0 to publish the roc-blueprint-core package bundle.
+# The package is released independently of the platform; to use a new ir
+# release in the platform, put its URL in blueprint-platform/core-release.
+on:
+  push:
+    tags: ["core-[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read pinned Roc nightly
+        run: printf 'ROC_NIGHTLY_TAG=%s\n' "$(sed -n '1p' .roc-version)" >> "$GITHUB_ENV"
+
+      - name: Install Roc
+        uses: roc-lang/setup-roc@f5a74bf90aa694b43ab4a7cbfdb19273bc6aa697
+        with:
+          version: nightly-new-compiler
+          nightly-tag: ${{ env.ROC_NIGHTLY_TAG }}
+
+      - name: Test
+        run: |
+          roc fmt --check blueprint-core
+          roc test blueprint-core/main.roc
+
+      - name: Bundle
+        run: scripts/bundle.sh core
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          read -r _ core < <(grep '^roc-blueprint-core ' dist/bundles.txt)
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${core}"
+          cat > notes.md <<NOTES
+          The blueprint Spec and its S-expression format.
+
+          \`\`\`roc
+          core: "${url}"
+          \`\`\`
+
+          Built with Roc \`${ROC_NIGHTLY_TAG}\`.
+          NOTES
+          prerelease=()
+          if [[ "${GITHUB_REF_NAME#core-}" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" "${prerelease[@]}" --latest=false \
+            --title "roc-blueprint-core ${GITHUB_REF_NAME#core-}" --notes-file notes.md "dist/${core}"
