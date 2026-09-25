@@ -146,6 +146,9 @@
                 ./blueprint-core/Layout.roc
                 ./blueprint-core/Sexpr.roc
                 ./blueprint-core/Value.roc
+                ./blueprint-core/Provider.roc
+                ./blueprint-core/Lock.roc
+                ./blueprint-core/Tree.roc
               ];
             };
             nativeBuildInputs = [

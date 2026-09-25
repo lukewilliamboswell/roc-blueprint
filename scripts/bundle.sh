@@ -53,7 +53,7 @@ bundle() { # bundle <dir> <files...>; prints the created archive name
 bundle_core() {
 	echo "==> Bundling roc-blueprint-core" >&2
 	local name
-	name="$(bundle "$ROOT/blueprint-core" main.roc Spec.roc Project.roc Request.roc Steps.roc Layout.roc Sexpr.roc Value.roc)"
+	name="$(bundle "$ROOT/blueprint-core" main.roc Spec.roc Project.roc Request.roc Steps.roc Layout.roc Sexpr.roc Value.roc Provider.roc Lock.roc Tree.roc)"
 	echo "    $name" >&2
 	echo "roc-blueprint-core $name" >>"$DIST/bundles.txt"
 	echo "$name"
