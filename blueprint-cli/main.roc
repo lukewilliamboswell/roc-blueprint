@@ -1,13 +1,13 @@
 ## `blueprint`: turns a `Blueprint.roc` into a working Nix environment.
 ##
-## The Roc compiler validates `Blueprint.roc` and prints the blueprint IR;
+## The Roc compiler validates `Blueprint.roc` and prints the blueprint Spec;
 ## this CLI consumes pure plans and owns file/process effects. Only explicit
 ## update publishes the authority; ordinary operations use its resolved pins.
 app [main!] {
 	pf: platform "../.basic-cli/main.roc",
 	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
-	ir: "../blueprint-ir-package/main.roc",
-	nix: "../blueprint-nix-package/main.roc",
+	core: "../blueprint-core/main.roc",
+	nix: "../blueprint-nix/main.roc",
 }
 
 import pf.Cmd
@@ -19,13 +19,13 @@ import pf.Stderr
 import weaver.Cli
 import weaver.Param
 import weaver.SubCmd
-import ir.Ir
-import ir.Project
-import ir.Request
-import ir.Plan
-import ir.Layout
-import nix.Backend
-import nix.NixBackend
+import core.Spec
+import core.Project
+import core.Request
+import core.Steps
+import core.Layout
+import nix.Provider
+import nix.NixProvider
 import nix.Locks
 import "../scripts/blueprint-runtime.py" as snapshot_helper : Str
 import "../.roc-version" as compiler_version : Str
@@ -33,9 +33,9 @@ import "../.roc-version" as compiler_version : Str
 version : Str
 version = "0.2.0"
 
-## The backend every command goes through.
-backend : Backend
-backend = NixBackend.backend
+## The provider every command goes through.
+provider : Provider
+provider = NixProvider.provider
 
 Command : [
 	Gen,
@@ -46,14 +46,14 @@ Command : [
 	Tasks,
 	Update,
 	Check,
-	PrintIr,
+	PrintSpec,
 	PrintFlake,
 ]
 
 ## The command-line parser. When Blueprint.roc loads, its shells, tasks and
 ## builds become subcommands, so help and usage errors list what this project
 ## actually defines. Otherwise the parser is generic and says why.
-cli_for : Try(Ir, _) -> Cli.CliParser(Try(Command, [NoSubcommand]))
+cli_for : Try(Spec, _) -> Cli.CliParser(Try(Command, [NoSubcommand]))
 cli_for = |loaded| {
 	generic_shell_cmd = SubCmd.finish(
 		Cli.map(Param.maybe_str({ name: "name", help: "The shell to enter (default: \"default\")." }), |name| Shell(name ?? "default")),
@@ -89,9 +89,9 @@ cli_for = |loaded| {
 		{ name: "workflow", description: "Execute an ordered task/build workflow", mapper: |c| c },
 	)
 	build_cmd = match loaded {
-		Ok(ir) if !ir.builds.is_empty() => SubCmd.finish(
+		Ok(spec) if !spec.builds.is_empty() => SubCmd.finish(
 			SubCmd.required(
-				ir.builds.map(
+				spec.builds.map(
 					|build| SubCmd.empty({
 						name: build.name,
 						description: "${build.output} [${build.environment}]",
@@ -109,24 +109,24 @@ cli_for = |loaded| {
 	}
 	{ shell_cmd, run_cmd, about } =
 		match loaded {
-			Ok(ir) => {
+			Ok(spec) => {
 				# Weaver rejects an empty subcommand list, so fall back to the
 				# generic parsers when there are no shells or tasks.
-				shell_cmd: if ir.shells.is_empty()
+				shell_cmd: if spec.shells.is_empty()
 					generic_shell_cmd
 				else
 					SubCmd.finish(
-						Cli.map(SubCmd.optional(ir.shells.map(shell_choice)), |picked| Shell(picked ?? "default")),
+						Cli.map(SubCmd.optional(spec.shells.map(shell_choice)), |picked| Shell(picked ?? "default")),
 						{ name: "shell", description: "Generate, then enter a dev shell (default: \"default\")", mapper: |c| c },
 					),
-				run_cmd: if ir.tasks.is_empty()
+				run_cmd: if spec.tasks.is_empty()
 					generic_run_cmd
 				else
 					SubCmd.finish(
-						SubCmd.required(ir.tasks.map(task_choice)),
+						SubCmd.required(spec.tasks.map(task_choice)),
 						{ name: "run", description: "Generate, then run a task in its shell", mapper: |r| Run(r) },
 					),
-				about: summary(ir),
+				about: summary(spec),
 			}
 
 			Err(err) => {
@@ -154,7 +154,7 @@ cli_for = |loaded| {
 				SubCmd.empty({ name: "tasks", description: "List the tasks", value: Tasks }),
 				SubCmd.empty({ name: "update", description: "Update Blueprint.lock to the latest inputs", value: Update }),
 				SubCmd.empty({ name: "check", description: "Validate Blueprint.roc", value: Check }),
-				SubCmd.empty({ name: "ir", description: "Print the blueprint IR", value: PrintIr }),
+				SubCmd.empty({ name: "spec", description: "Print the Spec", value: PrintSpec }),
 				SubCmd.empty({ name: "flake", description: "Print the generated files", value: PrintFlake }),
 			]),
 			{
@@ -171,21 +171,21 @@ cli_for = |loaded| {
 	)
 }
 
-summary : Ir -> Str
-summary = |ir| {
+summary : Spec -> Str
+summary = |spec| {
 	count = |n, one, many| if n == 1 "1 ${one}" else "${n.to_str()} ${many}"
-	shells = ir.shells.map(|s| s.name)
-	tasks = ir.tasks.map(|t| t.name)
+	shells = spec.shells.map(|s| s.name)
+	tasks = spec.tasks.map(|t| t.name)
 	task_part = if tasks.is_empty() "no tasks" else "${count(tasks.len(), "task", "tasks")} (${Str.join_with(tasks, ", ")})"
-	"${ir.name}: ${count(shells.len(), "shell", "shells")} (${Str.join_with(shells, ", ")}), ${task_part}."
+	"${spec.name}: ${count(shells.len(), "shell", "shells")} (${Str.join_with(shells, ", ")}), ${task_part}."
 }
 
-shell_choice : Ir.Shell -> SubCmd.SubcommandParserConfig(Str)
+shell_choice : Spec.Shell -> SubCmd.SubcommandParserConfig(Str)
 shell_choice = |shell| {
 	SubCmd.empty({ name: shell.name, description: "Environment ${shell.environment}", value: shell.name })
 }
 
-task_choice : Ir.Task -> SubCmd.SubcommandParserConfig({ task : Str, args : List(Str) })
+task_choice : Spec.Task -> SubCmd.SubcommandParserConfig({ task : Str, args : List(Str) })
 task_choice = |task|
 	SubCmd.finish(
 		Param.str_list({ name: "args", help: "Extra arguments appended to the command; put them after --." }),
@@ -200,7 +200,7 @@ main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |raw_args| {
 	context = context!()
 	loaded = match context {
-		Ok(ctx) => load_ir!(ctx.layout.project_root)
+		Ok(ctx) => load_spec!(ctx.layout.project_root)
 		Err(err) => Err(err)
 	}
 	# basic-cli supplies arguments without the executable name.
@@ -226,17 +226,17 @@ run! = |command, loaded, context| {
 	match command {
 		Check => check!(loaded, ctx.layout.project_root)
 		_ => {
-			ir = loaded?
+			spec = loaded?
 			match command {
-				Gen => execute_request!(ir, Request.Generate, ctx)
-				Shell(name) => execute_request!(ir, Request.Shell(name), ctx)
-				Run({ task, args }) => execute_request!(ir, Request.Run(task, args), ctx)
-				Build(name) => execute_request!(ir, Request.Build(name), ctx)
-				Workflow(name) => execute_request!(ir, Request.Workflow(name), ctx)
-				Tasks => list_tasks!(ir)
-				Update => update!(ir, ctx)
-				PrintIr => Stdout.write!(ir.to_str())
-				PrintFlake => print_files!(ir)
+				Gen => execute_request!(spec, Request.Generate, ctx)
+				Shell(name) => execute_request!(spec, Request.Shell(name), ctx)
+				Run({ task, args }) => execute_request!(spec, Request.Run(task, args), ctx)
+				Build(name) => execute_request!(spec, Request.Build(name), ctx)
+				Workflow(name) => execute_request!(spec, Request.Workflow(name), ctx)
+				Tasks => list_tasks!(spec)
+				Update => update!(spec, ctx)
+				PrintSpec => Stdout.write!(spec.to_str())
+				PrintFlake => print_files!(spec)
 				Check => check!(loaded, ctx.layout.project_root)
 			}
 		}
@@ -244,9 +244,9 @@ run! = |command, loaded, context| {
 }
 
 ## Type-check Blueprint.roc (including whole-config validation), then reuse
-## the IR loaded for CLI parsing to check backend compatibility. This also
+## the Spec loaded for CLI parsing to check provider compatibility. This also
 ## preserves validation for older platforms that only lower at run time.
-check! : Try(Ir, _), Str => Try({}, _)
+check! : Try(Spec, _), Str => Try({}, _)
 check! = |loaded, root| {
 	check_host!()?
 	Cmd.new_str(roc!()?).args_str(["check", "Blueprint.roc"])
@@ -256,9 +256,9 @@ check! = |loaded, root| {
 	Stdout.line!("Blueprint.roc is valid")
 }
 
-## Compile and run Blueprint.roc, then parse the IR it prints.
-load_ir! : Str => Try(Ir, _)
-load_ir! = |root| {
+## Compile and run Blueprint.roc, then parse the Spec it prints.
+load_spec! : Str => Try(Spec, _)
+load_spec! = |root| {
 	if !(path("${root}/Blueprint.roc").exists!() ?? False) {
 		return Err(NoBlueprint)
 	}
@@ -266,18 +266,18 @@ load_ir! = |root| {
 	output = Cmd.new_str(roc!()?).args_str(["Blueprint.roc"])
 		.cwd(path(root)).exec_output!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
-	ir = Ir.parse(output.stdout_utf8).map_err(|err| BadIr(err))?
-	missing = ir.unsupported_features(backend.features)
+	spec = Spec.parse(output.stdout_utf8).map_err(|err| BadSpec(err))?
+	missing = spec.unsupported_features(provider.features)
 	if !missing.is_empty() {
 		return Err(NeedsFeatures(missing))
 	}
-	Project.validate(ir).map_err(|message| InvalidProject(message))
+	Project.validate(spec).map_err(|message| InvalidProject(message))
 }
 
-render : Ir -> Try(List(Backend.File), _)
-render = |ir| (backend.render)(ir).map_err(|msg| RenderFailed(msg))
+render : Spec -> Try(List(Provider.File), _)
+render = |spec| (provider.render)(spec).map_err(|msg| RenderFailed(msg))
 
-## Run an argv from the backend.
+## Run an argv from the provider.
 exec! : List(Str), Str => Try({}, _)
 exec! = |argv, root|
 	match argv {
@@ -297,9 +297,9 @@ exec! = |argv, root|
 		[] => Ok({})
 	}
 
-print_files! : Ir => Try({}, _)
-print_files! = |ir| {
-	files = render(ir)?
+print_files! : Spec => Try({}, _)
+print_files! = |spec| {
+	files = render(spec)?
 	match files {
 		[only] => Stdout.write!(only.contents)
 		_ => {
@@ -449,10 +449,10 @@ safe_source! = |value| {
 }
 
 ## The pure planner validates the entire request before any staging effects.
-execute_request! : Ir, Request, Context => Try({}, _)
-execute_request! = |ir, request, ctx| {
+execute_request! : Spec, Request, Context => Try({}, _)
+execute_request! = |spec, request, ctx| {
 	layout = ctx.layout
-	_ = NixBackend.preflight(ir, request, ctx.target, layout)
+	_ = NixProvider.preflight(spec, request, ctx.target, layout)
 		.map_err(|message| RenderFailed(message))?
 	if !(path(layout.lock_path).exists!()?) {
 		return Err(LockFailed("missing authoritative lock; run `blueprint update`"))
@@ -463,7 +463,7 @@ execute_request! = |ir, request, ctx| {
 	}
 	locks = Locks.decode(path(layout.lock_path).read_utf8!()?)
 		.map_err(|message| LockFailed(message))?
-	plan = NixBackend.plan(ir, request, ctx.target, layout, locks)
+	plan = NixProvider.plan(spec, request, ctx.target, layout, locks)
 		.map_err(|message| RenderFailed(message))?
 	for step in plan.steps {
 		execute_step!(step, layout)?
@@ -473,7 +473,7 @@ execute_request! = |ir, request, ctx| {
 
 ## One consumer-owned executor for standalone requests and workflow steps.
 ## All planning has succeeded before the first materialization or task effect.
-execute_step! : Plan.Step, Layout => Try({}, _)
+execute_step! : Steps.Step, Layout => Try({}, _)
 execute_step! = |step, layout| {
 	for operation in step.operations {
 		match operation {
@@ -515,7 +515,7 @@ execute_step! = |step, layout| {
 
 ## Resolve the selected installable with the exact planned build command.
 ## Dependency metadata stays descriptive; no store paths are guessed for it.
-report_build! : Plan.Step, Str, Str => Try({}, _)
+report_build! : Steps.Step, Str, Str => Try({}, _)
 report_build! = |plan, name, root| {
 	for artifact in plan.artifacts {
 		Stderr.line!(
@@ -540,7 +540,7 @@ report_build! = |plan, name, root| {
 }
 
 ## Plans are compiled-in data, but filesystem aliases remain runtime state.
-stage! : List(Plan.File), Layout => Try({}, _)
+stage! : List(Steps.File), Layout => Try({}, _)
 stage! = |files, layout| {
 	safe_path!(layout.generated_root)?
 	for file in files {
@@ -557,19 +557,19 @@ stage! = |files, layout| {
 	Ok({})
 }
 
-list_tasks! : Ir => Try({}, _)
-list_tasks! = |ir| {
-	lines = ir.tasks.map(|t| "${t.name}\t(${t.environment})\t${Str.join_with(t.run, " ")}")
+list_tasks! : Spec => Try({}, _)
+list_tasks! = |spec| {
+	lines = spec.tasks.map(|t| "${t.name}\t(${t.environment})\t${Str.join_with(t.run, " ")}")
 	Stdout.line!(Str.join_with(lines, "\n"))
 }
 
 ## Explicit update alone resolves pins and atomically publishes the authority.
-update! : Ir, Context => Try({}, _)
-update! = |ir, ctx| {
+update! : Spec, Context => Try({}, _)
+update! = |spec, ctx| {
 	layout = ctx.layout
-	files = NixBackend.update_files(ir, ctx.target, layout)
+	files = NixProvider.update_files(spec, ctx.target, layout)
 		.map_err(|message| RenderFailed(message))?
-	locals = NixBackend.local_checks(ir, ctx.target, layout)
+	locals = NixProvider.local_checks(spec, ctx.target, layout)
 		.map_err(|message| RenderFailed(message))?
 	safe_path!(layout.lock_path)?
 	observed = Cmd.new_str("python3")
@@ -602,7 +602,7 @@ update! = |ir, ctx| {
 		layout.project_root,
 	)?
 	safe_path!(backend_lock)?
-	locks = Locks.from_nix(ir, layout, path(backend_lock).read_utf8!()?)
+	locks = Locks.from_nix(spec, layout, path(backend_lock).read_utf8!()?)
 		.map_err(|message| LockFailed(message))?
 	path(parent(layout.lock_path)).create_all!()?
 	publish_authority!(
@@ -679,13 +679,13 @@ describe = |err|
 		LockFailed(message) => "${message}; use `blueprint update` to initialize "
 			.concat("or deliberately refresh pins")
 		UnsafePath(value) => "refusing unsafe or symlinked runtime path: ${value}"
-		BadIr(InvalidSexpr(msg)) => "could not read the IR from Blueprint.roc: ${msg}"
-		BadIr(UnsupportedFormat({ major, minor })) => "IR format ${U64.to_str(major)}.${U64.to_str(minor)} is not supported by this blueprint (understands major ${Ir.current_format.major.to_str()}); upgrade blueprint or change the platform version"
+		BadSpec(InvalidSexpr(msg)) => "could not read the Spec from Blueprint.roc: ${msg}"
+		BadSpec(UnsupportedFormat({ major, minor })) => "Spec format ${U64.to_str(major)}.${U64.to_str(minor)} is not supported by this blueprint (understands major ${Spec.current_format.major.to_str()}); upgrade blueprint or change the platform version"
 		NeedsFeatures(missing) => "Blueprint.roc needs features: ${Str.join_with(missing, ", ")}; upgrade blueprint"
-		InvalidProject(msg) => "invalid IR project: ${msg}"
-		RenderFailed(msg) => "cannot generate the ${backend.name} files: ${msg}"
-		BadIr(MissingRequiredField("format")) => "Blueprint.roc uses an older roc-blueprint platform that this blueprint can't read; update the platform URL in its app header to a current release"
-		BadIr(MissingRequiredField(field)) => "the IR from Blueprint.roc is missing ${field}"
+		InvalidProject(msg) => "invalid Spec project: ${msg}"
+		RenderFailed(msg) => "cannot generate the ${provider.name} files: ${msg}"
+		BadSpec(MissingRequiredField("format")) => "Blueprint.roc uses an older roc-blueprint platform that this blueprint can't read; update the platform URL in its app header to a current release"
+		BadSpec(MissingRequiredField(field)) => "the Spec from Blueprint.roc is missing ${field}"
 		NonZeroExitCode({ command, exit_code, stderr_utf8_lossy, .. }) =>
 			"`${command}` exited with code ${I32.to_str(exit_code)}:\n"
 				.concat(stderr_utf8_lossy)

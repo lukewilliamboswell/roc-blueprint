@@ -71,7 +71,7 @@ generated.joinpath("flake.lock").write_text(json.dumps(graph))
     env = os.environ | {
         "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}", "ROC": str(roc),
         "ROC_VERSION": ROC_VERSION,
-        "FIXTURE": str(ROOT / "blueprint-nix-package/tests"
+        "FIXTURE": str(ROOT / "blueprint-nix/tests"
                        / "local.nix-lock.json"),
     }
 
@@ -87,7 +87,7 @@ generated.joinpath("flake.lock").write_text(json.dumps(graph))
                               env=env | (extra or {}), capture_output=True,
                               text=True, timeout=30)
 
-    # Preflight must inspect ancestor links for every backend input category.
+    # Preflight must inspect ancestor links for every provider input category.
     forms = {
         "build-source": WIRE[:-1] + '(build_sources (((name "assets") '
                         '(ref "path:./outer/assets")))) '

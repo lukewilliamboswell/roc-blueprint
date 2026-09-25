@@ -137,15 +137,15 @@
                 ./blueprint-cli
                 ./.roc-version
                 ./scripts/blueprint-runtime.py
-                ./blueprint-nix-package
-                ./blueprint-ir-package/main.roc
-                ./blueprint-ir-package/Ir.roc
-                ./blueprint-ir-package/Project.roc
-                ./blueprint-ir-package/Request.roc
-                ./blueprint-ir-package/Plan.roc
-                ./blueprint-ir-package/Layout.roc
-                ./blueprint-ir-package/Sexpr.roc
-                ./blueprint-ir-package/Value.roc
+                ./blueprint-nix
+                ./blueprint-core/main.roc
+                ./blueprint-core/Spec.roc
+                ./blueprint-core/Project.roc
+                ./blueprint-core/Request.roc
+                ./blueprint-core/Steps.roc
+                ./blueprint-core/Layout.roc
+                ./blueprint-core/Sexpr.roc
+                ./blueprint-core/Value.roc
               ];
             };
             nativeBuildInputs = [

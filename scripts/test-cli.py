@@ -152,7 +152,7 @@ else:
     assert "there is no Blueprint.roc" in run("tasks", status=1)
 
     def settings(body, cwd=work):
-        platform = os.path.relpath(ROOT / "blueprint-ir-platform/main.roc", cwd)
+        platform = os.path.relpath(ROOT / "blueprint-platform/main.roc", cwd)
         (cwd / "Blueprint.roc").write_text(
             f'app [config] {{ pf: platform "{platform}" }}\n'
             f'config = [{body}]\n'
@@ -171,7 +171,7 @@ else:
     assert "echo-args" in run("run", "--help")
     assert "ci" in run("shell", "--help")
     assert "echo-args\t(ci)" in run("tasks")
-    assert '(name "argument-test")' in run("ir")
+    assert '(name "argument-test")' in run("spec")
     assert "devShells" in run("flake")
     (work / "roc-calls.jsonl").unlink()
     assert "Blueprint.roc is valid" in run("check")
@@ -207,7 +207,7 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
     ]:
         cwd = isolated(f"compiler-{name}")
         settings(valid, cwd)
-        output = run("ir", status=1, cwd=cwd, overrides=overrides)
+        output = run("spec", status=1, cwd=cwd, overrides=overrides)
         assert diagnostic in output and pin in output and "set ROC" in output
         assert calls("roc", cwd) == ([] if name == "missing"
                                       else [["version"]])
@@ -247,7 +247,7 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
                 "configured argument", "first", "two words", "--literal", ""),
     ]
 
-    # Reusing the initially loaded IR must still reject unsupported features.
+    # Reusing the initially loaded Spec must still reject unsupported features.
     settings(valid + 'Custom("services", "demo", Str("value")),')
     assert "needs features: extensions" in run("check", status=1)
     settings('Environment("ci", [Tools(["git"])]), Shell("default", [Use("ci")])')
@@ -274,8 +274,8 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
     workflow_wire = (wire.replace("(minor 0)", "(minor 2)")[:-1]
                      + f'(requires ("workflows")) (workflows ({workflow})))')
     rejected = [
-        ("major-1", wire.replace("(major 2)", "(major 1)"), "IR format 1.0"),
-        ("major-3", wire.replace("(major 2)", "(major 3)"), "IR format 3.0"),
+        ("major-1", wire.replace("(major 2)", "(major 1)"), "Spec format 1.0"),
+        ("major-3", wire.replace("(major 2)", "(major 3)"), "Spec format 3.0"),
         ("requires", wire[:-1] + '(requires ("future-operation")))',
          "needs features: future-operation"),
         ("reference", wire.replace('(environment "ci")',
@@ -292,7 +292,7 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
          "workflows require feature: workflows"),
         ("workflow-tag", workflow_wire.replace('RunTask "echo-args" ()',
                                               'FutureStep "echo-args"'),
-         "could not read the IR from Blueprint.roc"),
+         "could not read the Spec from Blueprint.roc"),
         ("workflow-cycle", workflow_wire.replace(
             workflow, workflow + ' ((name "unused") '
             '(steps ((RunWorkflow "unused"))))'),
@@ -302,7 +302,7 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
             '(requires ("workflows" "workflows-v2"))'),
          "needs features: workflows-v2"),
         ("workflow-major", workflow_wire.replace('(major 2)', '(major 3)'),
-         "IR format 3.2"),
+         "Spec format 3.2"),
     ]
     for name, text, diagnostic in rejected:
         cwd = isolated(f"wire-{name}")
@@ -320,7 +320,7 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
         wire.replace("(minor 0)", "(minor 999)")[:-1]
         + '(future-field (Future "ignored")))'
     )
-    output = run("ir", cwd=cwd, overrides={"ROC": str(wire_roc)})
+    output = run("spec", cwd=cwd, overrides={"ROC": str(wire_roc)})
     assert "(minor 999)" in output, output
     assert '(name "wire")' in output, output
     untouched(cwd)
@@ -331,7 +331,7 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
     (cwd / "wire.scm").write_text(
         workflow_wire.replace("(minor 2)", "(minor 999)")
     )
-    output = run("ir", cwd=cwd, overrides={"ROC": str(wire_roc)})
+    output = run("spec", cwd=cwd, overrides={"ROC": str(wire_roc)})
     assert "(minor 999)" in output and '(RunTask "echo-args" ())' in output
     assert '(workflows (' in output, output
     untouched(cwd)

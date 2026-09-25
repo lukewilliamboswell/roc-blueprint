@@ -205,7 +205,7 @@ class Suite:
                 self.snapshot_files[relative] = source.read_bytes()
         source = (FIXTURE / "Blueprint.roc.in").read_text()
         relative = os.path.relpath(
-            ROOT / "blueprint-ir-platform/main.roc", self.project,
+            ROOT / "blueprint-platform/main.roc", self.project,
         )
         self.config = source.replace("@PLATFORM@", relative)
         self.config = self.config.replace("@PACKAGES@", ref)
@@ -319,7 +319,7 @@ class Suite:
         for isolation in cases:
             path.write_text(json.dumps({**spec, "isolation": isolation}))
             result = self.command([
-                sys.executable, ROOT / "blueprint-nix-package/build-runner.py",
+                sys.executable, ROOT / "blueprint-nix/build-runner.py",
                 path,
             ], good=False)
             require(b"user Run was not executed" in result.stderr,
@@ -344,7 +344,7 @@ class Suite:
             "runpy.run_path(sys.argv[1])['check_inputs'](sys.argv[2])"
         )
         argv = [sys.executable, "-I", "-c", check,
-                ROOT / "blueprint-nix-package/build-runner.py", farm]
+                ROOT / "blueprint-nix/build-runner.py", farm]
         self.command(argv)
         for target in (source / "data", self.work / "outside-source"):
             (source / "link").symlink_to(target)
@@ -394,7 +394,7 @@ class Suite:
             try:
                 url = f"http://127.0.0.1:{server.server_port}"
                 relative = os.path.relpath(
-                    ROOT / "blueprint-ir-platform/main.roc", project,
+                    ROOT / "blueprint-platform/main.roc", project,
                 )
                 config = (
                     f'app [config] {{ pf: platform "{relative}" }}\n'
@@ -541,7 +541,7 @@ class Suite:
         before = tree(self.generated), tree(self.workspace), self.calls()
         self.cli("build", "app", good=False, contains="Guix")
         after = tree(self.generated), tree(self.workspace), self.calls()
-        require(before == after, "unsupported closure had backend effects")
+        require(before == after, "unsupported closure had provider effects")
         config.write_text(self.config.replace(
             'Tools(["python3"])',
             'Tools(["python3", "blueprintMissingNativePackage"])',

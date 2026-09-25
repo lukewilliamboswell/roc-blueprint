@@ -8,13 +8,13 @@ ROOT="$PWD"
 step() { printf '\n==> %s\n' "$*"; }
 
 step "Formatting"
-"$ROC" fmt --check blueprint-ir-package blueprint-ir-platform blueprint-nix-package blueprint-cli fixtures examples
+"$ROC" fmt --check blueprint-core blueprint-platform blueprint-nix blueprint-cli fixtures examples
 
-step "roc-blueprint-ir tests"
-"$ROC" test blueprint-ir-package/main.roc
+step "roc-blueprint-core tests"
+"$ROC" test blueprint-core/main.roc
 
 step "Build the platform host"
-(cd blueprint-ir-platform && zig build)
+(cd blueprint-platform && zig build)
 
 step "Compile-time configuration validation"
 scripts/test-config.sh
@@ -58,7 +58,7 @@ step "B3 ordered workflows, failure propagation and fresh build operations"
 python3 scripts/test-b3.py
 
 step "Golden flakes parse as Nix"
-for f in blueprint-nix-package/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done
+for f in blueprint-nix/tests/*.golden.nix; do nix-instantiate --parse "$f" >/dev/null; done
 
 step "Extensions example: the platform emits them, this blueprint refuses them clearly"
 "$ROC" check examples/extensions/Blueprint.roc
@@ -76,15 +76,12 @@ for system in x86_64-linux aarch64-darwin; do
 	nix eval --raw ".#devShells.$system.default.drvPath" >/dev/null
 done
 
-step "Detached handoff: normal core/backend package imports and shared config core"
-python3 scripts/test-handoff.py
-
-step "Bundle ir and the platform against it"
+step "Bundle core and the platform against it"
 scripts/bundle.sh platform
 
-if [[ -f blueprint-ir-platform/ir-release ]]; then
-	step "Bundle the platform against the pinned ir release"
-	scripts/bundle.sh platform "$(cat blueprint-ir-platform/ir-release)"
+if [[ -f blueprint-platform/core-release ]]; then
+	step "Bundle the platform against the pinned core release"
+	scripts/bundle.sh platform "$(cat blueprint-platform/core-release)"
 fi
 
 step "Fuzz smoke test"

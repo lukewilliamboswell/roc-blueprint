@@ -297,15 +297,15 @@ migration proceeds (see <<migration>>).
 | Stage | Code
 
 | Evaluate
-| `blueprint-ir-platform` (`Config`, the validated newtypes, `Lower.lower`),
-  then `load_ir!` and `Project.validate` in `blueprint-cli/main.roc`.
+| `blueprint-platform` (`Config`, the validated newtypes, `Lower.lower`),
+  then `load_spec!` and `Project.validate` in `blueprint-cli/main.roc`.
 
 | Resolve
-| `update` in `blueprint-cli/main.roc`: `NixBackend.update_files` →
+| `update` in `blueprint-cli/main.roc`: `NixProvider.update_files` →
   `nix flake update` → `Locks.from_nix` → an atomic write of `Blueprint.lock`.
 
 | Fetch, Realise
-| `NixBackend.plan` returns `Plan` steps. The CLI executor runs their
+| `NixProvider.plan` returns `Steps`. The CLI executor runs their
   operations (`VerifyLocal`, `Snapshot`), stages the generated files and runs
   `nix build` / `nix develop`.
 
@@ -313,7 +313,7 @@ migration proceeds (see <<migration>>).
 | Implicit: `nix develop … --command` argv. There is no Activation type yet.
 
 | Inspect
-| The `check`, `ir`, `tasks` and `flake` commands (`Backend.render`).
+| The `check`, `spec`, `tasks` and `flake` commands (`Provider.render`).
 |===
 
 === Invariant status
@@ -334,7 +334,7 @@ migration proceeds (see <<migration>>).
   live under the workspace and are rebuilt from the Lock.
 | <<inv-6,6>> Explicit host facts | not yet |
 | <<inv-7,7>> Pure providers | partial | Providers are pure, but the CLI calls
-  `NixBackend` and `Locks` directly.
+  `NixProvider` and `Locks` directly.
 | <<inv-8,8>> Activation is data | not yet |
 | <<inv-9,9>> Inspectors read committed data | enforced by design | The
   existing inspection commands read only the Spec.
@@ -347,10 +347,11 @@ migration proceeds (see <<migration>>).
 
 The code is being migrated to this model in order:
 
-. *This document.*
-. *Terminology.* `Ir` becomes `Spec`, `Backend` becomes `Provider`, `Plan`
-  becomes `Steps`, and packages are renamed to `blueprint-core`,
-  `blueprint-platform` and `blueprint-nix`. Legacy handoff material is removed.
+. *This document (done).*
+. *Terminology (done).* `Ir` is now `Spec`, `Backend` is `Provider`, `Plan` is
+  `Steps`, and the packages are `blueprint-core`, `blueprint-platform` and
+  `blueprint-nix`. Legacy handoff material has been removed. The Spec's `Raw`
+  entries keep the wire field name `backend`, to avoid a major format bump.
 . *Provider interface.* The CLI (the Core) reaches Nix only through a
   stage-shaped `Provider` record (<<inv-7,invariant 7>>).
 . *Lock v1.* `Blueprint.lock` becomes a Blueprint-owned S-expression document.
