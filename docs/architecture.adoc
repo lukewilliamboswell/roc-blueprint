@@ -169,8 +169,8 @@ supply or receive trees. Each box is labelled with its layer, so the diagram
 does not depend on color.
 
 .Data flow through the Blueprint layers
-[mermaid]
-....
+[source,mermaid]
+----
 flowchart LR
     subgraph Intent["Intent (committed)"]
         BP["Blueprint"] -->|Evaluate| SPEC["Spec"]
@@ -206,7 +206,7 @@ flowchart LR
     LOCK -.-> REP
 
     CACHE[("Remote cache")] <-.->|substitute / push| TREE
-....
+----
 
 The Lock is the trust boundary. Everything to its left expresses and records
 decisions; everything to its right follows those decisions without making new
