@@ -123,7 +123,15 @@ def gate(work):
         shutil.copyfile(backend / "tests" / name, data / name)
     shutil.copytree(ROOT / ".basic-cli", detached / ".basic-cli", symlinks=False)
     example = detached / "examples/artifacts"
-    shutil.copytree(ROOT / "examples/artifacts", example)
+    # A previously used checkout may contain ignored pins, snapshots and Nix
+    # outputs. Distribution carries only the authored fixture, not that state.
+    for relative in (
+        "Blueprint.roc", "README.md", "assets/heading.txt", "src/message.txt",
+        "scripts/check.py", "scripts/build_library.py", "scripts/build_app.py",
+    ):
+        destination = example / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / "examples/artifacts" / relative, destination)
     authority = {path: identity(path) for path in (app / "authority.lock", app / "inputs.lock")}
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(QuietHandler, directory=str(serve)))

@@ -235,8 +235,8 @@ structural validation and required-feature checks still apply. Full rendering
   root, not the invocation directory. Out-of-tree generated roots are supported.
 - **`BLUEPRINT_TARGET`** selects a declared target (default `x86_64-linux`).
   **`ROC`** selects the pinned compatible compiler; the Nix wrapper supplies it.
-- Handoff qualification (B4) remains pending. No Guix executor or parallel
-  workflow scheduler is implemented.
+- B4 is a source-only handoff; the unchanged released-IR bundle remains a
+  release blocker. No Guix executor or parallel workflow scheduler is implemented.
 
 ## How it works
 

@@ -365,7 +365,15 @@ def example_smoke(work):
     suite = Suite(work)
     source = ROOT / "examples/artifacts"
     original = tree(source)
-    shutil.copytree(source, suite.project, dirs_exist_ok=True)
+    # A user may already have run update/build in the documented example.
+    # Carry authored fixture files only, never its ignored authority/workspace.
+    for relative in (
+        "Blueprint.roc", "README.md", "assets/heading.txt", "src/message.txt",
+        "scripts/check.py", "scripts/build_library.py", "scripts/build_app.py",
+    ):
+        destination = suite.project / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / relative, destination)
     config = suite.project / "Blueprint.roc"
     text = config.read_text()
     local_platform = '"../../blueprint-ir-platform/main.roc"'
