@@ -5,7 +5,7 @@ import core.Value
 import core.Request
 import core.Layout
 import core.Steps
-import Provider
+import core.Provider
 import Locks
 import "build-runner.py" as build_runner : Str
 
@@ -24,6 +24,18 @@ NixProvider :: [].{
 		render: |spec| render(spec).map_ok(
 			|contents| [{ path: "flake.nix", contents }],
 		),
+		preflight,
+		realise: |spec, request, target, layout, text| {
+			lock = Locks.decode(text).map_err(|m| InvalidLock(m))?
+			plan(spec, request, target, layout, lock).map_err(|m| Unrealisable(m))
+		},
+		resolve: |spec, target, layout| Ok({
+			files: update_files(spec, target, layout)?,
+			locals: local_checks(spec, target, layout)?,
+			argv: ["nix", "flake", "update", "--flake", "path:${layout.generated_root}"],
+			native_lock: "${layout.generated_root}/flake.lock",
+		}),
+		lock_from_native: |spec, layout, text| Locks.from_nix(spec, layout, text).map_ok(Locks.encode),
 	}
 
 	default_nixpkgs : Str

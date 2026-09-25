@@ -10,6 +10,15 @@ step() { printf '\n==> %s\n' "$*"; }
 step "Formatting"
 "$ROC" fmt --check blueprint-core blueprint-platform blueprint-nix blueprint-cli fixtures examples
 
+step "The CLI reaches providers only through the Provider contract"
+# docs/architecture.adoc invariant 7: one selection site, no provider internals.
+imports="$(grep -E '^import nix\.' blueprint-cli/main.roc)"
+refs="$(grep -oE '\bNix[A-Za-z]*\.|\bLocks\.' blueprint-cli/main.roc | sort | uniq -c | tr -s ' ')"
+if [[ "$imports" != "import nix.NixProvider" || "$refs" != " 1 NixProvider." ]]; then
+	echo "blueprint-cli/main.roc must use only provider.* (found: $imports / $refs)" >&2
+	exit 1
+fi
+
 step "roc-blueprint-core tests"
 "$ROC" test blueprint-core/main.roc
 

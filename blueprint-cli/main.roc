@@ -24,16 +24,17 @@ import core.Project
 import core.Request
 import core.Steps
 import core.Layout
-import nix.Provider
+import core.Provider
 import nix.NixProvider
-import nix.Locks
 import "../scripts/blueprint-runtime.py" as snapshot_helper : Str
 import "../.roc-version" as compiler_version : Str
 
 version : Str
 version = "0.2.0"
 
-## The provider every command goes through.
+## The provider every command goes through. This is the only reference to a
+## concrete provider: everything else uses the Provider contract
+## (docs/architecture.adoc, invariant 7; checked by scripts/test.sh).
 provider : Provider
 provider = NixProvider.provider
 
@@ -200,7 +201,7 @@ main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |raw_args| {
 	context = context!()
 	loaded = match context {
-		Ok(ctx) => load_spec!(ctx.layout.project_root)
+		Ok(ctx) => evaluate!(ctx.layout.project_root)
 		Err(err) => Err(err)
 	}
 	# basic-cli supplies arguments without the executable name.
@@ -228,13 +229,13 @@ run! = |command, loaded, context| {
 		_ => {
 			spec = loaded?
 			match command {
-				Gen => execute_request!(spec, Request.Generate, ctx)
-				Shell(name) => execute_request!(spec, Request.Shell(name), ctx)
-				Run({ task, args }) => execute_request!(spec, Request.Run(task, args), ctx)
-				Build(name) => execute_request!(spec, Request.Build(name), ctx)
-				Workflow(name) => execute_request!(spec, Request.Workflow(name), ctx)
+				Gen => realise!(spec, Request.Generate, ctx)
+				Shell(name) => realise!(spec, Request.Shell(name), ctx)
+				Run({ task, args }) => realise!(spec, Request.Run(task, args), ctx)
+				Build(name) => realise!(spec, Request.Build(name), ctx)
+				Workflow(name) => realise!(spec, Request.Workflow(name), ctx)
 				Tasks => list_tasks!(spec)
-				Update => update!(spec, ctx)
+				Update => resolve!(spec, ctx)
 				PrintSpec => Stdout.write!(spec.to_str())
 				PrintFlake => print_files!(spec)
 				Check => check!(loaded, ctx.layout.project_root)
@@ -257,8 +258,8 @@ check! = |loaded, root| {
 }
 
 ## Compile and run Blueprint.roc, then parse the Spec it prints.
-load_spec! : Str => Try(Spec, _)
-load_spec! = |root| {
+evaluate! : Str => Try(Spec, _)
+evaluate! = |root| {
 	if !(path("${root}/Blueprint.roc").exists!() ?? False) {
 		return Err(NoBlueprint)
 	}
@@ -449,10 +450,10 @@ safe_source! = |value| {
 }
 
 ## The pure planner validates the entire request before any staging effects.
-execute_request! : Spec, Request, Context => Try({}, _)
-execute_request! = |spec, request, ctx| {
+realise! : Spec, Request, Context => Try({}, _)
+realise! = |spec, request, ctx| {
 	layout = ctx.layout
-	_ = NixProvider.preflight(spec, request, ctx.target, layout)
+	_ = (provider.preflight)(spec, request, ctx.target, layout)
 		.map_err(|message| RenderFailed(message))?
 	if !(path(layout.lock_path).exists!()?) {
 		return Err(LockFailed("missing authoritative lock; run `blueprint update`"))
@@ -461,11 +462,16 @@ execute_request! = |spec, request, ctx| {
 	if path(layout.lock_path).type!()? != IsFile {
 		return Err(UnsafePath(layout.lock_path))
 	}
-	locks = Locks.decode(path(layout.lock_path).read_utf8!()?)
-		.map_err(|message| LockFailed(message))?
-	plan = NixProvider.plan(spec, request, ctx.target, layout, locks)
-		.map_err(|message| RenderFailed(message))?
-	for step in plan.steps {
+	lock = path(layout.lock_path).read_utf8!()?
+	steps = (provider.realise)(spec, request, ctx.target, layout, lock)
+		.map_err(
+			|err|
+				match err {
+					InvalidLock(message) => LockFailed(message)
+					Unrealisable(message) => RenderFailed(message)
+				},
+		)?
+	for step in steps.steps {
 		execute_step!(step, layout)?
 	}
 	Ok({})
@@ -564,12 +570,10 @@ list_tasks! = |spec| {
 }
 
 ## Explicit update alone resolves pins and atomically publishes the authority.
-update! : Spec, Context => Try({}, _)
-update! = |spec, ctx| {
+resolve! : Spec, Context => Try({}, _)
+resolve! = |spec, ctx| {
 	layout = ctx.layout
-	files = NixProvider.update_files(spec, ctx.target, layout)
-		.map_err(|message| RenderFailed(message))?
-	locals = NixProvider.local_checks(spec, ctx.target, layout)
+	resolution = (provider.resolve)(spec, ctx.target, layout)
 		.map_err(|message| RenderFailed(message))?
 	safe_path!(layout.lock_path)?
 	observed = Cmd.new_str("python3")
@@ -583,32 +587,29 @@ update! = |spec, ctx| {
 		.cwd(path(layout.project_root)).exec_output!()?
 	prior = observed.stdout_utf8.trim()
 	# Reject ancestor escapes and nested symlinks before staging or fetching.
-	for local in locals {
+	for local in resolution.locals {
 		safe_source!(local)?
 	}
-	backend_lock = "${layout.generated_root}/flake.lock"
-	safe_path!(backend_lock)?
-	if backend_lock == layout.lock_path {
-		return Err(UnsafePath(backend_lock))
+	native_lock = resolution.native_lock
+	safe_path!(native_lock)?
+	if native_lock == layout.lock_path or !native_lock.starts_with("${layout.generated_root}/") {
+		return Err(UnsafePath(native_lock))
 	}
-	stage!(files, layout)?
-	# Derived state is disposable. Unlink it rather than letting Nix follow a
-	# stale hard-link alias while explicitly resolving a fresh input graph.
-	if path(backend_lock).exists!()? {
-		path(backend_lock).delete!()?
+	stage!(resolution.files, layout)?
+	# Derived state is disposable. Unlink it rather than letting the provider
+	# follow a stale hard-link alias while explicitly resolving fresh pins.
+	if path(native_lock).exists!()? {
+		path(native_lock).delete!()?
 	}
-	exec!(
-		["nix", "flake", "update", "--flake", "path:${layout.generated_root}"],
-		layout.project_root,
-	)?
-	safe_path!(backend_lock)?
-	locks = Locks.from_nix(spec, layout, path(backend_lock).read_utf8!()?)
+	exec!(resolution.argv, layout.project_root)?
+	safe_path!(native_lock)?
+	lock = (provider.lock_from_native)(spec, layout, path(native_lock).read_utf8!()?)
 		.map_err(|message| LockFailed(message))?
 	path(parent(layout.lock_path)).create_all!()?
 	publish_authority!(
 		layout.lock_path,
 		prior,
-		Locks.encode(locks),
+		lock,
 		layout.project_root,
 	)
 }

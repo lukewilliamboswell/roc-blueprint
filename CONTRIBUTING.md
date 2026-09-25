@@ -8,7 +8,7 @@ blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
   host/, build.zig       Zig host, built into targets/{x64musl,arm64mac}/libhost.a
   targets/               linker inputs; all but libhost.a are vendored (see its README)
   core-release           (when present) the released core bundle URL a platform release uses
-blueprint-core/          roc-blueprint-core: Spec, shared validation, Steps, Value and codec
+blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
   Project.roc            pure normalization, references and provider capability checks
   fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip
 blueprint-nix/           importable pure Nix provider (depends only on blueprint-core)
@@ -206,8 +206,11 @@ atomic planner as standalone tasks/builds. Execute each step's operations, stage
 its files, then invoke its argv; stop immediately on failure. The entire plan
 must succeed before effects.
 The caller owns all effects; no provider registry or serialized config recipes
-are involved. `Provider.roc` retains only inspection metadata. Nix is the only
-implemented provider. It:
+are involved. `blueprint-core/Provider.roc` is the Core/Provider contract:
+`preflight`, `realise` (Steps from the Lock text), `resolve` plus
+`lock_from_native` (what to stage and run to produce new pins) and `render`.
+The CLI uses only that record; `scripts/test.sh` fails if it reaches into a
+provider's modules directly. Nix is the only implemented provider. It:
 
 - resolves Auto to its default nixpkgs source, without provider autodetection;
 - imports each selected environment's package sources per system with only
