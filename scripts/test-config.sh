@@ -253,6 +253,14 @@ same_ir Composed EquivalentComposition
 same_ir Builds ComposedBuilds
 same_ir Workflows ComposedWorkflows
 
+# Tool availability must not affect semantic configuration. Keep the compiler
+# explicit while removing all executable discovery from the app's environment.
+compiler="$(command -v "$ROC")"
+mkdir "$WORK/no-tools"
+"$compiler" "$WORK/Valid.roc" >"$WORK/with-tools.ir"
+PATH="$WORK/no-tools" "$compiler" "$WORK/Valid.roc" >"$WORK/without-tools.ir"
+cmp "$WORK/with-tools.ir" "$WORK/without-tools.ir"
+
 # New optional fields must be accompanied by feature markers for old consumers.
 "$ROC" "$WORK/Builds.roc" >"$WORK/builds.ir"
 grep -qF '(minor 2)' "$WORK/builds.ir"
