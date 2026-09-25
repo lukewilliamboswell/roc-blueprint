@@ -1,0 +1,365 @@
+= Blueprint Architecture: Core Model
+:toc: macro
+:toclevels: 2
+:icons: font
+
+This document is the canonical description of Blueprint's architecture. It
+defines the shared vocabulary, the layers, the stages and the data between
+them, and the invariants that keep Blueprint backend-neutral and not tied to
+any one use case. Where the code disagrees with this document, the difference
+is recorded in <<current-implementation>>.
+
+toc::[]
+
+== Purpose
+
+Blueprint turns a typed description of a development environment into a
+working, reproducible environment. Nix is how it does that today, but Blueprint
+is not Nix. The model below borrows Nix's best ideas (pinned inputs, content
+addressing, fixed-output fetches, substitution) and gives every
+ecosystem-specific concern to a replaceable *provider*. The aim is for the same
+Blueprint to be realised through Nix, conda-forge or Blueprint's own store, on
+macOS, Linux and Windows.
+
+**The protocol is the product; providers are adapters.**
+
+== Terms
+
+The vocabulary has three parts: *data* (nouns), *stages* (verbs) and *roles*
+(who does what).
+
+=== Data
+
+[cols="1,4",options="header"]
+|===
+| Term | Definition
+
+| *Blueprint*
+| The authored source (`Blueprint.roc`): what the user _intends_.
+
+| *Spec*
+| The normalised, validated, backend-neutral form of a Blueprint. It is what
+  the configuration platform emits and every other stage consumes.
+
+| *Component*
+| One thing a Spec asks for: a package identity plus a version constraint.
+  _(Planned: purl + vers identity.)_
+
+| *Source*
+| A pinned universe that components are chosen from, for example a nixpkgs
+  revision, a conda channel snapshot or a registry commit.
+
+| *System*
+| A target platform: OS, architecture and libc.
+
+| *Lock*
+| The _decisions_: the exact pins chosen for each Source (and, later, each
+  Component), with their digests and how they were verified.
+
+| *Artifact*
+| Fetched bytes, identified by digest and never modified.
+
+| *Tree*
+| An unpacked, content-addressed artifact in a Store.
+
+| *Store*
+| The local collection of artifacts and trees on one machine.
+
+| *Host facts*
+| What is observed about the machine rather than provided by Blueprint
+  (glibc version, MSVC, Xcode CLT).
+
+| *Environment*
+| The realised set of trees and host facts for one (shell, system).
+
+| *Activation*
+| Data that describes how to enter an Environment: PATH and environment
+  variable operations. It contains no shell text.
+
+| *Report*
+| A derived, read-only view of committed data, for example a plan diff, an
+  SBOM or an attestation.
+|===
+
+=== Stages
+
+[cols="1,4",options="header"]
+|===
+| Stage | Responsibility
+
+| *Evaluate* | Turn a Blueprint into a Spec, rejecting invalid intent.
+| *Resolve* | Decide exactly what to use and whether to trust it. This is the
+  _only_ stage that makes choices.
+| *Fetch* | Obtain the exact bytes the Lock names, and prove that they match.
+| *Realise* | Turn verified artifacts into trees and an Environment.
+| *Activate* | Describe how to enter the Environment, as data.
+| *Present* | Render an Activation for one consumer: a shell, CI, an editor, an
+  agent or a container.
+| *Inspect* | Derive Reports from Specs and Locks without touching a Store.
+|===
+
+=== Roles
+
+Core::
+  Owns the data types, the invariants and the *effect executor*. The Core is
+  the only part that performs I/O.
+
+Provider::
+  A pure plug-in that implements one or more stages for one ecosystem. The
+  kinds are:
+  * _resolver provider_ (Nix, conda, a native registry);
+  * _realiser provider_ (Nix, conda, native, remote execution);
+  * _presenter_ (sh, pwsh, cmd, GitHub Actions, JSON, devcontainer);
+  * _inspector_ (plan, audit).
+
+We say *provider* rather than *backend* on purpose. A backend suggests one
+component that owns the whole pipeline from end to end, which is exactly the
+coupling this model is designed to avoid.
+
+== Layers
+
+[cols="1,2,2,1,1",options="header"]
+|===
+| Layer | Data | Question it answers | Lifetime | Changed by
+
+| *Intent* | Blueprint, Spec | What do we want? | committed | people
+| *Decision* | Lock, Sources | What exactly did we choose, and why do we trust
+  it? | committed, reviewed | Resolve only
+| *Materialisation* | Artifact, Tree, Store, Environment | What exists on this
+  machine? | disposable cache | Fetch, Realise
+| *Interface* | Activation, renderings | How is it used? | ephemeral |
+  Activate, Present
+| _Cross-cutting_ | Reports | What changed, and what is in it? | derived |
+  Inspect
+|===
+
+The two committed layers, Intent and Decision, *are the protocol*. Everything
+below the Lock is an implementation detail. It can be replaced, and it can be
+rebuilt from the Lock.
+
+== Flow
+
+[source,mermaid]
+----
+flowchart LR
+    subgraph Intent["Intent (committed)"]
+        BP["Blueprint"] -->|Evaluate| SPEC["Spec"]
+    end
+
+    subgraph Decision["Decision (committed, trust boundary)"]
+        SRC[("Sources")]
+        LOCK[("Lock<br/>pins · digests · verification")]
+    end
+    SPEC -->|Resolve| LOCK
+    SRC --> LOCK
+
+    subgraph Mat["Materialisation (disposable)"]
+        ART[("Artifacts")]
+        TREE[("Trees / Store")]
+        ENVT["Environment"]
+        ART -->|Realise| TREE --> ENVT
+    end
+    LOCK -->|Fetch| ART
+    HOST["Host facts"] --> ENVT
+
+    subgraph Iface["Interface (ephemeral)"]
+        ACT["Activation"]
+        OUT["sh · pwsh · cmd · CI · JSON · run · container"]
+        ACT -->|Present| OUT
+    end
+    ENVT -->|Activate| ACT
+
+    subgraph Insp["Inspect (read-only)"]
+        REP["Reports"]
+    end
+    SPEC -.-> REP
+    LOCK -.-> REP
+
+    CACHE[("Remote cache")] <-.->|substitute / push| TREE
+----
+
+=== Stage responsibilities
+
+[cols="1,2,2,2,2,3",options="header"]
+|===
+| Stage | Input | Output | Effects | Implemented by | Must hold
+
+| Evaluate | Blueprint | Spec | none | configuration platform
+| Deterministic. No provider concepts outside namespaced hints.
+
+| Resolve | Spec, Sources, previous Lock | Lock | network reads, signature
+  checks | resolver provider (planned by the Core)
+| The only stage that makes choices. Trust is recorded, never assumed.
+
+| Fetch | Lock | Artifacts | network, Store writes | Core (and mirrors or
+  caches) | Each artifact's digest equals the digest in the Lock.
+
+| Realise | Artifacts, System, host facts | Trees, Environment | Store writes,
+  possibly process execution | realiser provider (planned by the Core)
+| A function of its inputs only. No network access and no new choices.
+
+| Activate | Environment | Activation | none | Core or realiser provider
+| Produces data only, never shell text.
+
+| Present | Activation | a rendering | none (exec, for `run`) | presenter
+| Each presenter does its own escaping.
+
+| Inspect | Spec(s), Lock(s) | Report | none | inspector
+| Never reads a Store, so it works with every provider.
+|===
+
+=== Commands as flows
+
+Each command reuses the same stages:
+
+[cols="1,3",options="header"]
+|===
+| Command | Flow
+
+| `blueprint update` | Evaluate → Resolve. The Lock is then committed.
+| `blueprint shell` / `run` / `build` / `workflow` | Evaluate → Fetch →
+  Realise → Activate → Present. With a warm Store, this works offline.
+| `blueprint check`, `spec`, `tasks` | Evaluate, then Inspect.
+| _(planned)_ `blueprint plan` | Evaluate and Inspect on two revisions (base
+  and head).
+| _(planned)_ `blueprint audit` | Inspect the Lock.
+|===
+
+== Invariants
+
+[[inv-1]] 1. *Intent is neutral.*::
+  A Spec contains no provider concepts except inside namespaced hints.
+[[inv-2]] 2. *Only Resolve makes choices.*::
+  Every later stage is a pure function of Lock + System + host facts. This is
+  Blueprint's reproducibility guarantee.
+[[inv-3]] 3. *The Lock is the single source of truth and the trust boundary.*::
+  * No later stage changes a pin, URL or digest.
+  * Trust decisions happen during Resolve and are recorded in the Lock.
+  * An update is always a visible, reviewable diff.
+[[inv-4]] 4. *Content is immutable and verified before use.*::
+  Caches and mirrors are never trusted. Everything they return is checked
+  against the Lock.
+[[inv-5]] 5. *Materialisation is disposable.*::
+  Deleting a Store or an Environment loses nothing that the Lock can't
+  rebuild.
+[[inv-6]] 6. *Host dependence is explicit.*::
+  Anything Blueprint does not provide is a declared host fact that Reports
+  show. Nothing about the host is assumed silently.
+[[inv-7]] 7. *Providers are pure.*::
+  * Providers return steps, and the Core executes them.
+  * A provider can only cause the effects the Core grants it.
+  * The Core knows providers only through the provider interface.
+[[inv-8]] 8. *Activation is data, and rendering happens last.*::
+  No stage before Present produces shell text.
+[[inv-9]] 9. *Inspectors read only committed data.*::
+  If a Report needs anything else, the Lock is incomplete, and the fix belongs
+  in the Lock.
+[[inv-10]] 10. *One codec, one versioning scheme.*::
+  * Spec, Lock and Activation share the S-expression codec and its
+    major/minor compatibility rules.
+  * JSON, TOML and shell scripts are _renderings_, never protocol data.
+
+=== The coupling test
+
+A new use case should need only a new provider or a new rendering. It should
+never change the Core or the committed data.
+
+[cols="2,2,1",options="header"]
+|===
+| Use case | What it needs | Core and Lock unchanged?
+
+| Developer shell (bash, pwsh) | presenter | yes
+| CI (GitHub Actions) | presenter | yes
+| Editor or AI agent | presenter (JSON) | yes
+| Container or devcontainer | presenter | yes
+| Nix, conda or native ecosystem | resolver and realiser providers | yes
+| Remote execution | realiser provider | yes
+| SBOM or PR review | inspector | yes
+|===
+
+A proposal breaks the architecture, and needs redesigning, if it needs any of
+these:
+
+* a provider-specific field outside hints;
+* a choice made after Resolve;
+* an inspector that reads a Store.
+
+[[current-implementation]]
+== Current implementation
+
+This section maps the model onto the code as it stands. It is updated as the
+migration proceeds (see <<migration>>).
+
+=== Stages in the code
+
+[cols="1,3",options="header"]
+|===
+| Stage | Code
+
+| Evaluate
+| `blueprint-ir-platform` (`Config`, the validated newtypes, `Lower.lower`),
+  then `load_ir!` and `Project.validate` in `blueprint-cli/main.roc`.
+
+| Resolve
+| `update` in `blueprint-cli/main.roc`: `NixBackend.update_files` →
+  `nix flake update` → `Locks.from_nix` → an atomic write of `Blueprint.lock`.
+
+| Fetch, Realise
+| `NixBackend.plan` returns `Plan` steps. The CLI executor runs their
+  operations (`VerifyLocal`, `Snapshot`), stages the generated files and runs
+  `nix build` / `nix develop`.
+
+| Activate, Present
+| Implicit: `nix develop … --command` argv. There is no Activation type yet.
+
+| Inspect
+| The `check`, `ir`, `tasks` and `flake` commands (`Backend.render`).
+|===
+
+=== Invariant status
+
+[cols="1,1,3",options="header"]
+|===
+| Invariant | Status | Notes
+
+| <<inv-1,1>> Intent is neutral | partial | The Spec still carries
+  Nix-shaped `inputs` (`Overlay`, `Flake`) and tool attribute paths.
+| <<inv-2,2>> Only Resolve chooses | enforced in code | Ordinary plans never
+  resolve or change pins (`Locks`).
+| <<inv-3,3>> Lock is the source of truth | partial | `Blueprint.lock` is a Nix
+  JSON envelope, not a Blueprint-owned document.
+| <<inv-4,4>> Verified content | partial | Local sources are verified by
+  narHash. Everything else is delegated to Nix.
+| <<inv-5,5>> Disposable materialisation | enforced by design | Generated files
+  live under the workspace and are rebuilt from the Lock.
+| <<inv-6,6>> Explicit host facts | not yet |
+| <<inv-7,7>> Pure providers | partial | Providers are pure, but the CLI calls
+  `NixBackend` and `Locks` directly.
+| <<inv-8,8>> Activation is data | not yet |
+| <<inv-9,9>> Inspectors read committed data | enforced by design | The
+  existing inspection commands read only the Spec.
+| <<inv-10,10>> One codec | partial | The Spec uses S-expressions; the Lock is
+  JSON.
+|===
+
+[[migration]]
+== Migration
+
+The code is being migrated to this model in order:
+
+. *This document.*
+. *Terminology.* `Ir` becomes `Spec`, `Backend` becomes `Provider`, `Plan`
+  becomes `Steps`, and packages are renamed to `blueprint-core`,
+  `blueprint-platform` and `blueprint-nix`. Legacy handoff material is removed.
+. *Provider interface.* The CLI (the Core) reaches Nix only through a
+  stage-shaped `Provider` record (<<inv-7,invariant 7>>).
+. *Lock v1.* `Blueprint.lock` becomes a Blueprint-owned S-expression document.
+  Nix pins are held as a Source plus provider hints
+  (<<inv-3,invariants 3>> and <<inv-10,10>>).
+
+Planned after that:
+
+* purl Components in the Spec and the Lock;
+* Activation as a core type, with presenters;
+* `plan` and `audit` inspectors;
+* a Store for a native provider.
