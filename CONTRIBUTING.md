@@ -191,7 +191,10 @@ probes the host or installs/fetches anything.
 
 `Blueprint.lock` is a `blueprint-core/Lock.roc` value in the same S-expression
 codec, with its own `format` (currently 1.0) and the same compatibility rules
-as the Spec. It holds `sources` (one provider-neutral `{ name, provider, ref,
+as the Spec. It holds `intent` (the parts of the Spec Resolve consumed: source
+and input declarations, build sources and per-environment overlay order), which
+the CLI records on `update` and compares before every other command, failing
+with what changed; `sources` (one provider-neutral `{ name, provider, ref,
 rev, digest }` per declared input, `digest` in SRI form) and provider-namespaced
 `hints`. The Nix provider's hint carries its declared input identity and the
 complete native lock graph; decoding rejects a lock whose Sources disagree with

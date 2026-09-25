@@ -26,7 +26,7 @@ NixProvider :: [].{
 		),
 		preflight,
 		realise: |spec, request, target, layout, text| {
-			lock = Locks.decode(text).map_err(|m| InvalidLock(m))?
+			lock = Locks.from_lock(text).map_err(|m| InvalidLock(m))?
 			plan(spec, request, target, layout, lock).map_err(|m| Unrealisable(m))
 		},
 		resolve: |spec, target, layout| Ok({
@@ -35,7 +35,7 @@ NixProvider :: [].{
 			argv: ["nix", "flake", "update", "--flake", "path:${layout.generated_root}"],
 			native_lock: "${layout.generated_root}/flake.lock",
 		}),
-		lock_from_native: |spec, layout, text| Locks.from_nix(spec, layout, text).map_ok(Locks.encode),
+		lock_from_native: |spec, layout, text| Locks.from_nix(spec, layout, text).map_ok(Locks.to_lock),
 	}
 
 	default_nixpkgs : Str

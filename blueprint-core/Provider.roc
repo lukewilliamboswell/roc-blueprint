@@ -5,6 +5,7 @@ import Spec
 import Request
 import Layout
 import Steps
+import Lock
 
 Provider := {
 
@@ -21,14 +22,16 @@ Provider := {
 	preflight : Spec, Request, Str, Layout -> Try({}, Str),
 
 	## Fetch + Realise + Activate: the ordered steps for one request, from the
-	## Lock text only. Never resolves or changes pins.
-	realise : Spec, Request, Str, Layout, Str -> Try(Steps, [InvalidLock(Str), Unrealisable(Str)]),
+	## Lock only. Never resolves or changes pins. The Core has already rejected
+	## a stale Lock.
+	realise : Spec, Request, Str, Layout, Lock -> Try(Steps, [InvalidLock(Str), Unrealisable(Str)]),
 
 	## Resolve: what the Core must stage and run to produce a native lock.
 	resolve : Spec, Str, Layout -> Try(Resolution, Str),
 
-	## Resolve: turn the native lock the resolve command wrote into Lock text.
-	lock_from_native : Spec, Layout, Str -> Try(Str, Str),
+	## Resolve: turn the native lock the resolve command wrote into a Lock. The
+	## Core records the Spec's intent in it before publishing.
+	lock_from_native : Spec, Layout, Str -> Try(Lock, Str),
 }.{
 
 	## Inspection returns relative names; executable Steps files are absolute.

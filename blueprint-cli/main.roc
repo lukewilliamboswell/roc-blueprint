@@ -25,6 +25,7 @@ import core.Request
 import core.Steps
 import core.Layout
 import core.Provider
+import core.Lock
 import nix.NixProvider
 import "../scripts/blueprint-runtime.py" as snapshot_helper : Str
 import "../.roc-version" as compiler_version : Str
@@ -462,7 +463,9 @@ realise! = |spec, request, ctx| {
 	if path(layout.lock_path).type!()? != IsFile {
 		return Err(UnsafePath(layout.lock_path))
 	}
-	lock = path(layout.lock_path).read_utf8!()?
+	lock = Lock.parse(path(layout.lock_path).read_utf8!()?)
+		.map_err(|_| LockFailed("unsupported Blueprint lock format; run blueprint update"))?
+	lock.stale(spec).map_err(|message| LockFailed(message))?
 	steps = (provider.realise)(spec, request, ctx.target, layout, lock)
 		.map_err(
 			|err|
@@ -603,13 +606,14 @@ resolve! = |spec, ctx| {
 	}
 	exec!(resolution.argv, layout.project_root)?
 	safe_path!(native_lock)?
-	lock = (provider.lock_from_native)(spec, layout, path(native_lock).read_utf8!()?)
+	resolved = (provider.lock_from_native)(spec, layout, path(native_lock).read_utf8!()?)
 		.map_err(|message| LockFailed(message))?
+	lock = { ..resolved, intent: Lock.intent_of(spec) }
 	path(parent(layout.lock_path)).create_all!()?
 	publish_authority!(
 		layout.lock_path,
 		prior,
-		lock,
+		lock.to_str(),
 		layout.project_root,
 	)
 }

@@ -165,6 +165,11 @@
 							(value (Str "nixpkgs"))) (
 							(name "roc")
 							(value (Str "roc")))))))))))))))))))))))))
+	(intent (
+		(build_sources ())
+		(inputs ())
+		(overlays ())
+		(sources ())))
 	(sources ((
 		(digest "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=")
 		(name "default")

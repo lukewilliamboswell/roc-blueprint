@@ -127,9 +127,13 @@ Locks := { identity : LockJson, graph : LockJson }.{
 	## Read the Lock text. The Sources shown to reviewers must be exactly those
 	## derived from the pins, so a hand edit to either side is rejected.
 	decode : Str -> Try(Locks, Str)
-	decode = |text| {
-		lock = Lock.parse(text)
-			.map_err(|_| "unsupported Blueprint lock format; run blueprint update")?
+	decode = |text| from_lock(
+		Lock.parse(text)
+			.map_err(|_| "unsupported Blueprint lock format; run blueprint update")?,
+	)
+
+	from_lock : Lock -> Try(Locks, Str)
+	from_lock = |lock| {
 		hint = lock.hint("nix")
 			.map_err(|_| "Blueprint lock has no nix pins; run blueprint update")?
 		identity = from_value(attr(hint, "identity")?)?
@@ -145,21 +149,24 @@ Locks := { identity : LockJson, graph : LockJson }.{
 	}
 
 	encode : Locks -> Str
-	encode = |locks| Lock.to_str(
-		Lock.{
-			format: Lock.current_format,
-			sources: sources(locks),
-			hints: [
-				{
-					provider: "nix",
-					value: Value.Attrs([
-						{ name: "identity", value: to_value(locks.identity) },
-						{ name: "graph", value: to_value(locks.graph) },
-					]),
-				},
-			],
-		},
-	)
+	encode = |locks| Lock.to_str(to_lock(locks))
+
+	## The Nix pins as a Lock. Its intent is left empty: the Core records it.
+	to_lock : Locks -> Lock
+	to_lock = |locks| Lock.{
+		format: Lock.current_format,
+		intent: Lock.empty_intent,
+		sources: sources(locks),
+		hints: [
+			{
+				provider: "nix",
+				value: Value.Attrs([
+					{ name: "identity", value: to_value(locks.identity) },
+					{ name: "graph", value: to_value(locks.graph) },
+				]),
+			},
+		],
+	}
 
 	## One provider-neutral Source per declared input, in declaration order.
 	sources : Locks -> List(Lock.Source)

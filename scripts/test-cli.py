@@ -390,6 +390,16 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
             assert "foreign-overlay" not in outputs
             assert 'overlays = [  ];' in outputs
 
+    # The Core rejects a lock whose recorded intent no longer matches the
+    # Spec, naming what changed, before the provider plans anything.
+    cwd = isolated("stale-intent")
+    settings(valid, cwd)
+    update(cwd)
+    settings(valid + 'Input("utils", "github:numtide/flake-utils"),', cwd)
+    output = run("run", "echo-args", status=1, cwd=cwd)
+    assert "changed its inputs since the lock was resolved" in output, output
+    assert calls("nix", cwd) == []
+
     # Pure layout validation must precede even lock reads and source/snapshot
     # effects. The generated directory may contain work, but its files may not.
     for filename in ("flake.nix", "flake.lock", "build-runner.py"):
