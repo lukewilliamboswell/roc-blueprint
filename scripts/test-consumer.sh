@@ -18,14 +18,17 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, 'scripts')
+import lockfile
+
 work = Path(sys.argv[1])
-authority = json.loads(work.joinpath('authority.before').read_bytes())
+authority_graph = lockfile.nix_graph(work.joinpath('authority.before').read_text())
 seed = json.loads(work.joinpath('native.before').read_bytes())
 # B2's stable input set adds unused Auto, sharing the existing nixpkgs pin.
 seed['nodes']['root']['inputs'] = {
     'default': 'nixpkgs', **seed['nodes']['root']['inputs'],
 }
-assert authority['nix'] == seed, 'conversion changed supplied pins'
+assert authority_graph == seed, 'conversion changed supplied pins'
 
 # Keep the B1 golden body; B2 declares stable inputs with explicit flake kinds.
 flake = Path('blueprint-nix/tests/sample.golden.nix').read_text()
@@ -34,7 +37,7 @@ flake = re.sub(r'"(nixpkgs|roc)"\.url = ("[^"]*");',
 flake = flake.replace('  inputs = {\n', '  inputs = {\n'
     '    "default" = { url = "github:NixOS/nixpkgs/nixos-unstable"; '
     'flake = true; };\n')
-lock = json.dumps(authority['nix'], separators=(',', ':')) + '\n'
+lock = json.dumps(authority_graph, separators=(',', ':')) + '\n'
 flake_header = b'# /consumer/work/generated/flake.nix\n'
 lock_header = b'# /consumer/work/generated/flake.lock\n'
 work.joinpath('expected').write_bytes(

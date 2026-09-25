@@ -10,6 +10,9 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lockfile  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 BLUEPRINT = ROOT / "blueprint"
 HELPER = ROOT / "scripts/blueprint-runtime.py"
@@ -150,7 +153,7 @@ generated.joinpath("flake.lock").write_text(json.dumps(graph))
             })
             assert newer.returncode == 0, newer.stderr
             winner = lock.read_bytes()
-            node = json.loads(winner)["nix"]["nodes"]["default"]
+            node = lockfile.nix_graph(winner.decode())["nodes"]["default"]
             assert node["locked"]["rev"] == "b" * 40
             Path(str(pause) + ".release").touch()
             out, err = older.communicate(timeout=30)

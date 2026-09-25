@@ -11,6 +11,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 BLUEPRINT = ROOT / "blueprint"
+sys.path.insert(0, str(ROOT / "scripts"))
+import lockfile  # noqa: E402
 ROC = shutil.which(os.environ.get("ROC", "roc"))
 if ROC is None:
     raise SystemExit("Roc compiler not found")
@@ -121,9 +123,10 @@ else:
             ["flake", "update", "--flake", f"path:{cwd}/.blueprint"],
         ]
         lock = cwd / "Blueprint.lock"
-        envelope = json.loads(lock.read_text())
+        pinned = lockfile.load(lock.read_text())
         native = json.loads((cwd / ".blueprint/flake.lock").read_text())
-        assert envelope["version"] == 1 and envelope["nix"] == native
+        assert pinned["format"]["major"] == 1
+        assert lockfile.nix_graph(lock.read_text()) == native
         lock.chmod(0o444)
         (cwd / "nix-calls.jsonl").unlink()
 

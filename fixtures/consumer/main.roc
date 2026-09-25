@@ -104,7 +104,7 @@ expect match plan(project(wire)?, Request.Generate, "x86_64-linux", layout) {
 
 # Native locks and malformed authorities cannot bypass the decoding protocol.
 expect Locks.decode(native_lock).is_err()
-	and Locks.decode(authority.replace_each("\"version\":1,", "\"version\":9,"))
+	and Locks.decode(authority.replace_each("(major 1)", "(major 9)"))
 		.is_err()
 
 # Caller-selected requests render only their environment and its shell aliases.

@@ -222,8 +222,10 @@ valid provider declarations do not block selected operations. Whole-project
 structural validation and required-feature checks still apply. Full rendering
 (`gen`, `update`, `check`, `flake`) checks all shell/task/build environments.
 
-- **Commit** `Blueprint.roc` and the authority (default `Blueprint.lock`);
-  **ignore** generated state (default `.blueprint/`).
+- **Commit** `Blueprint.roc` and the authority (default `Blueprint.lock`, a
+  versioned S-expression listing each pinned source and its digest);
+  **ignore** generated state (default `.blueprint/`). A lock written by an
+  older `blueprint` is refused; run `blueprint update`.
 - Normal `gen`, `shell`, `run`, `build` and `workflow` require matching pins and never
   rewrite authority or independently update derived locks.
 - **`BLUEPRINT_WORKSPACE`**, **`BLUEPRINT_GENERATED_ROOT`**, **`BLUEPRINT_LOCK`**

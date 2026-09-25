@@ -16,3 +16,5 @@ fuzz-artifacts/
 crash-*
 /result
 /docs/plans/
+blueprint-core/fuzz/*/lock-*
+__pycache__/

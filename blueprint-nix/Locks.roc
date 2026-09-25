@@ -1,6 +1,9 @@
-# Versioned authoritative pins. Native lock graphs are decoded, checked and
-# rebased as data. Ordinary plans never resolve or change authoritative pins.
+# The Nix provider's view of the Lock. Native lock graphs are decoded, checked
+# and rebased as data, and travel in the Lock as a "nix" hint next to the
+# provider-neutral Sources derived from them. Plans never change pins.
 import core.Spec
+import core.Lock
+import core.Value
 import core.Project
 import core.Layout
 import core.Steps
@@ -121,28 +124,125 @@ Locks := { identity : LockJson, graph : LockJson }.{
 		)
 	}
 
+	## Read the Lock text. The Sources shown to reviewers must be exactly those
+	## derived from the pins, so a hand edit to either side is rejected.
 	decode : Str -> Try(Locks, Str)
 	decode = |text| {
-		envelope = LockJson.decode(text)?
-		if LockJson.field(envelope, "version")? != LockJson.Number("1") {
-			return Err("unsupported Blueprint lock version; run blueprint update")
-		}
-		identity = LockJson.field(envelope, "identity")?
-		graph = LockJson.field(envelope, "nix")?
+		lock = Lock.parse(text)
+			.map_err(|_| "unsupported Blueprint lock format; run blueprint update")?
+		hint = lock.hint("nix")
+			.map_err(|_| "Blueprint lock has no nix pins; run blueprint update")?
+		identity = from_value(attr(hint, "identity")?)?
+		graph = from_value(attr(hint, "graph")?)?
 		validate_identity(identity)?
 		validate_graph(graph)?
 		validate_binding(identity, graph)?
-		Ok(Locks.{ identity, graph })
+		locks = Locks.{ identity, graph }
+		if sources(locks) != lock.sources {
+			return Err("Blueprint lock sources do not match its nix pins; run blueprint update")
+		}
+		Ok(locks)
 	}
 
 	encode : Locks -> Str
-	encode = |locks| LockJson.encode(
-		LockJson.Object([
-			{ name: "version", value: LockJson.Number("1") },
-			{ name: "identity", value: locks.identity },
-			{ name: "nix", value: locks.graph },
-		]),
-	).concat("\n")
+	encode = |locks| Lock.to_str(
+		Lock.{
+			format: Lock.current_format,
+			sources: sources(locks),
+			hints: [
+				{
+					provider: "nix",
+					value: Value.Attrs([
+						{ name: "identity", value: to_value(locks.identity) },
+						{ name: "graph", value: to_value(locks.graph) },
+					]),
+				},
+			],
+		},
+	)
+
+	## One provider-neutral Source per declared input, in declaration order.
+	sources : Locks -> List(Lock.Source)
+	sources = |locks| {
+		declared = LockJson.object(LockJson.field(locks.identity, "inputs") ?? LockJson.Object([])) ?? []
+		root = root_inputs(locks.graph) ?? LockJson.Object([])
+		nodes = LockJson.field(locks.graph, "nodes") ?? LockJson.Object([])
+		declared.map(
+			|input| {
+				locked = match LockJson.field(root, input.name) {
+					Ok(LockJson.String(id)) => LockJson.field(LockJson.field(nodes, id) ?? LockJson.Null, "locked") ?? LockJson.Null
+					_ => LockJson.Null
+				}
+				text = |value, name| match LockJson.field(value, name) {
+					Ok(LockJson.String(s)) => s
+					_ => ""
+				}
+				{
+					name: input.name,
+					provider: "nix",
+					ref: text(input.value, "ref"),
+					rev: text(locked, "rev"),
+					digest: text(locked, "narHash"),
+				}
+			},
+		)
+	}
+
+	attr : Value, Str -> Try(Value, Str)
+	attr = |value, name| match value {
+		Attrs(fields) => fields.find_first(|f| f.name == name)
+			.map_ok(|f| f.value)
+			.map_err(|_| "Blueprint lock nix pins are missing ${name}")
+		_ => Err("Blueprint lock nix pins are malformed")
+	}
+
+	## Native lock JSON as a Lock value. Only integers are representable, so
+	## `representable` is checked before any graph is accepted.
+	to_value : LockJson -> Value
+	to_value = |json| match json {
+		Object(fields) => Value.Attrs(fields.map(|f| { name: f.name, value: to_value(f.value) }))
+		Array(items) => Value.List(items.map(to_value))
+		String(s) => Value.Str(s)
+		Number(n) => match I64.from_str(n) {
+			Ok(i) => Value.Int(i)
+			Err(_) => Value.Str(n)
+		}
+		Boolean(b) => Value.Bool(b)
+		Null => Value.Attrs([])
+	}
+
+	from_value : Value -> Try(LockJson, Str)
+	from_value = |value| match value {
+		Attrs(fields) => {
+			var $out = []
+			for f in fields {
+				$out = $out.append({ name: f.name, value: from_value(f.value)? })
+			}
+			Ok(LockJson.Object($out))
+		}
+		List(items) => {
+			var $out = []
+			for item in items {
+				$out = $out.append(from_value(item)?)
+			}
+			Ok(LockJson.Array($out))
+		}
+		Str(s) => Ok(LockJson.String(s))
+		Int(i) => Ok(LockJson.Number(i.to_str()))
+		Bool(b) => Ok(LockJson.Boolean(b))
+	}
+
+	representable : LockJson -> Bool
+	representable = |json| match json {
+		Object(fields) => fields.all(|f| representable(f.value))
+		Array(items) => items.all(representable)
+		Number(n) => match I64.from_str(n) {
+			Ok(i) => i.to_str() == n
+			Err(_) => False
+		}
+		Null => False
+		_ => True
+	}
 
 	## Explicit update alone may supply fresh Nix observations. Every local node
 	## is tied to a declared relative identity and retains its NAR content hash.
@@ -153,6 +253,9 @@ Locks := { identity : LockJson, graph : LockJson }.{
 		identity = identity_for(project)?
 		graph = LockJson.decode(text)?
 		validate_graph(graph)?
+		if !representable(graph) {
+			return Err("Nix lock uses a value a Blueprint lock cannot record")
+		}
 		declared = inputs(project)?
 		root = root_inputs(graph)?
 		nodes = LockJson.object(LockJson.field(graph, "nodes")?)?
@@ -842,8 +945,8 @@ expect Locks.from_nix(
 expect match locked_fixture {
 	Ok(locks) => Locks.decode(
 		Locks.encode(locks).replace_each(
-			"\"path\":\"assets\"",
-			"\"path\":\"/developer/assets\"",
+			"(Str \"assets\")",
+			"(Str \"/developer/assets\")",
 		),
 	).is_err()
 	Err(_) => False
@@ -1084,3 +1187,17 @@ expect {
 	)
 	Locks.from_nix(project, TestData.layout, native).is_ok()
 }
+
+# Reviewers read Sources; a Source edited without its pins is rejected.
+expect match locked_fixture {
+	Ok(locks) => {
+		text = Locks.encode(locks)
+		(Locks.decode(text) == Ok(locks))
+			and Locks.sources(locks).all(|s| s.provider == "nix")
+				and Locks.decode(text.replace_each("(digest \"sha256-", "(digest \"sha256-X")).is_err()
+	}
+	Err(_) => False
+}
+
+# The pre-Lock JSON authority is refused with an update hint, not migrated.
+expect Locks.decode("{\"version\":1,\"identity\":{},\"nix\":{}}") == Err("unsupported Blueprint lock format; run blueprint update")

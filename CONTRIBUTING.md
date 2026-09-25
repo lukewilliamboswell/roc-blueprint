@@ -13,7 +13,7 @@ blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation
   fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip
 blueprint-nix/           importable pure Nix provider (depends only on blueprint-core)
   NixProvider.roc        shared pure request planning and flake rendering
-  Locks.roc              validated authority/native Nix lock translation
+  Locks.roc              Nix pins <-> the Lock: Sources plus a "nix" hint
   build-runner.py        in-derivation argv/output/isolation checks
   tests/                 Spec fixtures and golden flakes
 blueprint-cli/           the blueprint CLI (basic-cli + weaver)
@@ -187,6 +187,18 @@ checked after explicit provider selection, before staging effects. Package
 existence and target availability are Nix runtime checks. Core validation never
 probes the host or installs/fetches anything.
 
+### The Lock
+
+`Blueprint.lock` is a `blueprint-core/Lock.roc` value in the same S-expression
+codec, with its own `format` (currently 1.0) and the same compatibility rules
+as the Spec. It holds `sources` (one provider-neutral `{ name, provider, ref,
+rev, digest }` per declared input, `digest` in SRI form) and provider-namespaced
+`hints`. The Nix provider's hint carries its declared input identity and the
+complete native lock graph; decoding rejects a lock whose Sources disagree with
+those pins, so hand edits to either side fail. Older JSON locks are not
+migrated: run `blueprint update`. `scripts/lockfile.py` reads locks in tests,
+and `fuzz/lock-parse` fuzzes the parser.
+
 ### Compatibility
 
 - The decoder accepts the same `major`, whatever the `minor`; consumers must
@@ -237,8 +249,8 @@ are modeled; no Guix renderer, task implementation or executor exists. The
 reference CLI explicitly selects Nix; selection policy belongs to consumers.
 
 The source package exports `NixProvider` and `Locks`, without importing the CLI
-or an effectful platform. `Locks.decode` validates the versioned authority and
-native Nix graph; `Locks.derive` validates declaration/ordered-overlay identity
+or an effectful platform. `Locks.decode` parses the Lock, checks that its Sources match the
+"nix" hint's pins, and validates the native Nix graph; `Locks.derive` validates declaration/ordered-overlay identity
 and translates local project-relative paths into a disposable working lock.
 `NixProvider.plan` uses that translation. The former opaque-text `render_files`
 seam was removed, not retained as a bypass. `scripts/test-consumer.sh` compiles
