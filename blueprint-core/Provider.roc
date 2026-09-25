@@ -30,15 +30,17 @@ Provider := {
 	resolve : Spec, Str, Layout -> Try(Resolution, Str),
 
 	## Resolve: turn the native lock the resolve command wrote into a Lock. The
-	## Core records the Spec's intent in it before publishing.
-	lock_from_native : Spec, Layout, Str -> Try(Lock, Str),
+	## Core supplies its own tree digests for `Resolution.locals` (by path) and
+	## records the Spec's intent in the result before publishing.
+	lock_from_native : Spec, Layout, Str, List({ path : Str, digest : Str }) -> Try(Lock, Str),
 }.{
 
 	## Inspection returns relative names; executable Steps files are absolute.
 	File : { path : Str, contents : Str }
 
-	## `files` are staged, `locals` are checked for safety, then `argv` runs and
-	## writes `native_lock`, which `lock_from_native` converts.
+	## `files` are staged, `locals` are checked for safety and hashed by the
+	## Core, then `argv` runs and writes `native_lock`, which `lock_from_native`
+	## converts.
 	Resolution : {
 		files : List(Steps.File),
 		locals : List(Str),

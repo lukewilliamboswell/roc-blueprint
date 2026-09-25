@@ -6,6 +6,26 @@ import Spec
 Project :: [].{
 	ProviderName : [Nix, Guix]
 
+	## Order by UTF-8 bytes, for declaration-order-independent output.
+	bytewise : Str, Str -> [Before, Same, After]
+	bytewise = |a, b| {
+		left = a.to_utf8()
+		right = b.to_utf8()
+		var $i = 0
+		while $i < left.len() and $i < right.len() {
+			l = left.get($i) ?? 0
+			r = right.get($i) ?? 0
+			if l < r {
+				return Before
+			}
+			if l > r {
+				return After
+			}
+			$i = $i + 1
+		}
+		if left.len() < right.len() Before else if left.len() > right.len() After else Same
+	}
+
 	valid_name : Str -> Bool
 	valid_name = |name| !name.is_empty() and name.to_utf8().all(|b| letter(b) or (b >= '0' and b <= '9') or b == '-' or b == '_')
 

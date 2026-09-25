@@ -12,6 +12,7 @@ app [main!] {
 
 import pf.Cmd
 import pf.Env
+import pf.File
 import pf.OsStr
 import pf.Path
 import pf.Stdout
@@ -26,6 +27,7 @@ import core.Steps
 import core.Layout
 import core.Provider
 import core.Lock
+import core.Tree
 import nix.NixProvider
 import "../scripts/blueprint-runtime.py" as snapshot_helper : Str
 import "../.roc-version" as compiler_version : Str
@@ -450,6 +452,51 @@ safe_source! = |value| {
 	}
 }
 
+## Blueprint's content digest of a local source tree (see core `Tree`). Each
+## file is streamed through the builtin SHA-256 hasher in bounded chunks, so
+## no file is held in memory whole, and no provider tool is involved.
+tree_digest! : Str => Try(Str, _)
+tree_digest! = |root| {
+	entries = tree_entries!(root, "")?
+	Tree.digest(entries).map_err(|message| LockFailed(message))
+}
+
+tree_entries! : Str, Str => Try(List(Tree.Entry), _)
+tree_entries! = |root, prefix| {
+	var $entries = []
+	dir = if prefix == "" root else "${root}/${prefix}"
+	for child in path(dir).list!()? {
+		full = child.to_str()?
+		name = full.split_on("/").last() ?? full
+		relative = if prefix == "" name else "${prefix}/${name}"
+		match child.type!()? {
+			IsDir => {
+				$entries = $entries.append({ path: relative, kind: Dir }).concat(tree_entries!(root, relative)?)
+			}
+			IsFile => {
+				executable = child.is_executable!()?
+				$entries = $entries.append({ path: relative, kind: File({ executable, digest: file_digest!(full)? }) })
+			}
+			_ => return Err(UnsafePath(full))
+		}
+	}
+	Ok($entries)
+}
+
+## Chunks are read through a fixed-capacity buffer. basic-cli currently reads
+## by line; a byte-chunk read will replace this without changing callers.
+file_digest! : Str => Try(Crypto.SHA256.Digest, _)
+file_digest! = |file| {
+	reader = File.open_reader_with_capacity!(path(file), 65536)?
+	var $hasher = Crypto.SHA256.Hasher.empty()
+	var $chunk = reader.read_line!()?
+	while !$chunk.is_empty() {
+		$hasher = $hasher.write($chunk)
+		$chunk = reader.read_line!()?
+	}
+	Ok($hasher.finish())
+}
+
 ## The pure planner validates the entire request before any staging effects.
 realise! : Spec, Request, Context => Try({}, _)
 realise! = |spec, request, ctx| {
@@ -486,12 +533,9 @@ execute_step! : Steps.Step, Layout => Try({}, _)
 execute_step! = |step, layout| {
 	for operation in step.operations {
 		match operation {
-			VerifyLocal({ path: local, nar_hash }) => {
+			VerifyTree({ path: local, digest }) => {
 				safe_source!(local)?
-				observed = Cmd.new_str("nix").args_str(["hash", "path", "--sri", local])
-					.cwd(path(layout.project_root)).exec_output!()?
-				Stderr.write!(observed.stderr_utf8_lossy)?
-				if observed.stdout_utf8.trim() != nar_hash {
+				if tree_digest!(local)? != digest {
 					return Err(
 						LockFailed(
 							"local source ${local} changed; run `blueprint update`",
@@ -590,8 +634,10 @@ resolve! = |spec, ctx| {
 		.cwd(path(layout.project_root)).exec_output!()?
 	prior = observed.stdout_utf8.trim()
 	# Reject ancestor escapes and nested symlinks before staging or fetching.
+	var $trees = []
 	for local in resolution.locals {
 		safe_source!(local)?
+		$trees = $trees.append({ path: local, digest: tree_digest!(local)? })
 	}
 	native_lock = resolution.native_lock
 	safe_path!(native_lock)?
@@ -606,7 +652,7 @@ resolve! = |spec, ctx| {
 	}
 	exec!(resolution.argv, layout.project_root)?
 	safe_path!(native_lock)?
-	resolved = (provider.lock_from_native)(spec, layout, path(native_lock).read_utf8!()?)
+	resolved = (provider.lock_from_native)(spec, layout, path(native_lock).read_utf8!()?, $trees)
 		.map_err(|message| LockFailed(message))?
 	lock = { ..resolved, intent: Lock.intent_of(spec) }
 	path(parent(layout.lock_path)).create_all!()?

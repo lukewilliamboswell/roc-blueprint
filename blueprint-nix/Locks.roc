@@ -9,7 +9,7 @@ import core.Layout
 import core.Steps
 import LockJson
 
-Locks := { identity : LockJson, graph : LockJson }.{
+Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, digest : Str }) }.{
 	is_eq : _
 
 	Input : { name : Str, ref : Str, kind : Str, flake : Bool }
@@ -141,7 +141,10 @@ Locks := { identity : LockJson, graph : LockJson }.{
 		validate_identity(identity)?
 		validate_graph(graph)?
 		validate_binding(identity, graph)?
-		locks = Locks.{ identity, graph }
+		# Local inputs are verified by Blueprint's own tree digest, which only
+		# the Lock records; every other Source must match the pins exactly.
+		locals = lock.sources.keep_if(|s| is_local(identity, s.name) and s.digest != "").map(|s| { name: s.name, digest: s.digest })
+		locks = Locks.{ identity, graph, locals }
 		if sources(locks) != lock.sources {
 			return Err("Blueprint lock sources do not match its nix pins; run blueprint update")
 		}
@@ -169,6 +172,75 @@ Locks := { identity : LockJson, graph : LockJson }.{
 	}
 
 	## One provider-neutral Source per declared input, in declaration order.
+	## Record the Core's tree digests for local inputs, given by absolute path.
+	with_trees : Locks, Layout, List({ path : Str, digest : Str }) -> Try(Locks, Str)
+	with_trees = |locks, layout, trees| {
+		declared = LockJson.object(LockJson.field(locks.identity, "inputs")?)?
+		var $locals = []
+		for input in declared {
+			if is_local(locks.identity, input.name) {
+				ref = LockJson.string(LockJson.field(input.value, "ref")?)?
+				path = "${layout.project_root}/${ref.drop_prefix("path:")}"
+				tree = trees.find_first(|t| t.path == path)
+					.map_err(|_| "no tree digest for local input ${input.name}")?
+				$locals = $locals.append({ name: input.name, digest: tree.digest })
+			}
+		}
+		Ok({ ..locks, locals: $locals })
+	}
+
+	is_local : LockJson, Str -> Bool
+	is_local = |identity, name| match LockJson.field(LockJson.field(LockJson.field(identity, "inputs") ?? LockJson.Null, name) ?? LockJson.Null, "ref") {
+		Ok(LockJson.String(ref)) => ref.starts_with("path:")
+		_ => False
+	}
+
+	## `sha256-<base64>` (SRI, as Nix writes it) as `sha256:<hex>`; "" if not
+	## a SHA-256 SRI string.
+	sri_to_hex : Str -> Str
+	sri_to_hex = |sri| {
+		if !sri.starts_with("sha256-") {
+			return ""
+		}
+		match base64_decode(sri.drop_prefix("sha256-")) {
+			Ok(bytes) => match Crypto.SHA256.Digest.from_bytes(bytes) {
+				Ok(digest) => "sha256:${digest.to_hex()}"
+				Err(_) => ""
+			}
+			Err(_) => ""
+		}
+	}
+
+	base64_decode : Str -> Try(List(U8), [Invalid])
+	base64_decode = |text| {
+		value = |c| if c >= 'A' and c <= 'Z' Ok(c - 'A') else if c >= 'a' and c <= 'z' Ok(c - 'a' + 26) else if c >= '0' and c <= '9' Ok(c - '0' + 52) else if c == '+' Ok(62) else if c == '/' Ok(63) else Err(Invalid)
+		input = text.to_utf8()
+		if input.len() % 4 != 0 {
+			return Err(Invalid)
+		}
+		var $out = []
+		var $i = 0
+		while $i < input.len() {
+			a = value(input.get($i) ?? 0)?
+			b = value(input.get($i + 1) ?? 0)?
+			c3 = input.get($i + 2) ?? 0
+			c4 = input.get($i + 3) ?? 0
+			$out = $out.append((a).shl_wrap(2).bitwise_or((b).shr_zf_wrap(4)))
+			if c3 != '=' {
+				c = value(c3)?
+				$out = $out.append((b.bitwise_and(15)).shl_wrap(4).bitwise_or((c).shr_zf_wrap(2)))
+				if c4 != '=' {
+					d = value(c4)?
+					$out = $out.append((c.bitwise_and(3)).shl_wrap(6).bitwise_or(d))
+				}
+			} else if c4 != '=' {
+				return Err(Invalid)
+			}
+			$i = $i + 4
+		}
+		Ok($out)
+	}
+
 	sources : Locks -> List(Lock.Source)
 	sources = |locks| {
 		declared = LockJson.object(LockJson.field(locks.identity, "inputs") ?? LockJson.Object([])) ?? []
@@ -189,7 +261,11 @@ Locks := { identity : LockJson, graph : LockJson }.{
 					provider: "nix",
 					ref: text(input.value, "ref"),
 					rev: text(locked, "rev"),
-					digest: text(locked, "narHash"),
+					digest: if is_local(locks.identity, input.name) {
+						locks.locals.find_first(|l| l.name == input.name).map_ok(|l| l.digest) ?? ""
+					} else {
+						sri_to_hex(text(locked, "narHash"))
+					},
 				}
 			},
 		)
@@ -291,7 +367,7 @@ Locks := { identity : LockJson, graph : LockJson }.{
 		}
 		normalized = LockJson.set(graph, "nodes", LockJson.Object($nodes))?
 		validate_binding(identity, normalized)?
-		Ok(Locks.{ identity, graph: normalized })
+		Ok(Locks.{ identity, graph: normalized, locals: [] })
 	}
 
 	## Matching ignores object/declaration order, but never array/overlay order.
@@ -325,9 +401,10 @@ Locks := { identity : LockJson, graph : LockJson }.{
 				id = LockJson.string(LockJson.field(root, input.name)?)?
 				if node.name == id {
 					path = "${layout.project_root}/${local_path(input)}"
-					locked = LockJson.field($value, "locked")?
-					nar_hash = LockJson.string(LockJson.field(locked, "narHash")?)?
-					operation = VerifyLocal({ path, nar_hash })
+					digest = locks.locals.find_first(|l| l.name == input.name)
+						.map_err(|_| "local input ${input.name} has no recorded digest; run blueprint update")?
+						.digest
+					operation = VerifyTree({ path, digest })
 					if !$operations.contains(operation) {
 						$operations = $operations.append(operation)
 					}
@@ -842,12 +919,17 @@ Locks := { identity : LockJson, graph : LockJson }.{
 import TestData
 import "tests/local.nix-lock.json" as native_fixture : Str
 
+assets_tree : Str
+assets_tree = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
 locked_fixture : Try(Locks, Str)
-locked_fixture = Locks.from_nix(
-	TestData.project(TestData.data),
-	TestData.layout,
-	native_fixture,
-)
+locked_fixture = with_assets(Locks.from_nix(TestData.project(TestData.data), TestData.layout, native_fixture))
+
+with_assets : Try(Locks, Str) -> Try(Locks, Str)
+with_assets = |resolved| match resolved {
+	Ok(locks) => locks.with_trees(TestData.layout, [{ path: "/project/assets", digest: assets_tree }])
+	Err(e) => Err(e)
+}
 
 # Explicitly resolved native pins become a decoded, round-trippable authority.
 expect match locked_fixture {
@@ -879,10 +961,7 @@ expect match locked_fixture {
 			Ok(derived) => derived.contents.contains("/moved/assets")
 				and !derived.contents.contains("/project")
 					and derived.operations == [
-						VerifyLocal({
-							path: "/moved/assets",
-							nar_hash: "sha256-mhO52EWOvxHOyTFt0V1hM6Oo6mlpNo2PFlxQtcmCJBc=",
-						}),
+						VerifyTree({ path: "/moved/assets", digest: assets_tree }),
 					]
 						and Locks.decode(Locks.encode(locks)) == Ok(locks)
 			Err(_) => False
@@ -1201,10 +1280,25 @@ expect match locked_fixture {
 		text = Locks.encode(locks)
 		(Locks.decode(text) == Ok(locks))
 			and Locks.sources(locks).all(|s| s.provider == "nix")
-				and Locks.decode(text.replace_each("(digest \"sha256-", "(digest \"sha256-X")).is_err()
+				and Locks.decode(text.replace_each("(rev \"", "(rev \"0")).is_err()
 	}
 	Err(_) => False
 }
 
 # The pre-Lock JSON authority is refused with an update hint, not migrated.
 expect Locks.decode("{\"version\":1,\"identity\":{},\"nix\":{}}") == Err("unsupported Blueprint lock format; run blueprint update")
+
+# Nix's SRI hashes become Blueprint's `sha256:<hex>` digests.
+expect Locks.sri_to_hex("sha256-mhO52EWOvxHOyTFt0V1hM6Oo6mlpNo2PFlxQtcmCJBc=")
+	== "sha256:9a13b9d8458ebf11cec9316dd15d6133a3a8ea6969368d8f165c50b5c9822417"
+expect Locks.sri_to_hex("sha512-abc=") == "" and Locks.sri_to_hex("sha256-!!!!") == ""
+
+# A local source's recorded tree digest is what realisation verifies, and
+# editing it in the Lock is a (reviewable) change that decoding preserves.
+expect match locked_fixture {
+	Ok(locks) => {
+		assets = Locks.sources(locks).find_first(|s| s.name == "assets")
+		assets.map_ok(|s| s.digest) == Ok(assets_tree)
+	}
+	Err(_) => False
+}

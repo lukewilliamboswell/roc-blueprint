@@ -18,6 +18,10 @@ if [[ "$imports" != "import nix.NixProvider" || "$refs" != " 1 NixProvider." ]];
 	echo "blueprint-cli/main.roc must use only provider.* (found: $imports / $refs)" >&2
 	exit 1
 fi
+if grep -n '"nix"' blueprint-cli/main.roc; then
+	echo "blueprint-cli/main.roc must not run provider tools itself" >&2
+	exit 1
+fi
 
 step "roc-blueprint-core tests"
 "$ROC" test blueprint-core/main.roc

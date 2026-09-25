@@ -1,3 +1,4 @@
+import Project
 import Sexpr
 import Spec
 import Value
@@ -46,33 +47,13 @@ Lock := {
 	## part of the intent; overlay order within an environment is.
 	intent_of : Spec -> Intent
 	intent_of = |spec| {
-		sources: spec.sources.sort_with(|x, y| bytewise(x.name, y.name)),
-		inputs: spec.inputs.sort_with(|x, y| bytewise(x.name, y.name)),
-		build_sources: spec.build_sources.sort_with(|x, y| bytewise(x.name, y.name)),
+		sources: spec.sources.sort_with(|x, y| Project.bytewise(x.name, y.name)),
+		inputs: spec.inputs.sort_with(|x, y| Project.bytewise(x.name, y.name)),
+		build_sources: spec.build_sources.sort_with(|x, y| Project.bytewise(x.name, y.name)),
 		overlays: spec.environments
 			.keep_if(|env| !env.overlays.is_empty())
 			.map(|env| { environment: env.name, overlays: env.overlays })
-			.sort_with(|x, y| bytewise(x.environment, y.environment)),
-	}
-
-	## Order by UTF-8 bytes, so intent is independent of declaration order.
-	bytewise : Str, Str -> [Before, Same, After]
-	bytewise = |a, b| {
-		left = a.to_utf8()
-		right = b.to_utf8()
-		var $i = 0
-		while $i < left.len() and $i < right.len() {
-			l = left.get($i) ?? 0
-			r = right.get($i) ?? 0
-			if l < r {
-				return Before
-			}
-			if l > r {
-				return After
-			}
-			$i = $i + 1
-		}
-		if left.len() < right.len() Before else if left.len() > right.len() After else Same
+			.sort_with(|x, y| Project.bytewise(x.environment, y.environment)),
 	}
 
 	empty_intent : Intent

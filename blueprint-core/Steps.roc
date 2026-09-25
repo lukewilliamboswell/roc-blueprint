@@ -28,7 +28,7 @@ Steps := { steps : List(Step) }.{
 	## /proc/self/ns/{mnt,net} readlink identities, separate from source bytes.
 	## Serialize workspace use; stop on any failed materialization operation.
 	Operation : [
-		VerifyLocal({ path : Str, nar_hash : Str }),
+		VerifyTree({ path : Str, digest : Str }),
 		Snapshot({ root : Str, destination : Str, exclude : List(Str) }),
 	]
 }

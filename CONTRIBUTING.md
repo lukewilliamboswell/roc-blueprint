@@ -195,7 +195,9 @@ as the Spec. It holds `intent` (the parts of the Spec Resolve consumed: source
 and input declarations, build sources and per-environment overlay order), which
 the CLI records on `update` and compares before every other command, failing
 with what changed; `sources` (one provider-neutral `{ name, provider, ref,
-rev, digest }` per declared input, `digest` in SRI form) and provider-namespaced
+rev, digest }` per declared input; `digest` is `sha256:<hex>`: the Nix
+provider converts its NAR hashes for remote inputs, and local inputs carry
+Blueprint's own tree digest from core `Tree`) and provider-namespaced
 `hints`. The Nix provider's hint carries its declared input identity and the
 complete native lock graph; decoding rejects a lock whose Sources disagree with
 those pins, so hand edits to either side fail. Older JSON locks are not
@@ -265,7 +267,8 @@ relocated local-source translation.
 explicit `update` resolves new pins and publishes authority; normal commands
 stage derivatives and prohibit native lock updates. Named input declarations
 remain stable across selected closures; selected overlays remain scoped and
-ordered. Local authority contains relative identity and NAR hashes, not checkout
+ordered. Local authority contains relative identity and Blueprint tree digests
+(core `Tree`, computed and verified by the CLI without Nix), not checkout
 paths. Dirty local inputs fail until explicit update. Local verification and fresh
 snapshot operations repeat per explicit build, never reusing artifact results
 by name across tasks.

@@ -35,7 +35,10 @@ NixProvider :: [].{
 			argv: ["nix", "flake", "update", "--flake", "path:${layout.generated_root}"],
 			native_lock: "${layout.generated_root}/flake.lock",
 		}),
-		lock_from_native: |spec, layout, text| Locks.from_nix(spec, layout, text).map_ok(Locks.to_lock),
+		lock_from_native: |spec, layout, text, trees| {
+			locks = Locks.from_nix(spec, layout, text)?
+			Ok(Locks.to_lock(locks.with_trees(layout, trees)?))
+		},
 	}
 
 	default_nixpkgs : Str
@@ -1140,11 +1143,17 @@ import TestData
 import "tests/local.nix-lock.json" as native_lock : Str
 
 plan_locks : Try(Locks, Str)
-plan_locks = Locks.from_nix(
-	TestData.project(TestData.data),
-	TestData.layout,
-	native_lock,
-)
+plan_locks = resolved(TestData.project(TestData.data), native_lock)
+
+## Resolve fixture pins as the Core would: native lock, then tree digests.
+resolved : Spec, Str -> Try(Locks, Str)
+resolved = |project, text| match Locks.from_nix(project, TestData.layout, text) {
+	Ok(locks) => locks.with_trees(TestData.layout, [{ path: "/project/assets", digest: assets_tree }])
+	Err(e) => Err(e)
+}
+
+assets_tree : Str
+assets_tree = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 
 plan_fixture : Request -> Try(Steps, Str)
 plan_fixture = |request| {
@@ -1225,10 +1234,7 @@ expect match plan_fixture(Request.Build("app")) {
 # Inputs are verified before each fresh snapshot, including every excluded root.
 expect match plan_fixture(Request.Build("app")) {
 	Ok({ steps: [plan] }) => plan.operations == [
-		VerifyLocal({
-			path: "/project/assets",
-			nar_hash: "sha256-mhO52EWOvxHOyTFt0V1hM6Oo6mlpNo2PFlxQtcmCJBc=",
-		}),
+		VerifyTree({ path: "/project/assets", digest: assets_tree }),
 		Snapshot({
 			root: "/project",
 			destination: "/work/snapshot",
@@ -1416,7 +1422,7 @@ expect {
 		],
 	}
 	project = TestData.project(data)
-	match Locks.from_nix(project, TestData.layout, native_lock) {
+	match resolved(project, native_lock) {
 		Ok(locks) => NixProvider.plan(
 			project,
 			Request.Shell("default"),
@@ -1454,7 +1460,7 @@ expect {
 		"\"default\": \"default\", \"first\": \"default\", \"second\": \"default\"",
 	)
 	project = TestData.project(data)
-	match Locks.from_nix(project, TestData.layout, native) {
+	match resolved(project, native) {
 		Ok(locks) => {
 			reordered = TestData.project({
 				..data,
@@ -1648,7 +1654,7 @@ expect {
 				and step.operations.keep_if(
 					|operation| match operation {
 						Snapshot(_) => True
-						VerifyLocal(_) => False
+						VerifyTree(_) => False
 					},
 				).len() == 1,
 	) and match plan.steps.first() {
@@ -1979,7 +1985,7 @@ expect {
 		|step| step.operations.keep_if(
 			|operation| match operation {
 				Snapshot(_) => True
-				VerifyLocal(_) => False
+				VerifyTree(_) => False
 			},
 		).len(),
 	) == [1, 0, 0, 1, 0, 1, 1]
@@ -2023,7 +2029,7 @@ expect {
 		]),
 	}
 	project = TestData.project(data)
-	locks = Locks.from_nix(project, TestData.layout, native_lock)?
+	locks = resolved(project, native_lock)?
 	first = NixProvider.plan(
 		project,
 		Request.Workflow("one"),
@@ -2069,7 +2075,7 @@ expect {
 			{ name: "ci", steps: [RunTask("check", []), BuildArtifact("app")] },
 		],
 	})
-	locks = Locks.from_nix(project, TestData.layout, native_lock)?
+	locks = resolved(project, native_lock)?
 	first = NixProvider.plan(
 		project,
 		Request.Run("check", []),
@@ -2244,7 +2250,7 @@ expect {
 		sources: [{ name: "guix", provider: GuixPackages("channels") }],
 		environments: [TestData.builder, foreign],
 	})
-	locks = Locks.from_nix(project, TestData.layout, native_lock)?
+	locks = resolved(project, native_lock)?
 	NixProvider.plan(
 		project,
 		Request.Workflow("empty"),

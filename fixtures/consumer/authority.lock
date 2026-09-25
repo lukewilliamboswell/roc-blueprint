@@ -171,17 +171,17 @@
 		(overlays ())
 		(sources ())))
 	(sources ((
-		(digest "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=")
+		(digest "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5")
 		(name "default")
 		(provider "nix")
 		(ref "github:NixOS/nixpkgs/nixos-unstable")
 		(rev "4975466d324710c576dc11ad614684e6bd8cad8e")) (
-		(digest "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=")
+		(digest "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5")
 		(name "nixpkgs")
 		(provider "nix")
 		(ref "github:NixOS/nixpkgs/nixos-unstable")
 		(rev "4975466d324710c576dc11ad614684e6bd8cad8e")) (
-		(digest "sha256-fhatlsqelliHOfoT723TYQb8DzxSn698DpobgiARHIM=")
+		(digest "sha256:7e16ad96ca9e96588739fa13ef6dd36106fc0f3c529faf7c0e9a1b8220111c83")
 		(name "roc")
 		(provider "nix")
 		(ref "github:roc-lang/roc-overlay")
