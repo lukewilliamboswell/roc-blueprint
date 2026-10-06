@@ -1,4 +1,4 @@
-# The integration runner supplies a local platform, pinned packages and event log.
+# The suite supplies the local platform, the pinned inputs and the event log.
 app [config] {
 	pf: platform "@PLATFORM@",
 }
@@ -8,29 +8,33 @@ config = [
 	Systems(["x86_64-linux"]),
 	Packages("default", From(NixPackages("@PACKAGES@"))),
 	Packages("foreign", From(GuixPackages("https://example.invalid/guix"))),
-	Environment("builder", [Tools(["python3"])]),
+	Overlay("roc", "@ROC_OVERLAY@"),
+	# Tasks and builds are Roc scripts: one pinned compiler and the bundles
+	# those scripts name, and no other tool. Roc takes the first `--` for
+	# itself, so each command has one before the script's arguments.
+	Environment("builder", [Overlays(["roc"]), Command("roc-stable", "rocpkgs.@ROC_COMPILER@"), RocPackages([@ROC_PACKAGES@])]),
 	Environment("foreign", [Tools(["foreign#python"])]),
 	Source("assets", "path:./assets"),
-	Task("record", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "record", "configured argument"])]),
-	Task("prepare", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "prepare"])]),
-	Task("edit", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "edit"])]),
-	Task("dirty", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "dirty"])]),
-	Task("fail", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "fail"])]),
-	Task("later", [Use("builder"), Run(["python3", "task.py", "@EVENTS@", "record", "unsupported task reached"])]),
-	Build("library", [Use("builder"), Run(["python3", "build.py", "library"]), Output("dist/library")]),
+	Task("record", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "record", "configured argument"])]),
+	Task("prepare", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "prepare"])]),
+	Task("edit", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "edit"])]),
+	Task("dirty", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "dirty"])]),
+	Task("fail", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "fail"])]),
+	Task("later", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "record", "unsupported task reached"])]),
+	Build("library", [Use("builder"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
 	Build(
 		"app",
 		[
 			Use("builder"),
 			Inputs(["assets"]),
 			Needs(["library"]),
-			Run(["python3", "build.py", "app", "", "two words", "--", "--literal", "$HOME", "$(touch INJECTED)", "; touch INJECTED", "a'b\"c", "line\nbreak", "*", "$"]),
+			Run(["roc-stable", "build.roc", "--", "app", "", "two words", "--", "--literal", "$HOME", "$(touch INJECTED)", "; touch INJECTED", "a'b\"c", "line\nbreak", "*", "$"]),
 			Output("dist/app"),
 		],
 	),
-	Build("fail", [Use("builder"), Run(["python3", "build.py", "fail"]), Output("dist/fail")]),
-	Build("later-library", [Use("builder"), Run(["python3", "build.py", "library"]), Output("dist/library")]),
-	Build("later-app", [Use("builder"), Needs(["later-library"]), Run(["python3", "build.py", "fail"]), Output("dist/fail")]),
+	Build("fail", [Use("builder"), Run(["roc-stable", "build.roc", "--", "fail"]), Output("dist/fail")]),
+	Build("later-library", [Use("builder"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
+	Build("later-app", [Use("builder"), Needs(["later-library"]), Run(["roc-stable", "build.roc", "--", "fail"]), Output("dist/fail")]),
 	Workflow("empty", []),
 	Workflow("nested-empty", [RunWorkflow("empty"), RunWorkflow("empty")]),
 	Workflow("ci", [RunTask("prepare", []), BuildArtifact("app"), RunTask("record", ["after build"])]),

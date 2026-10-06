@@ -232,17 +232,22 @@ runtime operations to the CLI.
 
 ### Artifact builds
 
-Inside `config`, with `scripts/build.py` in the project:
+Inside `config`, with `scripts/build.roc` in the project and the `scripts`
+environment of [Roc packages](#roc-packages) above:
 
 ```roc
 Source("assets", "path:./assets"),
 Build("app", [
-	Use("dev"),
+	Use("scripts"),
 	Inputs(["assets"]),
-	Run(["python3", "scripts/build.py"]),
+	Run(["roc-stable", "scripts/build.roc"]),
 	Output("dist/app"),
 ]),
 ```
+
+`Run` is any argv; nothing about a build requires Roc. Roc takes the first
+`--` of its arguments for itself, so pass a script its own arguments after
+one: `Run(["roc-stable", "scripts/build.roc", "--", "--release"])`.
 
 Run `blueprint update`, then `blueprint build app`. The printed store path is
 resolved by Nix and contains exactly the declared file or directory. Missing
@@ -263,7 +268,9 @@ versions also put `python3`, coreutils and `bash` there, so a build that ran
 `sh`, `cp`, `mkdir` or `python3` without declaring it now fails with `build
 command not found`, or inside its own script when that script calls one: add
 the tool (`bash`, `coreutils`, `python3`) to the environment's `Tools`. A build
-also no longer sees the variables Nix's `stdenv` used to export.
+also no longer sees the variables Nix's `stdenv` used to export. A tool may
+give what it runs more than the build was given: the Roc compiler's package
+puts coreutils and a C compiler on the `PATH` of a script it runs.
 The `blueprint` executable is itself each build's builder inside the sandbox,
 so `blueprint build` refuses to run unless that executable is an x86_64 Linux
 one.

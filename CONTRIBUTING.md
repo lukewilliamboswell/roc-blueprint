@@ -21,7 +21,7 @@ fixtures/consumer/       independent consumer of the Spec and Nix packages
 fixtures/overlays/       overlay flakes for scripts/test_scenarios.roc
 examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
 examples/composition/    imported pure module returning reusable task settings
-examples/artifacts/      runnable source/dependency/workflow example and scripts
+examples/artifacts/      runnable source/dependency/workflow example and its Roc scripts
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
 scripts/                 Roc scripts, run from the repository root; their modules are in scripts/src/
   test.roc               everything CI checks, in groups; runs the test_*.roc suites
@@ -31,6 +31,7 @@ scripts/                 Roc scripts, run from the repository root; their module
   smoke_binary.roc       run a built CLI with no Roc and no Python of its own
   fuzz.roc               replay or fuzz the roc-fuzz targets
   release_notes.roc      write a release's notes for the release workflows
+  test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
 link-inputs.lock.json    the linker-input release the platform links, pinned by content
 flake.nix                builds blueprint with the pinned Roc; the development shell
 ```
@@ -124,17 +125,24 @@ revisions in `fixtures/consumer/inputs.lock` and `flake.lock`, and its
 `fixtures/consumer/main.roc` holds the staged bytes and supplied-lock
 preservation as `expect`s. Parse fuzzing also checks successful semantic
 normalization for idempotence.
-`scripts/test-b2.py` adds real offline-capable artifact/dependency/source tests,
-including host-file and TCP isolation with positive host controls, fail-closed
-runner checks, exact argv, immutable locks, freshness and relocation. It also
-checks what Nix copies from the project (bytes, the owner's execute bit, raw
-names, exclusions, refused symlinks and special files) and that an undeclared
-tool is not found. It runs `blueprint __build-runner` directly on the host for
-the checks that need no sandbox, with a hand-written witness naming namespaces
-the host does not have.
-`scripts/test-b3.py` adds real ordered task/build workflows, nested repetitions,
-failure stops, snapshot/dependency freshness, repeated locked-source verification,
-whole-closure preflight and immutable authority, including out-of-tree layouts.
+`scripts/test_builds.roc` runs real sandboxed builds of artifacts,
+dependencies and sources, including host-file and TCP isolation with positive
+host controls, fail-closed runner checks, exact argv, immutable locks,
+freshness and relocation. It also checks what Nix copies from the project
+(bytes, the owner's execute bit, raw names, exclusions, refused symlinks and
+special files) and that an undeclared tool is not found. It runs
+`blueprint __build-runner` directly on the host for the checks that need no
+sandbox, with a hand-written witness naming namespaces the host does not have.
+`scripts/test_workflows.roc` runs real ordered task/build workflows, nested
+repetitions, failure stops, snapshot/dependency freshness, repeated
+locked-source verification, whole-closure preflight and immutable authority,
+including out-of-tree layouts, and then a temporary copy of the complete
+artifacts example. Both are Roc scripts on the harness in
+`scripts/src/BuildHarness.roc`, and the tasks and builds of their fixtures are
+Roc scripts run as `roc-stable` through `RocPackages`. Their inputs are pinned
+in `fixtures/consumer/inputs.lock` and `fixtures/roc-inputs.lock.json`; one
+first step fetches them and every later Nix call is recorded and run with
+`--offline`. See [fixtures/builds/README.md](fixtures/builds/README.md).
 `scripts/test_update.roc` checks local-source preflight, authority observation and
 concurrent publication. `scripts/test_isolation.roc` checks what a build stages
 about its caller: the namespace identities, the CLI's own path as the runner,
@@ -158,7 +166,7 @@ leave nothing behind, and that a sandboxed build resolves its bundles with no
 network while the same build without one of them does not.
 Normal execution tests explicitly initialize authority with `update` first.
 The complete artifacts example is executed in a temporary copy by
-the workflow integration script (`scripts/test-b3.py`).
+the workflow suite (`scripts/test_workflows.roc`).
 
 ## Nightly updates
 
@@ -345,7 +353,7 @@ and translates local project-relative paths into a disposable working lock.
 seam was removed, not retained as a bypass. `fixtures/consumer/main.roc` is an
 independent app using these APIs, including caller-selected paths, decoded
 supplied authority and exact argv; `scripts/test.roc` checks it and runs its
-`expect`s. `scripts/test-b2.py` separately proves actual
+`expect`s. `scripts/test_builds.roc` separately proves actual
 relocated local-source translation.
 
 `gen`, `shell`, `run`, `build` and `workflow` require existing matching authority. Only

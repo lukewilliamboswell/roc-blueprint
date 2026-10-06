@@ -51,7 +51,7 @@ files = |_| {
 	}
 }
 
-# B2 emits unused Auto too; alias it to the existing identical nixpkgs pin.
+# The planner emits unused Auto too; alias it to the existing identical nixpkgs pin.
 # This fixture-only seed completion changes no locked node or fetch identity.
 complete_native_lock : Str
 complete_native_lock = native_lock.replace_each(
