@@ -64,6 +64,9 @@ if args[:3] == ["flake", "update", "--flake"]:
         name: fixtures[url] for name, url in declared
     }
     generated.joinpath("flake.lock").write_text(json.dumps(graph))
+elif args[:3] == ["build", "--no-link", "--print-out-paths"]:
+    assert len(args) == 4, args
+    print(os.environ["NIX_COMPILER_DIR"])
 elif args[:1] == ["develop"]:
     if os.environ.get("NIX_FAIL"):
         print("native package command failed", file=sys.stderr)
@@ -218,6 +221,36 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
         assert "blueprint" in run("--help", cwd=cwd, overrides=overrides)
         assert re.fullmatch(r"\d+\.\d+\.\d+(?:-\S+)?\s*",
                             run("--version", cwd=cwd, overrides=overrides))
+
+    # Without ROC, a compatible roc on PATH is used as it is. An incompatible
+    # or absent one makes the CLI fetch the pinned compiler through the provider.
+    fetched = work / "fetched-compiler"
+    (fetched / "bin").mkdir(parents=True)
+    (fetched / "bin/roc").symlink_to(roc_wrapper)
+    for name, path_roc in [("path", roc_wrapper), ("fetched", probe),
+                           ("absent", None)]:
+        cwd = isolated(f"compiler-{name}")
+        settings(valid, cwd)
+        on_path = cwd / "path-bin"
+        on_path.mkdir()
+        if path_roc is not None:
+            (on_path / "roc").symlink_to(path_roc)
+        without_roc = {k: v for k, v in env.items() if k != "ROC"} | {
+            "PATH": f"{on_path}{os.pathsep}{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            "PROBE_VERSION": "Roc compiler version other-nightly",
+            "NIX_COMPILER_DIR": str(fetched),
+        }
+        result = subprocess.run([str(BLUEPRINT), "spec"], cwd=cwd,
+                                env=without_roc, capture_output=True,
+                                text=True, timeout=60)
+        assert result.returncode == 0, (name, result.stdout + result.stderr)
+        assert "(name " in result.stdout
+        builds = [call for call in calls("nix", cwd) if call[:1] == ["build"]]
+        if name == "path":
+            assert builds == []
+        else:
+            assert len(builds) == 1 and builds[0][3].endswith(f'#"{pin}"')
+            assert builds[0][3].startswith("github:roc-lang/roc-overlay/")
 
     # ROC is invocation-relative even when BLUEPRINT_ROOT selects elsewhere.
     cwd = isolated("compiler-relative-root")

@@ -32,6 +32,11 @@ Provider := {
 	## Core supplies its own tree digests for `Resolution.locals` (by path) and
 	## records the Spec's intent in the result before publishing.
 	lock_from_native : Spec, Layout, Str, List({ path : Str, digest : Str }) -> Try(Lock, Str),
+
+	## The argv that fetches the Roc release with this tag and prints a
+	## directory whose `bin/roc` is that compiler. The Core runs it when no
+	## compatible compiler is at hand to evaluate the configuration.
+	compiler : Str -> List(Str),
 }.{
 
 	## Inspection returns relative names; executable Steps files are absolute.

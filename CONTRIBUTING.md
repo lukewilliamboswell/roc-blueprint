@@ -277,9 +277,17 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
 - **roc-blueprint-core:** push a tag like `core-X.Y.Z`. `release-core.yml` tests
   and bundles `blueprint-core/` and publishes release `core-X.Y.Z` with the bundle.
 - **roc-blueprint:** put the core bundle URL the platform should use in
-  `blueprint-platform/core-release`, then push a tag like `X.Y.Z`. `release.yml` runs the
-  tests and publishes release `X.Y.Z` with the platform bundle and a prebuilt
-  `blueprint` binary.
+  `blueprint-platform/core-release`, set `version` in `blueprint-cli/main.roc`
+  and `flake.nix` to the release, then push a tag like `X.Y.Z`. `release.yml`
+  runs the tests, cross-builds the `blueprint` binaries on Linux with
+  `scripts/build-release.sh`, runs the macOS binary on macOS with
+  `scripts/smoke-binary.sh`, and only then publishes release `X.Y.Z` with the
+  platform bundle, the binaries and their sha256 sums.
+
+A binary fetches the compiler named in `.roc-version` from the roc-overlay
+revision in `NixProvider.roc_overlay`. Change that constant whenever
+`flake.lock` moves the `roc-overlay` input; `scripts/test.sh` fails when the two
+differ.
 
 A tag with a `-` in it (e.g. `X.Y.Z-rc1`) is published as a pre-release.
 

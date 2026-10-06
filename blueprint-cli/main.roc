@@ -33,7 +33,7 @@ import "../scripts/blueprint-runtime.py" as snapshot_helper : Str
 import "../.roc-version" as compiler_version : Str
 
 version : Str
-version = "0.2.0"
+version = "0.4.0-rc2"
 
 ## The provider every command goes through. This is the only reference to a
 ## concrete provider: everything else uses the Provider contract
@@ -317,30 +317,60 @@ print_files! = |spec| {
 
 ## Probe identity before evaluating config with the selected compiler.
 ## A relative ROC executable belongs to the invocation directory, not root.
+## An explicit ROC must be the compatible compiler. Otherwise a compatible
+## `roc` on PATH is used, and failing that the provider fetches the release.
 roc! : () => Try(Str, _)
 roc! = || {
-	override = Env.var_str!("ROC") ?? "roc"
-	compiler = if override.contains("/") and !override.starts_with("/") {
-		cwd = Env.cwd!()?.to_str()?
-		"${cwd}/${override}"
-	} else override
-	output = Cmd.new_str(compiler).args_str(["version"]).exec_output!()
-		.map_err(
-			|err| CompilerFailed(
-				"could not probe ${compiler}: ${Str.inspect(err)}",
-			),
-		)?
 	expected = "Roc compiler version ${compiler_version.trim()}"
-	if output.stdout_utf8.trim() != expected {
-		return Err(
-			CompilerFailed(
-				"incompatible ROC executable ${compiler}: "
-					.concat("expected ${expected}; got ${output.stdout_utf8.trim()}"),
-			),
-		)
+	match Env.var_str!("ROC") {
+		Ok(override) => {
+			compiler = if override.contains("/") and !override.starts_with("/") {
+				cwd = Env.cwd!()?.to_str()?
+				"${cwd}/${override}"
+			} else override
+			output = Cmd.new_str(compiler).args_str(["version"]).exec_output!()
+				.map_err(
+					|err| CompilerFailed(
+						"could not probe ${compiler}: ${Str.inspect(err)}",
+					),
+				)?
+			if output.stdout_utf8.trim() != expected {
+				return Err(
+					CompilerFailed(
+						"incompatible ROC executable ${compiler}: "
+							.concat("expected ${expected}; got ${output.stdout_utf8.trim()}"),
+					),
+				)
+			}
+			Ok(compiler)
+		}
+		Err(_) => {
+			on_path = Cmd.new_str("roc").args_str(["version"]).exec_output!()
+				.map_ok(|output| output.stdout_utf8.trim() == expected) ?? False
+			if on_path {
+				return Ok("roc")
+			}
+			fetch_roc!((provider.compiler)(compiler_version.trim()))
+		}
 	}
-	Ok(compiler)
 }
+
+## Realise the compatible compiler through the provider. Its progress goes to
+## stderr; stdout is the directory holding `bin/roc`.
+fetch_roc! : List(Str) => Try(Str, _)
+fetch_roc! = |argv|
+	match argv {
+		[program, .. as args] => {
+			output = Cmd.new_str(program).args_str(args).stderr(Inherit).exec_output!()
+				.map_err(
+					|err| CompilerFailed(
+						"could not fetch Roc ${compiler_version.trim()}: ${Str.inspect(err)}",
+					),
+				)?
+			Ok("${output.stdout_utf8.trim()}/bin/roc")
+		}
+		[] => Err(CompilerFailed("the provider cannot fetch a compiler"))
+	}
 
 Context : { layout : Layout, target : Str }
 
@@ -375,16 +405,26 @@ context! = || {
 			generated_root: generated,
 			lock_path: lock,
 		},
-		target: Env.var_str!("BLUEPRINT_TARGET") ?? "x86_64-linux",
+		target: Env.var_str!("BLUEPRINT_TARGET") ?? host_target!(),
 	})
 }
 
-## Config-platform execution currently has only a verified Linux host.
+## The configuration platform ships a host for these machines only.
 check_host! : () => Try({}, [UnsupportedHost])
 check_host! = ||
 	match Env.platform!() {
 		{ arch: X64, os: LINUX } => Ok({})
+		{ arch: AARCH64, os: MACOS } => Ok({})
 		_ => Err(UnsupportedHost)
+	}
+
+## The System this machine realises by default. Unsupported hosts fall back
+## to the Linux default and fail later in check_host!.
+host_target! : () => Str
+host_target! = ||
+	match Env.platform!() {
+		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
+		_ => "x86_64-linux"
 	}
 
 resolve : Str, Str -> Str
@@ -720,13 +760,13 @@ describe = |err|
 	match err {
 		NoBlueprint => "there is no Blueprint.roc in the selected project root"
 		UnsupportedHost =>
-			"Blueprint.roc execution currently requires x86_64 Linux; "
+			"Blueprint.roc execution requires x86_64 Linux or Apple Silicon macOS; "
 				.concat("Systems/BLUEPRINT_TARGET describe outputs, ")
 				.concat("not compiler host support")
 		CompilerFailed(message) =>
 			"could not execute the configuration compiler; "
-				.concat("install Roc ${compiler_version.trim()} or set ROC to its ")
-				.concat("executable (the Nix package supplies it):\n${message}")
+				.concat("Roc ${compiler_version.trim()} is fetched automatically, ")
+				.concat("or set ROC to its executable:\n${message}")
 		LockFailed(message) => "${message}; use `blueprint update` to initialize "
 			.concat("or deliberately refresh pins")
 		UnsafePath(value) => "refusing unsafe or symlinked runtime path: ${value}"

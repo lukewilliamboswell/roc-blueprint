@@ -23,6 +23,16 @@ if grep -n '"nix"' blueprint-cli/main.roc; then
 	exit 1
 fi
 
+step "The fetched compiler comes from the locked roc-overlay revision"
+python3 - <<'PY'
+import json, re, urllib.parse
+locked = json.load(open("flake.lock"))["nodes"]["roc-overlay"]["locked"]
+expected = "github:{owner}/{repo}/{rev}?narHash={hash}".format(
+    hash=urllib.parse.quote(locked["narHash"], safe="-"), **locked)
+actual = re.search(r'roc_overlay = "([^"]+)"', open("blueprint-nix/NixProvider.roc").read()).group(1)
+assert actual == expected, f"update roc_overlay in NixProvider.roc to {expected}"
+PY
+
 step "roc-blueprint-core tests"
 "$ROC" test blueprint-core/main.roc
 

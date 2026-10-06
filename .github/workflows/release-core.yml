@@ -1,7 +1,7 @@
 name: Release roc-blueprint-core
 
 # Push a tag like core-0.1.0 to publish the roc-blueprint-core package bundle.
-# The package is released independently of the platform; to use a new ir
+# The package is released independently of the platform; to use a new core
 # release in the platform, put its URL in blueprint-platform/core-release.
 on:
   push:

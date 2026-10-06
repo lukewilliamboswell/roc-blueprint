@@ -39,7 +39,14 @@ NixProvider :: [].{
 			locks = Locks.from_nix(spec, layout, text)?
 			Ok(Locks.to_lock(locks.with_trees(layout, trees)?))
 		},
+		compiler: |tag| ["nix", "build", "--no-link", "--print-out-paths", "${roc_overlay}#\"${tag}\""],
 	}
+
+	## The roc-overlay revision that packages the compiler evaluating
+	## Blueprint.roc. scripts/test.sh keeps it equal to flake.lock, so the
+	## fetched compiler is the one this CLI was built and tested with.
+	roc_overlay : Str
+	roc_overlay = "github:roc-lang/roc-overlay/fb02fef7a45ddf115f558c8eaf32bd1ce2f9912f?narHash=sha256-R4ZjP2ceAyOyllFY%2B8wE1LLFVV4qvjw2yix57tzu6g0%3D"
 
 	default_nixpkgs : Str
 	default_nixpkgs = Locks.default_nixpkgs
@@ -1096,6 +1103,10 @@ expect {
 }
 
 expect NixProvider.render({ ..mk(simple), commands: [{ environment: "dev", name: "vcs", tool: { source: "default", name: "git" } }] }).is_err()
+
+# The evaluating compiler is fetched by tag from the pinned overlay revision.
+expect (NixProvider.provider.compiler)("nightly-2026-10-04-130536d") == ["nix", "build", "--no-link", "--print-out-paths", "${NixProvider.roc_overlay}#\"nightly-2026-10-04-130536d\""]
+expect NixProvider.roc_overlay.starts_with("github:roc-lang/roc-overlay/") and NixProvider.roc_overlay.contains("?narHash=sha256-")
 
 # Auto tool syntax is checked for the selected provider before any effects.
 expect NixProvider.render(

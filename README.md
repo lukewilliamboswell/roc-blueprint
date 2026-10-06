@@ -62,18 +62,22 @@ own flake. Keep the CLI and configuration platform on the same compatible
 source snapshot. Build the platform host before running local examples; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-The upstream flake is available via
-`nix develop github:lukewilliamboswell/roc-blueprint`; published binaries are
-listed under [releases](https://github.com/lukewilliamboswell/roc-blueprint/releases).
-Do not assume either accepts this development API. A prebuilt
-`blueprint-x86_64-linux` needs the compatible Roc nightly named in its release
-notes, on `PATH` or in `ROC`, plus Nix and Python 3.9+ for runtime effects.
-The source Nix package supplies Roc and Python. Compile-time validation does
-**not** eliminate the compiler requirement: loading a configuration invokes Roc.
+Prebuilt `blueprint` binaries for x86_64 Linux and Apple Silicon macOS are
+attached to each [release](https://github.com/lukewilliamboswell/roc-blueprint/releases),
+with their sha256 sums. A binary needs Nix and Python 3.9+. It does not need
+Roc installed: loading a configuration runs one exact Roc nightly, and the
+binary uses a `roc` on `PATH` when that is the right one, and otherwise fetches
+it through Nix from a pinned roc-overlay revision. Set `ROC` to choose the
+executable yourself; it must be that same nightly.
+
+Use each release's binary with that release's platform URL. The upstream flake
+is also available via `nix develop github:lukewilliamboswell/roc-blueprint`.
+Do not assume a published release accepts this development API.
 
 `Systems` controls generated Nix output shapes; it neither installs platform
-host targets nor proves execution support. Only x86_64 Linux execution is
-verified. macOS output evaluation is not a platform execution test.
+host targets nor proves execution support. Configurations execute on x86_64
+Linux and Apple Silicon macOS, the two machines the platform ships a host for.
+Sandboxed builds remain x86_64 Linux only.
 
 ## Writing `Blueprint.roc`
 
@@ -267,8 +271,9 @@ structural validation and required-feature checks still apply. Full rendering
 - **`BLUEPRINT_WORKSPACE`**, **`BLUEPRINT_GENERATED_ROOT`**, **`BLUEPRINT_LOCK`**
   choose caller paths; relative values resolve against the selected project
   root, not the invocation directory. Out-of-tree generated roots are supported.
-- **`BLUEPRINT_TARGET`** selects a declared target (default `x86_64-linux`).
-  **`ROC`** selects the pinned compatible compiler; the Nix wrapper supplies it.
+- **`BLUEPRINT_TARGET`** selects a declared target (default: this machine's
+  System). **`ROC`** selects the compatible compiler; unset, it is found on
+  `PATH` or fetched.
 - No Guix executor or parallel workflow scheduler is implemented.
 
 ## How it works
