@@ -235,8 +235,9 @@ class Suite:
         self.lock.chmod(0o444)
 
     def noops(self):
-        # Existing nonempty generated/snapshot trees must not even be restaged.
-        require(tree(self.workspace) and tree(self.generated),
+        # An existing nonempty generated tree must not even be restaged. A
+        # build keeps nothing in a workspace that is not the generated root.
+        require(tree(self.generated) and not tree(self.workspace),
                 "no-op test needs prior state")
         for name in ("empty", "nested-empty"):
             before = self.entries(), tree(self.workspace), tree(self.generated)
@@ -321,7 +322,6 @@ class Suite:
 
         self.reject_capabilities()
         # Remove only disposable old roots so they cannot become ordinary inputs.
-        shutil.rmtree(self.workspace)
         shutil.rmtree(self.generated)
         self.workspace = self.work / "outside-work"
         self.generated = self.work / "outside-generated"
@@ -332,7 +332,7 @@ class Suite:
         ])
         require(outputs == [cached, cached], "out-of-tree layout changed artifact")
         self.artifact(outputs[0], SECOND, EDITED)
-        require(self.workspace.is_dir() and self.generated.is_dir(),
+        require(self.generated.is_dir() and not self.workspace.exists(),
                 "caller-selected out-of-tree roots not used")
         require(not (self.caller / "Blueprint.lock").exists()
                 and not (self.caller / ".blueprint").exists(), "invocation cwd was used")

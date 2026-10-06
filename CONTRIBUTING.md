@@ -14,9 +14,9 @@ blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation
 blueprint-nix/           importable pure Nix provider (depends only on blueprint-core)
   NixProvider.roc        shared pure request planning and flake rendering
   Locks.roc              Nix pins <-> the Lock: Sources plus a "nix" hint
-  build-runner.py        in-derivation argv/output/isolation checks
   tests/                 Spec fixtures and golden flakes
-blueprint-cli/           the blueprint CLI (basic-cli + weaver)
+blueprint-cli/           the blueprint CLI (basic-cli + weaver); as `blueprint __build-runner`
+                         it is also each build's in-derivation argv/output/isolation check
 fixtures/consumer/       independent consumer of the Spec and Nix packages
 examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
 examples/composition/    imported pure module returning reusable task settings
@@ -93,13 +93,19 @@ missing-package diagnostics and package-target rejection. Parse fuzzing also
 checks successful semantic normalization for idempotence.
 `scripts/test-b2.py` adds real offline-capable artifact/dependency/source tests,
 including host-file and TCP isolation with positive host controls, fail-closed
-runner checks, exact argv, immutable locks, freshness and relocation.
+runner checks, exact argv, immutable locks, freshness and relocation. It also
+checks what Nix copies from the project (bytes, the owner's execute bit, raw
+names, exclusions, refused symlinks and special files) and that an undeclared
+tool is not found. It runs `blueprint __build-runner` directly on the host for
+the checks that need no sandbox, with a hand-written witness naming namespaces
+the host does not have.
 `scripts/test-b3.py` adds real ordered task/build workflows, nested repetitions,
 failure stops, snapshot/dependency freshness, repeated locked-source verification,
 whole-closure preflight and immutable authority, including out-of-tree layouts.
 `scripts/test-update.py` checks local-source preflight, authority observation and
-concurrent publication. `scripts/test-snapshot.py` checks the build snapshot's bytes,
-modes, exclusions and refusals and the isolation witness. Both put a failing
+concurrent publication. `scripts/test-isolation.py` checks what a build stages
+about its caller: the namespace identities, the CLI's own path as the runner,
+and the refusals when either cannot be used. Both put a failing
 `python3` on `PATH`: the CLI itself must not use a host Python.
 Normal execution tests explicitly initialize authority with `update` first.
 The complete artifacts example is executed in a temporary copy by
@@ -254,7 +260,10 @@ provider's modules directly. Nix is the only implemented provider. It:
 - refuses any `extensions` and advertises `"raw"`, `"sources"`, `"builds"` and
   `"workflows"`;
 - builds ordinary derivations with exact argv, filtered project snapshots,
-  read-only declared sources/artifacts and checked file/directory outputs.
+  read-only declared sources/artifacts and checked file/directory outputs. Each
+  is a raw `derivation` whose builder is the CLI's own executable, run as
+  `blueprint __build-runner`: no shell or interpreter stands between Nix and
+  the user's argv, and the build's PATH is its environment's tools alone.
 
 `Project.check_environment(project, Nix | Guix, name)` is a pure compatibility
 check. Guix source intent, native tool grammar and overlay-capability rejection
@@ -277,8 +286,8 @@ stage derivatives and prohibit native lock updates. Named input declarations
 remain stable across selected closures; selected overlays remain scoped and
 ordered. Local authority contains relative identity and Blueprint tree digests
 (core `Tree`, computed and verified by the CLI without Nix), not checkout
-paths. Dirty local inputs fail until explicit update. Local verification and fresh
-snapshot operations repeat per explicit build, never reusing artifact results
+paths. Dirty local inputs fail until explicit update. Local verification, caller
+observation and Nix's filtered project copy repeat per explicit build, never reusing artifact results
 by name across tasks.
 
 A new feature usually means: a setting in the platform (`Config.roc`,

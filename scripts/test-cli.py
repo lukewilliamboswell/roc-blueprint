@@ -433,9 +433,9 @@ sys.exit(int(os.environ.get("PROBE_STATUS", "0")))
     assert "changed its inputs since the lock was resolved" in output, output
     assert calls("nix", cwd) == []
 
-    # Pure layout validation must precede even lock reads and source/snapshot
+    # Pure layout validation must precede even lock reads and source
     # effects. The generated directory may contain work, but its files may not.
-    for filename in ("flake.nix", "flake.lock", "build-runner.py"):
+    for filename in ("flake.nix", "flake.lock"):
         for suffix in ("", "/child"):
             for command in [("gen",), ("build", "app"), ("update",)]:
                 cwd = isolated(f"collision-{filename}-{bool(suffix)}-{command[0]}")

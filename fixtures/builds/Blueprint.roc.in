@@ -82,6 +82,23 @@ config = [
 			Output("dist/symlink"),
 		],
 	),
+	Environment("bare", []),
+	Build(
+		"undeclared",
+		[
+			Use("bare"),
+			Run(["python3", "build.py", "library"]),
+			Output("dist/library"),
+		],
+	),
+	Build(
+		"undeclared-shell",
+		[
+			Use("builder"),
+			Run(["sh", "-c", "mkdir dist && echo implicit >dist/shell"]),
+			Output("dist/shell"),
+		],
+	),
 	Build(
 		"nested-link",
 		[

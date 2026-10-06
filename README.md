@@ -64,8 +64,8 @@ source snapshot. Build the platform host before running local examples; see
 
 Prebuilt `blueprint` binaries for x86_64 Linux, arm64 Linux and Apple Silicon
 macOS are attached to each [release](https://github.com/lukewilliamboswell/roc-blueprint/releases),
-with their sha256 sums. A binary needs Nix; builds also use coreutils `chmod`
-and `readlink`. It does not need Python or Roc installed: loading a configuration runs one exact Roc nightly, and the
+with their sha256 sums. A binary needs Nix; builds also use coreutils
+`readlink`. It does not need Python or Roc installed: loading a configuration runs one exact Roc nightly, and the
 binary uses a `roc` on `PATH` when that is the right one, and otherwise fetches
 it through Nix from a pinned roc-overlay revision. Set `ROC` to choose the
 executable yourself; it must be that same nightly.
@@ -199,9 +199,20 @@ from the writable project copy.
 
 Each build snapshots current project files, including untracked/task-generated
 files, excluding VCS metadata, caller-generated roots, authority and all local
-input trees. Changing a locked local source requires explicit update. Initial
+input trees. Nix makes that copy directly from the project, so a file is
+executable in a build only when its owner may execute it. Changing a locked
+local source requires explicit update. Initial
 source/output policy rejects symlinks and special files. Only local x86_64 Linux
 sandboxed execution is verified; tasks/config compilation are not sandboxed.
+A build's `PATH` holds exactly the tools its environment declares. Earlier
+versions also put `python3`, coreutils and `bash` there, so a build that ran
+`sh`, `cp`, `mkdir` or `python3` without declaring it now fails with `build
+command not found`, or inside its own script when that script calls one: add
+the tool (`bash`, `coreutils`, `python3`) to the environment's `Tools`. A build
+also no longer sees the variables Nix's `stdenv` used to export.
+The `blueprint` executable is itself each build's builder inside the sandbox,
+so `blueprint build` refuses to run unless that executable is an x86_64 Linux
+one.
 See the [complete runnable example](examples/artifacts/README.md),
 [real build fixture](fixtures/builds/README.md).
 

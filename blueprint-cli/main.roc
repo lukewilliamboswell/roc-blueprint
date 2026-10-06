@@ -201,6 +201,12 @@ task_choice = |task|
 
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |raw_args| {
+	# A sandboxed build runs this executable as its builder. There is no
+	# Blueprint.roc or compiler there, so dispatch before loading either.
+	match raw_args {
+		[first, .. as rest] if first.to_bytes() == "__build-runner".to_utf8() => return build_runner!(rest)
+		_ => {}
+	}
 	context = context!()
 	loaded = match context {
 		Ok(ctx) => evaluate!(ctx.layout.project_root)
@@ -422,13 +428,70 @@ check_host! = ||
 ## The System this machine realises by default. Unsupported hosts fall back
 ## to the Linux default and fail later in check_host!.
 host_target! : () => Str
-host_target! = ||
+host_target! = || host_system!() ?? "x86_64-linux"
+
+## The System this executable itself runs on.
+host_system! : () => Try(Str, [UnsupportedHost])
+host_system! = ||
 	match Env.platform!() {
-		{ arch: AARCH64, os: LINUX } => "aarch64-linux"
-		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
-		{ arch: X64, os: MACOS } => "x86_64-darwin"
-		_ => "x86_64-linux"
+		{ arch: X64, os: LINUX } => Ok("x86_64-linux")
+		{ arch: AARCH64, os: LINUX } => Ok("aarch64-linux")
+		{ arch: AARCH64, os: MACOS } => Ok("aarch64-darwin")
+		{ arch: X64, os: MACOS } => Ok("x86_64-darwin")
+		_ => Err(UnsupportedHost)
 	}
+
+## A build runs this executable as its builder, so it must be built for the
+## System the build runs on.
+runner_host : Try(Str, [UnsupportedHost]), Str -> Try({}, _)
+runner_host = |host, system|
+	if host == Ok(system) {
+		Ok({})
+	} else {
+		Err(
+			Refused(
+				"sandboxed builds run blueprint itself as their builder, so "
+					.concat("blueprint must run on ${system}; this host is ")
+					.concat(host ?? "unsupported"),
+			),
+		)
+	}
+
+expect runner_host(Ok("x86_64-linux"), "x86_64-linux") == Ok({})
+expect
+	[Ok("aarch64-linux"), Ok("x86_64-darwin"), Ok("aarch64-darwin"), Err(UnsupportedHost)].all(
+		|host| runner_host(host, "x86_64-linux").is_err(),
+	)
+
+## A path a provider can place in generated text without inspecting it.
+plain_path : Str -> Bool
+plain_path = |value|
+	value.starts_with("/")
+		and normalize(value) == value
+			and !value.to_utf8().any(
+				|byte| byte < 32 or byte == 127 or byte == '"' or byte == '\\' or byte == '$',
+			)
+
+expect plain_path("/nix/store/abc-blueprint/bin/.blueprint-wrapped")
+expect plain_path("/home/user name/bin/blueprint")
+expect
+	["blueprint", "/a/../b", "/a\"b", "/a\\b", "/a\${b}", "/a\nb", ""].all(
+		|value| !plain_path(value),
+	)
+
+## This executable's own path, for a build that runs on `system`.
+runner_executable! : Str => Try(Str, _)
+runner_executable! = |system| {
+	runner_host(host_system!(), system)?
+	executable = Env.exe_path!()
+		.map_err(|_| Refused("cannot locate the blueprint executable to run builds"))?
+	text = executable.to_str()
+		.map_err(|_| Refused("blueprint cannot run builds from ${executable.display()}"))?
+	if !plain_path(text) {
+		return Err(Refused("blueprint cannot run builds from ${text}"))
+	}
+	Ok(text)
+}
 
 resolve : Str, Str -> Str
 resolve = |root, value| if value.starts_with("/") value else "${root}/${value}"
@@ -567,38 +630,6 @@ expect within("/project".to_utf8(), "/".to_utf8())
 expect !within("/project-work".to_utf8(), "/project".to_utf8())
 expect !within("/project".to_utf8(), "/project/work".to_utf8())
 
-basename : List(U8) -> List(U8)
-basename = |bytes| bytes.fold([], |acc, byte| if byte == '/' [] else acc.append(byte))
-
-expect basename("/project/src/main.roc".to_utf8()) == "main.roc".to_utf8()
-
-## Snapshot exclusions are absolute paths or bare entry names. These are the
-## names, which apply at every depth.
-snapshot_names : List(Str) -> Try(List(Str), _)
-snapshot_names = |exclude| {
-	names = exclude.keep_if(|item| !item.starts_with("/"))
-	if names.any(|item| item.contains("/") or item == "" or item == "." or item == "..") {
-		return Err(Refused("snapshot exclusions must be absolute paths or names"))
-	}
-	Ok(names)
-}
-
-expect snapshot_names(["/project/work", ".git", ".jj"]) == Ok([".git", ".jj"])
-expect ["", ".", "..", "nested/.git"].all(|name| snapshot_names([name]).is_err())
-
-## A destination inside the project would be copied into itself unless an
-## excluded path covers the directory that holds it.
-unexcluded_in_tree : Str, Str, List(Str) -> Bool
-unexcluded_in_tree = |root, destination, excluded|
-	within(destination.to_utf8(), root.to_utf8())
-		and !excluded.any(|item| within(parent(destination).to_utf8(), item.to_utf8()))
-
-expect !unexcluded_in_tree("/project", "/project/work/snapshot", ["/project/work"])
-expect !unexcluded_in_tree("/project", "/project/a/work/snapshot", ["/project/a"])
-expect !unexcluded_in_tree("/project", "/outside/snapshot", [])
-expect unexcluded_in_tree("/project", "/project/work/snapshot", ["/project/work/snapshot"])
-expect unexcluded_in_tree("/project", "/project/work/snapshot", ["/project/workspace"])
-
 ## A namespace identity as the kernel prints it, e.g. `mnt:[4026531841]`.
 valid_namespace : Str, Str -> Bool
 valid_namespace = |name, identity| {
@@ -617,139 +648,273 @@ expect
 		|identity| !valid_namespace("mnt", identity),
 	)
 
-## The witness the provider reads beside the snapshot. Its bytes feed the
-## build, so the format is pinned: sorted keys, `, ` and `: ` separators.
-isolation_witness : Str, Str -> Str
-isolation_witness = |mnt, net| "{\"mnt\": \"${mnt}\", \"net\": \"${net}\"}\n"
-
-expect
-	isolation_witness("mnt:[4026531841]", "net:[4026531840]")
-		== "{\"mnt\": \"mnt:[4026531841]\", \"net\": \"net:[4026531840]\"}\n"
-
-## A child's namespaces are the caller's, so `readlink` observes this process.
-namespace! : Str => Try(Str, _)
-namespace! = |name| {
-	link = "/proc/self/ns/${name}"
-	output = Cmd.new_str("readlink").args_str([link]).exec_output!()
+## A child's namespaces are its parent's, so this `readlink` program observes
+## the calling process. basic-cli cannot read a link itself.
+observe_namespace! : Str, Str => Try(Str, Str)
+observe_namespace! = |readlink, name| {
+	output = Cmd.new_str(readlink).args_str(["/proc/self/ns/${name}"]).exec_output!()
 		.map_err(
-			|err| {
-				reason = match err {
+			|err|
+				match err {
 					NonZeroExitCode({ exit_code, .. }) => "readlink exited with code ${exit_code.to_str()}"
 					_ => "could not run readlink"
-				}
+				},
+		)?
+	Ok(output.stdout_utf8.drop_suffix("\n"))
+}
+
+namespace! : Str => Try(Str, _)
+namespace! = |name| {
+	identity = observe_namespace!("readlink", name)
+		.map_err(
+			|reason|
 				Refused(
 					"cannot observe caller build isolation; use Linux with "
-						.concat("readable ${link}: ${reason}"),
-				)
-			},
+						.concat("readable /proc/self/ns/${name}: ${reason}"),
+				),
 		)?
-	identity = output.stdout_utf8.drop_suffix("\n")
 	if !valid_namespace(name, identity) {
 		return Err(Refused("invalid caller ${name} namespace identity"))
 	}
 	Ok(identity)
 }
 
-## Stage project bytes and a separate namespace witness before publication.
-## Callers serialize workspace use and stop on failure. The two outputs cannot
-## be renamed together; removing the old witness before replacing the tree
-## ensures interrupted publication cannot authorize it with stale observations.
-snapshot! : Str, Str, List(Str) => Try({}, _)
-snapshot! = |root, destination, exclude| {
-	safe_path!(root)?
-	safe_path!(destination)?
-	witness = "${destination}.isolation.json"
-	safe_path!(witness)?
-	isolation = isolation_witness(namespace!("mnt")?, namespace!("net")?)
-	names = snapshot_names(exclude)?
-	excluded = exclude.keep_if(|item| item.starts_with("/"))
-	for item in excluded {
-		safe_path!(item)?
-	}
-	if within(root.to_utf8(), destination.to_utf8()) {
-		return Err(Refused("snapshot destination must not contain the project"))
-	}
-	if !(path(root).exists!()?) or path(root).type!()? != IsDir {
-		return Err(Refused("snapshot root is not a directory: ${root}"))
-	}
-	if unexcluded_in_tree(root, destination, excluded) {
-		return Err(Refused("in-tree snapshot parent must be excluded"))
-	}
-	path(parent(destination)).create_all!()?
-	temporary = Env.create_temp_dir_in!(path(parent(destination)), ".snapshot-")?
-	publish! = || {
-		staged_tree = temporary.join("project")
-		staged_tree.create_dir!()?
-		copied = copy_tree!(
-			path(root),
-			staged_tree,
-			names.map(|item| item.to_utf8()),
-			excluded.map(|item| item.to_utf8()),
-		)?
-		set_mode!("755", copied.keep_if(|item| item.executable).map(|item| item.file))?
-		set_mode!("644", copied.keep_if(|item| !item.executable).map(|item| item.file))?
-		staged_witness = temporary.join("isolation.json")
-		staged_witness.write_utf8!(isolation)?
-		safe_path!(destination)?
-		safe_path!(witness)?
-		if path(destination).exists!()? and path(destination).type!()? != IsDir {
-			return Err(Refused("snapshot destination is not a directory: ${destination}"))
-		}
-		if path(witness).exists!()? {
-			if path(witness).type!()? != IsFile {
-				return Err(Refused("isolation witness is not a file: ${witness}"))
-			}
-			path(witness).delete!()?
-		}
-		if path(destination).exists!()? {
-			path(destination).delete_all!()?
-		}
-		staged_tree.rename!(path(destination))?
-		staged_witness.rename!(path(witness))
-	}
-	result = publish!()
-	_ = temporary.delete_all!()
-	result
+## What the provider's build derivation passes to `blueprint __build-runner`.
+## `readlink` and `chmod` are absolute programs: a build has no implicit PATH.
+BuildSpec : {
+	project : Str,
+	argv : List(Str),
+	output : Str,
+	path : Str,
+	inputs : Str,
+	artifacts : Str,
+	readlink : Str,
+	chmod : Str,
 }
 
-## Copy directories and regular files, refusing symlinks and special files,
-## and report each copy with whether its source has any executable bit.
-## basic-cli has no no-follow open, so an entry replaced by a symlink between
-## the type check and the copy is followed: callers must not mutate the tree.
-copy_tree! : Path, Path, List(List(U8)), List(List(U8)) => Try(List({ file : Path, executable : Bool }), _)
-copy_tree! = |source, target, names, excluded| {
-	var $copied = []
+## The builder of a sandboxed build: exact argv and one contained,
+## symlink-free output. The specification is the given file, or the one the
+## derivation passes as `blueprintSpecPath`.
+build_runner! : List(OsStr) => Try({}, [Exit(I32)])
+build_runner! = |args| {
+	result = match args {
+		[] =>
+			match Env.var!(OsStr.from_str("blueprintSpecPath")) {
+				Ok(file) => run_build!(Path.from_os_str(file))
+				Err(_) => Err(Invalid("missing build specification"))
+			}
+
+		[file] => run_build!(Path.from_os_str(file))
+		_ => Err(Invalid("expected one build specification"))
+	}
+	match result {
+		Ok({}) => Ok({})
+		Err(Exited(code)) => Err(Exit(code))
+		Err(Invalid(message)) => {
+			_ = Stderr.line!("blueprint build: ${message}")
+			Err(Exit(1))
+		}
+		Err(other) => {
+			_ = Stderr.line!("blueprint build: ${Str.inspect(other)}")
+			Err(Exit(1))
+		}
+	}
+}
+
+run_build! : Path => Try({}, _)
+run_build! = |file| {
+	text = file.read_utf8!()?
+	# Nothing else, not even reading the rest of the specification, precedes
+	# the isolation check.
+	require_isolation!(text)?
+	parsed : Try(BuildSpec, _)
+	parsed = Json.parse(text)
+	spec = parsed.map_err(|_| Invalid("invalid build specification"))?
+	source = path(spec.project)
+	safe_tree!(source)?
+	check_inputs!(spec.readlink, path(spec.inputs))?
+	top = Env.cwd!()?
+	work = top.join("blueprint-work")
+	work.create_dir!()?
+	copy_tree!(source, work)?
+	# Store files are read-only; the project copy is the build's to change.
+	Cmd.new_str(spec.chmod).args_str(["-R", "u+w", "--"]).arg(work.to_os_str()).exec_cmd!()?
+	home = top.join("blueprint-home")
+	home.create_dir!()?
+	match spec.argv {
+		[] => return Err(Invalid("empty build command"))
+		[program, .. as rest] => {
+			# A bare program name resolves against the PATH given here.
+			ran = Cmd.new_str(program).args_str(rest).cwd(work)
+				.env_str("PATH", spec.path)
+				.env(OsStr.from_str("HOME"), home.to_os_str())
+				.env_str("BLUEPRINT_INPUTS", spec.inputs)
+				.env_str("BLUEPRINT_ARTIFACTS", spec.artifacts)
+				.stdout(Inherit).stderr(Inherit).run!()
+			match ran {
+				Ok({ status: Exited(0), .. }) => {}
+				Ok({ status: Exited(code), .. }) => return Err(Exited(code))
+				Ok({ status: Signaled(signal), .. }) => return Err(Exited(128 + signal))
+				Err(IO(NotFound)) => return Err(Invalid("build command not found: ${program}"))
+				Err(IO(err)) => return Err(Invalid("cannot run ${program}: ${Str.inspect(err)}"))
+				Err(_) => return Err(Invalid("cannot run ${program}"))
+			}
+		}
+	}
+	parts = output_parts(spec.output)?
+	if (work.is_sym_link!() ?? False) or !(work.is_dir!() ?? False) {
+		return Err(Invalid("build replaced the project workspace"))
+	}
+	# basic-cli has no no-follow open, so a build still running in the
+	# background could swap an entry between these checks and the copy.
+	var $depth = parts.len()
+	while $depth > 0 {
+		ancestor = work.join(Str.join_with(parts.take_first($depth), "/"))
+		if ancestor.is_sym_link!() ?? False {
+			return Err(Invalid("symlink in declared output path: ${ancestor.display()}"))
+		}
+		$depth = $depth - 1
+	}
+	output = work.join(spec.output)
+	if !(output.exists!() ?? False) {
+		return Err(Invalid("declared output is missing: ${spec.output}"))
+	}
+	if !within(
+		output.canonicalize!()?.to_os_str().to_bytes(),
+		work.canonicalize!()?.to_os_str().to_bytes(),
+	) {
+		return Err(Invalid("declared output escapes the project workspace"))
+	}
+	safe_tree!(output)?
+	destination = Path.from_os_str(
+		Env.var!(OsStr.from_str("out")).map_err(|_| Invalid("the build has no $out"))?,
+	)
+	if (destination.is_sym_link!() ?? False) or (destination.exists!() ?? False) {
+		return Err(Invalid("build wrote directly to $out instead of declared Output"))
+	}
+	if output.is_dir!()? {
+		destination.create_dir!()?
+		copy_tree!(output, destination)
+	} else {
+		output.copy!(destination)?
+		Ok({})
+	}
+}
+
+## Reject Run even when the daemon ignores client sandbox flags: the build's
+## namespaces must both differ from those the caller observed for itself.
+require_isolation! : Str => Try({}, _)
+require_isolation! = |text| {
+	witness : Try({ isolation : { mnt : Str, net : Str } }, _)
+	witness = Json.parse(text)
+	caller = witness.map_err(|_| Invalid("${isolation_remedy} Missing caller namespace observations."))?.isolation
+	tools : Try({ readlink : Str }, _)
+	tools = Json.parse(text)
+	readlink = tools.map_ok(|parsed| parsed.readlink)
+	# Two calls, not a loop: this Roc nightly miscounts references when a loop
+	# body matches on a value from outside it.
+	require_namespace!(readlink, "mnt", caller.mnt)?
+	require_namespace!(readlink, "net", caller.net)
+}
+
+isolation_remedy : Str
+isolation_remedy =
+	"cannot verify build isolation; user Run was not executed. "
+		.concat("Enable sandbox = true and sandbox-fallback = false in the Nix ")
+		.concat("daemon configuration and use a local Linux sandbox with /proc.")
+
+require_namespace! : Try(Str, _), Str, Str => Try({}, _)
+require_namespace! = |readlink, name, observed| {
+	if !valid_namespace(name, observed) {
+		return Err(Invalid("${isolation_remedy} Invalid caller ${name} namespace."))
+	}
+	current = match readlink {
+		Ok(program) => observe_namespace!(program, name)
+		Err(_) => Err("no readlink program")
+	}
+		.map_err(|reason| Invalid("${isolation_remedy} Cannot read build ${name} namespace: ${reason}"))?
+	if !valid_namespace(name, current) {
+		return Err(Invalid("${isolation_remedy} Invalid build ${name} namespace."))
+	}
+	if current == observed {
+		return Err(Invalid("${isolation_remedy} Build shares caller ${name} namespace."))
+	}
+	Ok({})
+}
+
+## A declared output is a relative path of plain names.
+output_parts : Str -> Try(List(Str), _)
+output_parts = |output| {
+	parts = output.split_on("/")
+	if parts.any(|part| part == "" or part == "." or part == "..") {
+		Err(Invalid("invalid declared relative output"))
+	} else {
+		Ok(parts)
+	}
+}
+
+expect output_parts("dist/my artifact") == Ok(["dist", "my artifact"])
+expect
+	["", "/absolute", ".", "..", "./artifact", "dist/../escape", "dist//file", "dist/"].all(
+		|output| output_parts(output) == Err(Invalid("invalid declared relative output")),
+	)
+
+## Reject links and special files anywhere in a tree, by raw entry names.
+safe_tree! : Path => Try({}, _)
+safe_tree! = |entry|
+	match entry.type!()? {
+		IsSymLink => Err(Invalid("symlink is not allowed in build output/source: ${entry.display()}"))
+		IsDir => {
+			for child in entry.list!()? {
+				safe_tree!(child)?
+			}
+			Ok({})
+		}
+		IsFile => Ok({})
+		IsOther => Err(Invalid("special file is not allowed in build output/source: ${entry.display()}"))
+	}
+
+## Allow generated farm links, not symlinks within fetched source trees.
+check_inputs! : Str, Path => Try({}, _)
+check_inputs! = |readlink, farm| {
+	for entry in farm.list!()? {
+		if !(entry.is_sym_link!()?) {
+			return Err(Invalid("expected generated source link: ${entry.display()}"))
+		}
+		target = Cmd.new_str(readlink).args_str(["-n", "--"]).arg(entry.to_os_str())
+			.exec_output_bytes!()
+			.map_err(|_| Invalid("cannot read generated source link: ${entry.display()}"))?
+			.stdout_bytes
+		# Follow exactly the planner's farm link. safe_tree! rejects a symlink
+		# at the fetched root or anywhere beneath it, including remote inputs.
+		resolved = if target.first() == Ok('/') {
+			target
+		} else {
+			farm.to_os_str().to_bytes().append('/').concat(target)
+		}
+		safe_tree!(Path.unix_bytes(resolved))?
+	}
+	Ok({})
+}
+
+basename : List(U8) -> List(U8)
+basename = |bytes| bytes.fold([], |acc, byte| if byte == '/' [] else acc.append(byte))
+
+expect basename("/project/src/main.roc".to_utf8()) == "main.roc".to_utf8()
+
+## Copy the directories and regular files of a tree safe_tree! accepted into
+## an existing directory, by raw entry names. Files keep their permissions.
+copy_tree! : Path, Path => Try({}, _)
+copy_tree! = |source, target| {
 	for entry in source.list!()? {
-		bytes = entry.to_os_str().to_bytes()
-		name = basename(bytes)
-		if !names.contains(name) and !excluded.any(|item| within(bytes, item)) {
-			copy = Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(name))
-			match entry.type!()? {
-				IsSymLink => return Err(Refused("snapshot refuses symlink: ${entry.display()}"))
-				IsDir => {
-					copy.create_dir!()?
-					$copied = $copied.concat(copy_tree!(entry, copy, names, excluded)?)
-				}
-				IsFile => {
-					entry.copy!(copy)?
-					$copied = $copied.append({ file: copy, executable: entry.is_executable!()? })
-				}
-				IsOther => return Err(Refused("snapshot refuses special file: ${entry.display()}"))
-			}
+		name = basename(entry.to_os_str().to_bytes())
+		copy = Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(name))
+		if entry.is_dir!()? {
+			copy.create_dir!()?
+			copy_tree!(entry, copy)?
+		} else {
+			entry.copy!(copy)?
 		}
-	}
-	Ok($copied)
-}
-
-## Snapshot modes are normalized to 0755 or 0644. basic-cli cannot set a
-## mode, so coreutils `chmod` does, in batches that fit one argument list.
-set_mode! : Str, List(Path) => Try({}, _)
-set_mode! = |mode, files| {
-	var $rest = files
-	while !$rest.is_empty() {
-		batch = $rest.take_first(128).map(|file| file.to_os_str())
-		$rest = $rest.drop_first(128)
-		Cmd.new_str("chmod").args_str([mode, "--"]).args(batch).exec_cmd!()?
 	}
 	Ok({})
 }
@@ -778,6 +943,15 @@ realise! = |spec, request, ctx| {
 					Unrealisable(message) => RenderFailed(message)
 				},
 		)?
+	# A build cannot run on this host: say so before the first step's effects.
+	for step in steps.steps {
+		for operation in step.operations {
+			match operation {
+				Runner({ system, .. }) => runner_host(host_system!(), system)?
+				_ => {}
+			}
+		}
+	}
 	for step in steps.steps {
 		execute_step!(step, layout)?
 	}
@@ -788,6 +962,7 @@ realise! = |spec, request, ctx| {
 ## All planning has succeeded before the first materialization or task effect.
 execute_step! : Steps.Step, Layout => Try({}, _)
 execute_step! = |step, layout| {
+	var $files = step.files
 	for operation in step.operations {
 		match operation {
 			VerifyTree({ path: local, digest }) => {
@@ -800,10 +975,26 @@ execute_step! = |step, layout| {
 					)
 				}
 			}
-			Snapshot({ root, destination, exclude }) => snapshot!(root, destination, exclude)?
+			Isolation(placeholder) => {
+				mnt = namespace!("mnt")?
+				net = namespace!("net")?
+				$files = $files.map(
+					|file| {
+						..file,
+						contents: file.contents.replace_each(placeholder.mnt, mnt)
+							.replace_each(placeholder.net, net),
+					},
+				)
+			}
+			Runner({ executable, system }) => {
+				own = runner_executable!(system)?
+				$files = $files.map(
+					|file| { ..file, contents: file.contents.replace_each(executable, own) },
+				)
+			}
 		}
 	}
-	stage!(step.files, layout)?
+	stage!($files, layout)?
 	match step.action {
 		Build(name) => report_build!(step, name, layout.project_root)
 		_ => exec!(step.argv, layout.project_root).map_err(
