@@ -271,34 +271,33 @@ class Suite:
         return output
 
     def reject_unsandboxed_runner(self):
-        """Execute the real runner on the host; never reach user Run."""
+        """Execute the real runner on the host; never reach user Run.
+
+        Uses the snapshot and witness the CLI published for a real build.
+        """
         source = self.work / "runner-source"
         source.mkdir()
         (source / "input").write_bytes(b"project bytes only\n")
-        snapshot = self.work / "runner-snapshot"
-        helper = ROOT / "scripts/blueprint-runtime.py"
-        self.command([sys.executable, helper, source, snapshot])
+        snapshot = self.workspace / "snapshot"
         sidecar = Path(str(snapshot) + ".isolation.json")
         observed = json.loads(sidecar.read_text())
         require(observed == {
             name: os.readlink(f"/proc/self/ns/{name}")
             for name in ("mnt", "net")
         }, "snapshot did not capture caller namespaces")
-        require(tree(snapshot) == {"input": b"project bytes only\n"},
+        require(tree(snapshot) == self.snapshot_files,
                 "isolation witness leaked into project bytes")
         before = sidecar.read_bytes()
-        self.command([sys.executable, helper, source, snapshot])
+        self.build("library")
         require(sidecar.read_bytes() == before, "witness defeats build caching")
         # Failed verification must preserve both previously published outputs.
-        (source / "bad-link").symlink_to(source / "input")
+        (self.project / "bad-link").symlink_to(self.project / "untracked.txt")
         previous = tree(snapshot), sidecar.read_bytes()
-        result = self.command(
-            [sys.executable, helper, source, snapshot], good=False,
-        )
+        result = self.cli("build", "library", good=False)
         require(b"snapshot refuses symlink" in result.stderr, result.stderr)
         require((tree(snapshot), sidecar.read_bytes()) == previous,
                 "failed snapshot changed a published tree or witness")
-        (source / "bad-link").unlink()
+        (self.project / "bad-link").unlink()
         marker = self.work / "unsandboxed-run-was-executed"
         spec = {
             "project": str(snapshot), "path": os.environ["PATH"],
@@ -438,7 +437,6 @@ class Suite:
 
     def run(self):
         self.reject_unsafe_fetched_sources()
-        self.reject_unsandboxed_runner()
         self.prepare()
         # Ordinary operations must neither initialize authority nor stage files.
         for args in [("gen",), ("shell",), ("run", "args"), ("build", "app")]:
@@ -463,6 +461,7 @@ class Suite:
         require(result.stdout == b"B2 shell control\n", result.stdout)
         first = self.graph()
         print("PASS file/directory/diamond graph, argv, readonly, exclusions")
+        self.reject_unsandboxed_runner()
 
         # A unique nonce prevents a cached derivation from faking isolation.
         token = secrets.token_hex(24).encode()

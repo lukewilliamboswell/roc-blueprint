@@ -75,7 +75,6 @@
               fileset = lib.fileset.unions [
                 ./blueprint-cli
                 ./.roc-version
-                ./scripts/blueprint-runtime.py
                 ./blueprint-nix
                 ./blueprint-core/main.roc
                 ./blueprint-core/Spec.roc
@@ -110,8 +109,7 @@
               install -Dm755 blueprint "$out/bin/blueprint"
               # Default to the pinned Roc; ROC in the environment still wins.
               wrapProgram "$out/bin/blueprint" \
-                --set-default ROC ${lib.getExe roc} \
-                --prefix PATH : ${lib.makeBinPath [ pkgs.python3 ]}
+                --set-default ROC ${lib.getExe roc}
               runHook postInstall
             '';
             meta = {
