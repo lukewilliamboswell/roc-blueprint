@@ -42,7 +42,7 @@ NixProvider :: [].{
 	}
 
 	## The roc-overlay revision that packages the compiler evaluating
-	## Blueprint.roc. scripts/test.sh keeps it equal to flake.lock, so the
+	## Blueprint.roc. scripts/test.roc keeps it equal to flake.lock, so the
 	## fetched compiler is the one this CLI was built and tested with.
 	roc_overlay : Str
 	roc_overlay = "github:roc-lang/roc-overlay/fb02fef7a45ddf115f558c8eaf32bd1ce2f9912f?narHash=sha256-R4ZjP2ceAyOyllFY%2B8wE1LLFVV4qvjw2yix57tzu6g0%3D"

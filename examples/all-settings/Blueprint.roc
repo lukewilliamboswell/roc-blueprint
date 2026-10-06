@@ -1,5 +1,5 @@
 # An example using every setting. CI runs blueprint against it, and
-# scripts/bundle.sh swaps the platform path for a bundle URL to smoke-test
+# scripts/bundle.roc swaps the platform path for a bundle URL to smoke-test
 # the platform bundle.
 app [config] { pf: platform "../../blueprint-platform/main.roc" }
 

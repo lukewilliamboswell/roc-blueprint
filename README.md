@@ -53,8 +53,8 @@ Development and verified execution require x86_64 Linux and
 [Nix](https://nixos.org/download) with flakes enabled. From this checkout:
 
 ```sh
-nix develop .                 # blueprint plus its pinned Roc compiler
-nix develop .#contributor     # also supplies build/test tools
+nix run . -- --help           # the blueprint CLI, built with its pinned Roc compiler
+nix develop                   # the toolchain for working on this repository
 ```
 
 You can add `packages.x86_64-linux.blueprint` from this source flake to your
@@ -71,7 +71,7 @@ it through Nix from a pinned roc-overlay revision. Set `ROC` to choose the
 executable yourself; it must be that same nightly.
 
 Use each release's binary with that release's platform URL. The upstream flake
-is also available via `nix develop github:lukewilliamboswell/roc-blueprint`.
+also runs the CLI directly: `nix run github:lukewilliamboswell/roc-blueprint`.
 Do not assume a published release accepts this development API.
 
 `Systems` controls generated Nix output shapes; it neither installs platform

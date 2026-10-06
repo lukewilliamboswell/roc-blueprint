@@ -33,7 +33,7 @@ already there, it:
    undeclared and nothing missing;
 6. stages the files it needs, then moves them into `targets/` and
    `../linker-inputs/` (the licences and `dependency.json`, which
-   `scripts/bundle.sh` ships in the platform bundle).
+   `scripts/bundle.roc` ships in the platform bundle).
 
 Any difference stops the run with a message naming it. A cached file that no
 longer matches is removed and the run fails; run `fetch` again to download it.
@@ -44,6 +44,6 @@ attestation service is consulted: the reviewed lock is the authority.
 
 Replace `link-inputs.lock.json` with the `link-inputs.lock.json` asset of the
 new release, byte for byte, and run `scripts/link_inputs.roc fetch` and
-`scripts/test.sh`. That is a dependency change: review the release, its source
+`scripts/test.roc`. That is a dependency change: review the release, its source
 revision and its provenance before merging, as described in roc-automation's
 [artifact verification guide](https://github.com/lukewilliamboswell/roc-automation/blob/main/docs/artifact-verification.md).
