@@ -86,16 +86,18 @@ platform)
 	(cd "$ROOT/blueprint-platform" && zig build)
 
 	echo "==> Checking vendored linker inputs"
-	(cd "$ROOT/blueprint-platform/targets" && sha256sum --quiet -c x64musl.sha256)
+	(cd "$ROOT/blueprint-platform/targets" && sha256sum --quiet -c x64musl.sha256 arm64musl.sha256)
 
 	echo "==> Bundling roc-blueprint (core: $CORE_URL)"
-	mkdir -p "$STAGE/platform/targets/x64musl" "$STAGE/platform/targets/arm64mac"
+	mkdir -p "$STAGE"/platform/targets/{x64musl,arm64musl,arm64mac,x64mac}
 	cp "$ROOT"/blueprint-platform/*.roc "$STAGE/platform/"
 	cp "$ROOT"/blueprint-platform/targets/x64musl/{crt1.o,libhost.a,libc.a,libzigc.a,libcompiler_rt.a} "$STAGE/platform/targets/x64musl/"
+	cp "$ROOT"/blueprint-platform/targets/arm64musl/{crt1.o,libhost.a,libc.a,libzigc.a,libcompiler_rt.a} "$STAGE/platform/targets/arm64musl/"
 	cp "$ROOT"/blueprint-platform/targets/arm64mac/libhost.a "$STAGE/platform/targets/arm64mac/"
+	cp "$ROOT"/blueprint-platform/targets/x64mac/libhost.a "$STAGE/platform/targets/x64mac/"
 	sed -i "s#\"../blueprint-core/main.roc\"#\"$CORE_URL\"#" "$STAGE/platform/main.roc"
 	grep -qF "\"$CORE_URL\"" "$STAGE/platform/main.roc" || { echo "failed to rewrite the core dependency" >&2; exit 1; }
-	pf_bundle="$(cd "$STAGE/platform" && bundle . main.roc $(ls *.roc | grep -v '^main.roc$') targets/x64musl/* targets/arm64mac/*)"
+	pf_bundle="$(cd "$STAGE/platform" && bundle . main.roc $(ls *.roc | grep -v '^main.roc$') targets/x64musl/* targets/arm64musl/* targets/arm64mac/* targets/x64mac/*)"
 	echo "    $pf_bundle"
 	echo "roc-blueprint $pf_bundle" >>"$DIST/bundles.txt"
 

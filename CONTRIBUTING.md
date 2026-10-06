@@ -5,7 +5,7 @@
 ```
 blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
   *.roc                  setting types, checked values, lowering to the Spec
-  host/, build.zig       Zig host, built into targets/{x64musl,arm64mac}/libhost.a
+  host/, build.zig       Zig host, built into targets/<target>/libhost.a
   targets/               linker inputs; all but libhost.a are vendored (see its README)
   core-release           (when present) the released core bundle URL a platform release uses
 blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
@@ -51,7 +51,7 @@ archive by hash, so its sandboxed build needs no network.
 ## Building and testing
 
 ```sh
-(cd blueprint-platform && zig build)      # targets/{x64musl,arm64mac}/libhost.a
+(cd blueprint-platform && zig build)      # targets/<target>/libhost.a for all four hosts
 roc test blueprint-core/main.roc      # Spec round trips and format tests
 roc test blueprint-cli/main.roc             # includes the golden flake test
 roc build blueprint-cli/main.roc --output=./blueprint
@@ -279,8 +279,8 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
 - **roc-blueprint:** put the core bundle URL the platform should use in
   `blueprint-platform/core-release`, set `version` in `blueprint-cli/main.roc`
   and `flake.nix` to the release, then push a tag like `X.Y.Z`. `release.yml`
-  runs the tests, cross-builds the `blueprint` binaries on Linux with
-  `scripts/build-release.sh`, runs the macOS binary on macOS with
+  runs the tests, cross-builds the four `blueprint` binaries on Linux with
+  `scripts/build-release.sh`, runs each on its own kind of machine with
   `scripts/smoke-binary.sh`, and only then publishes release `X.Y.Z` with the
   platform bundle, the binaries and their sha256 sums.
 

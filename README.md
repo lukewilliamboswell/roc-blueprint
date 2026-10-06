@@ -62,7 +62,7 @@ own flake. Keep the CLI and configuration platform on the same compatible
 source snapshot. Build the platform host before running local examples; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Prebuilt `blueprint` binaries for x86_64 Linux and Apple Silicon macOS are
+Prebuilt `blueprint` binaries for Linux and macOS, on x86_64 and arm64, are
 attached to each [release](https://github.com/lukewilliamboswell/roc-blueprint/releases),
 with their sha256 sums. A binary needs Nix and Python 3.9+. It does not need
 Roc installed: loading a configuration runs one exact Roc nightly, and the
@@ -75,8 +75,8 @@ is also available via `nix develop github:lukewilliamboswell/roc-blueprint`.
 Do not assume a published release accepts this development API.
 
 `Systems` controls generated Nix output shapes; it neither installs platform
-host targets nor proves execution support. Configurations execute on x86_64
-Linux and Apple Silicon macOS, the two machines the platform ships a host for.
+host targets nor proves execution support. Configurations execute on Linux and macOS, on
+x86_64 and arm64: the four machines the platform ships a host for.
 Sandboxed builds remain x86_64 Linux only.
 
 ## Writing `Blueprint.roc`

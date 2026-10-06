@@ -1,8 +1,9 @@
 name: Release roc-blueprint
 
 # Push a tag like 0.1.0 to publish the roc-blueprint platform bundle and
-# prebuilt `blueprint` CLIs for x86_64 Linux and Apple Silicon macOS. Both are
-# built on Linux; the macOS binary is run on macOS before anything is published.
+# prebuilt `blueprint` CLIs for Linux and macOS on x86_64 and arm64. All are
+# built on Linux; each is run on its own kind of machine before anything is
+# published.
 #
 # The platform depends on a published roc-blueprint-core release, whose bundle
 # URL is pinned in blueprint-platform/core-release (core has its own release
@@ -64,9 +65,9 @@ jobs:
           app [config] { pf: platform "${url}/${pf}" }
           \`\`\`
 
-          The \`blueprint\` CLI is attached for x86_64 Linux and Apple Silicon macOS, with sha256 sums in \`blueprint.sha256\`. It needs Nix and Python 3, and fetches its own Roc compiler through Nix.
+          The \`blueprint\` CLI is attached for Linux and macOS on x86_64 and arm64, with sha256 sums in \`blueprint.sha256\`. It needs Nix and Python 3, and fetches its own Roc compiler through Nix.
 
-          Uses roc-blueprint-core \`${core_url}\`. Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl and arm64mac.
+          Uses roc-blueprint-core \`${core_url}\`. Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl, arm64musl, arm64mac and x64mac.
           NOTES
           printf '%s\n' "$pf" > dist/platform-bundle
 
@@ -75,12 +76,19 @@ jobs:
           name: release
           path: |
             dist/
-            blueprint-platform/targets/arm64mac/libhost.a
+            blueprint-platform/targets/*/libhost.a
           if-no-files-found: error
 
-  macos-binary:
+  binaries:
     needs: build
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04-arm, system: aarch64-linux }
+          - { runner: macos-latest, system: aarch64-darwin }
+          - { runner: macos-15-intel, system: x86_64-darwin }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,13 +100,13 @@ jobs:
         with:
           name: release
 
-      - name: Smoke test the macOS binary
+      - name: Smoke test the binary
         run: |
-          chmod +x dist/blueprint-aarch64-darwin
-          scripts/smoke-binary.sh dist/blueprint-aarch64-darwin
+          chmod +x dist/blueprint-${{ matrix.system }}
+          scripts/smoke-binary.sh dist/blueprint-${{ matrix.system }}
 
   publish:
-    needs: [build, macos-binary]
+    needs: [build, binaries]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -118,4 +126,4 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" "${prerelease[@]}" --repo "$GITHUB_REPOSITORY" \
             --title "roc-blueprint $GITHUB_REF_NAME" --notes-file dist/notes.md \
-            "dist/${pf}" dist/blueprint-x86_64-linux dist/blueprint-aarch64-darwin dist/blueprint.sha256
+            "dist/${pf}" dist/blueprint-x86_64-linux dist/blueprint-aarch64-linux dist/blueprint-aarch64-darwin dist/blueprint-x86_64-darwin dist/blueprint.sha256

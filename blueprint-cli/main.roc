@@ -414,7 +414,9 @@ check_host! : () => Try({}, [UnsupportedHost])
 check_host! = ||
 	match Env.platform!() {
 		{ arch: X64, os: LINUX } => Ok({})
+		{ arch: AARCH64, os: LINUX } => Ok({})
 		{ arch: AARCH64, os: MACOS } => Ok({})
+		{ arch: X64, os: MACOS } => Ok({})
 		_ => Err(UnsupportedHost)
 	}
 
@@ -423,7 +425,9 @@ check_host! = ||
 host_target! : () => Str
 host_target! = ||
 	match Env.platform!() {
+		{ arch: AARCH64, os: LINUX } => "aarch64-linux"
 		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
+		{ arch: X64, os: MACOS } => "x86_64-darwin"
 		_ => "x86_64-linux"
 	}
 
@@ -760,7 +764,7 @@ describe = |err|
 	match err {
 		NoBlueprint => "there is no Blueprint.roc in the selected project root"
 		UnsupportedHost =>
-			"Blueprint.roc execution requires x86_64 Linux or Apple Silicon macOS; "
+			"Blueprint.roc execution requires Linux or macOS on x86_64 or arm64; "
 				.concat("Systems/BLUEPRINT_TARGET describe outputs, ")
 				.concat("not compiler host support")
 		CompilerFailed(message) =>

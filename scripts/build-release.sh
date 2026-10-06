@@ -41,6 +41,8 @@ build() { # roc target, Nix system
 	echo "==> $out"
 }
 build x64musl x86_64-linux
+build arm64musl aarch64-linux
 build arm64mac aarch64-darwin
-(cd "$DIST" && sha256sum blueprint-x86_64-linux blueprint-aarch64-darwin >blueprint.sha256)
+build x64mac x86_64-darwin
+(cd "$DIST" && sha256sum blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-darwin >blueprint.sha256)
 cat "$DIST/blueprint.sha256"

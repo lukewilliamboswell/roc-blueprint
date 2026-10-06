@@ -14,7 +14,9 @@ const Target = struct {
 
 const targets = [_]Target{
     .{ .dir = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }, .bundle_compiler_rt = false },
+    .{ .dir = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }, .bundle_compiler_rt = false },
     .{ .dir = "arm64mac", .query = .{ .cpu_arch = .aarch64, .os_tag = .macos }, .bundle_compiler_rt = true },
+    .{ .dir = "x64mac", .query = .{ .cpu_arch = .x86_64, .os_tag = .macos }, .bundle_compiler_rt = true },
 };
 
 pub fn build(b: *std.Build) void {
