@@ -5,6 +5,13 @@ examples/**/Blueprint.lock
 zig-out/
 dist/
 blueprint-platform/targets/*/libhost.a
+# Downloaded and installed by scripts/link_inputs.roc.
+.cache/
+blueprint-platform/linker-inputs/
+blueprint-platform/targets/*/crt1.o
+blueprint-platform/targets/*/libc.a
+blueprint-platform/targets/*/libzigc.a
+blueprint-platform/targets/*/libcompiler_rt.a
 /blueprint
 blueprint-cli/main
 .bundle-stage/

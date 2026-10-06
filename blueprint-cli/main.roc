@@ -29,11 +29,10 @@ import core.Provider
 import core.Lock
 import core.Tree
 import nix.NixProvider
-import "../scripts/blueprint-runtime.py" as snapshot_helper : Str
 import "../.roc-version" as compiler_version : Str
 
 version : Str
-version = "0.2.0"
+version = "0.4.0-rc2"
 
 ## The provider every command goes through. This is the only reference to a
 ## concrete provider: everything else uses the Provider contract
@@ -317,30 +316,60 @@ print_files! = |spec| {
 
 ## Probe identity before evaluating config with the selected compiler.
 ## A relative ROC executable belongs to the invocation directory, not root.
+## An explicit ROC must be the compatible compiler. Otherwise a compatible
+## `roc` on PATH is used, and failing that the provider fetches the release.
 roc! : () => Try(Str, _)
 roc! = || {
-	override = Env.var_str!("ROC") ?? "roc"
-	compiler = if override.contains("/") and !override.starts_with("/") {
-		cwd = Env.cwd!()?.to_str()?
-		"${cwd}/${override}"
-	} else override
-	output = Cmd.new_str(compiler).args_str(["version"]).exec_output!()
-		.map_err(
-			|err| CompilerFailed(
-				"could not probe ${compiler}: ${Str.inspect(err)}",
-			),
-		)?
 	expected = "Roc compiler version ${compiler_version.trim()}"
-	if output.stdout_utf8.trim() != expected {
-		return Err(
-			CompilerFailed(
-				"incompatible ROC executable ${compiler}: "
-					.concat("expected ${expected}; got ${output.stdout_utf8.trim()}"),
-			),
-		)
+	match Env.var_str!("ROC") {
+		Ok(override) => {
+			compiler = if override.contains("/") and !override.starts_with("/") {
+				cwd = Env.cwd!()?.to_str()?
+				"${cwd}/${override}"
+			} else override
+			output = Cmd.new_str(compiler).args_str(["version"]).exec_output!()
+				.map_err(
+					|err| CompilerFailed(
+						"could not probe ${compiler}: ${Str.inspect(err)}",
+					),
+				)?
+			if output.stdout_utf8.trim() != expected {
+				return Err(
+					CompilerFailed(
+						"incompatible ROC executable ${compiler}: "
+							.concat("expected ${expected}; got ${output.stdout_utf8.trim()}"),
+					),
+				)
+			}
+			Ok(compiler)
+		}
+		Err(_) => {
+			on_path = Cmd.new_str("roc").args_str(["version"]).exec_output!()
+				.map_ok(|output| output.stdout_utf8.trim() == expected) ?? False
+			if on_path {
+				return Ok("roc")
+			}
+			fetch_roc!((provider.compiler)(compiler_version.trim()))
+		}
 	}
-	Ok(compiler)
 }
+
+## Realise the compatible compiler through the provider. Its progress goes to
+## stderr; stdout is the directory holding `bin/roc`.
+fetch_roc! : List(Str) => Try(Str, _)
+fetch_roc! = |argv|
+	match argv {
+		[program, .. as args] => {
+			output = Cmd.new_str(program).args_str(args).stderr(Inherit).exec_output!()
+				.map_err(
+					|err| CompilerFailed(
+						"could not fetch Roc ${compiler_version.trim()}: ${Str.inspect(err)}",
+					),
+				)?
+			Ok("${output.stdout_utf8.trim()}/bin/roc")
+		}
+		[] => Err(CompilerFailed("the provider cannot fetch a compiler"))
+	}
 
 Context : { layout : Layout, target : Str }
 
@@ -375,16 +404,30 @@ context! = || {
 			generated_root: generated,
 			lock_path: lock,
 		},
-		target: Env.var_str!("BLUEPRINT_TARGET") ?? "x86_64-linux",
+		target: Env.var_str!("BLUEPRINT_TARGET") ?? host_target!(),
 	})
 }
 
-## Config-platform execution currently has only a verified Linux host.
+## The configuration platform ships a host for these machines only.
 check_host! : () => Try({}, [UnsupportedHost])
 check_host! = ||
 	match Env.platform!() {
 		{ arch: X64, os: LINUX } => Ok({})
+		{ arch: AARCH64, os: LINUX } => Ok({})
+		{ arch: AARCH64, os: MACOS } => Ok({})
+		{ arch: X64, os: MACOS } => Ok({})
 		_ => Err(UnsupportedHost)
+	}
+
+## The System this machine realises by default. Unsupported hosts fall back
+## to the Linux default and fail later in check_host!.
+host_target! : () => Str
+host_target! = ||
+	match Env.platform!() {
+		{ arch: AARCH64, os: LINUX } => "aarch64-linux"
+		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
+		{ arch: X64, os: MACOS } => "x86_64-darwin"
+		_ => "x86_64-linux"
 	}
 
 resolve : Str, Str -> Str
@@ -483,18 +526,232 @@ tree_entries! = |root, prefix| {
 	Ok($entries)
 }
 
-## Chunks are read through a fixed-capacity buffer. basic-cli currently reads
-## by line; a byte-chunk read will replace this without changing callers.
+## Bytes are read in bounded chunks; an empty chunk is the end of the file.
 file_digest! : Str => Try(Crypto.SHA256.Digest, _)
 file_digest! = |file| {
 	reader = File.open_reader_with_capacity!(path(file), 65536)?
 	var $hasher = Crypto.SHA256.Hasher.empty()
-	var $chunk = reader.read_line!()?
+	var $chunk = reader.read_up_to!(65536)?
 	while !$chunk.is_empty() {
 		$hasher = $hasher.write($chunk)
-		$chunk = reader.read_line!()?
+		$chunk = reader.read_up_to!(65536)?
 	}
 	Ok($hasher.finish())
+}
+
+## Observe authority bytes without decoding them, including an absent
+## authority. The token is `sha256:<hex>` of the raw bytes.
+authority_token! : Str => Try(Str, _)
+authority_token! = |file| {
+	safe_path!(file)?
+	if !(path(file).exists!()?) {
+		return Ok("absent")
+	}
+	if path(file).type!()? != IsFile {
+		return Err(Refused("authority is not a regular file: ${file}"))
+	}
+	Ok("sha256:${file_digest!(file)?.to_hex()}")
+}
+
+## Lexical containment of normalized absolute paths, as bytes: directory
+## entries need not be valid UTF-8.
+within : List(U8), List(U8) -> Bool
+within = |child, ancestor| {
+	base = if ancestor == ['/'] [] else ancestor
+	child == ancestor or child.take_first(base.len() + 1) == base.append('/')
+}
+
+expect within("/project/work".to_utf8(), "/project".to_utf8())
+expect within("/project".to_utf8(), "/project".to_utf8())
+expect within("/project".to_utf8(), "/".to_utf8())
+expect !within("/project-work".to_utf8(), "/project".to_utf8())
+expect !within("/project".to_utf8(), "/project/work".to_utf8())
+
+basename : List(U8) -> List(U8)
+basename = |bytes| bytes.fold([], |acc, byte| if byte == '/' [] else acc.append(byte))
+
+expect basename("/project/src/main.roc".to_utf8()) == "main.roc".to_utf8()
+
+## Snapshot exclusions are absolute paths or bare entry names. These are the
+## names, which apply at every depth.
+snapshot_names : List(Str) -> Try(List(Str), _)
+snapshot_names = |exclude| {
+	names = exclude.keep_if(|item| !item.starts_with("/"))
+	if names.any(|item| item.contains("/") or item == "" or item == "." or item == "..") {
+		return Err(Refused("snapshot exclusions must be absolute paths or names"))
+	}
+	Ok(names)
+}
+
+expect snapshot_names(["/project/work", ".git", ".jj"]) == Ok([".git", ".jj"])
+expect ["", ".", "..", "nested/.git"].all(|name| snapshot_names([name]).is_err())
+
+## A destination inside the project would be copied into itself unless an
+## excluded path covers the directory that holds it.
+unexcluded_in_tree : Str, Str, List(Str) -> Bool
+unexcluded_in_tree = |root, destination, excluded|
+	within(destination.to_utf8(), root.to_utf8())
+		and !excluded.any(|item| within(parent(destination).to_utf8(), item.to_utf8()))
+
+expect !unexcluded_in_tree("/project", "/project/work/snapshot", ["/project/work"])
+expect !unexcluded_in_tree("/project", "/project/a/work/snapshot", ["/project/a"])
+expect !unexcluded_in_tree("/project", "/outside/snapshot", [])
+expect unexcluded_in_tree("/project", "/project/work/snapshot", ["/project/work/snapshot"])
+expect unexcluded_in_tree("/project", "/project/work/snapshot", ["/project/workspace"])
+
+## A namespace identity as the kernel prints it, e.g. `mnt:[4026531841]`.
+valid_namespace : Str, Str -> Bool
+valid_namespace = |name, identity| {
+	prefix = "${name}:["
+	digits = identity.to_utf8().drop_first(prefix.to_utf8().len()).drop_last(1)
+	identity.starts_with(prefix)
+		and identity.ends_with("]")
+			and !digits.is_empty()
+				and digits.all(|byte| byte >= '0' and byte <= '9')
+}
+
+expect valid_namespace("mnt", "mnt:[4026531841]")
+expect valid_namespace("net", "net:[0]")
+expect
+	["mnt:[]", "mnt:]", "net:[1]", "mnt:[1]\n", "mnt:[1] ", " mnt:[1]", "mnt:[-1]", "mnt:[1a]", "mnt:[1]]", ""].all(
+		|identity| !valid_namespace("mnt", identity),
+	)
+
+## The witness the provider reads beside the snapshot. Its bytes feed the
+## build, so the format is pinned: sorted keys, `, ` and `: ` separators.
+isolation_witness : Str, Str -> Str
+isolation_witness = |mnt, net| "{\"mnt\": \"${mnt}\", \"net\": \"${net}\"}\n"
+
+expect
+	isolation_witness("mnt:[4026531841]", "net:[4026531840]")
+		== "{\"mnt\": \"mnt:[4026531841]\", \"net\": \"net:[4026531840]\"}\n"
+
+## A child's namespaces are the caller's, so `readlink` observes this process.
+namespace! : Str => Try(Str, _)
+namespace! = |name| {
+	link = "/proc/self/ns/${name}"
+	output = Cmd.new_str("readlink").args_str([link]).exec_output!()
+		.map_err(
+			|err| {
+				reason = match err {
+					NonZeroExitCode({ exit_code, .. }) => "readlink exited with code ${exit_code.to_str()}"
+					_ => "could not run readlink"
+				}
+				Refused(
+					"cannot observe caller build isolation; use Linux with "
+						.concat("readable ${link}: ${reason}"),
+				)
+			},
+		)?
+	identity = output.stdout_utf8.drop_suffix("\n")
+	if !valid_namespace(name, identity) {
+		return Err(Refused("invalid caller ${name} namespace identity"))
+	}
+	Ok(identity)
+}
+
+## Stage project bytes and a separate namespace witness before publication.
+## Callers serialize workspace use and stop on failure. The two outputs cannot
+## be renamed together; removing the old witness before replacing the tree
+## ensures interrupted publication cannot authorize it with stale observations.
+snapshot! : Str, Str, List(Str) => Try({}, _)
+snapshot! = |root, destination, exclude| {
+	safe_path!(root)?
+	safe_path!(destination)?
+	witness = "${destination}.isolation.json"
+	safe_path!(witness)?
+	isolation = isolation_witness(namespace!("mnt")?, namespace!("net")?)
+	names = snapshot_names(exclude)?
+	excluded = exclude.keep_if(|item| item.starts_with("/"))
+	for item in excluded {
+		safe_path!(item)?
+	}
+	if within(root.to_utf8(), destination.to_utf8()) {
+		return Err(Refused("snapshot destination must not contain the project"))
+	}
+	if !(path(root).exists!()?) or path(root).type!()? != IsDir {
+		return Err(Refused("snapshot root is not a directory: ${root}"))
+	}
+	if unexcluded_in_tree(root, destination, excluded) {
+		return Err(Refused("in-tree snapshot parent must be excluded"))
+	}
+	path(parent(destination)).create_all!()?
+	temporary = Env.create_temp_dir_in!(path(parent(destination)), ".snapshot-")?
+	publish! = || {
+		staged_tree = temporary.join("project")
+		staged_tree.create_dir!()?
+		copied = copy_tree!(
+			path(root),
+			staged_tree,
+			names.map(|item| item.to_utf8()),
+			excluded.map(|item| item.to_utf8()),
+		)?
+		set_mode!("755", copied.keep_if(|item| item.executable).map(|item| item.file))?
+		set_mode!("644", copied.keep_if(|item| !item.executable).map(|item| item.file))?
+		staged_witness = temporary.join("isolation.json")
+		staged_witness.write_utf8!(isolation)?
+		safe_path!(destination)?
+		safe_path!(witness)?
+		if path(destination).exists!()? and path(destination).type!()? != IsDir {
+			return Err(Refused("snapshot destination is not a directory: ${destination}"))
+		}
+		if path(witness).exists!()? {
+			if path(witness).type!()? != IsFile {
+				return Err(Refused("isolation witness is not a file: ${witness}"))
+			}
+			path(witness).delete!()?
+		}
+		if path(destination).exists!()? {
+			path(destination).delete_all!()?
+		}
+		staged_tree.rename!(path(destination))?
+		staged_witness.rename!(path(witness))
+	}
+	result = publish!()
+	_ = temporary.delete_all!()
+	result
+}
+
+## Copy directories and regular files, refusing symlinks and special files,
+## and report each copy with whether its source has any executable bit.
+## basic-cli has no no-follow open, so an entry replaced by a symlink between
+## the type check and the copy is followed: callers must not mutate the tree.
+copy_tree! : Path, Path, List(List(U8)), List(List(U8)) => Try(List({ file : Path, executable : Bool }), _)
+copy_tree! = |source, target, names, excluded| {
+	var $copied = []
+	for entry in source.list!()? {
+		bytes = entry.to_os_str().to_bytes()
+		name = basename(bytes)
+		if !names.contains(name) and !excluded.any(|item| within(bytes, item)) {
+			copy = Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(name))
+			match entry.type!()? {
+				IsSymLink => return Err(Refused("snapshot refuses symlink: ${entry.display()}"))
+				IsDir => {
+					copy.create_dir!()?
+					$copied = $copied.concat(copy_tree!(entry, copy, names, excluded)?)
+				}
+				IsFile => {
+					entry.copy!(copy)?
+					$copied = $copied.append({ file: copy, executable: entry.is_executable!()? })
+				}
+				IsOther => return Err(Refused("snapshot refuses special file: ${entry.display()}"))
+			}
+		}
+	}
+	Ok($copied)
+}
+
+## Snapshot modes are normalized to 0755 or 0644. basic-cli cannot set a
+## mode, so coreutils `chmod` does, in batches that fit one argument list.
+set_mode! : Str, List(Path) => Try({}, _)
+set_mode! = |mode, files| {
+	var $rest = files
+	while !$rest.is_empty() {
+		batch = $rest.take_first(128).map(|file| file.to_os_str())
+		$rest = $rest.drop_first(128)
+		Cmd.new_str("chmod").args_str([mode, "--"]).args(batch).exec_cmd!()?
+	}
+	Ok({})
 }
 
 ## The pure planner validates the entire request before any staging effects.
@@ -543,14 +800,7 @@ execute_step! = |step, layout| {
 					)
 				}
 			}
-			Snapshot({ root, destination, exclude }) => {
-				safe_path!(destination)?
-				exec!(
-					["python3", "-I", "-c", snapshot_helper, root, destination]
-						.concat(exclude),
-					layout.project_root,
-				)?
-			}
+			Snapshot({ root, destination, exclude }) => snapshot!(root, destination, exclude)?
 		}
 	}
 	stage!(step.files, layout)?
@@ -623,16 +873,7 @@ resolve! = |spec, ctx| {
 	resolution = (provider.resolve)(spec, ctx.target, layout)
 		.map_err(|message| RenderFailed(message))?
 	safe_path!(layout.lock_path)?
-	observed = Cmd.new_str("python3")
-		.args_str([
-			"-I",
-			"-c",
-			snapshot_helper,
-			"authority-token",
-			layout.lock_path,
-		])
-		.cwd(path(layout.project_root)).exec_output!()?
-	prior = observed.stdout_utf8.trim()
+	prior = authority_token!(layout.lock_path)?
 	# Reject ancestor escapes and nested symlinks before staging or fetching.
 	var $trees = []
 	for local in resolution.locals {
@@ -656,18 +897,15 @@ resolve! = |spec, ctx| {
 		.map_err(|message| LockFailed(message))?
 	lock = { ..resolved, intent: Lock.intent_of(spec) }
 	path(parent(layout.lock_path)).create_all!()?
-	publish_authority!(
-		layout.lock_path,
-		prior,
-		lock.to_str(),
-		layout.project_root,
-	)
+	publish_authority!(layout.lock_path, prior, lock.to_str())
 }
 
-## A short-lived helper holds the writer lock across comparison and rename.
-## Competing updates with distinct generated roots cannot roll back authority.
-publish_authority! : Str, Str, Str, Str => Try({}, _)
-publish_authority! = |destination, prior, contents, root| {
+## Publish only if the authority still has the token observed before
+## resolving, so an update that lost a race fails instead of rolling back a
+## newer one. No lock is held (basic-cli has none): two updates that both pass
+## the comparison before either renames can still overwrite each other.
+publish_authority! : Str, Str, Str => Try({}, _)
+publish_authority! = |destination, prior, contents| {
 	temporary = Env.create_temp_dir_in!(
 		path(parent(destination)),
 		".blueprint-write-",
@@ -675,19 +913,14 @@ publish_authority! = |destination, prior, contents, root| {
 	publish! = || {
 		staged = temporary.join("file")
 		staged.write_utf8!(contents)?
-		exec!(
-			[
-				"python3",
-				"-I",
-				"-c",
-				snapshot_helper,
-				"authority-publish",
-				destination,
-				prior,
-				staged.to_str()?,
-			],
-			root,
-		)
+		safe_path!(staged.to_str()?)?
+		if staged.type!()? != IsFile {
+			return Err(Refused("staged authority is not a regular file: ${staged.display()}"))
+		}
+		if authority_token!(destination)? != prior {
+			return Err(Refused("authority changed during update; retry blueprint update"))
+		}
+		staged.rename!(path(destination))
 	}
 	result = publish!()
 	_ = temporary.delete_all!()
@@ -720,16 +953,17 @@ describe = |err|
 	match err {
 		NoBlueprint => "there is no Blueprint.roc in the selected project root"
 		UnsupportedHost =>
-			"Blueprint.roc execution currently requires x86_64 Linux; "
+			"Blueprint.roc execution requires Linux or macOS on x86_64 or arm64; "
 				.concat("Systems/BLUEPRINT_TARGET describe outputs, ")
 				.concat("not compiler host support")
 		CompilerFailed(message) =>
 			"could not execute the configuration compiler; "
-				.concat("install Roc ${compiler_version.trim()} or set ROC to its ")
-				.concat("executable (the Nix package supplies it):\n${message}")
+				.concat("Roc ${compiler_version.trim()} is fetched automatically, ")
+				.concat("or set ROC to its executable:\n${message}")
 		LockFailed(message) => "${message}; use `blueprint update` to initialize "
 			.concat("or deliberately refresh pins")
 		UnsafePath(value) => "refusing unsafe or symlinked runtime path: ${value}"
+		Refused(message) => message
 		BadSpec(InvalidSexpr(msg)) => "could not read the Spec from Blueprint.roc: ${msg}"
 		BadSpec(UnsupportedFormat({ major, minor })) => "Spec format ${U64.to_str(major)}.${U64.to_str(minor)} is not supported by this blueprint (understands major ${Spec.current_format.major.to_str()}); upgrade blueprint or change the platform version"
 		NeedsFeatures(missing) => "Blueprint.roc needs features: ${Str.join_with(missing, ", ")}; upgrade blueprint"

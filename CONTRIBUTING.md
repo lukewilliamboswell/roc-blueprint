@@ -5,8 +5,8 @@
 ```
 blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
   *.roc                  setting types, checked values, lowering to the Spec
-  host/, build.zig       Zig host, built into targets/{x64musl,arm64mac}/libhost.a
-  targets/               linker inputs; all but libhost.a are vendored (see its README)
+  host/, build.zig       Zig host, built into targets/<target>/libhost.a
+  targets/               linker inputs, none committed: libhost.a is built, the rest fetched (see its README)
   core-release           (when present) the released core bundle URL a platform release uses
 blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
   Project.roc            pure normalization, references and provider capability checks
@@ -22,7 +22,8 @@ examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
 examples/composition/    imported pure module returning reusable task settings
 examples/artifacts/      runnable source/dependency/workflow example and scripts
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
-scripts/                 test.sh, bundle.sh, fuzz.sh
+scripts/                 test.sh, bundle.sh, fuzz.sh, link_inputs.roc (Roc scripts share scripts/src/)
+link-inputs.lock.json    the linker-input release the platform links, pinned by content
 flake.nix                builds blueprint with the pinned Roc; user and contributor shells
 ```
 
@@ -42,7 +43,7 @@ nix develop .#contributor
 
 gives Roc (the nightly in `.roc-version`, from
 [roc-overlay](https://github.com/roc-lang/roc-overlay)), Zig, `blueprint`,
-python3, zstd and git. Nix itself is also needed for `blueprint`.
+python3, zstd, git and curl. Nix itself is also needed for `blueprint`.
 
 `blueprint-cli/main.roc` uses the released basic-cli platform by URL. Roc
 downloads it on first use outside Nix; the Nix blueprint package fetches the same
@@ -51,16 +52,28 @@ archive by hash, so its sandboxed build needs no network.
 ## Building and testing
 
 ```sh
-(cd blueprint-platform && zig build)      # targets/{x64musl,arm64mac}/libhost.a
+scripts/link_inputs.roc fetch             # the musl runtime files the platform links
+(cd blueprint-platform && zig build)      # targets/<target>/libhost.a for all four hosts
 roc test blueprint-core/main.roc      # Spec round trips and format tests
 roc test blueprint-cli/main.roc             # includes the golden flake test
 roc build blueprint-cli/main.roc --output=./blueprint
 (cd examples/all-settings && ../../blueprint run --help) # try the CLI
 ./scripts/test.sh                           # everything CI runs
+./scripts/test.sh unit cli                  # or only some groups
 scripts/fuzz.sh 300                         # fuzz each target for 5 minutes
 ```
 
-`scripts/test.sh` is the full CI entry point: it builds the flake, invokes both
+The platform's linker inputs are not committed. `scripts/link_inputs.roc fetch`
+downloads the release pinned in `link-inputs.lock.json` into `.cache/link-inputs/`,
+verifies it and installs the files beside `libhost.a`; nothing that evaluates a
+`Blueprint.roc` against the local platform links without them. It is a Roc
+script: run it from the repository root with the pinned `roc` on `PATH`, or as
+`"$ROC" scripts/link_inputs.roc fetch`. `scripts/link_inputs.roc check` verifies
+what is installed without the network. See
+[blueprint-platform/targets/README.md](blueprint-platform/targets/README.md).
+
+`scripts/test.sh` is the full CI entry point: it fails if an object file, archive
+or import library is tracked, fetches and verifies the linker inputs, builds the flake, invokes both
 platform bundle modes (see below), and then runs each fuzz target for 30 seconds.
 `scripts/test-config.sh` checks valid configurations, imported-module composition,
 required settings, duplicates, unknown references, cycles and explicit-provider
@@ -84,7 +97,10 @@ runner checks, exact argv, immutable locks, freshness and relocation.
 `scripts/test-b3.py` adds real ordered task/build workflows, nested repetitions,
 failure stops, snapshot/dependency freshness, repeated locked-source verification,
 whole-closure preflight and immutable authority, including out-of-tree layouts.
-`scripts/test-update.py` checks local-source preflight and concurrent publication.
+`scripts/test-update.py` checks local-source preflight, authority observation and
+concurrent publication. `scripts/test-snapshot.py` checks the build snapshot's bytes,
+modes, exclusions and refusals and the isolation witness. Both put a failing
+`python3` on `PATH`: the CLI itself must not use a host Python.
 Normal execution tests explicitly initialize authority with `update` first.
 The complete artifacts example is executed in a temporary copy by
 the workflow integration script (`scripts/test-b3.py`).
@@ -277,9 +293,17 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
 - **roc-blueprint-core:** push a tag like `core-X.Y.Z`. `release-core.yml` tests
   and bundles `blueprint-core/` and publishes release `core-X.Y.Z` with the bundle.
 - **roc-blueprint:** put the core bundle URL the platform should use in
-  `blueprint-platform/core-release`, then push a tag like `X.Y.Z`. `release.yml` runs the
-  tests and publishes release `X.Y.Z` with the platform bundle and a prebuilt
-  `blueprint` binary.
+  `blueprint-platform/core-release`, set `version` in `blueprint-cli/main.roc`
+  and `flake.nix` to the release, then push a tag like `X.Y.Z`. `release.yml`
+  runs the tests, cross-builds the `blueprint` binaries on Linux with
+  `scripts/build-release.sh`, runs each on its own kind of machine with
+  `scripts/smoke-binary.sh`, and only then publishes release `X.Y.Z` with the
+  platform bundle, the binaries and their sha256 sums.
+
+A binary fetches the compiler named in `.roc-version` from the roc-overlay
+revision in `NixProvider.roc_overlay`. Change that constant whenever
+`flake.lock` moves the `roc-overlay` input; `scripts/test.sh` fails when the two
+differ.
 
 A tag with a `-` in it (e.g. `X.Y.Z-rc1`) is published as a pre-release.
 
@@ -295,6 +319,12 @@ and composition regressions. There are two gates:
 scripts/bundle.sh platform
 scripts/bundle.sh platform "$(< blueprint-platform/core-release)"
 ```
+
+Before bundling the platform, `scripts/bundle.sh` runs
+`scripts/link_inputs.roc check`, so only linker inputs matching
+`link-inputs.lock.json` are packed. Their licences and `dependency.json`
+inventory go into the bundle under `linker-inputs/`, and `release.yml` records
+the linker-input release and the lock's SHA-256 in the release notes.
 
 `scripts/test.sh` runs the first on every commit. `release.yml` runs the second
 when a platform release is tagged, and the release fails if the pinned core

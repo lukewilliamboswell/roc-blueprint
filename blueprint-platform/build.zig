@@ -1,20 +1,22 @@
 //! Builds the roc-blueprint platform host into targets/<target>/libhost.a.
 //!
 //! The musl runtime files beside libhost.a (crt1.o, libc.a, libzigc.a,
-//! libcompiler_rt.a) are not built here; they are vendored, see
-//! targets/README.md.
+//! libcompiler_rt.a) are not built here; scripts/link_inputs.roc installs them
+//! from a locked release, see targets/README.md.
 const std = @import("std");
 
 const Target = struct {
     dir: []const u8,
     query: std.Target.Query,
-    /// Linux links the vendored musl runtime's compiler-rt; macOS has none.
+    /// Linux links the fetched musl runtime's compiler-rt; macOS has none.
     bundle_compiler_rt: bool,
 };
 
 const targets = [_]Target{
     .{ .dir = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }, .bundle_compiler_rt = false },
+    .{ .dir = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }, .bundle_compiler_rt = false },
     .{ .dir = "arm64mac", .query = .{ .cpu_arch = .aarch64, .os_tag = .macos }, .bundle_compiler_rt = true },
+    .{ .dir = "x64mac", .query = .{ .cpu_arch = .x86_64, .os_tag = .macos }, .bundle_compiler_rt = true },
 };
 
 pub fn build(b: *std.Build) void {

@@ -69,13 +69,12 @@
 
           blueprint = pkgs.stdenv.mkDerivation {
             pname = "blueprint";
-            version = "0.2.0";
+            version = "0.4.0-rc2";
             src = lib.fileset.toSource {
               root = ./.;
               fileset = lib.fileset.unions [
                 ./blueprint-cli
                 ./.roc-version
-                ./scripts/blueprint-runtime.py
                 ./blueprint-nix
                 ./blueprint-core/main.roc
                 ./blueprint-core/Spec.roc
@@ -109,9 +108,10 @@
               runHook preInstall
               install -Dm755 blueprint "$out/bin/blueprint"
               # Default to the pinned Roc; ROC in the environment still wins.
+              # Builds run chmod and readlink; the host's own come first.
               wrapProgram "$out/bin/blueprint" \
                 --set-default ROC ${lib.getExe roc} \
-                --prefix PATH : ${lib.makeBinPath [ pkgs.python3 ]}
+                --suffix PATH : ${lib.makeBinPath [ pkgs.coreutils ]}
               runHook postInstall
             '';
             meta = {
