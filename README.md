@@ -76,7 +76,11 @@ Do not assume a published release accepts this development API.
 
 `Systems` controls generated Nix output shapes; it neither installs platform
 host targets nor proves execution support. Configurations execute on Linux and macOS, on
-x86_64 and arm64: the four machines the platform ships a host for.
+x86_64 and arm64: the four machines the platform ships a host for. On Intel
+macOS the default package source no longer evaluates, because current nixpkgs
+has dropped that system; declare
+`Packages("default", From(NixPackages("github:NixOS/nixpkgs/nixpkgs-26.05-darwin")))`
+there.
 Sandboxed builds remain x86_64 Linux only.
 
 ## Writing `Blueprint.roc`

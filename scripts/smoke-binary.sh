@@ -3,6 +3,9 @@
 # fetch its compiler, evaluate a Blueprint.roc and realise an environment.
 #
 #   scripts/smoke-binary.sh dist/blueprint-aarch64-darwin
+#
+# SMOKE_PACKAGES names the default package source when the built-in one does
+# not support this machine, as on Intel macOS.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 BLUEPRINT="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
@@ -16,7 +19,8 @@ cat >"$WORK/Blueprint.roc" <<EOF
 app [config] { pf: platform "$PLATFORM" }
 
 config = [
-	Name("smoke"),
+	Name("smoke"),${SMOKE_PACKAGES:+
+	Packages("default", From(NixPackages("$SMOKE_PACKAGES"))),}
 	Overlay("roc", "github:roc-lang/roc-overlay"),
 	Environment("dev", [Tools(["git"]), Overlays(["roc"]), Command("roc-stable", "rocpkgs.nightly")]),
 	Shell("default", [Use("dev")]),

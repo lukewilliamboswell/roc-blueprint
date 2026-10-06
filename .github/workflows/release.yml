@@ -87,7 +87,8 @@ jobs:
         include:
           - { runner: ubuntu-24.04-arm, system: aarch64-linux }
           - { runner: macos-latest, system: aarch64-darwin }
-          - { runner: macos-15-intel, system: x86_64-darwin }
+          # Current nixpkgs has dropped Intel macOS; 26.05 is its last branch.
+          - { runner: macos-15-intel, system: x86_64-darwin, packages: "github:NixOS/nixpkgs/nixpkgs-26.05-darwin" }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -101,6 +102,8 @@ jobs:
           name: release
 
       - name: Smoke test the binary
+        env:
+          SMOKE_PACKAGES: ${{ matrix.packages }}
         run: |
           chmod +x dist/blueprint-${{ matrix.system }}
           scripts/smoke-binary.sh dist/blueprint-${{ matrix.system }}
