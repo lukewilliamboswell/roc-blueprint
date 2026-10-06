@@ -1,0 +1,37 @@
+name: Fuzz
+
+# CI replays each fuzz target's committed corpus on every commit, which takes
+# seconds. This fuzzes each target for a while, weekly or on request.
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds to fuzz each target
+        type: number
+        default: 300
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/toolchain
+
+      - name: Fuzz each target
+        env:
+          SECONDS_PER_TARGET: ${{ inputs.seconds || 300 }}
+        run: nix develop -c scripts/fuzz.roc "$SECONDS_PER_TARGET"
+
+      - name: Upload fuzz crash inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-artifacts
+          path: fuzz-artifacts/
+          if-no-files-found: ignore

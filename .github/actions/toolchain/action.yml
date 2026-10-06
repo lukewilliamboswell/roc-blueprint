@@ -1,24 +1,12 @@
 name: Blueprint toolchain
-description: Roc at the pinned nightly, Zig, Nix with a download cache, and the linker-input download cache.
+description: Nix with a download cache, the flake's development shell, and the linker-input download cache.
 
+# The flake's default dev shell is the one definition of the toolchain: Roc at
+# the pinned nightly, Zig and the programs the scripts start. Jobs run every
+# script through `nix develop -c`.
 runs:
   using: composite
   steps:
-    - name: Read pinned Roc nightly
-      shell: bash
-      run: printf 'ROC_NIGHTLY_TAG=%s\n' "$(sed -n '1p' .roc-version)" >> "$GITHUB_ENV"
-
-    - name: Install Roc
-      uses: roc-lang/setup-roc@f5a74bf90aa694b43ab4a7cbfdb19273bc6aa697
-      with:
-        version: nightly-new-compiler
-        nightly-tag: ${{ env.ROC_NIGHTLY_TAG }}
-
-    - name: Install Zig
-      uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
-      with:
-        version: 0.16.0
-
     - name: Install Nix
       uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
 
@@ -35,3 +23,8 @@ runs:
       with:
         path: .cache/link-inputs
         key: link-inputs-${{ hashFiles('link-inputs.lock.json') }}
+
+    # A step of its own, so the log shows what entering the shell costs.
+    - name: Realise the development shell
+      shell: bash
+      run: nix develop -c true

@@ -18,6 +18,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      bundle: ${{ steps.notes.outputs.bundle }}
+      title: ${{ steps.notes.outputs.title }}
+      prerelease: ${{ steps.notes.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -27,47 +31,30 @@ jobs:
         run: grep -qF "version = \"${GITHUB_REF_NAME}\"" blueprint-cli/main.roc
 
       - name: Fetch and verify the platform's linker inputs
-        run: roc scripts/link_inputs.roc fetch
+        run: nix develop -c scripts/link_inputs.roc fetch
 
       # Built once: the tests below run the binary that is published.
-      - name: Cross-build the CLI binaries
-        run: scripts/build-release.sh
+      - name: Cross-build the CLI binaries and their smoke-test programs
+        run: nix develop -c scripts/build_release.roc
 
       - name: Use the built binary
         run: install -m 755 dist/blueprint-x86_64-linux blueprint
 
       - name: Test (including a localhost bundle smoke test)
-        run: ./scripts/test.sh
+        run: nix develop -c scripts/test.roc
         env:
           BLUEPRINT_PREBUILT: 1
 
       - name: Bundle against the pinned core release
-        run: scripts/bundle.sh platform "$(cat blueprint-platform/core-release)"
+        run: nix develop -c scripts/bundle.roc platform "$(cat blueprint-platform/core-release)"
 
+      # Outside the dev shell: the binary must work with no Roc on PATH.
       - name: Smoke test the Linux binary
-        run: scripts/smoke-binary.sh dist/blueprint-x86_64-linux
+        run: dist/smoke-x86_64-linux dist/blueprint-x86_64-linux
 
       - name: Write the release notes
-        run: |
-          read -r _ pf < <(grep '^roc-blueprint ' dist/bundles.txt)
-          core_url="$(cat blueprint-platform/core-release)"
-          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
-          link_inputs="$(python3 -c 'import json; print(json.load(open("link-inputs.lock.json"))["release"])')"
-          read -r link_lock _ < <(sha256sum link-inputs.lock.json)
-          cat > dist/notes.md <<NOTES
-          Platform (use in \`Blueprint.roc\`):
-
-          \`\`\`roc
-          app [config] { pf: platform "${url}/${pf}" }
-          \`\`\`
-
-          The \`blueprint\` CLI is attached for x86_64 Linux, arm64 Linux and Apple Silicon macOS, with sha256 sums in \`blueprint.sha256\`. It needs Nix, and fetches its own Roc compiler through Nix.
-
-          Uses roc-blueprint-core \`${core_url}\`. Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl, arm64musl, arm64mac and x64mac.
-
-          Linker inputs: roc-platform-template-zig release \`${link_inputs}\` (\`link-inputs.lock.json\` sha256 \`${link_lock}\`).
-          NOTES
-          printf '%s\n' "$pf" > dist/platform-bundle
+        id: notes
+        run: nix develop -c scripts/release_notes.roc dist/notes.md
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -98,12 +85,13 @@ jobs:
         with:
           name: release
 
+      # No Roc here: the smoke test is a program the build job cross-built.
       - name: Smoke test the binary
         env:
           SMOKE_PACKAGES: ${{ matrix.packages }}
         run: |
-          chmod +x dist/blueprint-${{ matrix.system }}
-          scripts/smoke-binary.sh dist/blueprint-${{ matrix.system }}
+          chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
+          dist/smoke-${{ matrix.system }} dist/blueprint-${{ matrix.system }}
 
   publish:
     needs: [build, binaries]
@@ -116,14 +104,18 @@ jobs:
         with:
           name: release
 
+      - name: The binaries are the ones that were built
+        working-directory: dist
+        run: sha256sum -c blueprint.sha256
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          pf="$(cat dist/platform-bundle)"
-          (cd dist && sha256sum -c blueprint.sha256)
-          prerelease=()
-          if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" "${prerelease[@]}" --repo "$GITHUB_REPOSITORY" \
-            --title "roc-blueprint $GITHUB_REF_NAME" --notes-file dist/notes.md \
-            "dist/${pf}" dist/blueprint-x86_64-linux dist/blueprint-aarch64-linux dist/blueprint-aarch64-darwin dist/blueprint.sha256
+          BUNDLE: ${{ needs.build.outputs.bundle }}
+          TITLE: ${{ needs.build.outputs.title }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          --prerelease="$PRERELEASE" --title "$TITLE" --notes-file dist/notes.md
+          "dist/$BUNDLE" dist/blueprint-x86_64-linux dist/blueprint-aarch64-linux
+          dist/blueprint-aarch64-darwin dist/blueprint.sha256

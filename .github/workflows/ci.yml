@@ -18,6 +18,8 @@ concurrency:
 permissions:
   contents: read
 
+# Every script runs through `nix develop -c`: the flake's dev shell is the one
+# definition of the toolchain (see .github/actions/toolchain).
 jobs:
   # Cross-builds every release binary once. The cli and nix jobs test the
   # x86_64 Linux one, so the binary that is tested is the binary that ships.
@@ -28,16 +30,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/toolchain
 
-      - run: scripts/test.sh static
+      - run: nix develop -c scripts/test.roc static
 
       - name: Fetch and verify the platform's linker inputs
-        run: roc scripts/link_inputs.roc fetch
+        run: nix develop -c scripts/link_inputs.roc fetch
 
-      - name: Cross-build the release binaries
-        run: scripts/build-release.sh
+      - name: Cross-build the release binaries and their smoke-test programs
+        run: nix develop -c scripts/build_release.roc
 
+      # Outside the dev shell: the binary must work with no Roc on PATH.
       - name: Smoke test the Linux binary
-        run: scripts/smoke-binary.sh dist/blueprint-x86_64-linux
+        run: dist/smoke-x86_64-linux dist/blueprint-x86_64-linux
 
       # Later jobs evaluate a Blueprint.roc against this checkout's platform;
       # some have no Roc or Zig of their own, so they take the built hosts and
@@ -48,11 +51,12 @@ jobs:
           name: blueprint-binaries
           path: |
             dist/blueprint-*
+            dist/smoke-*
             blueprint-platform/targets/*/*.a
             blueprint-platform/targets/*/crt1.o
           if-no-files-found: error
 
-  # Groups of scripts/test.sh that need no CLI binary start at once.
+  # Groups of scripts/test.roc that need no CLI binary start at once.
   checks:
     strategy:
       fail-fast: false
@@ -65,7 +69,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/toolchain
 
-      - run: scripts/test.sh ${{ matrix.group }}
+      - run: nix develop -c scripts/test.roc ${{ matrix.group }}
 
       - name: Upload fuzz crash inputs
         if: failure() && matrix.group == 'fuzz'
@@ -96,12 +100,13 @@ jobs:
       - name: Use the built binary
         run: install -m 755 dist/blueprint-x86_64-linux blueprint
 
-      - run: scripts/test.sh ${{ matrix.group }}
+      - run: nix develop -c scripts/test.roc ${{ matrix.group }}
         env:
           BLUEPRINT_PREBUILT: 1
 
   # Two binaries are cross-built for machines the Linux job cannot run, so
-  # run each where it must work.
+  # run each where it must work. These runners have Nix and deliberately no
+  # Roc: the smoke test is itself a program the build job cross-built.
   binaries:
     needs: build
     strategy:
@@ -131,8 +136,8 @@ jobs:
         env:
           SMOKE_PACKAGES: ${{ matrix.packages }}
         run: |
-          chmod +x dist/blueprint-${{ matrix.system }}
-          scripts/smoke-binary.sh dist/blueprint-${{ matrix.system }}
+          chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
+          dist/smoke-${{ matrix.system }} dist/blueprint-${{ matrix.system }}
 
   # The one required check: green only when every job above succeeded.
   test:
