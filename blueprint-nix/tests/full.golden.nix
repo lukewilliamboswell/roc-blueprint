@@ -7,6 +7,7 @@
     "stable".url = "github:NixOS/nixpkgs/nixos-24.05";
     "roc".url = "github:roc-lang/roc-overlay";
     "utils".url = "github:numtide/flake-utils";
+    "nixpkgs".follows = "default";
   };
 
   outputs = { self, ... }@inputs:

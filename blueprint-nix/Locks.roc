@@ -64,6 +64,44 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 		Ok($inputs)
 	}
 
+	## `nix develop` takes the bash it runs a shell or task with from the flake
+	## input named `nixpkgs`, and from the registry's floating nixpkgs when the
+	## flake has none. Package sources have names the project chose, so the
+	## generated flake gives one of them that second name with a `follows`: no
+	## pin of its own, only another way to reach a source the Lock already pins.
+	shell_alias : Str
+	shell_alias = "nixpkgs"
+
+	## The package source the alias follows, among the inputs a flake declares:
+	## `default` when it is a Nix package source, otherwise the first Nix
+	## package source declared. The alias is one name for the whole flake, so
+	## it cannot follow each environment's own source. A flake that declares
+	## any input called `nixpkgs` keeps that input, and one without a Nix
+	## package source has nothing to follow.
+	shell_source : List({ name : Str, kind : Str }) -> Try(Str, [NoAlias])
+	shell_source = |declared| {
+		if declared.any(|input| input.name == shell_alias) {
+			return Err(NoAlias)
+		}
+		sources_ = declared.keep_if(|input| input.kind == "auto" or input.kind == "packages")
+		chosen = sources_.find_first(|input| input.name == "default") ?? (sources_.first().map_err(|_| NoAlias)?)
+		Ok(chosen.name)
+	}
+
+	## The root edge Nix writes for that `follows`.
+	alias_edge : Str -> LockJson
+	alias_edge = |target| LockJson.Array([LockJson.String(target)])
+
+	## The name and kind of each input a lock identity declares.
+	declared_kinds : LockJson -> Try(List({ name : Str, kind : Str }), Str)
+	declared_kinds = |identity| {
+		var $declared = []
+		for input in LockJson.object(LockJson.field(identity, "inputs")?)? {
+			$declared = $declared.append({ name: input.name, kind: LockJson.string(LockJson.field(input.value, "kind")?)? })
+		}
+		Ok($declared)
+	}
+
 	## B2 local references are normalized project-relative subtrees. Local Git,
 	## absolute paths and query escapes are rejected instead of losing identity.
 	normalize_ref : Str -> Try(Str, Str)
@@ -393,10 +431,22 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 		root = root_inputs(locks.graph)?
 		nodes = LockJson.object(LockJson.field(locks.graph, "nodes")?)?
 		declared = inputs(project)?
+		# The staged flake always declares the alias, so the working lock always
+		# has its edge. A Lock written before the alias existed lacks it; adding
+		# it here changes no pin, and Nix is never left to add it itself.
+		root_name = LockJson.string(LockJson.field(locks.graph, "root")?)?
+		alias = shell_source(declared.map(|input| { name: input.name, kind: input.kind }))
+		aliased = match alias {
+			Ok(target) => LockJson.set(root, shell_alias, alias_edge(target))?
+			Err(NoAlias) => root
+		}
 		var $nodes = []
 		var $operations = []
 		for node in nodes {
 			var $value = node.value
+			if node.name == root_name and alias.is_ok() {
+				$value = LockJson.set($value, "inputs", aliased)?
+			}
 			for input in declared.keep_if(|i| i.ref.starts_with("path:")) {
 				id = LockJson.string(LockJson.field(root, input.name)?)?
 				if node.name == id {
@@ -756,7 +806,17 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	validate_binding = |identity, graph| {
 		inputs_ = LockJson.object(LockJson.field(identity, "inputs")?)?
 		root = root_inputs(graph)?
-		if LockJson.object(root)?.len() != inputs_.len() {
+		# Beside the declared inputs the root may hold the alias, exactly as the
+		# declarations determine it. A Lock from before the alias has none.
+		aliased = !inputs_.any(|input| input.name == shell_alias)
+			and LockJson.object(root)?.any(|edge| edge.name == shell_alias)
+		if aliased {
+			expected = shell_source(declared_kinds(identity)?).map_ok(alias_edge)
+			if LockJson.field(root, shell_alias).map_err(|_| NoAlias) != expected {
+				return Err("Nix root input ${shell_alias} does not follow the source lock identity selects")
+			}
+		}
+		if LockJson.object(root)?.len() != inputs_.len() + (if aliased 1 else 0) {
 			return Err("Nix root input set does not match lock identity")
 		}
 		nodes = LockJson.field(graph, "nodes")?
@@ -968,6 +1028,101 @@ expect match locked_fixture {
 		}
 	}
 	Err(_) => False
+}
+
+# What Nix writes since the generated flake gives the default source the
+# name `nixpkgs`: one more root edge, which follows it.
+aliased_fixture : Str
+aliased_fixture = native_fixture.replace_each("\"default\": \"default\"", "\"default\": \"default\", \"nixpkgs\": [\"default\"]")
+
+aliased_locks : Try(Locks, Str)
+aliased_locks = with_assets(Locks.from_nix(TestData.project(TestData.data), TestData.layout, aliased_fixture))
+
+# An update records that edge with the rest of the native graph and it
+# round-trips. It is no Source: the pins shown to reviewers are the same.
+expect match (aliased_locks, locked_fixture) {
+	(Ok(locks), Ok(before)) => Locks.decode(Locks.encode(locks)) == Ok(locks)
+		and Locks.encode(locks).contains("(name \"nixpkgs\")")
+			and !Locks.encode(before).contains("(name \"nixpkgs\")")
+				and locks != before
+					and Locks.sources(locks) == Locks.sources(before)
+	_ => False
+}
+
+# A Lock written before the alias existed is still authority, unchanged. Its
+# working lock gains the edge, so it is byte for byte the one a new Lock
+# derives and Nix has nothing to add under --no-update-lock-file.
+expect match (aliased_locks, locked_fixture) {
+	(Ok(locks), Ok(before)) => {
+		project = TestData.project(TestData.data)
+		match (Locks.derive(locks, project, TestData.layout), Locks.derive(before, project, TestData.layout)) {
+			(Ok(new), Ok(old)) => new == old
+				and old.contents.contains("\"inputs\":{\"assets\":\"assets\",\"default\":\"default\",\"nixpkgs\":[\"default\"]}")
+					and Locks.decode(Locks.encode(before)) == Ok(before)
+			_ => False
+		}
+	}
+	_ => False
+}
+
+# The edge is the one the declarations determine, or the Lock is refused: it
+# cannot follow another input, be a pin of its own, or stand beside nothing.
+expect {
+	accepts = |text| Locks.from_nix(TestData.project(TestData.data), TestData.layout, text).is_ok()
+	retargeted = |edge| aliased_fixture.replace_each("\"nixpkgs\": [\"default\"]", "\"nixpkgs\": ${edge}")
+	accepts(aliased_fixture)
+		and !accepts(retargeted("[\"assets\"]"))
+			and !accepts(retargeted("\"default\""))
+				and !accepts(retargeted("[\"default\", \"default\"]"))
+					and !accepts(retargeted("[]"))
+						and !accepts(aliased_fixture.replace_each("\"nixpkgs\": [", "\"other\": ["))
+}
+
+# Tampering with the recorded edge is caught when the Lock is read back.
+expect match aliased_locks {
+	Ok(locks) => {
+		text = Locks.encode(locks)
+		edge = "(List ((Str \"default\")))"
+		text.split_on(edge).len() == 2 and Locks.decode(text.replace_each(edge, "(List ((Str \"assets\")))")).is_err()
+	}
+	Err(_) => False
+}
+
+# A project with an input of its own called nixpkgs has an ordinary pinned
+# edge of that name. Nothing follows, and a follows edge there is refused.
+expect {
+	project = TestData.project({ ..TestData.data, sources: [{ name: "default", provider: Auto }, { name: "nixpkgs", provider: Auto }] })
+	own = native_fixture.replace_each("\"default\": \"default\"", "\"default\": \"default\", \"nixpkgs\": \"default\"")
+	match with_assets(Locks.from_nix(project, TestData.layout, own)) {
+		Ok(locks) => match Locks.derive(locks, project, TestData.layout) {
+			Ok(derived) => derived.contents.contains("\"nixpkgs\":\"default\"") and !derived.contents.contains("[\"default\"]")
+				and Locks.from_nix(project, TestData.layout, aliased_fixture).is_err()
+			Err(_) => False
+		}
+		Err(_) => False
+	}
+}
+
+# A project with no Nix package source has nothing to follow: no edge is
+# added, and one that appears is refused.
+expect {
+	project = TestData.project({
+		..TestData.data,
+		sources: [{ name: "default", provider: GuixPackages("channels") }],
+		environments: [{ ..TestData.builder, tools: [] }],
+		tasks: [],
+		builds: [],
+		shells: [],
+	})
+	native = native_fixture.replace_each("\"assets\": \"assets\", \"default\": \"default\"", "\"assets\": \"assets\"")
+	match with_assets(Locks.from_nix(project, TestData.layout, native)) {
+		Ok(locks) => match Locks.derive(locks, project, TestData.layout) {
+			Ok(derived) => !derived.contents.contains("nixpkgs\":")
+				and Locks.from_nix(project, TestData.layout, native.replace_each("\"assets\": \"assets\"", "\"assets\": \"assets\", \"nixpkgs\": [\"assets\"]")).is_err()
+			Err(_) => False
+		}
+		Err(_) => False
+	}
 }
 
 # JSON syntax, envelope versions and graph shape are validated, not trusted.

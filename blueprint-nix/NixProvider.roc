@@ -575,6 +575,8 @@ NixProvider :: [].{
 			]),
 		)?
 		# Inspection retains scoped inputs; plans emit stable full declarations.
+		# Either way `declared` is exactly what this flake declares.
+		var $declared = []
 		match staging {
 			None => {
 				for source in spec.sources.keep_if(
@@ -585,6 +587,7 @@ NixProvider :: [].{
 						NixPackages(ref) => ref
 						GuixPackages(_) => return Err("Nix cannot use Guix source ${source.name}")
 					}
+					$declared = $declared.append({ name: source.name, kind: "packages" })
 					$rendered = append_rendered(
 						$rendered,
 						"    ${quote(source.name)}.url = ${quote(url)};\n",
@@ -594,12 +597,14 @@ NixProvider :: [].{
 					|i| i.kind == Flake
 						or environments.any(|e| e.overlays.contains(i.name)),
 				) {
+					$declared = $declared.append({ name: input.name, kind: "flake" })
 					$rendered = append_rendered(
 						$rendered,
 						"    ${quote(input.name)}.url = ${quote(input.url)};\n",
 					)?
 				}
 				for source in spec.build_sources {
+					$declared = $declared.append({ name: source.name, kind: "source" })
 					$rendered = append_rendered(
 						$rendered,
 						"    ${quote(source.name)} = { url = ${quote(source.ref)}; "
@@ -611,6 +616,7 @@ NixProvider :: [].{
 				for input in data.inputs {
 					url = quote(Locks.input_url(input, data.layout))
 					flake = if input.flake "true" else "false"
+					$declared = $declared.append({ name: input.name, kind: input.kind })
 					$rendered = append_rendered(
 						$rendered,
 						"    ${quote(input.name)} = { url = ${url}; "
@@ -619,6 +625,7 @@ NixProvider :: [].{
 				}
 			}
 		}
+		$rendered = append_rendered($rendered, render_shell_alias($declared))?
 		$rendered = append_rendered(
 			$rendered,
 			lines([
@@ -707,6 +714,16 @@ NixProvider :: [].{
 		}
 		$rendered = append_rendered($rendered, lines(["    };", "}"]))?
 		Ok(Str.join_with($rendered.chunks, ""))
+	}
+
+	## The input `nix develop` takes its own bash from, pinned like the source
+	## it follows. Without it Nix uses the registry's floating nixpkgs for that
+	## bash on every shell and task, whatever the Lock says. See
+	## `Locks.shell_source` for which source is followed and when none is.
+	render_shell_alias : List({ name : Str, kind : Str }) -> Str
+	render_shell_alias = |declared| match Locks.shell_source(declared) {
+		Ok(target) => "    ${quote(Locks.shell_alias)}.follows = ${quote(target)};\n"
+		Err(NoAlias) => ""
 	}
 
 	## mkShell comes from the first tool's source, keeping unrelated providers
@@ -1090,6 +1107,83 @@ expect match NixProvider.render(mk(simple)) {
 	)
 	Err(_) => False
 }
+
+# `nix develop` takes its own bash from the input named nixpkgs: the flake
+# gives that name to the default source, after the inputs it declares.
+expect match NixProvider.render(mk(simple)) {
+	Ok(text) => text.contains(
+		"  inputs = {\n    \"default\".url = \"github:NixOS/nixpkgs/nixos-unstable\";\n    \"nixpkgs\".follows = \"default\";\n  };\n",
+	)
+	Err(_) => False
+}
+
+alias_environment : Str, List(Str) -> Spec.Environment
+alias_environment = |name, sources| { ..base, name, tools: sources.map(|source| { source, name: "git" }) }
+
+alias_lines : TestSpec -> Try(List(Str), Str)
+alias_lines = |t| Ok(NixProvider.render(mk(t))?.split_on("\n").keep_if(|line| line.contains("follows") or line.contains("\"nixpkgs\"")))
+
+stable : Spec.Source
+stable = { name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }
+
+# `default` is followed wherever it is declared; without it, the first
+# rendered package source is. An overlay or other input is never followed.
+expect {
+	both = {
+		..simple,
+		sources: [stable, { name: "default", provider: Auto }],
+		inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }],
+		environments: [{ ..alias_environment("dev", ["stable", "default"]), overlays: ["roc"] }],
+	}
+	only_named = {
+		..simple,
+		sources: [stable, { name: "older", provider: NixPackages("github:NixOS/nixpkgs/nixos-23.11") }],
+		environments: [alias_environment("dev", ["older", "stable"])],
+	}
+	alias_lines(both) == Ok(["    \"nixpkgs\".follows = \"default\";"])
+		and alias_lines(only_named) == Ok(["    \"nixpkgs\".follows = \"stable\";"])
+}
+
+# Inspection renders only the sources an environment uses, so the alias
+# follows one of those: never an input this flake does not declare.
+expect {
+	project = mk({
+		..simple,
+		sources: [stable],
+		environments: [alias_environment("dev", ["stable"]), alias_environment("plain", ["default"])],
+		shells: [{ name: "default", environment: "dev" }, { name: "plain", environment: "plain" }],
+	})
+	lines_of = |name| Ok(NixProvider.render_environment(project, name)?.split_on("\n").keep_if(|line| line.contains("follows")))
+	lines_of("dev") == Ok(["    \"nixpkgs\".follows = \"stable\";"])
+		and lines_of("plain") == Ok(["    \"nixpkgs\".follows = \"default\";"])
+}
+
+# A project that declares an input named nixpkgs keeps it, whatever its kind:
+# no second declaration of that name is written and nothing follows.
+expect {
+	as_source = {
+		..simple,
+		sources: [{ name: "nixpkgs", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		environments: [alias_environment("dev", ["default", "nixpkgs"])],
+	}
+	as_overlay = {
+		..simple,
+		inputs: [{ name: "nixpkgs", url: "github:example/overlay", kind: Overlay }],
+		environments: [{ ..base, overlays: ["nixpkgs"] }],
+	}
+	as_input = { ..simple, inputs: [{ name: "nixpkgs", url: "github:example/flake", kind: Flake }] }
+	alias_lines(as_source) == Ok(["    \"nixpkgs\".url = \"github:NixOS/nixpkgs/nixos-24.05\";", "            \"nixpkgs\" = import inputs.\"nixpkgs\" { inherit system overlays; };", "            sets.\"nixpkgs\".\"git\""])
+		and alias_lines(as_overlay) == Ok(["    \"nixpkgs\".url = \"github:example/overlay\";", "          overlays = [ inputs.\"nixpkgs\".overlays.default ];"])
+			and alias_lines(as_input) == Ok(["    \"nixpkgs\".url = \"github:example/flake\";"])
+}
+
+# The rule itself: package sources only, `default` first, none when the name
+# is taken or there is no Nix package source.
+expect Locks.shell_source([{ name: "assets", kind: "source" }, { name: "stable", kind: "packages" }, { name: "default", kind: "auto" }]) == Ok("default")
+expect Locks.shell_source([{ name: "roc", kind: "overlay" }, { name: "stable", kind: "packages" }, { name: "older", kind: "packages" }]) == Ok("stable")
+expect Locks.shell_source([{ name: "default", kind: "packages" }, { name: "nixpkgs", kind: "source" }]) == Err(NoAlias)
+expect Locks.shell_source([{ name: "default", kind: "overlay" }, { name: "utils", kind: "flake" }, { name: "assets", kind: "source" }]) == Err(NoAlias)
+expect Locks.shell_source([]) == Err(NoAlias)
 
 # Tasks need stable entries even when no alias refers to their environment.
 expect match NixProvider.render(
@@ -1610,6 +1704,29 @@ expect match plan_fixture(Request.Shell("default")) {
 	_ => False
 }
 
+# A staged plan declares every input, so its alias does not depend on the
+# request: a task in an environment that uses only `stable` still follows
+# `default`, and the working lock carries the matching edge.
+expect {
+	data = {
+		..TestData.data,
+		sources: [stable, { name: "default", provider: Auto }],
+		environments: [TestData.builder, alias_environment("pinned", ["stable"])],
+		tasks: TestData.data.tasks.append({ name: "pinned", environment: "pinned", run: ["git"] }),
+	}
+	project = TestData.project(data)
+	native = native_lock.replace_each("\"assets\": \"assets\"", "\"assets\": \"assets\", \"stable\": \"stable\"").replace_each(
+		"\"default\": {",
+		"\"stable\": { \"locked\": { \"lastModified\": 1, \"narHash\": \"sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=\", \"owner\": \"NixOS\", \"repo\": \"nixpkgs\", \"rev\": \"4975466d324710c576dc11ad614684e6bd8cad8e\", \"type\": \"github\" }, \"original\": { \"owner\": \"NixOS\", \"ref\": \"nixos-24.05\", \"repo\": \"nixpkgs\", \"type\": \"github\" } },\n    \"default\": {",
+	)
+	locks = resolved(project, native)?
+	plan = NixProvider.plan(project, Request.Run("pinned", []), "x86_64-linux", TestData.layout, locks)?
+	match plan.steps.first().map_ok(|step| step.files) {
+		Ok([flake, lock]) => flake.contents.contains("    \"default\" = { url = \"github:NixOS/nixpkgs/nixos-unstable\"; flake = true; };\n    \"assets\" = { url = \"path:/project/assets\"; flake = false; };\n    \"nixpkgs\".follows = \"default\";\n  };\n")
+			and lock.path == "/generated/flake.lock" and lock.contents.contains("\"nixpkgs\":[\"default\"]")
+		_ => False
+	}
+}
 # Roc packages: `packages` locks one bundle, `scripts` inherits it and adds
 # another, and `builder` has none.
 roc_project : Spec

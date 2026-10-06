@@ -78,8 +78,8 @@ Do not assume a published release accepts this development API.
 host targets nor proves execution support. Configurations execute on x86_64
 Linux, arm64 Linux and Apple Silicon macOS. No Intel macOS binary is released:
 the platform has a host for it and the CLI evaluates configurations there, but
-entering an environment fails because `nix develop` takes its shell from
-current nixpkgs, which has dropped that system.
+entering an environment fails with current nixpkgs, which has dropped that
+system.
 Sandboxed builds remain x86_64 Linux only.
 
 ## Writing `Blueprint.roc`
@@ -343,6 +343,11 @@ structural validation and required-feature checks still apply. Full rendering
   older `blueprint` is refused; run `blueprint update`.
 - Normal `gen`, `shell`, `run`, `build` and `workflow` require matching pins and never
   rewrite authority or independently update derived locks.
+- `nix develop` takes the bash it runs a shell or task with from a flake input
+  named `nixpkgs`, so the generated flake gives that name to the `default`
+  package source (or, without one, the first Nix package source declared) and
+  that bash is pinned by `Blueprint.lock` like every tool, unless the project
+  declares an input named `nixpkgs` itself.
 - **`BLUEPRINT_WORKSPACE`**, **`BLUEPRINT_GENERATED_ROOT`**, **`BLUEPRINT_LOCK`**
   choose caller paths; relative values resolve against the selected project
   root, not the invocation directory. Out-of-tree generated roots are supported.
