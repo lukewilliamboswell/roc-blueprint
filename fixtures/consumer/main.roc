@@ -94,6 +94,18 @@ expect match files({}) {
 	Err(_) => False
 }
 
+# The staged lock is the supplied native graph, compactly encoded with its
+# nodes last: planning from the authority adds, drops and reorders no pin.
+# No value in the fixture holds a space.
+expect {
+	compact = complete_native_lock.replace_each("\n", "").replace_each(" ", "")
+	nodes = compact.drop_prefix("{\"nodes\":").drop_suffix(",\"root\":\"root\",\"version\":7}")
+	match files({}) {
+		Ok(generated) => nodes != compact and generated.last().map_ok(|file| file.contents) == Ok("{\"root\":\"root\",\"version\":7,\"nodes\":${nodes}}\n")
+		Err(_) => False
+	}
+}
+
 # Generate needs neither provider commands nor filesystem observations here.
 expect match plan(project(wire)?, Request.Generate, "x86_64-linux", layout) {
 	Ok({ steps: [step] }) => step.action == Generate

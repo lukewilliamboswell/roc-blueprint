@@ -8,47 +8,36 @@ on:
     tags: ["core-[0-9]+.[0-9]+.[0-9]+*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Read pinned Roc nightly
-        run: printf 'ROC_NIGHTLY_TAG=%s\n' "$(sed -n '1p' .roc-version)" >> "$GITHUB_ENV"
-
-      - name: Install Roc
-        uses: roc-lang/setup-roc@f5a74bf90aa694b43ab4a7cbfdb19273bc6aa697
-        with:
-          version: nightly-new-compiler
-          nightly-tag: ${{ env.ROC_NIGHTLY_TAG }}
+      - uses: ./.github/actions/toolchain
 
       - name: Test
         run: |
-          roc fmt --check blueprint-core
-          roc test blueprint-core/main.roc
+          nix develop -c roc fmt --check blueprint-core
+          nix develop -c roc test blueprint-core/main.roc
 
       - name: Bundle
-        run: scripts/bundle.sh core
+        run: nix develop -c scripts/bundle.roc core
+
+      - name: Write the release notes
+        id: notes
+        run: nix develop -c scripts/release_notes.roc dist/notes.md
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          read -r _ core < <(grep '^roc-blueprint-core ' dist/bundles.txt)
-          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${core}"
-          cat > notes.md <<NOTES
-          The blueprint Spec and its S-expression format.
-
-          \`\`\`roc
-          core: "${url}"
-          \`\`\`
-
-          Built with Roc \`${ROC_NIGHTLY_TAG}\`.
-          NOTES
-          prerelease=()
-          if [[ "${GITHUB_REF_NAME#core-}" == *-* ]]; then prerelease=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" "${prerelease[@]}" --latest=false \
-            --title "roc-blueprint-core ${GITHUB_REF_NAME#core-}" --notes-file notes.md "dist/${core}"
+          BUNDLE: ${{ steps.notes.outputs.bundle }}
+          TITLE: ${{ steps.notes.outputs.title }}
+          PRERELEASE: ${{ steps.notes.outputs.prerelease }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" --prerelease="$PRERELEASE" --latest=false
+          --title "$TITLE" --notes-file dist/notes.md "dist/$BUNDLE"
