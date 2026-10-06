@@ -85,6 +85,18 @@ class Suite:
         self.env["ROC"] = str(Path(compiler).resolve())
         nix = shutil.which("nix")
         require(nix, "real Nix is required")
+        # Everything below runs offline, so nothing may depend on what an
+        # earlier test happened to leave in the store. Fetch, once and with
+        # the network, what the fixture's derivations are built with.
+        seed = json.loads((ROOT / "fixtures/consumer/inputs.lock").read_text())
+        warm_pin = seed["nodes"]["nixpkgs"]["locked"]
+        warm = f'github:{warm_pin["owner"]}/{warm_pin["repo"]}/{warm_pin["rev"]}'
+        subprocess.run(
+            [nix, "build", "--no-link"]
+            + [f"{warm}#{name}" for name in
+               ("stdenv", "stdenvNoCC", "python3", "coreutils")],
+            check=True,
+        )
         wrapper = work / "bin/nix"
         wrapper.write_text(
             f"#!{sys.executable}\nimport json, os, sys\n"

@@ -680,7 +680,8 @@ namespace! = |name| {
 }
 
 ## What the provider's build derivation passes to `blueprint __build-runner`.
-## `readlink` and `chmod` are absolute programs: a build has no implicit PATH.
+## `readlink`, `chmod` and `ln` are absolute programs: a build has no implicit
+## PATH. Only a build whose environment has Roc packages names them and `ln`.
 BuildSpec : {
 	project : Str,
 	argv : List(Str),
@@ -690,7 +691,13 @@ BuildSpec : {
 	artifacts : Str,
 	readlink : Str,
 	chmod : Str,
+	roc_packages : Try(List(RocPackage), [Missing]),
+	ln : Try(Str, [Missing]),
 }
+
+## A released Roc bundle: the content hash Roc looks for in its package cache
+## and the directory holding the unpacked bundle.
+RocPackage : { name : Str, path : Str }
 
 ## The builder of a sandboxed build: exact argv and one contained,
 ## symlink-free output. The specification is the given file, or the one the
@@ -741,16 +748,22 @@ run_build! = |file| {
 	Cmd.new_str(spec.chmod).args_str(["-R", "u+w", "--"]).arg(work.to_os_str()).exec_cmd!()?
 	home = top.join("blueprint-home")
 	home.create_dir!()?
+	cache = roc_build_cache!(spec.roc_packages, spec.ln, top)?
 	match spec.argv {
 		[] => return Err(Invalid("empty build command"))
 		[program, .. as rest] => {
 			# A bare program name resolves against the PATH given here.
-			ran = Cmd.new_str(program).args_str(rest).cwd(work)
+			base = Cmd.new_str(program).args_str(rest).cwd(work)
 				.env_str("PATH", spec.path)
 				.env(OsStr.from_str("HOME"), home.to_os_str())
 				.env_str("BLUEPRINT_INPUTS", spec.inputs)
 				.env_str("BLUEPRINT_ARTIFACTS", spec.artifacts)
-				.stdout(Inherit).stderr(Inherit).run!()
+			# Only the user command sees the cache, and only when there is one.
+			command = match cache {
+				Private(directory) => base.env(OsStr.from_str("XDG_CACHE_HOME"), directory.to_os_str())
+				NoCache => base
+			}
+			ran = command.stdout(Inherit).stderr(Inherit).run!()
 			match ran {
 				Ok({ status: Exited(0), .. }) => {}
 				Ok({ status: Exited(code), .. }) => return Err(Exited(code))
@@ -799,6 +812,37 @@ run_build! = |file| {
 		output.copy!(destination)?
 		Ok({})
 	}
+}
+
+## A build has no network, so Roc cannot download a package there. Give the
+## build a cache of its own holding its environment's locked bundles: Roc reads
+## `$XDG_CACHE_HOME/roc/packages/<hash>/main.roc` and does not download what it
+## finds. Links suffice, because the cache is discarded with the build
+## directory and the store cannot be collected while the build runs. basic-cli
+## cannot create a link itself.
+roc_build_cache! : Try(List(RocPackage), [Missing]), Try(Str, [Missing]), Path => Try([Private(Path), NoCache], _)
+roc_build_cache! = |declared, ln, top| {
+	bundles = declared ?? []
+	if bundles.is_empty() {
+		return Ok(NoCache)
+	}
+	program = ln.map_err(|_| Invalid("the build has Roc packages but no ln program"))?
+	cache = top.join("blueprint-cache")
+	directory = cache.join("roc").join("packages")
+	directory.create_all!()?
+	for bundle in bundles {
+		if !Project.valid_name(bundle.name) {
+			return Err(Invalid("invalid Roc package name: ${bundle.name}"))
+		}
+		if !(path(bundle.path).join("main.roc").is_file!() ?? False) {
+			return Err(Invalid("Roc package ${bundle.name} has no main.roc"))
+		}
+		Cmd.new_str(program).args_str(["-s", "--", bundle.path])
+			.arg(directory.join(bundle.name).to_os_str())
+			.exec_cmd!()
+			.map_err(|_| Invalid("cannot link Roc package ${bundle.name}"))?
+	}
+	Ok(Private(cache))
 }
 
 ## Reject Run even when the daemon ignores client sandbox flags: the build's
@@ -963,6 +1007,7 @@ realise! = |spec, request, ctx| {
 execute_step! : Steps.Step, Layout => Try({}, _)
 execute_step! = |step, layout| {
 	var $files = step.files
+	var $roc_packages = []
 	for operation in step.operations {
 		match operation {
 			VerifyTree({ path: local, digest }) => {
@@ -992,9 +1037,16 @@ execute_step! = |step, layout| {
 					|file| { ..file, contents: file.contents.replace_each(executable, own) },
 				)
 			}
+			# Locating the bundles reads the files staged below.
+			RocPackages(request) => {
+				$roc_packages = $roc_packages.append(request)
+			}
 		}
 	}
 	stage!($files, layout)?
+	for request in $roc_packages {
+		publish_roc_packages!(request.names, request.locate, layout.project_root)?
+	}
 	match step.action {
 		Build(name) => report_build!(step, name, layout.project_root)
 		_ => exec!(step.argv, layout.project_root).map_err(
@@ -1005,6 +1057,160 @@ execute_step! = |step, layout| {
 				},
 		)
 	}
+}
+
+## The directory Roc reads URL packages from, as bytes: `roc/packages` under
+## `XDG_CACHE_HOME` when that is set, otherwise under `.cache` in `HOME`. Roc
+## takes a relative value against its working directory, which for a shell or
+## task is the project root.
+roc_package_cache : Try(List(U8), _), Try(List(U8), _), List(U8) -> Try(List(U8), [NoRocPackageCache])
+roc_package_cache = |xdg_cache_home, home, root| {
+	base = match (xdg_cache_home, home) {
+		(Ok(directory), _) => directory
+		(Err(_), Ok(directory)) => directory.concat("/.cache".to_utf8())
+		(Err(_), Err(_)) => return Err(NoRocPackageCache)
+	}
+	absolute = if base.first() == Ok('/') base else root.append('/').concat(base)
+	Ok(absolute.concat("/roc/packages".to_utf8()))
+}
+
+expect roc_package_cache(Ok("/xdg".to_utf8()), Ok("/home/me".to_utf8()), "/project".to_utf8()) == Ok("/xdg/roc/packages".to_utf8())
+expect roc_package_cache(Err(Unset), Ok("/home/me".to_utf8()), "/project".to_utf8()) == Ok("/home/me/.cache/roc/packages".to_utf8())
+expect roc_package_cache(Ok("cache".to_utf8()), Ok("/home/me".to_utf8()), "/project".to_utf8()) == Ok("/project/cache/roc/packages".to_utf8())
+expect roc_package_cache(Ok([0xff, '/', 'c']), Err(Unset), "/project".to_utf8()) == Ok("/project/".to_utf8().concat([0xff]).concat("/c/roc/packages".to_utf8()))
+expect roc_package_cache(Err(Unset), Err(Unset), "/project".to_utf8()) == Err(NoRocPackageCache)
+
+child : Path, Str -> Path
+child = |directory, name| Path.unix_bytes(directory.to_os_str().to_bytes().append('/').concat(name.to_utf8()))
+
+## Roc resolves a URL package from `<cache>/<hash>/main.roc` alone.
+roc_package_present! : Path, Str => Bool
+roc_package_present! = |cache, name| child(child(cache, name), "main.roc").is_file!() ?? False
+
+## Make each named bundle resolvable by Roc without a download, by publishing
+## the locked copy into Roc's package cache. A package that is already there,
+## whether Roc downloaded it or an earlier run published it, is left alone, and
+## when none is missing the provider is not asked anything. Roc may lose its
+## cache at any time; the next run publishes again.
+publish_roc_packages! : List(Str), List(Str), Str => Try({}, _)
+publish_roc_packages! = |names, locate, root| {
+	xdg_cache_home = Env.var!(OsStr.from_str("XDG_CACHE_HOME")).map_ok(|value| value.to_bytes())
+	home = Env.var!(OsStr.from_str("HOME")).map_ok(|value| value.to_bytes())
+	cache = Path.unix_bytes(
+		roc_package_cache(xdg_cache_home, home, root.to_utf8())
+			.map_err(|_| RocPackagesFailed("neither XDG_CACHE_HOME nor HOME says where Roc's package cache is"))?,
+	)
+	var $missing = []
+	for name in names {
+		if !Project.valid_name(name) {
+			return Err(RocPackagesFailed("invalid Roc package name: ${name}"))
+		}
+		if !roc_package_present!(cache, name) {
+			$missing = $missing.append(name)
+		}
+	}
+	if $missing.is_empty() {
+		return Ok({})
+	}
+	located = locate_roc_packages!(locate, root)?
+	cache.create_all!().map_err(|_| RocPackagesFailed("cannot create Roc's package cache ${cache.display()}"))?
+	for name in $missing {
+		bundle = located.find_first(|entry| entry.name == name)
+			.map_err(|_| RocPackagesFailed("the ${provider.name} provider did not locate Roc package ${name}"))?
+		publish_roc_package!(cache, name, path(bundle.path))?
+	}
+	Ok({})
+}
+
+## Run the provider's argv; it prints where each locked bundle is unpacked.
+locate_roc_packages! : List(Str), Str => Try(List(RocPackage), _)
+locate_roc_packages! = |argv, root|
+	match argv {
+		[program, .. as args] => {
+			output = Cmd.new_str(program).args_str(args).cwd(path(root)).stderr(Inherit).exec_output!()
+				.map_err(|_| RocPackagesFailed("could not locate the locked Roc packages with `${Str.join_with(argv, " ")}`"))?
+			located : Try(List(RocPackage), _)
+			located = Json.parse(output.stdout_utf8)
+			located.map_err(|_| RocPackagesFailed("the ${provider.name} provider did not say where the locked Roc packages are"))
+		}
+		[] => Err(RocPackagesFailed("the ${provider.name} provider cannot locate Roc packages"))
+	}
+
+## Publish one bundle as `<cache>/<name>`. The provider has already verified
+## `source` against Blueprint.lock, so nothing is hashed again here.
+##
+## Every Roc process reads this cache, so `main.roc` must never appear before
+## the rest. The tree is copied into a staging directory in the cache
+## directory itself and then renamed into place, which is atomic. The staging
+## directory is renamed to end in `.tmp` first: Roc sweeps directories of that
+## name from its cache once they are a day old, so one abandoned by a killed
+## process does not stay forever. Whatever happens, it is deleted on the way
+## out.
+publish_roc_package! : Path, Str, Path => Try({}, _)
+publish_roc_package! = |cache, name, source| {
+	if !(source.join("main.roc").is_file!() ?? False) {
+		return Err(RocPackagesFailed("locked Roc package ${name} has no main.roc in ${source.display()}"))
+	}
+	final = child(cache, name)
+	created = Env.create_temp_dir_in!(cache, "blueprint-${name}.")
+		.map_err(|err| RocPackagesFailed("cannot stage Roc package ${name} in ${cache.display()}: ${Str.inspect(err)}"))?
+	staging = Path.unix_bytes(created.to_os_str().to_bytes().concat(".tmp".to_utf8()))
+	match created.rename!(staging) {
+		Ok({}) => {}
+		Err(err) => {
+			_ = created.delete_all!()
+			return Err(RocPackagesFailed("cannot stage Roc package ${name} in ${cache.display()}: ${Str.inspect(err)}"))
+		}
+	}
+	publish! = || {
+		# The staging directory is private (mode 0700); the package is a
+		# child with ordinary permissions, so it can be deleted like any other.
+		staged = child(staging, name)
+		staged.create_dir!()?
+		copy_roc_package!(source, staged)?
+		first = staged.rename!(final)
+		# Losing the rename to another process costs nothing: its bytes are ours.
+		if first.is_ok() or roc_package_present!(cache, name) {
+			return Ok({})
+		}
+		# Otherwise something without a `main.roc` holds the name: an
+		# interrupted extraction, or a link whose target is gone. Roc treats
+		# that as incomplete and replaces it; do the same rather than leave Roc
+		# to download it. It is moved aside, not deleted in place, so the name
+		# is empty only between two renames.
+		final.rename!(child(staging, "${name}.incomplete"))
+			.map_err(|_| RocPackagesFailed("cannot publish Roc package ${name}: ${final.display()} has no main.roc and cannot be replaced"))?
+		second = staged.rename!(final)
+		if second.is_ok() or roc_package_present!(cache, name) {
+			Ok({})
+		} else {
+			Err(RocPackagesFailed("cannot publish Roc package ${name} as ${final.display()}"))
+		}
+	}
+	result = publish!()
+	cleanup = staging.delete_all!()
+	result?
+	cleanup.map_err(|_| RocPackagesFailed("published Roc package ${name} but could not delete ${staging.display()}"))
+}
+
+## Copy a bundle's directories and regular files by raw entry names. Files
+## keep their permissions, so they stay read-only as in the store; directories
+## are created anew and writable, so the package can be deleted. A bundle
+## holds no links or special files.
+copy_roc_package! : Path, Path => Try({}, _)
+copy_roc_package! = |source, target| {
+	for entry in source.list!()? {
+		copy = Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(basename(entry.to_os_str().to_bytes())))
+		match entry.type!()? {
+			IsDir => {
+				copy.create_dir!()?
+				copy_roc_package!(entry, copy)?
+			}
+			IsFile => entry.copy!(copy)?
+			_ => return Err(RocPackagesFailed("Roc package holds a link or special file: ${entry.display()}"))
+		}
+	}
+	Ok({})
 }
 
 ## Resolve the selected installable with the exact planned build command.
@@ -1160,6 +1366,7 @@ describe = |err|
 		NeedsFeatures(missing) => "Blueprint.roc needs features: ${Str.join_with(missing, ", ")}; upgrade blueprint"
 		InvalidProject(msg) => "invalid Spec project: ${msg}"
 		RenderFailed(msg) => "cannot generate the ${provider.name} files: ${msg}"
+		RocPackagesFailed(msg) => msg
 		BadSpec(MissingRequiredField("format")) => "Blueprint.roc uses an older roc-blueprint platform that this blueprint can't read; update the platform URL in its app header to a current release"
 		BadSpec(MissingRequiredField(field)) => "the Spec from Blueprint.roc is missing ${field}"
 		NonZeroExitCode({ command, exit_code, stderr_utf8_lossy, .. }) =>

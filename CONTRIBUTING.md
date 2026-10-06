@@ -22,13 +22,13 @@ examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
 examples/composition/    imported pure module returning reusable task settings
 examples/artifacts/      runnable source/dependency/workflow example and scripts
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
-scripts/                 test.sh, bundle.sh, fuzz.sh, link_inputs.roc (Roc scripts share scripts/src/)
+scripts/                 test.sh, bundle.sh, fuzz.sh, link_inputs.roc, test_roc_packages.roc (Roc scripts share scripts/src/)
 link-inputs.lock.json    the linker-input release the platform links, pinned by content
 flake.nix                builds blueprint with the pinned Roc; user and contributor shells
 ```
 
 The local platform and CLI share `blueprint-core`, including
-`Project.validate`. The Spec wire format is major 2 (currently 2.4); published
+`Project.validate`. The Spec wire format is major 2 (currently 2.5); published
 major-1 bundles are not compatible. The architecture, terminology (Spec,
 Provider, Lock, stages) and invariants are defined in
 [docs/architecture.adoc](docs/architecture.adoc); keep it in sync with changes.
@@ -107,6 +107,13 @@ concurrent publication. `scripts/test-isolation.py` checks what a build stages
 about its caller: the namespace identities, the CLI's own path as the runner,
 and the refusals when either cannot be used. Both put a failing
 `python3` on `PATH`: the CLI itself must not use a host Python.
+`scripts/test_roc_packages.roc` is a Roc script, like `link_inputs.roc`. It
+runs the real CLI and Nix with a Roc package cache of its own in a temporary
+directory, and refuses to run if that directory lies inside `~/.cache`. It
+checks publication into an empty cache, that a second run writes nothing, that
+an existing package is left alone and an incomplete one replaced, that failures
+leave nothing behind, and that a sandboxed build resolves its bundles with no
+network while the same build without one of them does not.
 Normal execution tests explicitly initialize authority with `update` first.
 The complete artifacts example is executed in a temporary copy by
 the workflow integration script (`scripts/test-b3.py`).
@@ -154,7 +161,7 @@ blueprint platform's Linux target.
 
 In outline:
 
-- `format` — `((major 2) (minor 4))`; see compatibility below.
+- `format` — `((major 2) (minor 5))`; see compatibility below.
 - `name`, `systems` (strings such as `"x86_64-linux"`).
 - `sources` — `{ name, provider }`, where provider is `Auto`,
   `NixPackages(Str)` or `GuixPackages(Str)`. Validation supplies
@@ -167,6 +174,11 @@ In outline:
   inherit parent first and only enter the environment on their named System.
 - `commands` — optional `{ environment, name, tool }` launchers. Validation
   flattens inheritance; a child replaces a same-named inherited command.
+- `roc_packages` — optional `{ environment, name, source }`: a Roc bundle's
+  content hash and the `build_sources` entry that fetches it. The platform
+  derives both from the bundle URL (`roc-<hash>`, `tarball+<url>`);
+  environments sharing a bundle share one source. Validation flattens
+  inheritance, parent first.
 - `shells` — `{ name, environment }` aliases.
 - `tasks` — `{ name, environment, run }`, with nonempty executable argv.
 - `build_sources` — `{ name, ref }`, locked non-flake sources, separate from
@@ -179,7 +191,7 @@ In outline:
   wire field keeps the name `backend`).
 - `extensions` — `{ kind, name, value }`, blocks a provider may understand.
 - `requires` — features the config uses beyond the core (`"raw"`,
-  `"extensions"`, `"sources"`, `"builds"`, `"workflows"`, `"system-tools"`, `"commands"`), so an older `blueprint` can say what's missing.
+  `"extensions"`, `"sources"`, `"builds"`, `"workflows"`, `"system-tools"`, `"commands"`, `"roc-packages"`), so an older `blueprint` can say what's missing.
 
 `Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its S-expression encoder
 and parser are hand-written to avoid recursive-codec derivation problems.
@@ -252,13 +264,22 @@ provider's modules directly. Nix is the only implemented provider. It:
   select packages for their named System before Nix evaluates them. Each
   `commands` entry becomes a package holding one launcher that execs the
   tool's main program;
+- makes `roc_packages` available without a download. A shell or task step
+  carries a `RocPackages` operation naming the environment's bundles and a
+  `locate` argv (`nix eval --json` of the generated flake's
+  `blueprintRocPackages.<environment>` output, with the staged lock read-only),
+  which prints where each locked bundle is unpacked. The executor publishes the
+  missing ones into Roc's package cache and runs `locate` only when one is
+  missing. A build's specification instead lists the bundles and a `ln`, and
+  `blueprint __build-runner` links them into a cache inside the build directory
+  and sets `XDG_CACHE_HOME` for the build's command. There is no shell hook;
 - rejects unsupported Nix target declarations and restricts build requests to
   x86_64 Linux. Other supported output shapes are not execution evidence;
 - renders `raw` for backend `"nix"` at `shell:<alias>` and `flake` as data,
   rejecting invalid targets, duplicate attributes and managed-field overrides.
   Alias Raw does not affect other aliases or tasks; other providers' Raw is inert;
-- refuses any `extensions` and advertises `"raw"`, `"sources"`, `"builds"` and
-  `"workflows"`;
+- refuses any `extensions` and advertises `"raw"`, `"sources"`, `"builds"`,
+  `"workflows"`, `"system-tools"`, `"commands"` and `"roc-packages"`;
 - builds ordinary derivations with exact argv, filtered project snapshots,
   read-only declared sources/artifacts and checked file/directory outputs. Each
   is a raw `derivation` whose builder is the CLI's own executable, run as

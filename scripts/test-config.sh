@@ -40,6 +40,7 @@ fixture EquivalentInline '[Name("inheritance"), Overlay("tools", "github:roc-lan
 fixture EquivalentDefault '[Name("valid"), Packages("default", Auto), Environment("dev", [Tools(["git"])]), Shell("default", [Use("dev")])]'
 fixture EquivalentComposition '[Name("composed"), Systems(["x86_64-linux"]), Environment("base", [Tools(["git"])]), Environment("dev", [Tools(["git", "python3"])]), Shell("default", [Use("dev")]), Task("fmt", [Use("dev"), Run(["python3", "--version"])]), Task("test", [Use("dev"), Run(["git", "--version"])]), Task("args", [Use("dev"), Run(["python3", "-c", "import json, sys; print(json.dumps(sys.argv[1:]))", "configured argument"])])]'
 fixture Commands '[Name("commands"), Overlay("roc", "github:roc-lang/roc-overlay"), Environment("base", [Command("vcs", "git"), Command("py", "python3")]), Environment("dev", [Extend("base"), Overlays(["roc"]), Command("py", "python312"), Command("roc-stable", "rocpkgs.nightly")]), Shell("default", [Use("dev")])]'
+fixture RocPackages '[Name("packages"), Environment("base", [RocPackages(["https://example.test/releases/download/1.0.0/abc123.tar.zst"])]), Environment("dev", [Extend("base"), RocPackages(["https://example.test/releases/download/1.0.0/abc123.tar.zst", "https://example.test/releases/download/2.0.0/def456.tar.zst"])]), Shell("default", [Use("dev")])]'
 fixture SystemTools '[Name("systems"), Systems(["x86_64-linux", "aarch64-darwin"]), Environment("base", [Tools(["git"]), ToolsFor("x86_64-linux", ["wayland"])]), Environment("dev", [Extend("base"), ToolsFor("x86_64-linux", ["alsa-lib"])]), Shell("default", [Use("dev")])]'
 
 fixture MissingName '[Environment("dev", [])]' 'MissingName'
@@ -67,6 +68,9 @@ fixture UnknownToolsForSource '[Name("invalid"), Systems(["x86_64-linux"]), Envi
 fixture DuplicateCommand '[Name("invalid"), Environment("dev", [Command("vcs", "git"), Command("vcs", "mercurial")])]' 'DuplicateCommand'
 fixture InvalidCommandName '[Name("invalid"), Environment("dev", [Command("bin/vcs", "git")])]' 'invalid command name'
 fixture UnknownCommandSource '[Name("invalid"), Environment("dev", [Command("vcs", "missing#git")])]' 'unknown source'
+fixture DuplicateRocPackages '[Name("invalid"), Environment("dev", [RocPackages([]), RocPackages([])])]' 'DuplicateRocPackages'
+fixture InsecureRocPackage '[Name("invalid"), Environment("dev", [RocPackages(["http://example.test/abc123.tar.zst"])])]' 'invalid Roc package URL'
+fixture UnhashedRocPackage '[Name("invalid"), Environment("dev", [RocPackages(["https://example.test/archive.tar.gz"])])]' 'invalid Roc package URL'
 fixture DuplicateOverlays '[Name("invalid"), Environment("dev", [Overlays([]), Overlays([])])]' 'DuplicateOverlays'
 fixture DuplicateExtend '[Name("invalid"), Environment("base", []), Environment("dev", [Extend("base"), Extend("base")])]' 'DuplicateExtend'
 fixture UnknownShellEnvironment '[Name("invalid"), Shell("default", [Use("missing")])]' 'unknown environment'
@@ -271,12 +275,12 @@ cmp "$WORK/with-tools.spec" "$WORK/without-tools.spec"
 
 # New optional fields must be accompanied by feature markers for old consumers.
 "$ROC" "$WORK/Builds.roc" >"$WORK/builds.spec"
-grep -qF '(minor 4)' "$WORK/builds.spec"
+grep -qF '(minor 5)' "$WORK/builds.spec"
 grep -qF '(requires ("sources" "builds"))' "$WORK/builds.spec"
 grep -qF '(build_sources ' "$WORK/builds.spec"
 grep -qF '(builds ' "$WORK/builds.spec"
 "$ROC" "$WORK/Workflows.roc" >"$WORK/workflows.spec"
-grep -qF '(minor 4)' "$WORK/workflows.spec"
+grep -qF '(minor 5)' "$WORK/workflows.spec"
 grep -qF '(requires ("builds" "workflows"))' "$WORK/workflows.spec"
 grep -qF '(workflows ' "$WORK/workflows.spec"
 grep -qF '(RunTask "check.all" ("" "two words" "\"quoted\"" "$HOME" "line\nbreak" "--flag"))' "$WORK/workflows.spec"
@@ -288,5 +292,10 @@ grep -qF '(system "x86_64-linux")' "$WORK/system-tools.spec"
 grep -qF '(requires ("commands"))' "$WORK/commands.spec"
 grep -qF '(commands ' "$WORK/commands.spec"
 grep -qF '(name "roc-stable")' "$WORK/commands.spec"
+"$ROC" "$WORK/RocPackages.roc" >"$WORK/roc-packages.spec"
+grep -qF '(requires ("sources" "roc-packages"))' "$WORK/roc-packages.spec"
+grep -qF '(roc_packages ' "$WORK/roc-packages.spec"
+grep -qF '(ref "tarball+https://example.test/releases/download/1.0.0/abc123.tar.zst")' "$WORK/roc-packages.spec"
+test "$(grep -o 'name "roc-abc123"' "$WORK/roc-packages.spec" | wc -l)" = 1
 
 echo "    ${#valid[@]} valid configs accepted; ${#invalid[@]} semantic errors and ${#quote_invalid[@]} checked-name errors rejected at compile time; equivalent Spec verified"

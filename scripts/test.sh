@@ -79,8 +79,12 @@ group_unit() {
 	step "roc-blueprint-core tests"
 	"$ROC" test blueprint-core/main.roc
 
+	step "Platform lowering tests"
+	"$ROC" test blueprint-platform/main.roc
+
 	step "Repository script tests"
 	"$ROC" test scripts/link_inputs.roc
+	"$ROC" test scripts/test_roc_packages.roc
 	prepare
 	step "Compile-time configuration validation"
 	scripts/test-config.sh
@@ -128,6 +132,10 @@ group_nix() {
 
 	step "Renamed commands through real Nix"
 	scripts/test-command.sh
+
+	step "Locked Roc packages: published for tasks, private to sandboxed builds"
+	# A Roc script. It creates the package cache it publishes into.
+	"$ROC" scripts/test_roc_packages.roc
 
 	step "B2 sandboxed artifacts, isolation, sources and immutable locks"
 	python3 scripts/test-b2.py
