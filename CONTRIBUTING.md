@@ -444,7 +444,11 @@ Before bundling the platform, `scripts/bundle.roc` makes the check of
 `link-inputs.lock.json` are packed. Their licences and `dependency.json`
 inventory go into the bundle under `linker-inputs/`, and
 `scripts/release_notes.roc` records the linker-input release and the lock's
-SHA-256 in the release notes.
+SHA-256 in the release notes. The notes of a platform release list what else it
+was built from: the Roc nightly and the Zig version, the roc-overlay revision
+and the hashes of the two compiler archives it supplied, the flake's nixpkgs
+revision, the core bundle, and the Roc packages compiled into the CLI as
+`roc deps blueprint-cli/main.roc` resolves them.
 
 `scripts/test.roc` runs the first on every commit. `release.yml` runs the second
 when a platform release is tagged, and the release fails if the pinned core

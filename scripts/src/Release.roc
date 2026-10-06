@@ -48,6 +48,21 @@ Release := [].{
 	## The released file the build compiles a second time, to compare.
 	twice = { source: "blueprint-cli/main.roc", target: "x64musl", name: "blueprint-x86_64-linux" }
 
+	## The compiler that builds every target is the x86_64 Linux archive, with
+	## the macOS sysroot of the Apple Silicon archive beside it.
+	compiler_system = "x86_64-linux"
+	sysroot_system = "aarch64-darwin"
+
+	## The compiler archive the flake's locked roc-overlay names for a system:
+	## its URL and the hash Nix checks it against.
+	archive! : Str, Str => Try({ url : Str, hash : Str }, _)
+	archive! = |root, system| {
+		attribute = ".#packages.${system}.roc.src"
+		url = Process.succeed!(Process.command("nix", ["eval", "--raw", "${attribute}.url"], root))?.stdout
+		hash = Process.succeed!(Process.command("nix", ["eval", "--raw", "${attribute}.outputHash"], root))?.stdout
+		Ok({ url, hash })
+	}
+
 	## Where `nix store prefetch-file --json` says it put the file.
 	store_path : Str -> Try(Str, [NoStorePath])
 	store_path = |json| {
@@ -76,10 +91,8 @@ Release := [].{
 ## Fetch and unpack the compiler archive the flake locks for a system.
 fetch! : Str, Str, Str => Try(Str, _)
 fetch! = |root, work, system| {
-	attribute = ".#packages.${system}.roc.src"
-	url = Process.succeed!(Process.command("nix", ["eval", "--raw", "${attribute}.url"], root))?.stdout
-	hash = Process.succeed!(Process.command("nix", ["eval", "--raw", "${attribute}.outputHash"], root))?.stdout
-	fetched = Process.succeed!(Process.command("nix", ["store", "prefetch-file", "--json", "--expected-hash", hash, url], root))?
+	named = Release.archive!(root, system)?
+	fetched = Process.succeed!(Process.command("nix", ["store", "prefetch-file", "--json", "--expected-hash", named.hash, named.url], root))?
 	archive = match Release.store_path(fetched.stdout) {
 		Ok(path) => path
 		Err(NoStorePath) => return Script.fail!("nix store prefetch-file did not name a store path: ${fetched.stdout}")
@@ -92,8 +105,8 @@ fetch! = |root, work, system| {
 
 build! : Str, Str => Try({}, _)
 build! = |root, work| {
-	linux = fetch!(root, work, "x86_64-linux")?
-	mac = fetch!(root, work, "aarch64-darwin")?
+	linux = fetch!(root, work, Release.compiler_system)?
+	mac = fetch!(root, work, Release.sysroot_system)?
 	Path.copy_dir!(Path.utf8("${mac}/darwin"), Path.utf8("${linux}/darwin"))?
 	roc = "${linux}/roc"
 	tag = Path.read_utf8!(Path.utf8("${root}/.roc-version"))?.split_on("\n").first() ?? ""
