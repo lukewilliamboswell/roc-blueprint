@@ -81,9 +81,13 @@ tool grammar at compile time. It compares emitted Spec for inherited versus inli
 environments, omitted versus explicit Auto, and composed versus inline settings.
 Both bundle gates retain those assertions against the served platform, plus the
 all-settings example.
-`python3 scripts/test-cli.py` exercises the built CLI with and without a
+`scripts/test_cli.roc` exercises the built CLI with and without a
 configuration, checks validation and help/version handling, and records Nix
 argv to verify shell selection and task arguments without entering a shell.
+It holds what only a run can show: the order of checks before any effect, how
+often the configuration is evaluated, exact provider argv and error text. Rules
+that a pure `expect` in `blueprint-core` or `blueprint-nix` already holds are
+not repeated there.
 The all-settings integration tests separately run tasks through real Nix.
 `scripts/test-b1.sh` executes imported composition tasks with exact argv-byte
 assertions and noncommutative overlays in both orders, including inheritance
