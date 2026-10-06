@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Everything CI checks. Needs roc (or $ROC), zig 0.16 and nix.
+# Everything CI checks. Needs roc (or $ROC), zig 0.16, nix and curl.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export ROC="${ROC:-roc}"
@@ -8,7 +8,7 @@ ROOT="$PWD"
 step() { printf '\n==> %s\n' "$*"; }
 
 step "Formatting"
-"$ROC" fmt --check blueprint-core blueprint-platform blueprint-nix blueprint-cli fixtures examples
+"$ROC" fmt --check blueprint-core blueprint-platform blueprint-nix blueprint-cli fixtures examples scripts
 
 step "The CLI reaches providers only through the Provider contract"
 # docs/architecture.adoc invariant 7: one selection site, no provider internals.
@@ -35,6 +35,14 @@ PY
 
 step "roc-blueprint-core tests"
 "$ROC" test blueprint-core/main.roc
+
+step "Repository script tests"
+"$ROC" test scripts/link_inputs.roc
+
+step "Fetch and verify the platform's linker inputs"
+# Unconditional: a restored cache is storage, not authority. The archive is
+# rehashed against link-inputs.lock.json whether or not it was downloaded.
+"$ROC" scripts/link_inputs.roc fetch
 
 step "Build the platform host"
 (cd blueprint-platform && zig build)
