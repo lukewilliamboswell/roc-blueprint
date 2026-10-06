@@ -118,15 +118,11 @@ overlay will fail Nix validation and cannot auto-merge. Update the `roc-overlay`
 input with `nix flake update roc-overlay` once upstream lists that nightly,
 then retry the updater. Do not skip the Nix check to accept a compiler bump.
 
-The September 23 nightly (`nightly-2026-09-23-c7852fd`) uses basic-cli
-[PR #499](https://github.com/roc-lang/basic-cli/pull/499), pinned to commit
-`473caa2cc4f3fe9ce4e4682158bb80ebc2e19169` in `flake.nix` and `flake.lock`.
-This source includes both [PR #495](https://github.com/roc-lang/basic-cli/pull/495)
-(implicit error unions) and [PR #498](https://github.com/roc-lang/basic-cli/pull/498)
-(the SQLite inference-hang workaround); #495 alone is insufficient.
-As of September 24, 2026, no published basic-cli release includes both fixes;
-0.23.0-rc1 remains the newest prerelease and stalls with this compiler.
-Keep the reproducible source pin until a compatible release is published.
+The October 4 nightly (`nightly-2026-10-04-130536d`) rejects redundant type
+exposes, so it needs basic-cli 0.24.0 (commit
+`1a4e6f4a0a5f233586e8215c6c5e7085f5c57597`, pinned in `flake.nix` and
+`flake.lock`) and roc-fuzz 0.4.3. Keep the reproducible source pin until
+Nix builds from a release artifact.
 The pinned source passes the CLI and imported platform tests. Nix builds its
 Rust host for x64musl on Linux and arm64mac on macOS using the upstream Rust
 toolchain version and locked Cargo dependencies.
@@ -135,7 +131,7 @@ The Rust host is reused across Roc nightly updates.
 The complete suite requires x86_64 Linux, Zig 0.16 and a running Nix daemon. To test the CLI alone on macOS,
 check out that exact basic-cli commit, run `python3 scripts/build.py` there,
 and link its `platform` directory at `.basic-cli` in this repository. Then
-run the CLI unit tests and build with the September 23 Roc binary. The native
+run the CLI unit tests and build with the pinned Roc binary. The native
 CLI can run on macOS, but executing a Blueprint.roc still requires the
 blueprint platform's Linux target.
 

@@ -6,7 +6,7 @@
     roc-overlay.url = "github:roc-lang/roc-overlay";
     roc-overlay.inputs.nixpkgs.follows = "nixpkgs";
     basic-cli-src = {
-      url = "github:roc-lang/basic-cli/473caa2cc4f3fe9ce4e4682158bb80ebc2e19169";
+      url = "github:roc-lang/basic-cli/1a4e6f4a0a5f233586e8215c6c5e7085f5c57597";
       flake = false;
     };
     rust-overlay.url = "github:oxalica/rust-overlay";
@@ -47,7 +47,7 @@
           rocTag = lib.trim (builtins.readFile ./.roc-version);
           roc = roc-overlay.packages.${system}.${rocTag};
 
-          # Temporary source pin to basic-cli PR #499 until a compatible release.
+          # Source pin to basic-cli 0.24.0.
           rustToolchain = pkgs.rust-bin.fromRustupToolchain {
             channel =
               (builtins.fromTOML (builtins.readFile "${basic-cli-src}/rust-toolchain.toml")).toolchain.channel;
@@ -60,7 +60,7 @@
           };
           basic-cli = rustPlatform.buildRustPackage {
             pname = "basic-cli-platform";
-            version = "0.23.0-pr499";
+            version = "0.24.0";
             src = basic-cli-src;
             cargoLock.lockFile = "${basic-cli-src}/Cargo.lock";
             nativeBuildInputs = [

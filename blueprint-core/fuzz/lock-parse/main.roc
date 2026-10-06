@@ -1,7 +1,7 @@
 # Mutate Lock text; whatever parses must survive a re-encode unchanged.
 app [target] {
-	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.0-rc1/9k2cfuAWoBfcRBRiVbriXFf1dHktoRBbieifYN7NmTHc.tar.zst",
 	core: "../../main.roc",
+	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst",
 }
 
 import pf.Fuzz
@@ -23,7 +23,7 @@ test = |bytes|
 				}
 				Err(_) => Fuzz.keep
 			}
-		}
+	}
 
 target = Fuzz.target_with({
 	name: "lock-parse",
