@@ -1185,3 +1185,78 @@ expect {
 		]),
 	) == Err("workflow expansion exceeds 1 MiB argv bytes")
 }
+
+# Each declaration namespace rejects a repeated name with its own message.
+expect {
+	shell = { name: "default", environment: "base" }
+	task = { name: "check", environment: "base", run: ["git"] }
+	spec = fixture([base])
+	Project.validate({ ..spec, shells: [shell, shell] }) == Err("DuplicateShell: default") and
+		Project.validate({ ..spec, tasks: [task, task] }) == Err("DuplicateTask: check") and
+			Project.validate({ ..spec, sources: [{ name: "default", provider: Auto }, { name: "default", provider: Auto }] }) == Err("DuplicateSource: default") and
+				Project.validate({ ..spec, inputs: [{ name: "tools", url: "github:example/tools", kind: Flake }, { name: "tools", url: "github:example/overlay", kind: Overlay }] }) == Err("DuplicateInput: tools")
+}
+
+# Package sources, flake inputs and build sources share one input namespace.
+expect {
+	spec = fixture([base])
+	assets = { name: "assets", ref: "path:./assets" }
+	Project.validate({ ..spec, sources: [{ name: "data", provider: Auto }] }) == Err("DuplicateInput: data") and
+		Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "data" }] }) == Err("DuplicateInput: data") and
+			Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "nix" }] }) == Err("DuplicateInput: nix") and
+				Project.validate({ ..spec, requires_: ["sources"], build_sources: [assets] }).is_ok()
+}
+
+# A shell or task must use a declared environment, and a task a nonempty argv.
+expect {
+	spec = fixture([base])
+	task = { name: "check", environment: "base", run: ["git"] }
+	Project.validate({ ..spec, shells: [{ name: "default", environment: "missing" }] }) == Err("unknown environment: missing") and
+		Project.validate({ ..spec, tasks: [{ ..task, environment: "missing" }] }) == Err("unknown environment: missing") and
+			Project.validate({ ..spec, tasks: [{ ..task, run: [] }] }) == Err("empty argv: check") and
+				Project.validate({ ..spec, tasks: [{ ..task, run: [""] }] }) == Err("empty argv: check") and
+					Project.validate({ ..spec, tasks: [task] }).is_ok()
+}
+
+# The project name is free text, but not empty or a control character.
+expect Project.validate({ ..fixture([base]), name: "" }) == Err("invalid name for project")
+expect Project.validate({ ..fixture([base]), name: "line\nbreak" }) == Err("invalid name for project")
+expect Project.validate({ ..fixture([base]), name: Str.from_utf8([127]) ?? "" }) == Err("invalid name for project")
+expect Project.validate({ ..fixture([base]), systems: [] }) == Err("no systems")
+
+# A cycle is reported with the path that closes it, whatever its length.
+expect Project.validate(fixture([{ ..base, parents: ["base"] }])) == Err("environment cycle: base -> base")
+expect {
+	environment = |name, parent| { name, parents: [parent], tools: [], overlays: [] }
+	Project.validate(fixture([environment("one", "two"), environment("two", "three"), environment("three", "one")])) == Err("environment cycle: one -> two -> three -> one")
+}
+
+# Naming the default source explicitly changes nothing.
+expect {
+	spec = fixture([base])
+	Project.validate({ ..spec, sources: [{ name: "default", provider: Auto }].concat(spec.sources) }) == Project.validate(spec)
+}
+
+# A flake input is not a package source, and explicit providers name their grammar.
+expect Project.validate(fixture([{ ..base, tools: [{ source: "data", name: "git" }] }])) == Err("unknown source: data")
+expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])) == Err("invalid Nix tool: python@3")
+expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])) == Err("invalid Guix tool: python@")
+expect Project.validate({ ..fixture([base]), requires_: ["commands"], commands: [{ environment: "base", name: "bin/vcs", tool: { source: "default", name: "git" } }] }) == Err("invalid command name: bin/vcs")
+
+# Build references name build sources and builds only, each at most once.
+expect Project.validate(build_fixture([{ ..library, inputs: ["default"] }])) == Err("unknown build source: default")
+expect Project.validate(build_fixture([{ ..library, inputs: ["assets", "assets"] }])) == Err("DuplicateBuildInput: assets")
+expect Project.validate(build_fixture([library, { ..application, needs: ["library", "library"] }])) == Err("DuplicateBuildDependency: library")
+expect Project.validate(build_fixture([{ ..library, output: "dist/../escape" }])) == Err("invalid build output: library: dist/../escape")
+expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:../escape" }], ["sources", "builds"])) == Err("invalid build source reference: assets")
+expect Project.validate(build_fixture([{ ..library, inputs: [] }])).is_ok()
+expect {
+	spec = workflow_fixture([])
+	helper = { name: "helper", environment: "builder", run: ["cmd"] }
+	Project.validate({ ..spec, tasks: [helper], builds: [{ ..library, needs: ["helper"] }] }) == Err("unknown build: helper")
+}
+
+# A workflow step of each kind names what it could not find.
+expect Project.validate(workflow_fixture([{ name: "ci", steps: [RunTask("library", [])] }])) == Err("unknown task: library")
+expect Project.validate(workflow_fixture([{ name: "ci", steps: [BuildArtifact("missing")] }])) == Err("unknown build: missing")
+expect Project.validate(workflow_fixture([{ name: "ci", steps: [RunWorkflow("missing")] }])) == Err("unknown workflow: missing")
