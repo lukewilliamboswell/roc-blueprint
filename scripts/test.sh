@@ -58,6 +58,9 @@ python3 scripts/test-cli.py
 step "Explicit update source safety and concurrent authority publication"
 python3 scripts/test-update.py
 
+step "Build snapshots, mode normalization and the isolation witness"
+python3 scripts/test-snapshot.py
+
 step "blueprint against examples/all-settings/Blueprint.roc"
 (
 	cd examples/all-settings

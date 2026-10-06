@@ -84,7 +84,10 @@ runner checks, exact argv, immutable locks, freshness and relocation.
 `scripts/test-b3.py` adds real ordered task/build workflows, nested repetitions,
 failure stops, snapshot/dependency freshness, repeated locked-source verification,
 whole-closure preflight and immutable authority, including out-of-tree layouts.
-`scripts/test-update.py` checks local-source preflight and concurrent publication.
+`scripts/test-update.py` checks local-source preflight, authority observation and
+concurrent publication. `scripts/test-snapshot.py` checks the build snapshot's bytes,
+modes, exclusions and refusals and the isolation witness. Both put a failing
+`python3` on `PATH`: the CLI itself must not use a host Python.
 Normal execution tests explicitly initialize authority with `update` first.
 The complete artifacts example is executed in a temporary copy by
 the workflow integration script (`scripts/test-b3.py`).
