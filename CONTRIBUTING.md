@@ -296,17 +296,19 @@ platform <core-url>` bundles a staged copy whose `core:` is the given URL. With
 no URL it bundles the local `blueprint-core/` and serves it from localhost. Either way
 it then serves the platform bundle from localhost and runs
 `examples/all-settings/Blueprint.roc` against it, plus the shared configuration
-and composition regressions. Keep both gates:
+and composition regressions. There are two gates:
 
 ```sh
 scripts/bundle.sh platform
 scripts/bundle.sh platform "$(< blueprint-platform/core-release)"
 ```
 
-There is no `core-release` pin until the first `core-X.Y.Z` release is
-published; create it with that release's bundle URL. From then on the second
-gate runs in `scripts/test.sh` and must pass. Do not substitute a local URL
-for the release check.
+`scripts/test.sh` runs the first on every commit. `release.yml` runs the second
+when a platform release is tagged, and the release fails if the pinned core
+cannot build the platform. A change that adds a Spec field therefore merges
+with the existing pin; publish a `core-X.Y.Z` release containing the field and
+update `core-release` before tagging the next platform release. Do not
+substitute a local URL for the release check.
 
 The two packages need separate tags: Roc identifies a package by its URL
 minus the version and hash, so two bundles under one tag look like one
@@ -319,7 +321,7 @@ source build does not require that release or a machine-local override.
 Once published, restore the release URL in `blueprint-cli/main.roc`, add the
 same archive URL and verified hash to `rocPackages` in `flake.nix`, and remove
 the source-host build and unused flake inputs (refresh `flake.lock`). Rerun
-`scripts/test.sh`, including both bundle variants, before adopting that release.
+`scripts/test.sh` and the pinned-core bundle gate before adopting that release.
 If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
 
 ## Upstream workarounds
