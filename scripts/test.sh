@@ -34,7 +34,6 @@ scripts/test-config.sh
 "$ROC" check examples/all-settings/Blueprint.roc
 
 step "CLI tests"
-scripts/prepare-basic-cli.sh
 "$ROC" test blueprint-cli/main.roc
 
 step "Build the blueprint CLI"

@@ -22,7 +22,7 @@ examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
 examples/composition/    imported pure module returning reusable task settings
 examples/artifacts/      runnable source/dependency/workflow example and scripts
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
-scripts/                 prepare-basic-cli.sh, test.sh, bundle.sh, fuzz.sh
+scripts/                 test.sh, bundle.sh, fuzz.sh
 flake.nix                builds blueprint with the pinned Roc; user and contributor shells
 ```
 
@@ -44,15 +44,13 @@ gives Roc (the nightly in `.roc-version`, from
 [roc-overlay](https://github.com/roc-lang/roc-overlay)), Zig, `blueprint`,
 python3, zstd and git. Nix itself is also needed for `blueprint`.
 
-Run `scripts/prepare-basic-cli.sh` before compiling the CLI directly. It builds
-the source-pinned basic-cli platform with Nix and creates the ignored
-`.basic-cli` symlink used by `blueprint-cli/main.roc`. `scripts/test.sh` also
-runs this setup. The Nix blueprint package includes the platform automatically.
+`blueprint-cli/main.roc` uses the released basic-cli platform by URL. Roc
+downloads it on first use outside Nix; the Nix blueprint package fetches the same
+archive by hash, so its sandboxed build needs no network.
 
 ## Building and testing
 
 ```sh
-scripts/prepare-basic-cli.sh                # basic-cli source + Rust host
 (cd blueprint-platform && zig build)      # targets/{x64musl,arm64mac}/libhost.a
 roc test blueprint-core/main.roc      # Spec round trips and format tests
 roc test blueprint-cli/main.roc             # includes the golden flake test
@@ -119,18 +117,9 @@ input with `nix flake update roc-overlay` once upstream lists that nightly,
 then retry the updater. Do not skip the Nix check to accept a compiler bump.
 
 The October 4 nightly (`nightly-2026-10-04-130536d`) rejects redundant type
-exposes, so it needs basic-cli 0.24.0 (commit
-`1a4e6f4a0a5f233586e8215c6c5e7085f5c57597`, pinned in `flake.nix` and
-`flake.lock`) and roc-fuzz 0.4.3. Keep the reproducible source pin until
-Nix builds from a release artifact.
-The pinned source passes the CLI and imported platform tests. Nix builds its
-Rust host for x64musl on Linux and arm64mac on macOS using the upstream Rust
-toolchain version and locked Cargo dependencies.
-The Rust host is reused across Roc nightly updates.
+exposes, so it needs the basic-cli 0.24.0 release and roc-fuzz 0.4.3.
 
 The complete suite requires x86_64 Linux, Zig 0.16 and a running Nix daemon. To test the CLI alone on macOS,
-check out that exact basic-cli commit, run `python3 scripts/build.py` there,
-and link its `platform` directory at `.basic-cli` in this repository. Then
 run the CLI unit tests and build with the pinned Roc binary. The native
 CLI can run on macOS, but executing a Blueprint.roc still requires the
 blueprint platform's Linux target.
@@ -318,14 +307,11 @@ The two packages need separate tags: Roc identifies a package by its URL
 minus the version and hash, so two bundles under one tag look like one
 package served with two hashes.
 
-Update the basic-cli source revision in `flake.nix` and refresh its lock input
-when adopting a newer commit. Switching back to a released platform is blocked
-on publication of a release containing both #495 and #498; the committed Nix
-source build does not require that release or a machine-local override.
-Once published, restore the release URL in `blueprint-cli/main.roc`, add the
-same archive URL and verified hash to `rocPackages` in `flake.nix`, and remove
-the source-host build and unused flake inputs (refresh `flake.lock`). Rerun
-`scripts/test.sh` and the pinned-core bundle gate before adopting that release.
+To adopt a newer basic-cli release, change the URL in `blueprint-cli/main.roc`
+and `fixtures/consumer/main.roc`, then update the matching entry in `rocPackages`
+in `flake.nix` with the new URL and hash (`nix store prefetch-file <url>`). Add
+any new transitive dependency to the same list. Rerun `scripts/test.sh` and the
+pinned-core bundle gate.
 If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
 
 ## Upstream workarounds
@@ -345,9 +331,8 @@ support for the `ROC` override.
 
 These remaining dependencies and workarounds still apply:
 
-- **Pinned Roc and basic-cli.** `.roc-version` selects the compiler and the
-  `basic-cli-src` flake input selects compatible platform source. Replace this
-  temporary source dependency when a compatible basic-cli release is available.
+- **Pinned Roc.** `.roc-version` selects the compiler, and the basic-cli
+  release in `blueprint-cli/main.roc` must be compatible with it.
 - **`roc bundle --output-dir` must be on the same filesystem as the working
   directory.** Otherwise the bundler fails with `CrossDevice`.
 - **Error unions in `blueprint-core/Sexpr.roc` use a named extension
