@@ -833,8 +833,8 @@ NixProvider :: [].{
 				"              inherit project isolation;",
 				"              argv = [ ${argv} ];",
 				"              output = ${quote(build.output)};",
-				"              path = pkgs.lib.makeBinPath (tools ++ "
-					.concat("[ pkgs.python3 pkgs.coreutils pkgs.bash ]);"),
+				# Exactly the environment's tools: nothing implicit is on PATH.
+				"              path = pkgs.lib.makeBinPath tools;",
 				"              inputs = pkgs.linkFarm "
 					.concat(quote("blueprint-inputs-${build.name}"))
 					.concat(" [ ${Str.join_with(inputs, " ")} ];"),
@@ -1424,9 +1424,13 @@ expect match plan_fixture(Request.Build("app")) {
 										"\n",
 									),
 								)
-									and !file.contents.contains("runCommand")
-										and !file.contents.contains("python3}")
-											and !file.contents.contains("outputHash")
+									and file.contents.contains(
+										"              path = pkgs.lib.makeBinPath tools;\n",
+									)
+										and !file.contents.contains("pkgs.bash")
+											and !file.contents.contains("runCommand")
+												and !file.contents.contains("python3}")
+													and !file.contents.contains("outputHash")
 		Err(_) => False
 	}
 	_ => False

@@ -204,6 +204,12 @@ executable in a build only when its owner may execute it. Changing a locked
 local source requires explicit update. Initial
 source/output policy rejects symlinks and special files. Only local x86_64 Linux
 sandboxed execution is verified; tasks/config compilation are not sandboxed.
+A build's `PATH` holds exactly the tools its environment declares. Earlier
+versions also put `python3`, coreutils and `bash` there, so a build that ran
+`sh`, `cp`, `mkdir` or `python3` without declaring it now fails with `build
+command not found`, or inside its own script when that script calls one: add
+the tool (`bash`, `coreutils`, `python3`) to the environment's `Tools`. A build
+also no longer sees the variables Nix's `stdenv` used to export.
 The `blueprint` executable is itself each build's builder inside the sandbox,
 so `blueprint build` refuses to run unless that executable is an x86_64 Linux
 one.
