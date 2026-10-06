@@ -21,8 +21,9 @@ permissions:
 # Every script runs through `nix develop -c`: the flake's dev shell is the one
 # definition of the toolchain (see .github/actions/toolchain).
 jobs:
-  # Cross-builds every release binary once. The cli and nix jobs test the
-  # x86_64 Linux one, so the binary that is tested is the binary that ships.
+  # Cross-builds every release binary once. The cli, scenarios and builds jobs
+  # test the x86_64 Linux one, so the binary that is tested is the binary that
+  # ships.
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -81,13 +82,15 @@ jobs:
           path: fuzz-artifacts/
           if-no-files-found: ignore
 
-  # Groups that drive the CLI use the binary the build job produced.
+  # Groups that drive the CLI use the binary the build job produced. The
+  # real-Nix suites are two groups, scenarios and builds, of about the same
+  # length: these jobs are the longest after build, so they run side by side.
   cli:
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        group: [cli, nix]
+        group: [cli, scenarios, builds]
     name: ${{ matrix.group }}
     runs-on: ubuntu-latest
     timeout-minutes: 30

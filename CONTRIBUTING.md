@@ -33,7 +33,7 @@ scripts/                 Roc scripts, run from the repository root; their module
   release_notes.roc      write a release's notes for the release workflows
   test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
 link-inputs.lock.json    the linker-input release the platform links, pinned by content
-flake.nix                builds blueprint with the pinned Roc; the development shell
+flake.nix                builds blueprint with the pinned Roc; the development shell; the release cross-compiler
 ```
 
 The local platform and CLI share `blueprint-core`, including
@@ -52,8 +52,8 @@ nix develop
 
 gives Roc (the nightly in `.roc-version`, from
 [roc-overlay](https://github.com/roc-lang/roc-overlay)), Zig 0.16 and the
-programs the scripts start: coreutils, git, curl and tar (and python3, until the
-last Python test is ported). This shell is the one definition of the toolchain:
+programs the scripts start: coreutils, git, curl, tar and gzip. It has no
+Python. This shell is the one definition of the toolchain:
 every CI job runs its scripts through `nix develop -c`, so what passes in the
 shell is what CI runs. `blueprint` is not in the shell, so entering it never
 compiles the CLI; build it as below, or use `nix run .`.
@@ -72,7 +72,8 @@ roc test blueprint-cli/main.roc             # the CLI's, the Nix provider's and 
 roc build blueprint-cli/main.roc --output=./blueprint
 (cd examples/all-settings && ../../blueprint run --help) # try the CLI
 scripts/test.roc                            # everything CI runs
-scripts/test.roc unit cli                   # or only some groups
+scripts/test.roc unit cli                   # or only some groups: static, unit,
+                                            # cli, scenarios, builds, package, fuzz
 scripts/fuzz.roc 300                        # fuzz each target for 5 minutes
 ```
 
@@ -92,12 +93,16 @@ See
 (formatting; no tracked object file, archive or import library; the CLI's use of
 the Provider contract; `roc_overlay` against `flake.lock`; the flake's list of
 core modules and its version), `unit` (the platform's, the scripts', the CLI's
-and the consumer's `expect`s and the configuration fixtures), `cli`, `nix`,
+and the consumer's `expect`s and the configuration fixtures), `cli`,
+`scenarios` (`test_scenarios.roc`, `test_roc_packages.roc` and the golden
+flakes parsed by Nix), `builds` (`test_builds.roc` and `test_workflows.roc`),
 `package` (the flake's package and development shell, the packaged CLI building
 an artifact with only Nix on `PATH`, and the platform bundled against the local
 core, see below) and `fuzz` (each target's committed corpus, replayed, which
 takes seconds; `.github/workflows/fuzz.yml` fuzzes each target for five minutes
-every week and uploads any crashing input).
+every week and uploads any crashing input). `scenarios` and `builds` are the
+real-Nix suites, split into two groups of about the same length so that CI runs
+them as two jobs at the same time.
 `scripts/test_config.roc` runs the compiler on generated `Blueprint.roc`
 fixtures: the platform's own rules, which only a compiler run can show (a
 setting given twice or not at all, in `Lower.roc`, and each checked name's
@@ -206,7 +211,7 @@ The complete suite requires x86_64 Linux and a running Nix daemon; the
 development shell supplies the rest. `zig build` builds the platform host for
 all four targets, so on Apple Silicon macOS the CLI's tests, the native CLI and
 the evaluation of a `Blueprint.roc` work too. Sandboxed builds, and so the
-`nix` and `package` groups, remain x86_64 Linux only.
+`scenarios`, `builds` and `package` groups, remain x86_64 Linux only.
 
 ## The Spec
 
@@ -410,11 +415,13 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
   which resolves what a new user's project would: Blueprint's default package
   source, the overlay's default branch and its newest nightly.
 
-`build_release.roc` compiles every released file with `--no-cache`: with Roc's
-compile cache, one source and target gave different bytes depending on what the
-cache already held. It also compiles the x86_64 Linux CLI a second time and
-fails unless the two are byte-identical. The three CLI binaries are compiled at
-the same time, each about 2.3 GB at its peak.
+`build_release.roc` takes its compiler from the flake: `nix build .#roc-cross`
+is the x86_64 Linux compiler archive of the nightly in `.roc-version` with the
+`darwin/` sysroot of the Apple Silicon archive beside it, which Roc needs to
+link macOS programs. Both are fetched by the URL and hash the locked
+roc-overlay records. The package is not in the development shell, so only a
+release build downloads the macOS archive. The three CLI binaries are compiled
+at the same time, each about 2.3 GB at its peak.
 
 A binary fetches the compiler named in `.roc-version` from the roc-overlay
 revision in `NixProvider.roc_overlay`. Change that constant whenever

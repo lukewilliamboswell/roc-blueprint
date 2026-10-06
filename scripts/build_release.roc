@@ -13,7 +13,8 @@ import src/Release
 ## Silicon macOS into `dist/blueprint-<system>`, with their SHA-256 sums in
 ## `dist/blueprint.sha256`, and the smoke-test program for each as
 ## `dist/smoke-<system>`. Run from the repository root on x86_64 Linux, after
-## `scripts/link_inputs.roc fetch`. Needs Nix, Zig and tar.
+## `scripts/link_inputs.roc fetch`. Needs Nix and Zig; the compiler is the
+## flake's `roc-cross` package.
 ##
 ##   scripts/build_release.roc
 main! : List(OsStr) => Try({}, [Exit(I32)])

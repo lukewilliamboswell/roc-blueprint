@@ -36,6 +36,30 @@
           rocTag = lib.trim (builtins.readFile ./.roc-version);
           roc = roc-overlay.packages.${system}.${rocTag};
 
+          # The compiler scripts/build_release.roc cross-builds every released
+          # binary with: the x86_64 Linux archive unpacked as it is, with the
+          # `darwin/` sysroot of the Apple Silicon archive beside it. Roc links
+          # macOS programs against that sysroot and looks for it next to its own
+          # executable, so `roc` is not wrapped or moved. Only the macOS archive
+          # ships the sysroot. Each archive's URL and hash are the ones
+          # roc-overlay records for the tag; they are fetched again here because
+          # the overlay's own macOS source is a derivation for a Darwin builder.
+          rocArchive =
+            archiveSystem:
+            let
+              src = roc-overlay.packages.${archiveSystem}.${rocTag}.src;
+            in
+            pkgs.fetchurl {
+              inherit (src) url;
+              hash = src.outputHash;
+            };
+          rocCross = pkgs.runCommand "roc-cross-${rocTag}" { } ''
+            mkdir -p "$out" sysroot
+            tar -xzf ${rocArchive "x86_64-linux"} -C "$out" --strip-components=1
+            tar -xzf ${rocArchive "aarch64-darwin"} -C sysroot --strip-components=1
+            cp -r sysroot/darwin "$out/darwin"
+          '';
+
           # Roc packages blueprint-cli/main.roc downloads. Fetched here and unpacked into
           # Roc's package cache so the sandboxed build needs no network.
           # These are the `pf:` and `weaver:` URLs in blueprint-cli/main.roc plus
@@ -133,7 +157,10 @@
           packages = {
             inherit blueprint roc;
             default = blueprint;
-          };
+          }
+          # Not in the development shell: only a release build needs it, and
+          # with it the macOS archive.
+          // lib.optionalAttrs (system == "x86_64-linux") { roc-cross = rocCross; };
 
           apps.default = {
             type = "app";
