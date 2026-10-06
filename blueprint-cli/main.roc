@@ -6,7 +6,7 @@
 app [main!] {
 	core: "../blueprint-core/main.roc",
 	nix: "../blueprint-nix/main.roc",
-	pf: platform "../.basic-cli/main.roc",
+	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
 	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
 }
 

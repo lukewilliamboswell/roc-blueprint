@@ -5,12 +5,6 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     roc-overlay.url = "github:roc-lang/roc-overlay";
     roc-overlay.inputs.nixpkgs.follows = "nixpkgs";
-    basic-cli-src = {
-      url = "github:roc-lang/basic-cli/1a4e6f4a0a5f233586e8215c6c5e7085f5c57597";
-      flake = false;
-    };
-    rust-overlay.url = "github:oxalica/rust-overlay";
-    rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -18,87 +12,32 @@
       self,
       nixpkgs,
       roc-overlay,
-      basic-cli-src,
-      rust-overlay,
     }:
     let
-      # Each system builds basic-cli's host for its own Roc target.
-      hostTargets = {
-        x86_64-linux = {
-          roc = "x64musl";
-          rust = "x86_64-unknown-linux-musl";
-        };
-        aarch64-darwin = {
-          roc = "arm64mac";
-          rust = "aarch64-apple-darwin";
-        };
-      };
+      systems = [
+        "x86_64-linux"
+        "aarch64-darwin"
+      ];
       forSystem =
         system:
         let
-          host = hostTargets.${system};
-          pkgs = import nixpkgs {
-            inherit system;
-            overlays = [ rust-overlay.overlays.default ];
-          };
+          pkgs = import nixpkgs { inherit system; };
           lib = pkgs.lib;
 
           # The Roc nightly pinned in .roc-version, from roc-overlay.
           rocTag = lib.trim (builtins.readFile ./.roc-version);
           roc = roc-overlay.packages.${system}.${rocTag};
 
-          # Source pin to basic-cli 0.24.0.
-          rustToolchain = pkgs.rust-bin.fromRustupToolchain {
-            channel =
-              (builtins.fromTOML (builtins.readFile "${basic-cli-src}/rust-toolchain.toml")).toolchain.channel;
-            components = [ "llvm-tools-preview" ];
-            targets = [ host.rust ];
-          };
-          rustPlatform = pkgs.makeRustPlatform {
-            cargo = rustToolchain;
-            rustc = rustToolchain;
-          };
-          basic-cli = rustPlatform.buildRustPackage {
-            pname = "basic-cli-platform";
-            version = "0.24.0";
-            src = basic-cli-src;
-            cargoLock.lockFile = "${basic-cli-src}/Cargo.lock";
-            nativeBuildInputs = [
-              pkgs.python3
-              pkgs.zig_0_16
-            ];
-            postPatch = ''
-              patchShebangs ci scripts
-            '';
-            # Keep Cargo's build helpers native; upstream uses Zig for musl C code.
-            buildPhase = ''
-              runHook preBuild
-              export CARGO_NET_OFFLINE=true
-              export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
-              python3 scripts/build.py --target ${host.roc}
-              runHook postBuild
-            '';
-            # Roc supplies the host's unresolved symbols when linking an app.
-            doCheck = false;
-            dontStrip = true;
-            installPhase = ''
-              runHook preInstall
-              mkdir -p "$out"
-              cp -R platform/. "$out/"
-              # build.py leaves arm64mac in platform/; the musl host is copied from Cargo.
-              ${lib.optionalString (host.roc == "x64musl") ''
-                cp target/${host.rust}/release/libhost.a "$out/targets/${host.roc}/libhost.a"
-              ''}
-              runHook postInstall
-            '';
-          };
-
           # Roc packages blueprint-cli/main.roc downloads. Fetched here and unpacked into
           # Roc's package cache so the sandboxed build needs no network.
-          # These are the `weaver:` URL in blueprint-cli/main.roc plus transitive
-          # dependencies (http, roc-ansi, path). A missing one shows up as
-          # "package download failed" in `nix build .#blueprint`.
+          # These are the `pf:` and `weaver:` URLs in blueprint-cli/main.roc plus
+          # transitive dependencies (http, roc-ansi, path). A missing one shows
+          # up as "package download failed" in `nix build .#blueprint`.
           rocPackages = [
+            {
+              url = "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst";
+              hash = "sha256-UN3FXbkwjWFcgDSif53HGC1ml2SEsdHEbi2ea82cFgw=";
+            }
             {
               url = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst";
               hash = "sha256-6e+qlQ5y9vds326vAEJFcvppsEumEnMjV6wEU2ePArQ=";
@@ -163,7 +102,6 @@
               runHook preBuild
               export HOME="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache"
               ${lib.concatMapStrings unpackRocPackage rocPackages}
-              cp -R ${basic-cli} .basic-cli
               roc build blueprint-cli/main.roc --output=blueprint
               runHook postBuild
             '';
@@ -185,7 +123,7 @@
         in
         {
           packages = {
-            inherit blueprint roc basic-cli;
+            inherit blueprint roc;
             default = blueprint;
           };
 
@@ -218,7 +156,6 @@
             };
           };
         };
-      systems = builtins.attrNames hostTargets;
       outputs = nixpkgs.lib.genAttrs systems forSystem;
     in
     {

@@ -6,7 +6,6 @@ zig-out/
 dist/
 blueprint-platform/targets/*/libhost.a
 /blueprint
-/.basic-cli
 blueprint-cli/main
 .bundle-stage/
 blueprint-core/fuzz/*/spec-*
