@@ -7,7 +7,6 @@ import core.Layout
 import core.Steps
 import core.Provider
 import Locks
-import "build-runner.py" as build_runner : Str
 
 ## Package names are native Nix attributes, never translated or filtered.
 ## Each environment imports its sources with only its ordered overlay stack.
@@ -128,7 +127,7 @@ NixProvider :: [].{
 						Some({ inputs, layout }),
 						Limited(16777216),
 					)?
-					check_layout(project, target, layout, False)?
+					check_layout(project, target, layout)?
 				}
 				return Ok($prepared)
 			}
@@ -227,11 +226,11 @@ NixProvider :: [].{
 			Some({ inputs, layout }),
 			remaining,
 		)?
-		check_layout(project, target, layout, !$builds.is_empty())?
+		check_layout(project, target, layout)?
 		match $action {
 			Build(_) => {
 				# Configuration text must not collide with an executor placeholder.
-				for placeholder in [caller_mnt, caller_net] {
+				for placeholder in [caller_mnt, caller_net, caller_executable] {
 					if contents.split_on(placeholder).len() != 2 {
 						return Err("build configuration contains the reserved text ${placeholder}")
 					}
@@ -275,10 +274,11 @@ NixProvider :: [].{
 		match action {
 			Build(_) => {
 				$operations = $operations.append(Isolation({ mnt: caller_mnt, net: caller_net }))
+					.append(Runner({ executable: caller_executable, system: target }))
 			}
 			_ => {}
 		}
-		files = staged_files(layout, contents, !builds.is_empty())
+		files = staged_files(layout, contents)
 			.append({
 				path: "${layout.generated_root}/flake.lock",
 				contents: derived.contents,
@@ -300,12 +300,16 @@ NixProvider :: [].{
 	}
 
 	## Placeholders the executor replaces with the caller's namespace identities
-	## when it stages a build's files (see `Steps.Operation`).
+	## and its own executable path when it stages a build's files (see
+	## `Steps.Operation`).
 	caller_mnt : Str
 	caller_mnt = "@blueprint-caller-mnt-namespace@"
 
 	caller_net : Str
 	caller_net = "@blueprint-caller-net-namespace@"
+
+	caller_executable : Str
+	caller_executable = "@blueprint-caller-executable@"
 
 	## What a build never reads from the project: VCS metadata names at every
 	## depth, then caller-generated roots, the authority and local inputs.
@@ -330,7 +334,7 @@ NixProvider :: [].{
 	local_checks : Spec, Str, Layout -> Try(List(Str), Str)
 	local_checks = |spec, target, layout| {
 		project = Project.validate(spec)?
-		check_layout(project, target, layout, !project.builds.is_empty())?
+		check_layout(project, target, layout)?
 		Ok(
 			Locks.inputs(project)?
 				.keep_if(|input| input.ref.starts_with("path:"))
@@ -343,7 +347,7 @@ NixProvider :: [].{
 	update_files : Spec, Str, Layout -> Try(List(Steps.File), Str)
 	update_files = |spec, target, layout| {
 		project = Project.validate(spec)?
-		check_layout(project, target, layout, !project.builds.is_empty())?
+		check_layout(project, target, layout)?
 		inputs = Locks.inputs(project)?
 		names = project.shells.map(|s| s.environment)
 			.concat(project.tasks.map(|t| t.environment))
@@ -356,27 +360,21 @@ NixProvider :: [].{
 			Some({ inputs, layout }),
 			Unlimited,
 		)?
-		Ok(staged_files(layout, contents, !project.builds.is_empty()))
+		Ok(staged_files(layout, contents))
 	}
 
-	staged_files : Layout, Str, Bool -> List(Steps.File)
-	staged_files = |layout, contents, builds| {
-		files = [{ path: "${layout.generated_root}/flake.nix", contents }]
-		if builds files.append({
-			path: "${layout.generated_root}/build-runner.py",
-			contents: build_runner,
-		}) else files
-	}
+	staged_files : Layout, Str -> List(Steps.File)
+	staged_files = |layout, contents| [{ path: "${layout.generated_root}/flake.nix", contents }]
 
-	check_layout : Spec, Str, Layout, Bool -> Try({}, Str)
-	check_layout = |project, target, layout, builds| {
+	check_layout : Spec, Str, Layout -> Try({}, Str)
+	check_layout = |project, target, layout| {
 		Layout.validate(layout)?
 		if !project.systems.contains(target) {
 			return Err("target ${target} is not declared by the project")
 		}
 		# A generated directory may contain the workspace, but an actual file
 		# must never become its ancestor: the workspace is a directory.
-		files = staged_files(layout, "", builds).map(|file| file.path)
+		files = staged_files(layout, "").map(|file| file.path)
 			.append("${layout.generated_root}/flake.lock")
 		for file in files {
 			if Layout.contains(file, layout.workspace)
@@ -747,7 +745,8 @@ NixProvider :: [].{
 	## copy: excluded entries are never inspected, and any other symlink or
 	## special file aborts evaluation. Nix records only whether the owner may
 	## execute a file. Namespace observations belong to materialization, not
-	## project bytes, so the executor fills them in per build.
+	## project bytes, so the executor fills them in per build. The runner is the
+	## executor's own executable, copied into the store from where it is.
 	render_source : Source -> Str
 	render_source = |source| match source {
 		Unplanned => lines([
@@ -756,6 +755,7 @@ NixProvider :: [].{
 				.concat("and a caller project\";"),
 			"        isolation = builtins.throw "
 				.concat("\"build execution requires a caller isolation witness\";"),
+			"        runner = builtins.throw \"build execution requires a caller runner\";",
 			"      in {",
 		])
 		Planned({ root, exclude }) => {
@@ -778,13 +778,16 @@ NixProvider :: [].{
 				"              else true);",
 				"        };",
 				"        isolation = { mnt = ${quote(caller_mnt)}; net = ${quote(caller_net)}; };",
+				"        runner = builtins.path { path = /. + ${quote(caller_executable)}; "
+					.concat("name = \"blueprint-runner\"; };"),
 				"      in {",
 			])
 		}
 	}
 
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
-	## Runner tool paths are explicit; argv and metadata enter through JSON.
+	## The builder is `blueprint __build-runner`, with no shell around it. Its
+	## own tools are absolute paths; argv and metadata enter through JSON.
 	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), Str -> Str
 	render_build = |build, environment, system_tools, commands, system| {
 		sources = source_names(environment, system_tools, commands)
@@ -821,7 +824,11 @@ NixProvider :: [].{
 				"            };",
 				"            pkgs = sets.${quote(primary)};",
 				"            tools = [ ${Str.join_with(tools, " ")} ];",
-				"          in pkgs.runCommand ${quote("blueprint-${build.name}")} {",
+				"          in derivation {",
+				"            name = ${quote("blueprint-${build.name}")};",
+				"            inherit system;",
+				"            builder = runner;",
+				"            args = [ \"__build-runner\" ];",
 				"            blueprintSpec = builtins.toJSON {",
 				"              inherit project isolation;",
 				"              argv = [ ${argv} ];",
@@ -834,12 +841,11 @@ NixProvider :: [].{
 				"              artifacts = pkgs.linkFarm "
 					.concat(quote("blueprint-artifacts-${build.name}"))
 					.concat(" [ ${Str.join_with(dependencies, " ")} ];"),
+				"              readlink = \"\${pkgs.coreutils}/bin/readlink\";",
+				"              chmod = \"\${pkgs.coreutils}/bin/chmod\";",
 				"            };",
 				"            passAsFile = [ \"blueprintSpec\" ];",
-				"          } ''",
-				"            \${pkgs.python3}/bin/python3 -I \${./build-runner.py} "
-					.concat("\"$blueprintSpecPath\""),
-				"          '';",
+				"          };",
 			]),
 		)
 	}
@@ -1371,9 +1377,9 @@ expect match plan_fixture(Request.Build("app")) {
 			mnt: "@blueprint-caller-mnt-namespace@",
 			net: "@blueprint-caller-net-namespace@",
 		}),
+		Runner({ executable: "@blueprint-caller-executable@", system: "x86_64-linux" }),
 	] and plan.files.map(|file| file.path) == [
 		"/generated/flake.nix",
-		"/generated/build-runner.py",
 		"/generated/flake.lock",
 	]
 	_ => False
@@ -1392,8 +1398,35 @@ expect match plan_fixture(Request.Build("app")) {
 							"isolation = { mnt = \"@blueprint-caller-mnt-namespace@\"; "
 								.concat("net = \"@blueprint-caller-net-namespace@\"; };"),
 						)
-							and file.contents.contains("pkgs.runCommand")
-								and !file.contents.contains("outputHash")
+							and file.contents.contains(
+								Str.join_with(
+									[
+										"          in derivation {",
+										"            name = \"blueprint-app\";",
+										"            inherit system;",
+										"            builder = runner;",
+										"            args = [ \"__build-runner\" ];",
+										"            blueprintSpec = builtins.toJSON {",
+										"              inherit project isolation;",
+									],
+									"\n",
+								),
+							)
+								and file.contents.contains(
+									Str.join_with(
+										[
+											"              readlink = \"\${pkgs.coreutils}/bin/readlink\";",
+											"              chmod = \"\${pkgs.coreutils}/bin/chmod\";",
+											"            };",
+											"            passAsFile = [ \"blueprintSpec\" ];",
+											"          };",
+										],
+										"\n",
+									),
+								)
+									and !file.contents.contains("runCommand")
+										and !file.contents.contains("python3}")
+											and !file.contents.contains("outputHash")
 		Err(_) => False
 	}
 	_ => False
@@ -1420,6 +1453,7 @@ expect NixProvider.render_source(
 		"              else true);",
 		"        };",
 		"        isolation = { mnt = \"@blueprint-caller-mnt-namespace@\"; net = \"@blueprint-caller-net-namespace@\"; };",
+		"        runner = builtins.path { path = /. + \"@blueprint-caller-executable@\"; name = \"blueprint-runner\"; };",
 		"      in {",
 		"",
 	],
@@ -1437,14 +1471,15 @@ expect match (plan_fixture(Request.Build("app")), plan_fixture(Request.Generate)
 				and planned.contents.contains("builtins.elem path [ \"/project/assets\" ])")
 					and inert.contents.contains("project = builtins.throw")
 						and inert.contents.contains("isolation = builtins.throw")
-							and !inert.contents.contains("@blueprint-caller")
+							and inert.contents.contains("runner = builtins.throw")
+								and !inert.contents.contains("@blueprint-caller")
 		_ => False
 	}
 	_ => False
 }
 
 # Configuration text cannot collide with a placeholder the executor replaces.
-expect ["@blueprint-caller-mnt-namespace@", "@blueprint-caller-net-namespace@"].all(
+expect ["@blueprint-caller-mnt-namespace@", "@blueprint-caller-net-namespace@", "@blueprint-caller-executable@"].all(
 	|placeholder| NixProvider.preflight(
 		TestData.project({
 			..TestData.data,
@@ -1729,7 +1764,7 @@ expect match plan_locks {
 
 # File/directory conflicts fail in pure preflight and both update entry points,
 # before lock reads, VerifyLocal or staging can have effects.
-expect ["flake.nix", "flake.lock", "build-runner.py"].all(
+expect ["flake.nix", "flake.lock"].all(
 	|file| {
 		["", "/child"].all(
 			|suffix| {
@@ -1787,7 +1822,6 @@ expect match NixProvider.update_files(
 ) {
 	Ok(files) => files.map(|file| file.path) == [
 		"/generated/flake.nix",
-		"/generated/build-runner.py",
 	]
 	Err(_) => False
 }
@@ -1834,7 +1868,7 @@ expect {
 				and step.operations.keep_if(
 					|operation| match operation {
 						Isolation(_) => True
-						VerifyTree(_) => False
+						_ => False
 					},
 				).len() == 1,
 	) and match plan.steps.first() {
@@ -2165,7 +2199,7 @@ expect {
 		|step| step.operations.keep_if(
 			|operation| match operation {
 				Isolation(_) => True
-				VerifyTree(_) => False
+				_ => False
 			},
 		).len(),
 	) == [1, 0, 0, 1, 0, 1, 1]
@@ -2284,44 +2318,6 @@ expect {
 				"x86_64-linux",
 				TestData.layout,
 			).is_err()
-}
-
-# A task-safe layout can collide only with a later build's generated runner.
-# Full preflight and planning must catch that collision before the first task.
-expect {
-	project = TestData.project({
-		..TestData.workflow_data,
-		workflows: [
-			{ name: "ci", steps: [RunTask("check", []), BuildArtifact("app")] },
-		],
-	})
-	layout = { ..TestData.layout, workspace: "/generated/build-runner.py" }
-	locks = plan_locks?
-	NixProvider.preflight(
-		project,
-		Request.Run("check", []),
-		"x86_64-linux",
-		layout,
-	) == Ok({}) and NixProvider.plan(
-		project,
-		Request.Run("check", []),
-		"x86_64-linux",
-		layout,
-		locks,
-	).is_ok() and NixProvider.preflight(
-		project,
-		Request.Workflow("ci"),
-		"x86_64-linux",
-		layout,
-	) == Err("generated files, workspace and authority must not overlap")
-		and NixProvider.plan(
-			project,
-			Request.Workflow("ci"),
-			"x86_64-linux",
-			layout,
-			locks,
-		).map_ok(|plan| plan.steps) ==
-			Err("generated files, workspace and authority must not overlap")
 }
 
 # Task-compatible target selection cannot hide a later unsupported build.

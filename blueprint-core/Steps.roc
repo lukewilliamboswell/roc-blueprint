@@ -26,9 +26,14 @@ Steps := { steps : List(Step) }.{
 	## Isolation names two placeholder texts in this step's files. Before
 	## staging, replace each with the caller's /proc/self/ns/{mnt,net} readlink
 	## identity (`mnt:[digits]`, `net:[digits]`), observed for this step.
+	## Runner: the step's command runs the executor's own executable on
+	## `system`. Refuse every step before the first unless the executor runs on
+	## that System; then replace the `executable` placeholder text with its
+	## absolute path, refusing one holding `"`, `\`, `$` or a control character.
 	## Serialize workspace use; stop on any failed materialization operation.
 	Operation : [
 		VerifyTree({ path : Str, digest : Str }),
 		Isolation({ mnt : Str, net : Str }),
+		Runner({ executable : Str, system : Str }),
 	]
 }

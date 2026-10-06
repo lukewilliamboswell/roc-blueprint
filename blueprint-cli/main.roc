@@ -201,6 +201,12 @@ task_choice = |task|
 
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |raw_args| {
+	# A sandboxed build runs this executable as its builder. There is no
+	# Blueprint.roc or compiler there, so dispatch before loading either.
+	match raw_args {
+		[first, .. as rest] if first.to_bytes() == "__build-runner".to_utf8() => return build_runner!(rest)
+		_ => {}
+	}
 	context = context!()
 	loaded = match context {
 		Ok(ctx) => evaluate!(ctx.layout.project_root)
@@ -422,13 +428,70 @@ check_host! = ||
 ## The System this machine realises by default. Unsupported hosts fall back
 ## to the Linux default and fail later in check_host!.
 host_target! : () => Str
-host_target! = ||
+host_target! = || host_system!() ?? "x86_64-linux"
+
+## The System this executable itself runs on.
+host_system! : () => Try(Str, [UnsupportedHost])
+host_system! = ||
 	match Env.platform!() {
-		{ arch: AARCH64, os: LINUX } => "aarch64-linux"
-		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
-		{ arch: X64, os: MACOS } => "x86_64-darwin"
-		_ => "x86_64-linux"
+		{ arch: X64, os: LINUX } => Ok("x86_64-linux")
+		{ arch: AARCH64, os: LINUX } => Ok("aarch64-linux")
+		{ arch: AARCH64, os: MACOS } => Ok("aarch64-darwin")
+		{ arch: X64, os: MACOS } => Ok("x86_64-darwin")
+		_ => Err(UnsupportedHost)
 	}
+
+## A build runs this executable as its builder, so it must be built for the
+## System the build runs on.
+runner_host : Try(Str, [UnsupportedHost]), Str -> Try({}, _)
+runner_host = |host, system|
+	if host == Ok(system) {
+		Ok({})
+	} else {
+		Err(
+			Refused(
+				"sandboxed builds run blueprint itself as their builder, so "
+					.concat("blueprint must run on ${system}; this host is ")
+					.concat(host ?? "unsupported"),
+			),
+		)
+	}
+
+expect runner_host(Ok("x86_64-linux"), "x86_64-linux") == Ok({})
+expect
+	[Ok("aarch64-linux"), Ok("x86_64-darwin"), Ok("aarch64-darwin"), Err(UnsupportedHost)].all(
+		|host| runner_host(host, "x86_64-linux").is_err(),
+	)
+
+## A path a provider can place in generated text without inspecting it.
+plain_path : Str -> Bool
+plain_path = |value|
+	value.starts_with("/")
+		and normalize(value) == value
+			and !value.to_utf8().any(
+				|byte| byte < 32 or byte == 127 or byte == '"' or byte == '\\' or byte == '$',
+			)
+
+expect plain_path("/nix/store/abc-blueprint/bin/.blueprint-wrapped")
+expect plain_path("/home/user name/bin/blueprint")
+expect
+	["blueprint", "/a/../b", "/a\"b", "/a\\b", "/a\${b}", "/a\nb", ""].all(
+		|value| !plain_path(value),
+	)
+
+## This executable's own path, for a build that runs on `system`.
+runner_executable! : Str => Try(Str, _)
+runner_executable! = |system| {
+	runner_host(host_system!(), system)?
+	executable = Env.exe_path!()
+		.map_err(|_| Refused("cannot locate the blueprint executable to run builds"))?
+	text = executable.to_str()
+		.map_err(|_| Refused("blueprint cannot run builds from ${executable.display()}"))?
+	if !plain_path(text) {
+		return Err(Refused("blueprint cannot run builds from ${text}"))
+	}
+	Ok(text)
+}
 
 resolve : Str, Str -> Str
 resolve = |root, value| if value.starts_with("/") value else "${root}/${value}"
@@ -585,28 +648,275 @@ expect
 		|identity| !valid_namespace("mnt", identity),
 	)
 
-## A child's namespaces are the caller's, so `readlink` observes this process.
-namespace! : Str => Try(Str, _)
-namespace! = |name| {
-	link = "/proc/self/ns/${name}"
-	output = Cmd.new_str("readlink").args_str([link]).exec_output!()
+## A child's namespaces are its parent's, so this `readlink` program observes
+## the calling process. basic-cli cannot read a link itself.
+observe_namespace! : Str, Str => Try(Str, Str)
+observe_namespace! = |readlink, name| {
+	output = Cmd.new_str(readlink).args_str(["/proc/self/ns/${name}"]).exec_output!()
 		.map_err(
-			|err| {
-				reason = match err {
+			|err|
+				match err {
 					NonZeroExitCode({ exit_code, .. }) => "readlink exited with code ${exit_code.to_str()}"
 					_ => "could not run readlink"
-				}
+				},
+		)?
+	Ok(output.stdout_utf8.drop_suffix("\n"))
+}
+
+namespace! : Str => Try(Str, _)
+namespace! = |name| {
+	identity = observe_namespace!("readlink", name)
+		.map_err(
+			|reason|
 				Refused(
 					"cannot observe caller build isolation; use Linux with "
-						.concat("readable ${link}: ${reason}"),
-				)
-			},
+						.concat("readable /proc/self/ns/${name}: ${reason}"),
+				),
 		)?
-	identity = output.stdout_utf8.drop_suffix("\n")
 	if !valid_namespace(name, identity) {
 		return Err(Refused("invalid caller ${name} namespace identity"))
 	}
 	Ok(identity)
+}
+
+## What the provider's build derivation passes to `blueprint __build-runner`.
+## `readlink` and `chmod` are absolute programs: a build has no implicit PATH.
+BuildSpec : {
+	project : Str,
+	argv : List(Str),
+	output : Str,
+	path : Str,
+	inputs : Str,
+	artifacts : Str,
+	readlink : Str,
+	chmod : Str,
+}
+
+## The builder of a sandboxed build: exact argv and one contained,
+## symlink-free output. The specification is the given file, or the one the
+## derivation passes as `blueprintSpecPath`.
+build_runner! : List(OsStr) => Try({}, [Exit(I32)])
+build_runner! = |args| {
+	result = match args {
+		[] =>
+			match Env.var!(OsStr.from_str("blueprintSpecPath")) {
+				Ok(file) => run_build!(Path.from_os_str(file))
+				Err(_) => Err(Invalid("missing build specification"))
+			}
+
+		[file] => run_build!(Path.from_os_str(file))
+		_ => Err(Invalid("expected one build specification"))
+	}
+	match result {
+		Ok({}) => Ok({})
+		Err(Exited(code)) => Err(Exit(code))
+		Err(Invalid(message)) => {
+			_ = Stderr.line!("blueprint build: ${message}")
+			Err(Exit(1))
+		}
+		Err(other) => {
+			_ = Stderr.line!("blueprint build: ${Str.inspect(other)}")
+			Err(Exit(1))
+		}
+	}
+}
+
+run_build! : Path => Try({}, _)
+run_build! = |file| {
+	text = file.read_utf8!()?
+	# Nothing else, not even reading the rest of the specification, precedes
+	# the isolation check.
+	require_isolation!(text)?
+	parsed : Try(BuildSpec, _)
+	parsed = Json.parse(text)
+	spec = parsed.map_err(|_| Invalid("invalid build specification"))?
+	source = path(spec.project)
+	safe_tree!(source)?
+	check_inputs!(spec.readlink, path(spec.inputs))?
+	top = Env.cwd!()?
+	work = top.join("blueprint-work")
+	work.create_dir!()?
+	copy_tree!(source, work)?
+	# Store files are read-only; the project copy is the build's to change.
+	Cmd.new_str(spec.chmod).args_str(["-R", "u+w", "--"]).arg(work.to_os_str()).exec_cmd!()?
+	home = top.join("blueprint-home")
+	home.create_dir!()?
+	match spec.argv {
+		[] => return Err(Invalid("empty build command"))
+		[program, .. as rest] => {
+			# A bare program name resolves against the PATH given here.
+			ran = Cmd.new_str(program).args_str(rest).cwd(work)
+				.env_str("PATH", spec.path)
+				.env(OsStr.from_str("HOME"), home.to_os_str())
+				.env_str("BLUEPRINT_INPUTS", spec.inputs)
+				.env_str("BLUEPRINT_ARTIFACTS", spec.artifacts)
+				.stdout(Inherit).stderr(Inherit).run!()
+			match ran {
+				Ok({ status: Exited(0), .. }) => {}
+				Ok({ status: Exited(code), .. }) => return Err(Exited(code))
+				Ok({ status: Signaled(signal), .. }) => return Err(Exited(128 + signal))
+				Err(IO(NotFound)) => return Err(Invalid("build command not found: ${program}"))
+				Err(IO(err)) => return Err(Invalid("cannot run ${program}: ${Str.inspect(err)}"))
+				Err(_) => return Err(Invalid("cannot run ${program}"))
+			}
+		}
+	}
+	parts = output_parts(spec.output)?
+	if (work.is_sym_link!() ?? False) or !(work.is_dir!() ?? False) {
+		return Err(Invalid("build replaced the project workspace"))
+	}
+	# basic-cli has no no-follow open, so a build still running in the
+	# background could swap an entry between these checks and the copy.
+	var $depth = parts.len()
+	while $depth > 0 {
+		ancestor = work.join(Str.join_with(parts.take_first($depth), "/"))
+		if ancestor.is_sym_link!() ?? False {
+			return Err(Invalid("symlink in declared output path: ${ancestor.display()}"))
+		}
+		$depth = $depth - 1
+	}
+	output = work.join(spec.output)
+	if !(output.exists!() ?? False) {
+		return Err(Invalid("declared output is missing: ${spec.output}"))
+	}
+	if !within(
+		output.canonicalize!()?.to_os_str().to_bytes(),
+		work.canonicalize!()?.to_os_str().to_bytes(),
+	) {
+		return Err(Invalid("declared output escapes the project workspace"))
+	}
+	safe_tree!(output)?
+	destination = Path.from_os_str(
+		Env.var!(OsStr.from_str("out")).map_err(|_| Invalid("the build has no $out"))?,
+	)
+	if (destination.is_sym_link!() ?? False) or (destination.exists!() ?? False) {
+		return Err(Invalid("build wrote directly to $out instead of declared Output"))
+	}
+	if output.is_dir!()? {
+		destination.create_dir!()?
+		copy_tree!(output, destination)
+	} else {
+		output.copy!(destination)?
+		Ok({})
+	}
+}
+
+## Reject Run even when the daemon ignores client sandbox flags: the build's
+## namespaces must both differ from those the caller observed for itself.
+require_isolation! : Str => Try({}, _)
+require_isolation! = |text| {
+	witness : Try({ isolation : { mnt : Str, net : Str } }, _)
+	witness = Json.parse(text)
+	caller = witness.map_err(|_| Invalid("${isolation_remedy} Missing caller namespace observations."))?.isolation
+	tools : Try({ readlink : Str }, _)
+	tools = Json.parse(text)
+	readlink = tools.map_ok(|parsed| parsed.readlink)
+	# Two calls, not a loop: this Roc nightly miscounts references when a loop
+	# body matches on a value from outside it.
+	require_namespace!(readlink, "mnt", caller.mnt)?
+	require_namespace!(readlink, "net", caller.net)
+}
+
+isolation_remedy : Str
+isolation_remedy =
+	"cannot verify build isolation; user Run was not executed. "
+		.concat("Enable sandbox = true and sandbox-fallback = false in the Nix ")
+		.concat("daemon configuration and use a local Linux sandbox with /proc.")
+
+require_namespace! : Try(Str, _), Str, Str => Try({}, _)
+require_namespace! = |readlink, name, observed| {
+	if !valid_namespace(name, observed) {
+		return Err(Invalid("${isolation_remedy} Invalid caller ${name} namespace."))
+	}
+	current = match readlink {
+		Ok(program) => observe_namespace!(program, name)
+		Err(_) => Err("no readlink program")
+	}
+		.map_err(|reason| Invalid("${isolation_remedy} Cannot read build ${name} namespace: ${reason}"))?
+	if !valid_namespace(name, current) {
+		return Err(Invalid("${isolation_remedy} Invalid build ${name} namespace."))
+	}
+	if current == observed {
+		return Err(Invalid("${isolation_remedy} Build shares caller ${name} namespace."))
+	}
+	Ok({})
+}
+
+## A declared output is a relative path of plain names.
+output_parts : Str -> Try(List(Str), _)
+output_parts = |output| {
+	parts = output.split_on("/")
+	if parts.any(|part| part == "" or part == "." or part == "..") {
+		Err(Invalid("invalid declared relative output"))
+	} else {
+		Ok(parts)
+	}
+}
+
+expect output_parts("dist/my artifact") == Ok(["dist", "my artifact"])
+expect
+	["", "/absolute", ".", "..", "./artifact", "dist/../escape", "dist//file", "dist/"].all(
+		|output| output_parts(output) == Err(Invalid("invalid declared relative output")),
+	)
+
+## Reject links and special files anywhere in a tree, by raw entry names.
+safe_tree! : Path => Try({}, _)
+safe_tree! = |entry|
+	match entry.type!()? {
+		IsSymLink => Err(Invalid("symlink is not allowed in build output/source: ${entry.display()}"))
+		IsDir => {
+			for child in entry.list!()? {
+				safe_tree!(child)?
+			}
+			Ok({})
+		}
+		IsFile => Ok({})
+		IsOther => Err(Invalid("special file is not allowed in build output/source: ${entry.display()}"))
+	}
+
+## Allow generated farm links, not symlinks within fetched source trees.
+check_inputs! : Str, Path => Try({}, _)
+check_inputs! = |readlink, farm| {
+	for entry in farm.list!()? {
+		if !(entry.is_sym_link!()?) {
+			return Err(Invalid("expected generated source link: ${entry.display()}"))
+		}
+		target = Cmd.new_str(readlink).args_str(["-n", "--"]).arg(entry.to_os_str())
+			.exec_output_bytes!()
+			.map_err(|_| Invalid("cannot read generated source link: ${entry.display()}"))?
+			.stdout_bytes
+		# Follow exactly the planner's farm link. safe_tree! rejects a symlink
+		# at the fetched root or anywhere beneath it, including remote inputs.
+		resolved = if target.first() == Ok('/') {
+			target
+		} else {
+			farm.to_os_str().to_bytes().append('/').concat(target)
+		}
+		safe_tree!(Path.unix_bytes(resolved))?
+	}
+	Ok({})
+}
+
+basename : List(U8) -> List(U8)
+basename = |bytes| bytes.fold([], |acc, byte| if byte == '/' [] else acc.append(byte))
+
+expect basename("/project/src/main.roc".to_utf8()) == "main.roc".to_utf8()
+
+## Copy the directories and regular files of a tree safe_tree! accepted into
+## an existing directory, by raw entry names. Files keep their permissions.
+copy_tree! : Path, Path => Try({}, _)
+copy_tree! = |source, target| {
+	for entry in source.list!()? {
+		name = basename(entry.to_os_str().to_bytes())
+		copy = Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(name))
+		if entry.is_dir!()? {
+			copy.create_dir!()?
+			copy_tree!(entry, copy)?
+		} else {
+			entry.copy!(copy)?
+		}
+	}
+	Ok({})
 }
 
 ## The pure planner validates the entire request before any staging effects.
@@ -633,6 +943,15 @@ realise! = |spec, request, ctx| {
 					Unrealisable(message) => RenderFailed(message)
 				},
 		)?
+	# A build cannot run on this host: say so before the first step's effects.
+	for step in steps.steps {
+		for operation in step.operations {
+			match operation {
+				Runner({ system, .. }) => runner_host(host_system!(), system)?
+				_ => {}
+			}
+		}
+	}
 	for step in steps.steps {
 		execute_step!(step, layout)?
 	}
@@ -665,6 +984,12 @@ execute_step! = |step, layout| {
 						contents: file.contents.replace_each(placeholder.mnt, mnt)
 							.replace_each(placeholder.net, net),
 					},
+				)
+			}
+			Runner({ executable, system }) => {
+				own = runner_executable!(system)?
+				$files = $files.map(
+					|file| { ..file, contents: file.contents.replace_each(executable, own) },
 				)
 			}
 		}

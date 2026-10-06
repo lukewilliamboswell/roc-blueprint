@@ -14,9 +14,9 @@ blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation
 blueprint-nix/           importable pure Nix provider (depends only on blueprint-core)
   NixProvider.roc        shared pure request planning and flake rendering
   Locks.roc              Nix pins <-> the Lock: Sources plus a "nix" hint
-  build-runner.py        in-derivation argv/output/isolation checks
   tests/                 Spec fixtures and golden flakes
-blueprint-cli/           the blueprint CLI (basic-cli + weaver)
+blueprint-cli/           the blueprint CLI (basic-cli + weaver); as `blueprint __build-runner`
+                         it is also each build's in-derivation argv/output/isolation check
 fixtures/consumer/       independent consumer of the Spec and Nix packages
 examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
 examples/composition/    imported pure module returning reusable task settings
@@ -254,7 +254,10 @@ provider's modules directly. Nix is the only implemented provider. It:
 - refuses any `extensions` and advertises `"raw"`, `"sources"`, `"builds"` and
   `"workflows"`;
 - builds ordinary derivations with exact argv, filtered project snapshots,
-  read-only declared sources/artifacts and checked file/directory outputs.
+  read-only declared sources/artifacts and checked file/directory outputs. Each
+  is a raw `derivation` whose builder is the CLI's own executable, run as
+  `blueprint __build-runner`: no shell or interpreter stands between Nix and
+  the user's argv, and the build's PATH is its environment's tools alone.
 
 `Project.check_environment(project, Nix | Guix, name)` is a pure compatibility
 check. Guix source intent, native tool grammar and overlay-capability rejection

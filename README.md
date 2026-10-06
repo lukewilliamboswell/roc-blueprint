@@ -204,6 +204,9 @@ executable in a build only when its owner may execute it. Changing a locked
 local source requires explicit update. Initial
 source/output policy rejects symlinks and special files. Only local x86_64 Linux
 sandboxed execution is verified; tasks/config compilation are not sandboxed.
+The `blueprint` executable is itself each build's builder inside the sandbox,
+so `blueprint build` refuses to run unless that executable is an x86_64 Linux
+one.
 See the [complete runnable example](examples/artifacts/README.md),
 [real build fixture](fixtures/builds/README.md).
 
