@@ -19,6 +19,7 @@ Spec := {
 	environments : List({ name : Str, parents : List(Str), tools : List({ source : Str, name : Str }), overlays : List(Str) }),
 	system_tools : List({ environment : Str, system : Str, tools : List({ source : Str, name : Str }) }),
 	commands : List({ environment : Str, name : Str, tool : { source : Str, name : Str } }),
+	roc_packages : List({ environment : Str, name : Str, source : Str }),
 	shells : List({ name : Str, environment : Str }),
 	tasks : List({ name : Str, environment : Str, run : List(Str) }),
 	build_sources : List({ name : Str, ref : Str }),
@@ -52,6 +53,12 @@ Spec := {
 	## One tool's main program under another command name. The environment
 	## receives only that command, not the tool's own executables.
 	Command : { environment : Str, name : Str, tool : Tool }
+
+	## A released Roc package bundle the environment's Roc programs resolve
+	## without a download. `name` is its content hash, the directory Roc looks
+	## for in its package cache; `source` names the locked build source that
+	## fetches it.
+	RocPackage : { environment : Str, name : Str, source : Str }
 	Shell : { name : Str, environment : Str }
 	Task : { name : Str, environment : Str, run : List(Str) }
 
@@ -73,7 +80,7 @@ Spec := {
 	Raw : { backend : Str, target : Str, value : Value }
 
 	current_format : Format
-	current_format = { major: 2, minor: 4 }
+	current_format = { major: 2, minor: 5 }
 
 	empty : Str -> Spec
 	empty = |name| Spec.{
@@ -86,6 +93,7 @@ Spec := {
 		environments: [],
 		system_tools: [],
 		commands: [],
+		roc_packages: [],
 		shells: [],
 		tasks: [],
 		build_sources: [],
@@ -119,6 +127,7 @@ Spec := {
 				environments: wire.environments ?? [],
 				system_tools: wire.system_tools ?? [],
 				commands: wire.commands ?? [],
+				roc_packages: wire.roc_packages ?? [],
 				shells: wire.shells ?? [],
 				tasks: wire.tasks ?? [],
 				build_sources: wire.build_sources ?? [],
@@ -144,6 +153,7 @@ Wire : {
 	environments : Try(List(Spec.Environment), [Missing]),
 	system_tools : Try(List(Spec.SystemTools), [Missing]),
 	commands : Try(List(Spec.Command), [Missing]),
+	roc_packages : Try(List(Spec.RocPackage), [Missing]),
 	shells : Try(List(Spec.Shell), [Missing]),
 	tasks : Try(List(Spec.Task), [Missing]),
 	build_sources : Try(List(Spec.BuildSource), [Missing]),
@@ -162,7 +172,12 @@ expect {
 
 expect {
 	spec = { ..Spec.empty("x"), requires_: ["commands"], commands: [{ environment: "dev", name: "roc-stable", tool: { source: "default", name: "rocpkgs.nightly" } }] }
-	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 4 }
+	Spec.parse(spec.to_str()) == Ok(spec)
+}
+
+expect {
+	spec = { ..Spec.empty("x"), requires_: ["sources", "roc-packages"], build_sources: [{ name: "roc-abc", ref: "tarball+https://example.test/abc.tar.zst" }], roc_packages: [{ environment: "dev", name: "abc", source: "roc-abc" }] }
+	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 5 }
 }
 expect Spec.parse("((format ((major 1) (minor 0))) (shells 42))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
 expect Spec.parse("((format ((major 3) (minor 0))))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))

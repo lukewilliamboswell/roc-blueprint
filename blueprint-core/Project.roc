@@ -231,6 +231,23 @@ Project :: [].{
 				return Err("DuplicateCommand: environment ${entry.environment}: ${entry.name}")
 			}
 		}
+		if !spec.roc_packages.is_empty() and !spec.requires_.contains("roc-packages") {
+			return Err("Roc packages require feature: roc-packages")
+		}
+		for entry in spec.roc_packages {
+			if !spec.environments.any(|e| e.name == entry.environment) {
+				return Err("unknown environment for Roc package: ${entry.environment}")
+			}
+			if !valid_name(entry.name) {
+				return Err("invalid Roc package name: ${entry.name}")
+			}
+			if !spec.build_sources.any(|s| s.name == entry.source) {
+				return Err("unknown source for Roc package: ${entry.source}")
+			}
+			if spec.roc_packages.keep_if(|other| other.environment == entry.environment and other.name == entry.name).len() > 1 {
+				return Err("DuplicateRocPackage: environment ${entry.environment}: ${entry.name}")
+			}
+		}
 		for input in spec.inputs {
 			if !valid_ref(input.url) {
 				return Err("invalid input reference: ${input.name}")
@@ -239,10 +256,12 @@ Project :: [].{
 		var $environments = []
 		var $system_tools = []
 		var $commands = []
+		var $roc_packages = []
 		for env in spec.environments {
 			resolved = resolve(spec.environments, env.name, [])?
 			env_commands = resolve_commands(spec.environments, spec.commands, env.name, [])?
 			$commands = $commands.concat(env_commands)
+			$roc_packages = $roc_packages.concat(resolve_roc_packages(spec.environments, spec.roc_packages, env.name, [])?)
 			for system in declared_systems {
 				tools_for_system = resolve_system_tools(spec.environments, spec.system_tools, env.name, system, [])?
 				if !tools_for_system.is_empty() {
@@ -318,7 +337,7 @@ Project :: [].{
 				return Err("empty Raw provider or target")
 			}
 		}
-		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
+		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, roc_packages: $roc_packages, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
 	}
 
 	## Whole-project checks precede expansion, even for an empty request.
@@ -549,6 +568,26 @@ Project :: [].{
 		}
 	}
 
+	## Roc packages inherit parent first. A name is a content hash, so a child
+	## repeating an inherited package adds nothing.
+	resolve_roc_packages : List(Spec.Environment), List(Spec.RocPackage), Str, List(Str) -> Try(List(Spec.RocPackage), Str)
+	resolve_roc_packages = |environments, entries, name, visiting| {
+		if visiting.contains(name) or visiting.len() >= 128 {
+			return Err("environment cycle or inheritance limit: ${name}")
+		}
+		env = environments.find_first(|e| e.name == name).map_err(|_| "unknown environment: ${name}")?
+		own = entries.keep_if(|entry| entry.environment == name)
+		match env.parents {
+			[] => Ok(own)
+			[parent] => {
+				inherited = resolve_roc_packages(environments, entries, parent, visiting.append(name))?
+					.map(|entry| { ..entry, environment: name })
+				Ok(inherited.concat(own.keep_if(|o| !inherited.any(|entry| entry.name == o.name))))
+			}
+			_ => Err("environment ${name} has several parents")
+		}
+	}
+
 	## Check only the requested environment's normalized dependency closure.
 	## This models Guix shell capability without implementing a Guix executor.
 	check_environment : Spec, ProviderName, Str -> Try({}, Str)
@@ -609,6 +648,7 @@ fixture = |environments| Spec.{
 	environments,
 	system_tools: [],
 	commands: [],
+	roc_packages: [],
 	shells: [],
 	tasks: [],
 	build_sources: [],
@@ -722,6 +762,7 @@ build_fixture = |builds| Spec.{
 	environments: [{ name: "builder", parents: [], tools: [], overlays: [] }],
 	system_tools: [],
 	commands: [],
+	roc_packages: [],
 	shells: [],
 	tasks: [],
 	build_sources: [{ name: "assets", ref: "path:./assets" }],
@@ -808,6 +849,37 @@ expect {
 expect ["roc-stable", "python3.12", "g++", "_x"].all(Project.valid_command_name)
 expect ["", "-rf", ".hidden", "bin/roc", "two words", "a\nb", "$(x)", "a\"b"].all(|name| !Project.valid_command_name(name))
 
+# Roc packages inherit parent first and need their locked source declared.
+expect {
+	http = { name: "roc-http", ref: "tarball+https://example.test/http.tar.zst" }
+	cli = { name: "roc-cli", ref: "tarball+https://example.test/cli.tar.zst" }
+	spec = {
+		..fixture([base, { ..child, overlays: [] }]),
+		requires_: ["sources", "roc-packages"],
+		build_sources: [http, cli],
+		roc_packages: [
+			{ environment: "base", name: "http", source: "roc-http" },
+			{ environment: "dev", name: "cli", source: "roc-cli" },
+			{ environment: "dev", name: "http", source: "roc-http" },
+		],
+	}
+	entry = { environment: "base", name: "http", source: "roc-http" }
+	valid = match Project.validate(spec) {
+		Ok(project) => project.roc_packages == [
+			entry,
+			{ environment: "dev", name: "http", source: "roc-http" },
+			{ environment: "dev", name: "cli", source: "roc-cli" },
+		] and Project.validate(project) == Ok(project)
+		Err(_) => False
+	}
+	valid and
+		Project.validate({ ..spec, requires_: ["sources"] }) == Err("Roc packages require feature: roc-packages") and
+			Project.validate({ ..spec, roc_packages: [entry, entry] }) == Err("DuplicateRocPackage: environment base: http") and
+				Project.validate({ ..spec, roc_packages: [{ ..entry, environment: "missing" }] }) == Err("unknown environment for Roc package: missing") and
+					Project.validate({ ..spec, roc_packages: [{ ..entry, source: "missing" }] }) == Err("unknown source for Roc package: missing") and
+						Project.validate({ ..spec, roc_packages: [{ ..entry, name: "../escape" }] }) == Err("invalid Roc package name: ../escape")
+}
+
 expect ["path:./assets", "path:assets", "github:example/assets", "git+https://example.test/assets.git", "https://example.test/assets.tar.gz"].all(Project.valid_build_source_ref)
 expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../escape", "path:./assets/../escape", "path:assets?dir=../escape", "file:/absolute", "git+file:///absolute", "github:", "https://", "path:line\nbreak"].all(|ref| !Project.valid_build_source_ref(ref))
 
@@ -815,7 +887,7 @@ expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../esc
 build_source_fixture : List(Spec.BuildSource), List(Str) -> Spec
 build_source_fixture = |build_sources, requires_| {
 	spec = build_fixture([library])
-	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
+	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, roc_packages: spec.roc_packages, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
 }
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["builds"])) == Err("build sources require feature: sources")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["sources"])) == Err("builds require feature: builds")
@@ -880,6 +952,7 @@ workflow_features = |workflows, features| Spec.{
 	environments: [{ name: "builder", parents: [], tools: [], overlays: [] }],
 	system_tools: [],
 	commands: [],
+	roc_packages: [],
 	shells: [],
 	tasks: [{ name: "check.all", environment: "builder", run: ["cmd"] }],
 	build_sources: [{ name: "assets", ref: "path:./assets" }],
