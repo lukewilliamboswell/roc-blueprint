@@ -294,7 +294,7 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
 - **roc-blueprint:** put the core bundle URL the platform should use in
   `blueprint-platform/core-release`, set `version` in `blueprint-cli/main.roc`
   and `flake.nix` to the release, then push a tag like `X.Y.Z`. `release.yml`
-  runs the tests, cross-builds the four `blueprint` binaries on Linux with
+  runs the tests, cross-builds the `blueprint` binaries on Linux with
   `scripts/build-release.sh`, runs each on its own kind of machine with
   `scripts/smoke-binary.sh`, and only then publishes release `X.Y.Z` with the
   platform bundle, the binaries and their sha256 sums.

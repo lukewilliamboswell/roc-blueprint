@@ -62,8 +62,8 @@ own flake. Keep the CLI and configuration platform on the same compatible
 source snapshot. Build the platform host before running local examples; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Prebuilt `blueprint` binaries for Linux and macOS, on x86_64 and arm64, are
-attached to each [release](https://github.com/lukewilliamboswell/roc-blueprint/releases),
+Prebuilt `blueprint` binaries for x86_64 Linux, arm64 Linux and Apple Silicon
+macOS are attached to each [release](https://github.com/lukewilliamboswell/roc-blueprint/releases),
 with their sha256 sums. A binary needs Nix; builds also use coreutils `chmod`
 and `readlink`. It does not need Python or Roc installed: loading a configuration runs one exact Roc nightly, and the
 binary uses a `roc` on `PATH` when that is the right one, and otherwise fetches
@@ -75,12 +75,11 @@ is also available via `nix develop github:lukewilliamboswell/roc-blueprint`.
 Do not assume a published release accepts this development API.
 
 `Systems` controls generated Nix output shapes; it neither installs platform
-host targets nor proves execution support. Configurations execute on Linux and macOS, on
-x86_64 and arm64: the four machines the platform ships a host for. On Intel
-macOS the default package source no longer evaluates, because current nixpkgs
-has dropped that system; declare
-`Packages("default", From(NixPackages("github:NixOS/nixpkgs/nixpkgs-26.05-darwin")))`
-there.
+host targets nor proves execution support. Configurations execute on x86_64
+Linux, arm64 Linux and Apple Silicon macOS. No Intel macOS binary is released:
+the platform has a host for it and the CLI evaluates configurations there, but
+entering an environment fails because `nix develop` takes its shell from
+current nixpkgs, which has dropped that system.
 Sandboxed builds remain x86_64 Linux only.
 
 ## Writing `Blueprint.roc`

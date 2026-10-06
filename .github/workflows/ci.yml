@@ -79,7 +79,7 @@ jobs:
           path: fuzz-artifacts/
           if-no-files-found: ignore
 
-  # Three binaries are cross-built for machines the Linux job cannot run, so
+  # Two binaries are cross-built for machines the Linux job cannot run, so
   # run each where it must work.
   binaries:
     needs: test
@@ -89,8 +89,6 @@ jobs:
         include:
           - { runner: ubuntu-24.04-arm, system: aarch64-linux }
           - { runner: macos-latest, system: aarch64-darwin }
-          # Current nixpkgs has dropped Intel macOS; 26.05 is its last branch.
-          - { runner: macos-15-intel, system: x86_64-darwin, packages: "github:NixOS/nixpkgs/nixpkgs-26.05-darwin" }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
