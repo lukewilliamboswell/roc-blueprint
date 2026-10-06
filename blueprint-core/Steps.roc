@@ -22,13 +22,13 @@ Steps := { steps : List(Step) }.{
 		dependencies : List(Str),
 	}
 
-	## Verify all locked local trees before snapshotting or staging files.
-	## Snapshot exclusions are absolute paths or VCS metadata basenames.
-	## The Nix executor also publishes destination + ".isolation.json": caller
-	## /proc/self/ns/{mnt,net} readlink identities, separate from source bytes.
+	## Verify all locked local trees before staging files.
+	## Isolation names two placeholder texts in this step's files. Before
+	## staging, replace each with the caller's /proc/self/ns/{mnt,net} readlink
+	## identity (`mnt:[digits]`, `net:[digits]`), observed for this step.
 	## Serialize workspace use; stop on any failed materialization operation.
 	Operation : [
 		VerifyTree({ path : Str, digest : Str }),
-		Snapshot({ root : Str, destination : Str, exclude : List(Str) }),
+		Isolation({ mnt : Str, net : Str }),
 	]
 }

@@ -97,7 +97,7 @@ NixProvider :: [].{
 						RunTask(task, extra) => Request.Run(task, extra)
 						BuildArtifact(build) => Request.Build(build)
 					}
-					# Share immutable recipes, NEVER runtime artifacts or snapshots.
+					# Share immutable recipes, NEVER runtime artifacts or project copies.
 					# Repeated requests still append a complete executable step.
 					selected = match $templates.find_first(|entry| entry.request == atomic) {
 						Ok(entry) => entry.selected
@@ -124,7 +124,7 @@ NixProvider :: [].{
 						project,
 						[],
 						[],
-						"",
+						Unplanned,
 						Some({ inputs, layout }),
 						Limited(16777216),
 					)?
@@ -209,20 +209,36 @@ NixProvider :: [].{
 			Request.Workflow(_) => return Err("workflow must expand into atomic requests")
 		}
 		inputs = Locks.inputs(project)?
-		snapshot = "${layout.workspace}/snapshot"
 		remaining = charge_rendered(
 			budget,
 			$argv.fold(0, |n, arg| n + arg.to_utf8().len()),
 		)?
+		# Only an explicit build observes its caller; other requests render
+		# builds that refuse to evaluate.
+		source = match $action {
+			Build(_) => Planned({ root: layout.project_root, exclude: excluded(layout, inputs) })
+			_ => Unplanned
+		}
 		contents = render_selected(
 			project,
 			$names,
 			$builds,
-			snapshot,
+			source,
 			Some({ inputs, layout }),
 			remaining,
 		)?
 		check_layout(project, target, layout, !$builds.is_empty())?
+		match $action {
+			Build(_) => {
+				# Configuration text must not collide with an executor placeholder.
+				for placeholder in [caller_mnt, caller_net] {
+					if contents.split_on(placeholder).len() != 2 {
+						return Err("build configuration contains the reserved text ${placeholder}")
+					}
+				}
+			}
+			_ => {}
+		}
 		Ok({ project, inputs, builds: $builds, argv: $argv, contents, action: $action })
 	}
 
@@ -250,34 +266,15 @@ NixProvider :: [].{
 		Ok(Steps.{ steps: $steps })
 	}
 
-	## A snapshot operation belongs to one explicit build, never an artifact name.
+	## An isolation observation belongs to one explicit build, never an artifact name.
 	## Recheck supplied local pins on every step, including after source-editing tasks.
 	materialize_plan = |selected, target, layout, derived| {
-		{ inputs, builds, argv, contents, action, .. } = selected
-		snapshot = "${layout.workspace}/snapshot"
+		{ builds, argv, contents, action, .. } = selected
 		base_ref = "path:${layout.generated_root}"
 		var $operations = derived.operations
 		match action {
 			Build(_) => {
-				local = inputs.keep_if(|i| i.ref.starts_with("path:"))
-					.map(|i| "${layout.project_root}/${Locks.local_path(i)}")
-				exclude = [
-					".git",
-					".hg",
-					".svn",
-					".jj",
-					layout.workspace,
-					layout.generated_root,
-					layout.lock_path,
-				]
-					.concat(local)
-				$operations = $operations.append(
-					Snapshot({
-						root: layout.project_root,
-						destination: snapshot,
-						exclude,
-					}),
-				)
+				$operations = $operations.append(Isolation({ mnt: caller_mnt, net: caller_net }))
 			}
 			_ => {}
 		}
@@ -301,6 +298,32 @@ NixProvider :: [].{
 			),
 		}
 	}
+
+	## Placeholders the executor replaces with the caller's namespace identities
+	## when it stages a build's files (see `Steps.Operation`).
+	caller_mnt : Str
+	caller_mnt = "@blueprint-caller-mnt-namespace@"
+
+	caller_net : Str
+	caller_net = "@blueprint-caller-net-namespace@"
+
+	## What a build never reads from the project: VCS metadata names at every
+	## depth, then caller-generated roots, the authority and local inputs.
+	excluded : Layout, List(Locks.Input) -> List(Str)
+	excluded = |layout, inputs|
+		[
+			".git",
+			".hg",
+			".svn",
+			".jj",
+			layout.workspace,
+			layout.generated_root,
+			layout.lock_path,
+		]
+			.concat(
+				inputs.keep_if(|i| i.ref.starts_with("path:"))
+					.map(|i| "${layout.project_root}/${Locks.local_path(i)}"),
+			)
 
 	## Update consumers check these source roots before staging or fetching.
 	## Keep provider/input path interpretation here, not duplicated in the CLI.
@@ -329,7 +352,7 @@ NixProvider :: [].{
 			project,
 			names,
 			project.builds,
-			"${layout.workspace}/snapshot",
+			Unplanned,
 			Some({ inputs, layout }),
 			Unlimited,
 		)?
@@ -351,26 +374,19 @@ NixProvider :: [].{
 		if !project.systems.contains(target) {
 			return Err("target ${target} is not declared by the project")
 		}
-		snapshot = "${layout.workspace}/snapshot"
-		isolation = "${snapshot}.isolation.json"
 		# A generated directory may contain the workspace, but an actual file
-		# must never become its ancestor (Snapshot would create it as a dir).
+		# must never become its ancestor: the workspace is a directory.
 		files = staged_files(layout, "", builds).map(|file| file.path)
 			.append("${layout.generated_root}/flake.lock")
 		for file in files {
 			if Layout.contains(file, layout.workspace)
-				or [snapshot, isolation, layout.lock_path].any(
-					|path| Layout.contains(file, path) or Layout.contains(path, file),
-				) {
-				return Err("generated files, snapshot and authority must not overlap")
+				or Layout.contains(file, layout.lock_path)
+					or Layout.contains(layout.lock_path, file) {
+				return Err("generated files, workspace and authority must not overlap")
 			}
 		}
-		if Layout.contains(isolation, layout.generated_root)
-			or Layout.contains(isolation, layout.lock_path)
-				or Layout.contains(snapshot, layout.generated_root)
-					or Layout.contains(snapshot, layout.lock_path)
-						or Layout.contains(layout.generated_root, layout.lock_path) {
-			return Err("generated files, snapshot and authority must not overlap")
+		if Layout.contains(layout.generated_root, layout.lock_path) {
+			return Err("generated files, workspace and authority must not overlap")
 		}
 		for input in Locks.inputs(project)? {
 			if input.ref.starts_with("path:") {
@@ -396,7 +412,7 @@ NixProvider :: [].{
 		names = project.shells.map(|s| s.environment)
 			.concat(project.tasks.map(|t| t.environment))
 			.concat(project.builds.map(|b| b.environment))
-		render_selected(project, names, project.builds, "", None, Unlimited)
+		render_selected(project, names, project.builds, Unplanned, None, Unlimited)
 	}
 
 	## A Shell/Run consumer selects one environment before staging any effects.
@@ -410,7 +426,7 @@ NixProvider :: [].{
 
 	render_closure : Spec, List(Str) -> Try(Str, Str)
 	render_closure = |spec, names|
-		render_selected(spec, names, [], "", None, Unlimited)
+		render_selected(spec, names, [], Unplanned, None, Unlimited)
 
 	## Charge exact emitted UTF-8 bytes before retaining a renderer chunk.
 	## Unlimited keeps standalone/inspection rendering on this same code path.
@@ -434,18 +450,21 @@ NixProvider :: [].{
 		Ok({ chunks: rendered.chunks.append(chunk), budget })
 	}
 
+	## The project a build copies: only an explicit build plan has one.
+	Source : [Unplanned, Planned({ root : Str, exclude : List(Str) })]
+
 	## Inspection and executable plans share one renderer. Plans supply the full
-	## stable input set and explicit snapshot path; inspection never guesses one.
+	## stable input set and explicit project source; inspection never guesses one.
 	render_selected : Spec,
 	List(Str),
 	List(Spec.Build),
-	Str,
+	Source,
 	[
 		None,
 		Some({ inputs : List(Locks.Input), layout : Layout }),
 	],
 	RenderBudget -> Try(Str, Str)
-	render_selected = |input_spec, names, builds, snapshot, staging, budget| {
+	render_selected = |input_spec, names, builds, copied, staging, budget| {
 		missing = input_spec.unsupported_features(provider.features)
 		if !missing.is_empty() {
 			return Err("unsupported features: ${Str.join_with(missing, ", ")}")
@@ -622,7 +641,7 @@ NixProvider :: [].{
 		}
 		$rendered = append_rendered($rendered, "      };\n")?
 		if !builds.is_empty() {
-			$rendered = append_rendered($rendered, "      packages = {\n")?
+			$rendered = append_rendered($rendered, render_source(copied))?
 			for system in spec.systems {
 				$rendered = append_rendered(
 					$rendered,
@@ -633,7 +652,7 @@ NixProvider :: [].{
 						.map_err(|_| "unknown build environment")?
 					$rendered = append_rendered(
 						$rendered,
-						render_build(build, env, spec.system_tools, spec.commands, system, snapshot),
+						render_build(build, env, spec.system_tools, spec.commands, system),
 					)?
 				}
 				$rendered = append_rendered(
@@ -724,10 +743,50 @@ NixProvider :: [].{
 		prefix.concat(suffix)
 	}
 
+	## Open `packages` with what every build shares. Nix makes the one project
+	## copy: excluded entries are never inspected, and any other symlink or
+	## special file aborts evaluation. Nix records only whether the owner may
+	## execute a file. Namespace observations belong to materialization, not
+	## project bytes, so the executor fills them in per build.
+	render_source : Source -> Str
+	render_source = |source| match source {
+		Unplanned => lines([
+			"      packages = let",
+			"        project = builtins.throw \"build execution requires NixProvider.plan "
+				.concat("and a caller project\";"),
+			"        isolation = builtins.throw "
+				.concat("\"build execution requires a caller isolation witness\";"),
+			"      in {",
+		])
+		Planned({ root, exclude }) => {
+			names = exclude.keep_if(|item| !item.starts_with("/")).map(quote)
+			paths = exclude.keep_if(|item| item != root and Layout.contains(root, item))
+				.fold([], |seen, item| if seen.contains(item) seen else seen.append(item))
+				.map(quote)
+			lines([
+				"      packages = let",
+				"        project = builtins.path {",
+				"          path = /. + ${quote(root)};",
+				"          name = \"blueprint-project\";",
+				"          filter = path: type:",
+				"            !(builtins.elem (baseNameOf path) [ ${Str.join_with(names, " ")} ]",
+				"              || builtins.elem path [ ${Str.join_with(paths, " ")} ])",
+				"            && (if type == \"symlink\" then "
+					.concat("throw \"snapshot refuses symlink: \${path}\""),
+				"              else if type == \"unknown\" then "
+					.concat("throw \"snapshot refuses special file: \${path}\""),
+				"              else true);",
+				"        };",
+				"        isolation = { mnt = ${quote(caller_mnt)}; net = ${quote(caller_net)}; };",
+				"      in {",
+			])
+		}
+	}
+
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
 	## Runner tool paths are explicit; argv and metadata enter through JSON.
-	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), Str, Str -> Str
-	render_build = |build, environment, system_tools, commands, system, snapshot| {
+	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), Str -> Str
+	render_build = |build, environment, system_tools, commands, system| {
 		sources = source_names(environment, system_tools, commands)
 		primary = sources.first() ?? "default"
 		overlays = environment.overlays.map(
@@ -751,20 +810,6 @@ NixProvider :: [].{
 			|name|
 				"{ name = ${quote(name)}; path = artifacts.${quote(name)}; }",
 		)
-		project = if snapshot.is_empty() {
-			"builtins.throw \"build execution requires NixProvider.plan "
-				.concat("and a caller snapshot\"")
-		} else {
-			"builtins.path { path = /. + ${quote(snapshot)}; "
-				.concat("name = \"blueprint-project\"; }")
-		}
-		# Namespace observations belong to materialization, not project bytes.
-		isolation = if snapshot.is_empty() {
-			"builtins.throw \"build execution requires a caller isolation witness\""
-		} else {
-			"builtins.fromJSON (builtins.readFile "
-				.concat("${quote("${snapshot}.isolation.json")})")
-		}
 		argv = Str.join_with(build.run.map(quote), " ")
 		lines([
 			"          ${quote(build.name)} = let",
@@ -778,8 +823,7 @@ NixProvider :: [].{
 				"            tools = [ ${Str.join_with(tools, " ")} ];",
 				"          in pkgs.runCommand ${quote("blueprint-${build.name}")} {",
 				"            blueprintSpec = builtins.toJSON {",
-				"              project = ${project};",
-				"              isolation = ${isolation};",
+				"              inherit project isolation;",
 				"              argv = [ ${argv} ];",
 				"              output = ${quote(build.output)};",
 				"              path = pkgs.lib.makeBinPath (tools ++ "
@@ -1319,23 +1363,13 @@ expect match plan_fixture(Request.Build("app")) {
 	_ => False
 }
 
-# Inputs are verified before each fresh snapshot, including every excluded root.
+# Inputs are verified before each fresh observation of the caller.
 expect match plan_fixture(Request.Build("app")) {
 	Ok({ steps: [plan] }) => plan.operations == [
 		VerifyTree({ path: "/project/assets", digest: assets_tree }),
-		Snapshot({
-			root: "/project",
-			destination: "/work/snapshot",
-			exclude: [
-				".git",
-				".hg",
-				".svn",
-				".jj",
-				"/work",
-				"/generated",
-				"/authority/inputs.lock",
-				"/project/assets",
-			],
+		Isolation({
+			mnt: "@blueprint-caller-mnt-namespace@",
+			net: "@blueprint-caller-net-namespace@",
 		}),
 	] and plan.files.map(|file| file.path) == [
 		"/generated/flake.nix",
@@ -1353,9 +1387,10 @@ expect match plan_fixture(Request.Build("app")) {
 		)
 			and file.contents.contains("path = artifacts.\"library\";")
 				and file.contents.contains("path = inputs.\"assets\";")
-					and file.contents.contains("path = /. + \"/work/snapshot\";")
+					and file.contents.contains("path = /. + \"/project\";")
 						and file.contents.contains(
-							"builtins.readFile \"/work/snapshot.isolation.json\"",
+							"isolation = { mnt = \"@blueprint-caller-mnt-namespace@\"; "
+								.concat("net = \"@blueprint-caller-net-namespace@\"; };"),
 						)
 							and file.contents.contains("pkgs.runCommand")
 								and !file.contents.contains("outputHash")
@@ -1363,6 +1398,63 @@ expect match plan_fixture(Request.Build("app")) {
 	}
 	_ => False
 }
+
+# Nix copies the project once: exclusions are decided before an entry's type,
+# only in-project paths are listed, and anything else unsafe aborts evaluation.
+expect NixProvider.render_source(
+	Planned({
+		root: "/project",
+		exclude: [".git", ".jj", "/project/work", "/outside/generated", "/project/work", "/project/a \"b\""],
+	}),
+) == Str.join_with(
+	[
+		"      packages = let",
+		"        project = builtins.path {",
+		"          path = /. + \"/project\";",
+		"          name = \"blueprint-project\";",
+		"          filter = path: type:",
+		"            !(builtins.elem (baseNameOf path) [ \".git\" \".jj\" ]",
+		"              || builtins.elem path [ \"/project/work\" \"/project/a \\\"b\\\"\" ])",
+		"            && (if type == \"symlink\" then throw \"snapshot refuses symlink: \${path}\"",
+		"              else if type == \"unknown\" then throw \"snapshot refuses special file: \${path}\"",
+		"              else true);",
+		"        };",
+		"        isolation = { mnt = \"@blueprint-caller-mnt-namespace@\"; net = \"@blueprint-caller-net-namespace@\"; };",
+		"      in {",
+		"",
+	],
+	"\n",
+)
+
+# The build plan excludes VCS names, caller roots, the authority and local
+# inputs; inspection and non-build requests render builds that cannot run.
+expect match (plan_fixture(Request.Build("app")), plan_fixture(Request.Generate)) {
+	(Ok({ steps: [build] }), Ok({ steps: [generate] })) => match (build.files.first(), generate.files.first()) {
+		(Ok(planned), Ok(inert)) =>
+			planned.contents.contains(
+				"[ \".git\" \".hg\" \".svn\" \".jj\" ]",
+			)
+				and planned.contents.contains("builtins.elem path [ \"/project/assets\" ])")
+					and inert.contents.contains("project = builtins.throw")
+						and inert.contents.contains("isolation = builtins.throw")
+							and !inert.contents.contains("@blueprint-caller")
+		_ => False
+	}
+	_ => False
+}
+
+# Configuration text cannot collide with a placeholder the executor replaces.
+expect ["@blueprint-caller-mnt-namespace@", "@blueprint-caller-net-namespace@"].all(
+	|placeholder| NixProvider.preflight(
+		TestData.project({
+			..TestData.data,
+			builds: [{ ..TestData.library, run: ["python3", placeholder] }],
+		}),
+		Request.Build("library"),
+		"x86_64-linux",
+		TestData.layout,
+	) == Err("build configuration contains the reserved text ${placeholder}"),
+)
 
 # Task extras preserve empty arguments, controls and option-looking literals.
 expect match plan_fixture(
@@ -1403,7 +1495,7 @@ expect match plan_fixture(Request.Shell("default")) {
 	_ => False
 }
 
-# Generate produces no provider command or snapshot and never writes authority.
+# Generate produces no provider command or observation and never writes authority.
 expect match plan_fixture(Request.Generate) {
 	Ok({ steps: [plan] }) => plan.action == Generate
 		and plan.argv.is_empty() and plan.operations.len() == 1
@@ -1587,7 +1679,7 @@ expect {
 	}
 }
 
-# Out-of-tree roots work; overlapping sources, authority or snapshots do not.
+# Out-of-tree roots work; overlapping sources, authority or generated files do not.
 expect match plan_locks {
 	Ok(locks) => {
 		layouts = [
@@ -1600,7 +1692,7 @@ expect match plan_locks {
 			Layout.{
 				project_root: "/project",
 				workspace: "/work",
-				generated_root: "/work/snapshot/nix",
+				generated_root: "/authority/lock/nix",
 				lock_path: "/authority/lock",
 			},
 			Layout.{
@@ -1613,7 +1705,7 @@ expect match plan_locks {
 				project_root: "/project",
 				workspace: "/work",
 				generated_root: "/generated",
-				lock_path: "/work/snapshot.isolation.json",
+				lock_path: "/generated/flake.nix/lock",
 			},
 			Layout.{
 				project_root: "/project",
@@ -1636,7 +1728,7 @@ expect match plan_locks {
 }
 
 # File/directory conflicts fail in pure preflight and both update entry points,
-# before lock reads, VerifyLocal, Snapshot or staging can have effects.
+# before lock reads, VerifyLocal or staging can have effects.
 expect ["flake.nix", "flake.lock", "build-runner.py"].all(
 	|file| {
 		["", "/child"].all(
@@ -1714,7 +1806,7 @@ workflow_plan = |request| NixProvider.plan(
 )
 
 # The maximum repeated build sequence shares a large immutable recipe, not
-# artifacts: all 4096 explicit operations still carry their own snapshot step.
+# artifacts: all 4096 explicit operations still observe their own caller.
 expect {
 	var $payload = "x"
 	while $payload.to_utf8().len() < 524288 {
@@ -1741,7 +1833,7 @@ expect {
 			and step.artifacts.map(|artifact| artifact.name) == ["library"]
 				and step.operations.keep_if(
 					|operation| match operation {
-						Snapshot(_) => True
+						Isolation(_) => True
 						VerifyTree(_) => False
 					},
 				).len() == 1,
@@ -2058,7 +2150,7 @@ expect {
 }
 
 # Diamond dependencies occur once per build operation, not once per workflow.
-# Every explicit build snapshots again, even consecutive builds of one name.
+# Every explicit build observes again, even consecutive builds of one name.
 expect {
 	sequence = workflow_plan(Request.Workflow("ci"))?
 	sequence.steps.map(|step| step.artifacts.map(|artifact| artifact.name)) == [
@@ -2072,7 +2164,7 @@ expect {
 	] and sequence.steps.map(
 		|step| step.operations.keep_if(
 			|operation| match operation {
-				Snapshot(_) => True
+				Isolation(_) => True
 				VerifyTree(_) => False
 			},
 		).len(),
@@ -2221,7 +2313,7 @@ expect {
 		Request.Workflow("ci"),
 		"x86_64-linux",
 		layout,
-	) == Err("generated files, snapshot and authority must not overlap")
+	) == Err("generated files, workspace and authority must not overlap")
 		and NixProvider.plan(
 			project,
 			Request.Workflow("ci"),
@@ -2229,7 +2321,7 @@ expect {
 			layout,
 			locks,
 		).map_ok(|plan| plan.steps) ==
-			Err("generated files, snapshot and authority must not overlap")
+			Err("generated files, workspace and authority must not overlap")
 }
 
 # Task-compatible target selection cannot hide a later unsupported build.
@@ -2397,7 +2489,7 @@ expect {
 # matching authority; absence of runnable steps never bypasses global checks.
 expect {
 	locks = plan_locks?
-	unsafe = { ..TestData.layout, generated_root: "/work/snapshot/nix" }
+	unsafe = { ..TestData.layout, generated_root: "/authority/inputs.lock/nix" }
 	changed = {
 		..workflow_project,
 		build_sources: [{ name: "assets", ref: "path:./changed-assets" }],

@@ -567,38 +567,6 @@ expect within("/project".to_utf8(), "/".to_utf8())
 expect !within("/project-work".to_utf8(), "/project".to_utf8())
 expect !within("/project".to_utf8(), "/project/work".to_utf8())
 
-basename : List(U8) -> List(U8)
-basename = |bytes| bytes.fold([], |acc, byte| if byte == '/' [] else acc.append(byte))
-
-expect basename("/project/src/main.roc".to_utf8()) == "main.roc".to_utf8()
-
-## Snapshot exclusions are absolute paths or bare entry names. These are the
-## names, which apply at every depth.
-snapshot_names : List(Str) -> Try(List(Str), _)
-snapshot_names = |exclude| {
-	names = exclude.keep_if(|item| !item.starts_with("/"))
-	if names.any(|item| item.contains("/") or item == "" or item == "." or item == "..") {
-		return Err(Refused("snapshot exclusions must be absolute paths or names"))
-	}
-	Ok(names)
-}
-
-expect snapshot_names(["/project/work", ".git", ".jj"]) == Ok([".git", ".jj"])
-expect ["", ".", "..", "nested/.git"].all(|name| snapshot_names([name]).is_err())
-
-## A destination inside the project would be copied into itself unless an
-## excluded path covers the directory that holds it.
-unexcluded_in_tree : Str, Str, List(Str) -> Bool
-unexcluded_in_tree = |root, destination, excluded|
-	within(destination.to_utf8(), root.to_utf8())
-		and !excluded.any(|item| within(parent(destination).to_utf8(), item.to_utf8()))
-
-expect !unexcluded_in_tree("/project", "/project/work/snapshot", ["/project/work"])
-expect !unexcluded_in_tree("/project", "/project/a/work/snapshot", ["/project/a"])
-expect !unexcluded_in_tree("/project", "/outside/snapshot", [])
-expect unexcluded_in_tree("/project", "/project/work/snapshot", ["/project/work/snapshot"])
-expect unexcluded_in_tree("/project", "/project/work/snapshot", ["/project/workspace"])
-
 ## A namespace identity as the kernel prints it, e.g. `mnt:[4026531841]`.
 valid_namespace : Str, Str -> Bool
 valid_namespace = |name, identity| {
@@ -616,15 +584,6 @@ expect
 	["mnt:[]", "mnt:]", "net:[1]", "mnt:[1]\n", "mnt:[1] ", " mnt:[1]", "mnt:[-1]", "mnt:[1a]", "mnt:[1]]", ""].all(
 		|identity| !valid_namespace("mnt", identity),
 	)
-
-## The witness the provider reads beside the snapshot. Its bytes feed the
-## build, so the format is pinned: sorted keys, `, ` and `: ` separators.
-isolation_witness : Str, Str -> Str
-isolation_witness = |mnt, net| "{\"mnt\": \"${mnt}\", \"net\": \"${net}\"}\n"
-
-expect
-	isolation_witness("mnt:[4026531841]", "net:[4026531840]")
-		== "{\"mnt\": \"mnt:[4026531841]\", \"net\": \"net:[4026531840]\"}\n"
 
 ## A child's namespaces are the caller's, so `readlink` observes this process.
 namespace! : Str => Try(Str, _)
@@ -648,110 +607,6 @@ namespace! = |name| {
 		return Err(Refused("invalid caller ${name} namespace identity"))
 	}
 	Ok(identity)
-}
-
-## Stage project bytes and a separate namespace witness before publication.
-## Callers serialize workspace use and stop on failure. The two outputs cannot
-## be renamed together; removing the old witness before replacing the tree
-## ensures interrupted publication cannot authorize it with stale observations.
-snapshot! : Str, Str, List(Str) => Try({}, _)
-snapshot! = |root, destination, exclude| {
-	safe_path!(root)?
-	safe_path!(destination)?
-	witness = "${destination}.isolation.json"
-	safe_path!(witness)?
-	isolation = isolation_witness(namespace!("mnt")?, namespace!("net")?)
-	names = snapshot_names(exclude)?
-	excluded = exclude.keep_if(|item| item.starts_with("/"))
-	for item in excluded {
-		safe_path!(item)?
-	}
-	if within(root.to_utf8(), destination.to_utf8()) {
-		return Err(Refused("snapshot destination must not contain the project"))
-	}
-	if !(path(root).exists!()?) or path(root).type!()? != IsDir {
-		return Err(Refused("snapshot root is not a directory: ${root}"))
-	}
-	if unexcluded_in_tree(root, destination, excluded) {
-		return Err(Refused("in-tree snapshot parent must be excluded"))
-	}
-	path(parent(destination)).create_all!()?
-	temporary = Env.create_temp_dir_in!(path(parent(destination)), ".snapshot-")?
-	publish! = || {
-		staged_tree = temporary.join("project")
-		staged_tree.create_dir!()?
-		copied = copy_tree!(
-			path(root),
-			staged_tree,
-			names.map(|item| item.to_utf8()),
-			excluded.map(|item| item.to_utf8()),
-		)?
-		set_mode!("755", copied.keep_if(|item| item.executable).map(|item| item.file))?
-		set_mode!("644", copied.keep_if(|item| !item.executable).map(|item| item.file))?
-		staged_witness = temporary.join("isolation.json")
-		staged_witness.write_utf8!(isolation)?
-		safe_path!(destination)?
-		safe_path!(witness)?
-		if path(destination).exists!()? and path(destination).type!()? != IsDir {
-			return Err(Refused("snapshot destination is not a directory: ${destination}"))
-		}
-		if path(witness).exists!()? {
-			if path(witness).type!()? != IsFile {
-				return Err(Refused("isolation witness is not a file: ${witness}"))
-			}
-			path(witness).delete!()?
-		}
-		if path(destination).exists!()? {
-			path(destination).delete_all!()?
-		}
-		staged_tree.rename!(path(destination))?
-		staged_witness.rename!(path(witness))
-	}
-	result = publish!()
-	_ = temporary.delete_all!()
-	result
-}
-
-## Copy directories and regular files, refusing symlinks and special files,
-## and report each copy with whether its source has any executable bit.
-## basic-cli has no no-follow open, so an entry replaced by a symlink between
-## the type check and the copy is followed: callers must not mutate the tree.
-copy_tree! : Path, Path, List(List(U8)), List(List(U8)) => Try(List({ file : Path, executable : Bool }), _)
-copy_tree! = |source, target, names, excluded| {
-	var $copied = []
-	for entry in source.list!()? {
-		bytes = entry.to_os_str().to_bytes()
-		name = basename(bytes)
-		if !names.contains(name) and !excluded.any(|item| within(bytes, item)) {
-			copy = Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(name))
-			match entry.type!()? {
-				IsSymLink => return Err(Refused("snapshot refuses symlink: ${entry.display()}"))
-				IsDir => {
-					copy.create_dir!()?
-					$copied = $copied.concat(copy_tree!(entry, copy, names, excluded)?)
-				}
-				IsFile => {
-					entry.copy!(copy)?
-					$copied = $copied.append({ file: copy, executable: entry.is_executable!()? })
-				}
-				IsOther => return Err(Refused("snapshot refuses special file: ${entry.display()}"))
-			}
-		}
-	}
-	Ok($copied)
-}
-
-## Snapshot modes are normalized to 0755 or 0644. basic-cli cannot set a
-## mode, so coreutils `chmod` does, in batches that fit one argument list.
-set_mode! : Str, List(Path) => Try({}, _)
-set_mode! = |mode, files| {
-	var $rest = files
-	while !$rest.is_empty() {
-		batch = $rest.take_first(128).map(|file| file.to_os_str())
-		$rest = $rest.drop_first(128)
-		Cmd.new_str("chmod").args_str([mode, "--"]).args(batch).exec_cmd!()?
-	}
-	Ok({})
 }
 
 ## The pure planner validates the entire request before any staging effects.
@@ -788,6 +643,7 @@ realise! = |spec, request, ctx| {
 ## All planning has succeeded before the first materialization or task effect.
 execute_step! : Steps.Step, Layout => Try({}, _)
 execute_step! = |step, layout| {
+	var $files = step.files
 	for operation in step.operations {
 		match operation {
 			VerifyTree({ path: local, digest }) => {
@@ -800,10 +656,20 @@ execute_step! = |step, layout| {
 					)
 				}
 			}
-			Snapshot({ root, destination, exclude }) => snapshot!(root, destination, exclude)?
+			Isolation(placeholder) => {
+				mnt = namespace!("mnt")?
+				net = namespace!("net")?
+				$files = $files.map(
+					|file| {
+						..file,
+						contents: file.contents.replace_each(placeholder.mnt, mnt)
+							.replace_each(placeholder.net, net),
+					},
+				)
+			}
 		}
 	}
-	stage!(step.files, layout)?
+	stage!($files, layout)?
 	match step.action {
 		Build(name) => report_build!(step, name, layout.project_root)
 		_ => exec!(step.argv, layout.project_root).map_err(

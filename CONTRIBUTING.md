@@ -277,8 +277,8 @@ stage derivatives and prohibit native lock updates. Named input declarations
 remain stable across selected closures; selected overlays remain scoped and
 ordered. Local authority contains relative identity and Blueprint tree digests
 (core `Tree`, computed and verified by the CLI without Nix), not checkout
-paths. Dirty local inputs fail until explicit update. Local verification and fresh
-snapshot operations repeat per explicit build, never reusing artifact results
+paths. Dirty local inputs fail until explicit update. Local verification, caller
+observation and Nix's filtered project copy repeat per explicit build, never reusing artifact results
 by name across tasks.
 
 A new feature usually means: a setting in the platform (`Config.roc`,
