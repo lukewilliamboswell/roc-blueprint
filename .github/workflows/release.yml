@@ -65,7 +65,7 @@ jobs:
           app [config] { pf: platform "${url}/${pf}" }
           \`\`\`
 
-          The \`blueprint\` CLI is attached for Linux and macOS on x86_64 and arm64, with sha256 sums in \`blueprint.sha256\`. It needs Nix and Python 3, and fetches its own Roc compiler through Nix.
+          The \`blueprint\` CLI is attached for Linux and macOS on x86_64 and arm64, with sha256 sums in \`blueprint.sha256\`. It needs Nix, and fetches its own Roc compiler through Nix.
 
           Uses roc-blueprint-core \`${core_url}\`. Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl, arm64musl, arm64mac and x64mac.
           NOTES

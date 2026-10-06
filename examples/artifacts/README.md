@@ -50,8 +50,10 @@ back to its current working-tree bytes.
   files. Ordinary project files, including untracked ones, enter the snapshot;
   keep secrets outside it. VCS metadata, authority, generated workspace and
   declared local source trees are excluded.
-- Serialize shared-workspace use and avoid concurrent source mutation. There
-  is no cross-step artifact-name cache, automatic update, or rollback.
+- Serialize shared-workspace use and avoid concurrent source mutation, and run
+  one `blueprint update` per project at a time: an update that sees the
+  authority change fails, but no lock excludes two that publish together.
+  There is no cross-step artifact-name cache, automatic update, or rollback.
 
 The B3 integration gate runs a **temporary copy** of this complete example,
 substituting only its local platform location and a supplied existing fixture

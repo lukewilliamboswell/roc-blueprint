@@ -64,8 +64,8 @@ source snapshot. Build the platform host before running local examples; see
 
 Prebuilt `blueprint` binaries for Linux and macOS, on x86_64 and arm64, are
 attached to each [release](https://github.com/lukewilliamboswell/roc-blueprint/releases),
-with their sha256 sums. A binary needs Nix and Python 3.9+. It does not need
-Roc installed: loading a configuration runs one exact Roc nightly, and the
+with their sha256 sums. A binary needs Nix; builds also use coreutils `chmod`
+and `readlink`. It does not need Python or Roc installed: loading a configuration runs one exact Roc nightly, and the
 binary uses a `roc` on `PATH` when that is the right one, and otherwise fetches
 it through Nix from a pinned roc-overlay revision. Set `ROC` to choose the
 executable yourself; it must be that same nightly.

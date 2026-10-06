@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run a built blueprint binary on this machine with no Roc of its own: it must
-# fetch its compiler, evaluate a Blueprint.roc and realise an environment.
+# fetch its compiler, evaluate a Blueprint.roc and realise an environment. It
+# must also do so without a host Python.
 #
 #   scripts/smoke-binary.sh dist/blueprint-aarch64-darwin
 #
@@ -48,9 +49,16 @@ done
 export PATH="$clean_path"
 if command -v roc >/dev/null; then echo "a roc is still on PATH" >&2; exit 1; fi
 
+# Leave no usable Python either: the first python3 on PATH records and fails.
+mkdir "$WORK/no-python"
+printf '#!/bin/sh\necho "$@" >>"%s"\nexit 97\n' "$WORK/python3-was-used" >"$WORK/no-python/python3"
+chmod +x "$WORK/no-python/python3"
+export PATH="$WORK/no-python:$PATH"
+
 cd "$WORK"
 "$BLUEPRINT" --version
 "$BLUEPRINT" update
 "$BLUEPRINT" run git | grep -q '^git version '
 test "$("$BLUEPRINT" run script)" = "Hello from a roc-stable script"
+if [[ -e "$WORK/python3-was-used" ]]; then echo "blueprint used a host python3" >&2; exit 1; fi
 echo "blueprint binary smoke test passed on $(uname -sm)"
