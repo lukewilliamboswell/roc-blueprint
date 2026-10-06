@@ -390,7 +390,8 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
 `build_release.roc` compiles every released file with `--no-cache`: with Roc's
 compile cache, one source and target gave different bytes depending on what the
 cache already held. It also compiles the x86_64 Linux CLI a second time and
-fails unless the two are byte-identical.
+fails unless the two are byte-identical. The three CLI binaries are compiled at
+the same time, each about 2.3 GB at its peak.
 
 A binary fetches the compiler named in `.roc-version` from the roc-overlay
 revision in `NixProvider.roc_overlay`. Change that constant whenever

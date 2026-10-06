@@ -34,6 +34,17 @@ Release := [].{
 	build_args : Str, Str, Str -> List(Str)
 	build_args = |source, target, output| ["build", source, "--target=${target}", "--no-cache", "--output=${output}"]
 
+	## One file to compile: its source, Roc's target and where it goes.
+	File : { source : Str, target : Str, output : Str }
+
+	## One program for every released system, as `<directory>/<name>-<system>`.
+	files : Str, Str -> List(File)
+	files = |name, directory|
+		programs.keep_if(|program| program.name == name).fold(
+			[],
+			|listed, program| listed.concat(systems.map(|released| { source: program.source, target: released.target, output: "${directory}/${program.name}-${released.system}" })),
+		)
+
 	## The released file the build compiles a second time, to compare.
 	twice = { source: "blueprint-cli/main.roc", target: "x64musl", name: "blueprint-x86_64-linux" }
 
@@ -92,14 +103,11 @@ build! = |root, work| {
 	Process.passthrough!(Process.command("zig", ["build"], "${root}/blueprint-platform"))?
 	dist = "${root}/dist"
 	Path.create_all!(Path.utf8(dist))?
-	for program in Release.programs {
-		for released in Release.systems {
-			output = "${dist}/${program.name}-${released.system}"
-			compile!(roc, root, program.source, released.target, output)?
-			Script.info!("==>", output)?
-		}
-	}
-	reproducible!(roc, root, work, dist)?
+	# Two rounds, so that at most three compilations of the CLI run at once.
+	second = "${work}/${Release.twice.name}"
+	compile_together!(roc, root, Release.files("blueprint", dist))?
+	compile_together!(roc, root, Release.files("smoke", dist).append({ source: Release.twice.source, target: Release.twice.target, output: second }))?
+	reproducible!("${dist}/${Release.twice.name}", second)?
 
 	var $sums = ""
 	for released in Release.systems {
@@ -110,32 +118,49 @@ build! = |root, work| {
 	Stdout.write!($sums)
 }
 
-## Build one program for one target. The compiler occasionally fails with an
-## unexplained internal error and succeeds unchanged when run again, so a
-## failure is retried once.
-compile! : Str, Str, Str, Str, Str => Try({}, _)
-compile! = |roc, root, source, target, output| {
-	job = Process.command(roc, Release.build_args(source, target, output), root)
-	first = Process.traced!(job)?
-	if first.code != 0 {
-		Stdout.write!("${first.stdout}${first.stderr}")?
-		_ = Process.succeed!(job)?
+## Build these files at the same time. A compilation of the CLI is
+## single-threaded for most of its run and peaks at about 2.3 GB, so three fit
+## a 4-core, 16 GB machine. `--no-cache` leaves them nothing to share: built
+## together they are byte for byte what they are built one after another.
+##
+## The compiler occasionally fails with an unexplained internal error and
+## succeeds unchanged when run again, so each failure is retried once, alone.
+compile_together! : Str, Str, List(Release.File) => Try({}, _)
+compile_together! = |roc, root, files| {
+	jobs = files.map(|file| Process.command(roc, Release.build_args(file.source, file.target, file.output), root))
+	for job in jobs {
+		Script.info!("RUN ", job.label)?
 	}
-	size = if Path.is_file!(Path.utf8(output))? Path.size_in_bytes!(Path.utf8(output))? else 0
-	Process.check!(size > 0, "${output} was not built")
+	finish_each!(files, jobs, Process.together!(jobs)?)
 }
 
-## Build the x86_64 Linux CLI a second time and require the bytes that were
-## just built: a release must be a function of its source and compiler.
-reproducible! : Str, Str, Str, Str => Try({}, _)
-reproducible! = |roc, root, work, dist| {
-	checked = Release.twice
-	again = "${work}/${checked.name}"
-	compile!(roc, root, checked.source, checked.target, again)?
-	first = Integrity.digest(Path.read_bytes!(Path.utf8("${dist}/${checked.name}"))?)
-	second = Integrity.digest(Path.read_bytes!(Path.utf8(again))?)
-	Process.check!(first == second, "${checked.name} is not reproducible: built twice from one source, its sha256 was ${first} and then ${second}")?
-	Script.pass!("${checked.name} built twice is byte-identical (sha256 ${first})")
+## Report each compilation in the order given, with its own output if it failed.
+finish_each! : List(Release.File), List(Process.Job), List(Process.Outcome) => Try({}, _)
+finish_each! = |files, jobs, outcomes|
+	match (files, jobs, outcomes) {
+		([], [], []) => Ok({})
+		([file, .. as other_files], [job, .. as other_jobs], [outcome, .. as other_outcomes]) => {
+			if outcome.code != 0 {
+				Stdout.write!("${job.label} exited with code ${outcome.code.to_str()}:\n${outcome.stdout}${outcome.stderr}\nRetrying it once.\n")?
+				_ = Process.succeed!(job)?
+			}
+			size = if Path.is_file!(Path.utf8(file.output))? Path.size_in_bytes!(Path.utf8(file.output))? else 0
+			Process.check!(size > 0, "${file.output} was not built")?
+			Script.info!("==>", file.output)?
+			finish_each!(other_files, other_jobs, other_outcomes)
+		}
+		_ => Script.fail!("the compiler did not report every file")
+	}
+
+## Require a file compiled twice to be the same bytes: a release must be a
+## function of its source and compiler.
+reproducible! : Str, Str => Try({}, _)
+reproducible! = |first, second| {
+	name = first.split_on("/").last() ?? first
+	once = Integrity.digest(Path.read_bytes!(Path.utf8(first))?)
+	again = Integrity.digest(Path.read_bytes!(Path.utf8(second))?)
+	Process.check!(once == again, "${name} is not reproducible: built twice from one source, its sha256 was ${once} and then ${again}")?
+	Script.pass!("${name} built twice is byte-identical (sha256 ${once})")
 }
 
 expect Release.store_path("{\"hash\":\"sha256-abc=\",\"storePath\":\"/nix/store/abc-roc.tar.gz\"}\n") == Ok("/nix/store/abc-roc.tar.gz")
@@ -151,3 +176,12 @@ expect Release.build_args("blueprint-cli/main.roc", "x64musl", "dist/blueprint-x
 
 # The file built twice is one of the released files, named as `dist/` names it.
 expect Release.programs.any(|program| program.source == Release.twice.source and Release.systems.any(|released| released.target == Release.twice.target and "${program.name}-${released.system}" == Release.twice.name))
+
+# Each program is built for every released system, in the systems' order.
+expect Release.files("blueprint", "dist").map(|file| file.output) == ["dist/blueprint-x86_64-linux", "dist/blueprint-aarch64-linux", "dist/blueprint-aarch64-darwin"]
+expect Release.files("smoke", "/repo/dist") == [
+	{ source: "scripts/smoke_binary.roc", target: "x64musl", output: "/repo/dist/smoke-x86_64-linux" },
+	{ source: "scripts/smoke_binary.roc", target: "arm64musl", output: "/repo/dist/smoke-aarch64-linux" },
+	{ source: "scripts/smoke_binary.roc", target: "arm64mac", output: "/repo/dist/smoke-aarch64-darwin" },
+]
+expect Release.programs.map(|program| program.name) == ["blueprint", "smoke"] and Release.files("other", "dist").is_empty()
