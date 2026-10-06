@@ -71,8 +71,8 @@ script: run it from the repository root with the pinned `roc` on `PATH`, or as
 what is installed without the network. See
 [blueprint-platform/targets/README.md](blueprint-platform/targets/README.md).
 
-`scripts/test.sh` is the full CI entry point: it fetches and verifies the linker
-inputs, builds the flake, invokes both
+`scripts/test.sh` is the full CI entry point: it fails if an object file, archive
+or import library is tracked, fetches and verifies the linker inputs, builds the flake, invokes both
 platform bundle modes (see below), and then runs each fuzz target for 30 seconds.
 `scripts/test-config.sh` checks valid configurations, imported-module composition,
 required settings, duplicates, unknown references, cycles and explicit-provider

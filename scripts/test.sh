@@ -10,6 +10,14 @@ step() { printf '\n==> %s\n' "$*"; }
 step "Formatting"
 "$ROC" fmt --check blueprint-core blueprint-platform blueprint-nix blueprint-cli fixtures examples scripts
 
+step "No binary linker input is tracked"
+# They are fetched by content from the release in link-inputs.lock.json.
+tracked="$(git ls-files -- '*.o' '*.a' '*.lib')"
+if [[ -n "$tracked" ]]; then
+	printf 'object files, archives and import libraries must not be committed:\n%s\n' "$tracked" >&2
+	exit 1
+fi
+
 step "The CLI reaches providers only through the Provider contract"
 # docs/architecture.adoc invariant 7: one selection site, no provider internals.
 imports="$(grep -E '^import nix\.' blueprint-cli/main.roc)"
