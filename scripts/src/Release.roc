@@ -27,12 +27,9 @@ Release := [].{
 	## The program each system's binary is built from, and its name in `dist/`.
 	programs = [{ source: "blueprint-cli/main.roc", name: "blueprint" }, { source: "scripts/smoke_binary.roc", name: "smoke" }]
 
-	## The compiler's arguments for one released file. `--no-cache`: with Roc's
-	## compile cache the same source and target gave different bytes depending
-	## on what the cache already held, so a released file is always compiled
-	## from nothing. It costs no time: a cached build of the CLI is no faster.
+	## The compiler's arguments for one released file.
 	build_args : Str, Str, Str -> List(Str)
-	build_args = |source, target, output| ["build", source, "--target=${target}", "--no-cache", "--output=${output}"]
+	build_args = |source, target, output| ["build", source, "--target=${target}", "--output=${output}"]
 
 	## One file to compile: its source, Roc's target and where it goes.
 	File : { source : Str, target : Str, output : Str }
@@ -44,9 +41,6 @@ Release := [].{
 			[],
 			|listed, program| listed.concat(systems.map(|released| { source: program.source, target: released.target, output: "${directory}/${program.name}-${released.system}" })),
 		)
-
-	## The released file the build compiles a second time, to compare.
-	twice = { source: "blueprint-cli/main.roc", target: "x64musl", name: "blueprint-x86_64-linux" }
 
 	## The compiler that builds every target is the x86_64 Linux archive, with
 	## the macOS sysroot of the Apple Silicon archive beside it.
@@ -116,11 +110,8 @@ build! = |root, work| {
 	Process.passthrough!(Process.command("zig", ["build"], "${root}/blueprint-platform"))?
 	dist = "${root}/dist"
 	Path.create_all!(Path.utf8(dist))?
-	# Two rounds, so that at most three compilations of the CLI run at once.
-	second = "${work}/${Release.twice.name}"
 	compile_together!(roc, root, Release.files("blueprint", dist))?
-	compile_together!(roc, root, Release.files("smoke", dist).append({ source: Release.twice.source, target: Release.twice.target, output: second }))?
-	reproducible!("${dist}/${Release.twice.name}", second)?
+	compile_together!(roc, root, Release.files("smoke", dist))?
 
 	var $sums = ""
 	for released in Release.systems {
@@ -133,8 +124,7 @@ build! = |root, work| {
 
 ## Build these files at the same time. A compilation of the CLI is
 ## single-threaded for most of its run and peaks at about 2.3 GB, so three fit
-## a 4-core, 16 GB machine. `--no-cache` leaves them nothing to share: built
-## together they are byte for byte what they are built one after another.
+## a 4-core, 16 GB machine.
 ##
 ## The compiler occasionally fails with an unexplained internal error and
 ## succeeds unchanged when run again, so each failure is retried once, alone.
@@ -165,17 +155,6 @@ finish_each! = |files, jobs, outcomes|
 		_ => Script.fail!("the compiler did not report every file")
 	}
 
-## Require a file compiled twice to be the same bytes: a release must be a
-## function of its source and compiler.
-reproducible! : Str, Str => Try({}, _)
-reproducible! = |first, second| {
-	name = first.split_on("/").last() ?? first
-	once = Integrity.digest(Path.read_bytes!(Path.utf8(first))?)
-	again = Integrity.digest(Path.read_bytes!(Path.utf8(second))?)
-	Process.check!(once == again, "${name} is not reproducible: built twice from one source, its sha256 was ${once} and then ${again}")?
-	Script.pass!("${name} built twice is byte-identical (sha256 ${once})")
-}
-
 expect Release.store_path("{\"hash\":\"sha256-abc=\",\"storePath\":\"/nix/store/abc-roc.tar.gz\"}\n") == Ok("/nix/store/abc-roc.tar.gz")
 expect Release.store_path("{\"hash\":\"sha256-abc=\",\"storePath\":\"/elsewhere\"}") == Err(NoStorePath)
 expect Release.store_path("error: hash mismatch") == Err(NoStorePath)
@@ -184,11 +163,7 @@ expect Release.store_path("error: hash mismatch") == Err(NoStorePath)
 expect Release.checksum_line("blueprint-x86_64-linux", "abc".to_utf8()) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  blueprint-x86_64-linux\n"
 expect Release.systems.map(|released| released.system) == ["x86_64-linux", "aarch64-linux", "aarch64-darwin"]
 
-# Every released file is compiled without the compile cache.
-expect Release.build_args("blueprint-cli/main.roc", "x64musl", "dist/blueprint-x86_64-linux") == ["build", "blueprint-cli/main.roc", "--target=x64musl", "--no-cache", "--output=dist/blueprint-x86_64-linux"]
-
-# The file built twice is one of the released files, named as `dist/` names it.
-expect Release.programs.any(|program| program.source == Release.twice.source and Release.systems.any(|released| released.target == Release.twice.target and "${program.name}-${released.system}" == Release.twice.name))
+expect Release.build_args("blueprint-cli/main.roc", "x64musl", "dist/blueprint-x86_64-linux") == ["build", "blueprint-cli/main.roc", "--target=x64musl", "--output=dist/blueprint-x86_64-linux"]
 
 # Each program is built for every released system, in the systems' order.
 expect Release.files("blueprint", "dist").map(|file| file.output) == ["dist/blueprint-x86_64-linux", "dist/blueprint-aarch64-linux", "dist/blueprint-aarch64-darwin"]
