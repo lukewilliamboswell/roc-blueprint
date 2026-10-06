@@ -4,9 +4,11 @@
 #
 #   scripts/smoke-binary.sh dist/blueprint-aarch64-darwin
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 BLUEPRINT="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
-WORK="$(mktemp -d)"
+# macOS temporary directories sit behind a symlink; the relative platform path
+# below must be computed from the real location.
+WORK="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 PLATFORM="$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$ROOT/blueprint-platform/main.roc" "$WORK")"
 
