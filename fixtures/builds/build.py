@@ -4,6 +4,7 @@ import errno
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 
 
@@ -42,6 +43,9 @@ def inputs():
 def main():
     mode = sys.argv[1]
     if mode == "library":
+        # Only the environment's declared tool: no implicit shell or coreutils.
+        assert len(os.environ["PATH"].split(":")) == 1, os.environ["PATH"]
+        assert shutil.which("sh") is None and shutil.which("ls") is None
         assert list(Path(os.environ["BLUEPRINT_INPUTS"]).iterdir()) == []
         assert list(Path(os.environ["BLUEPRINT_ARTIFACTS"]).iterdir()) == []
         task = Path("task-produced.txt")

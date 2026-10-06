@@ -123,10 +123,12 @@ class Suite:
             BLUEPRINT_LOCK="authority.lock",
         )
 
-    def command(self, argv, *, good=True, stdin=None):
+    def command(self, argv, *, good=True, stdin=None, cwd=None, extra=None,
+                code=None):
         self.count += 1
         result = subprocess.run(
-            list(map(str, argv)), cwd=self.caller, env=self.env,
+            list(map(str, argv)), cwd=cwd or self.caller,
+            env=self.env | (extra or {}),
             input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=300,
         )
@@ -135,7 +137,7 @@ class Suite:
         stem.with_suffix(".out").write_bytes(result.stdout)
         stem.with_suffix(".err").write_bytes(result.stderr)
         require(
-            (result.returncode == 0) if good else (result.returncode == 1),
+            result.returncode == (code if code is not None else int(not good)),
             f"{argv}: exit {result.returncode}; logs {stem}.*\n"
             + result.stderr.decode(errors="replace"),
         )
@@ -186,7 +188,7 @@ class Suite:
         pinned = seed["nodes"]["nixpkgs"]["locked"]
         ref = f'github:{pinned["owner"]}/{pinned["repo"]}/{pinned["rev"]}'
         self.packages_ref = ref
-        # Independent expected source ledger, never populated from a snapshot.
+        # Independent expected source ledger, never populated from a build.
         self.snapshot_files = {}
         self.executables = {"nested/unused-executable"}
         # Reuse the existing immutable fixture pin, never a floating branch.
@@ -220,10 +222,26 @@ class Suite:
         nested.parent.mkdir()
         nested.write_bytes(self.snapshot_files["nested/unused-executable"])
         nested.chmod(0o755)
+        # Nix records only whether the owner may execute a file, and a name
+        # need not be UTF-8.
+        raw = os.fsdecode(b"not-utf8-\xff")
+        for name, mode, executable in [
+            ("group-only-tool", 0o654, False), ("private-tool", 0o700, True),
+            ("setuid-tool", 0o4755, True), ("read-only", 0o444, False),
+            (raw, 0o600, False),
+        ]:
+            data = os.fsencode(name) + b"\xff\x00\n"
+            (self.project / name).write_bytes(data)
+            (self.project / name).chmod(mode)
+            self.snapshot_files[name] = data
+            if executable:
+                self.executables.add(name)
         for name in (".git", ".hg", ".svn", ".jj", "nested/.git"):
             directory = self.project / name
             directory.mkdir(parents=True)
             (directory / "excluded-secret").write_bytes(b"VCS excluded")
+        # An excluded entry is never inspected, so a link there is not refused.
+        (self.project / ".git/link").symlink_to(self.project / "untracked.txt")
         self.cli("check")
 
     def expected(self):
@@ -259,78 +277,179 @@ class Suite:
         expected_manifest = (json.dumps(manifest, sort_keys=True) + "\n").encode()
         require(contents["files.json"] == expected_manifest,
                 "in-derivation source bytes/modes differ from fixture ledger")
-        snapshot = self.workspace / "snapshot"
-        require(tree(snapshot) == self.snapshot_files,
-                "snapshot bytes differ from independent fixture ledger")
-        executable_files = {
-            name for name in self.snapshot_files
-            if (snapshot / name).stat().st_mode & 0o111
-        }
-        require(executable_files == self.executables, executable_files)
         require(not (self.project / "INJECTED").exists(), "argv injection")
         return output
+
+    def runner(self, spec, *, good=True, code=None):
+        """Run the production build runner on the host, as a derivation does.
+
+        Each run gets its own build directory, specification and `$out`.
+        """
+        top = Path(tempfile.mkdtemp(prefix="runner-", dir=self.work))
+        (top / "build").mkdir()
+        (top / "spec.json").write_text(json.dumps(spec))
+        result = self.command(
+            [ROOT / "blueprint", "__build-runner", top / "spec.json"],
+            good=good, code=code, cwd=top / "build",
+            extra={"out": str(top / "out")},
+        )
+        return result, top
+
+    def host_spec(self, **fields):
+        """A specification whose witness names namespaces this host lacks.
+
+        The runner compares a build's namespaces with the caller's witness.
+        A hand-written witness that differs from this process therefore lets
+        the remaining checks run here without a sandbox; the production
+        witness is the one the CLI observes for itself.
+        """
+        empty = self.work / "runner-empty"
+        empty.mkdir(exist_ok=True)
+        return {
+            "project": str(empty), "inputs": str(empty),
+            "artifacts": str(empty), "path": os.environ["PATH"],
+            "output": "output", "isolation": {"mnt": "mnt:[0]", "net": "net:[0]"},
+            "argv": [sys.executable, "-c",
+                     "open('output', 'w').write('host control')"],
+            "readlink": shutil.which("readlink"),
+            "chmod": shutil.which("chmod"),
+        } | fields
+
+    def runner_mechanics(self):
+        """Exit codes, the declared PATH and output checks, without Nix."""
+        python = [sys.executable, "-c"]
+        _, top = self.runner(self.host_spec())
+        require((top / "out").read_text() == "host control", top)
+        self.runner(self.host_spec(argv=python + ["raise SystemExit(7)"]),
+                    code=7)
+        self.runner(self.host_spec(argv=python + [
+            "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"]),
+            code=143)
+        for spec, diagnostic in [
+            # Only the declared path is searched, not this process's own.
+            (self.host_spec(path=str(self.work / "runner-empty"),
+                            argv=["env"]), "build command not found: env"),
+            (self.host_spec(argv=python + [
+                "import os; open(os.environ['out'], 'w').write('direct'); "
+                "open('output', 'w').write('declared')"]),
+             "build wrote directly to $out instead of declared Output"),
+            (self.host_spec(argv=python + [
+                "import os; os.rename(os.getcwd(), '../moved'); "
+                "os.symlink('moved', '../blueprint-work'); "
+                "open('../moved/output', 'w').write('moved')"]),
+             "build replaced the project workspace"),
+            (self.host_spec(output="../escape"),
+             "invalid declared relative output"),
+            (self.host_spec(argv=python + ["import os; os.mkfifo('output')"]),
+             "special file is not allowed in build output/source"),
+        ]:
+            result, top = self.runner(spec, good=False)
+            require(diagnostic.encode() in result.stderr, result.stderr)
+            require(result.stderr.startswith(b"blueprint build: "),
+                    result.stderr)
+            if "$out" not in diagnostic:
+                require(not os.path.lexists(top / "out"), "failure published")
+        print("PASS runner exit codes, declared PATH and output checks "
+              "(host, hand-written witness)")
+
+    def reject_unsafe_project_entries(self):
+        """Symlinks and special files are refused wherever the build reads."""
+        for kind in ("file-link", "dir-link", "dangling", "fifo"):
+            for where in ("", "nested/"):
+                bad = self.project / f"{where}bad"
+                if kind == "fifo":
+                    os.mkfifo(bad)
+                    message = f"snapshot refuses special file: {bad}"
+                else:
+                    bad.symlink_to({
+                        "file-link": self.project / "untracked.txt",
+                        "dir-link": self.project / "nested",
+                        "dangling": self.project / "absent",
+                    }[kind])
+                    message = f"snapshot refuses symlink: {bad}"
+                result = self.cli("build", "library", good=False,
+                                  contains=message)
+                require(not result.stdout and b"built " not in result.stderr,
+                        "refused project entry published success")
+                bad.unlink()
+        # Excluded entries are never inspected, whatever they are.
+        os.mkfifo(self.project / ".git/fifo")
+        self.build("library")
+        (self.project / ".git/fifo").unlink()
+        print("PASS project symlinks and special files refused at any depth; "
+              "excluded entries never inspected")
 
     def reject_unsandboxed_runner(self):
         """Execute the real runner on the host; never reach user Run.
 
-        Uses the snapshot and witness the CLI published for a real build.
+        Uses the namespace identities the CLI staged for a real build.
         """
         source = self.work / "runner-source"
         source.mkdir()
         (source / "input").write_bytes(b"project bytes only\n")
-        snapshot = self.workspace / "snapshot"
-        sidecar = Path(str(snapshot) + ".isolation.json")
-        observed = json.loads(sidecar.read_text())
-        require(observed == {
+        observed = {
             name: os.readlink(f"/proc/self/ns/{name}")
             for name in ("mnt", "net")
-        }, "snapshot did not capture caller namespaces")
-        require(tree(snapshot) == self.snapshot_files,
-                "isolation witness leaked into project bytes")
-        before = sidecar.read_bytes()
-        self.build("library")
-        require(sidecar.read_bytes() == before, "witness defeats build caching")
-        # Failed verification must preserve both previously published outputs.
-        (self.project / "bad-link").symlink_to(self.project / "untracked.txt")
-        previous = tree(snapshot), sidecar.read_bytes()
-        result = self.cli("build", "library", good=False)
-        require(b"snapshot refuses symlink" in result.stderr, result.stderr)
-        require((tree(snapshot), sidecar.read_bytes()) == previous,
-                "failed snapshot changed a published tree or witness")
-        (self.project / "bad-link").unlink()
-        marker = self.work / "unsandboxed-run-was-executed"
-        spec = {
-            "project": str(snapshot), "path": os.environ["PATH"],
-            "inputs": str(source), "artifacts": str(source),
-            "output": "output",
-            "argv": [sys.executable, "-c",
-                     f"from pathlib import Path; Path({str(marker)!r})"
-                     ".write_text('unsafe')"],
         }
+        flake = self.generated / "flake.nix"
+        self.build("library")
+        literal = 'isolation = {{ mnt = "{mnt}"; net = "{net}"; }};'.format(
+            **observed)
+        require(literal in flake.read_text(),
+                "staged build did not capture caller namespaces")
+        require("@blueprint-caller" not in flake.read_text(),
+                "staged build kept an unobserved placeholder")
+        before = flake.read_bytes()
+        self.build("library")
+        require(flake.read_bytes() == before, "witness defeats build caching")
+        marker = self.work / "unsandboxed-run-was-executed"
+        spec = self.host_spec(
+            project=str(source), inputs=str(source), artifacts=str(source),
+            argv=[sys.executable, "-c",
+                  f"from pathlib import Path; Path({str(marker)!r})"
+                  ".write_text('unsafe')"],
+        )
         cases = [
-            observed,
-            {**observed, "net": "net:[0]"},
-            {**observed, "mnt": "mnt:[0]"},
-            {"mnt": "invalid", "net": observed["net"]},
-            None,
+            (observed, "Build shares caller mnt namespace."),
+            ({**observed, "net": "net:[0]"},
+             "Build shares caller mnt namespace."),
+            ({**observed, "mnt": "mnt:[0]"},
+             "Build shares caller net namespace."),
+            ({"mnt": "invalid", "net": observed["net"]},
+             "Invalid caller mnt namespace."),
+            ({"mnt": "mnt:[0]", "net": "net:[0] "},
+             "Invalid caller net namespace."),
+            (None, "Missing caller namespace observations."),
+            ({"mnt": "mnt:[0]"}, "Missing caller namespace observations."),
         ]
-        path = self.work / "runner-spec.json"
-        for isolation in cases:
-            path.write_text(json.dumps({**spec, "isolation": isolation}))
-            result = self.command([
-                sys.executable, ROOT / "blueprint-nix/build-runner.py",
-                path,
-            ], good=False)
-            require(b"user Run was not executed" in result.stderr,
+        specs = [({**spec, "isolation": isolation}, reason)
+                 for isolation, reason in cases]
+        # A witness that differs still fails closed when the build's own
+        # namespaces cannot be read.
+        unreadable = {**spec, "readlink": str(self.work / "no-readlink")}
+        specs.append((unreadable, "Cannot read build mnt namespace"))
+        absent = dict(spec)
+        del absent["isolation"]
+        specs.append((absent, "Missing caller namespace observations."))
+        for candidate, reason in specs:
+            result, top = self.runner(candidate, good=False)
+            require(b"blueprint build: cannot verify build isolation; "
+                    b"user Run was not executed" in result.stderr,
                     result.stderr)
             require(b"daemon configuration" in result.stderr, result.stderr)
+            require(reason.encode() in result.stderr, result.stderr)
             require(not marker.exists(), "unsandboxed user Run executed")
-            require(not (self.caller / "blueprint-work").exists(),
+            require(sorted(top.iterdir()) == [top / "build", top / "spec.json"],
+                    "isolation check happened after an effect")
+            require(not list((top / "build").iterdir()),
                     "isolation check happened after workspace setup")
         print("PASS unsandboxed runner fails closed before user Run")
 
     def reject_unsafe_fetched_sources(self):
-        """Filesystem unit gate for the runner's local/remote source boundary."""
+        """Filesystem unit gate for the runner's local/remote source boundary.
+
+        The production runner checks a source farm on the host; see host_spec.
+        """
         source = self.work / "fetched-source"
         source.mkdir()
         (source / "data").write_bytes(b"locked bytes\n")
@@ -338,25 +457,37 @@ class Suite:
         farm.mkdir()
         entry = farm / "assets"
         entry.symlink_to(source)
-        check = (
-            "import runpy,sys; "
-            "runpy.run_path(sys.argv[1])['check_inputs'](sys.argv[2])"
-        )
-        argv = [sys.executable, "-I", "-c", check,
-                ROOT / "blueprint-nix/build-runner.py", farm]
-        self.command(argv)
+        sentinel = self.work / "fetched-source-run-was-executed"
+        spec = self.host_spec(inputs=str(farm), argv=[
+            sys.executable, "-c",
+            f"open({str(sentinel)!r}, 'w').write('run'); "
+            "open('output', 'w').write('safe source')"])
+        _, top = self.runner(spec)
+        require((top / "out").read_text() == "safe source", top)
+        sentinel.unlink()
         for target in (source / "data", self.work / "outside-source"):
             (source / "link").symlink_to(target)
-            result = self.command(argv, good=False)
+            result, _ = self.runner(spec, good=False)
             require(b"symlink is not allowed" in result.stderr, result.stderr)
             (source / "link").unlink()
+        os.mkfifo(source / "pipe")
+        result, _ = self.runner(spec, good=False)
+        require(b"special file is not allowed" in result.stderr, result.stderr)
+        (source / "pipe").unlink()
         # A fetched root link is not confused with the allowed farm link.
         alias = self.work / "fetched-root-link"
         alias.symlink_to(source)
         entry.unlink()
         entry.symlink_to(alias)
-        result = self.command(argv, good=False)
+        result, _ = self.runner(spec, good=False)
         require(b"symlink is not allowed" in result.stderr, result.stderr)
+        # Only generated links belong in a farm.
+        entry.unlink()
+        (farm / "plain").write_bytes(b"not a link\n")
+        result, _ = self.runner(spec, good=False)
+        require(b"expected generated source link" in result.stderr,
+                result.stderr)
+        require(not sentinel.exists(), "user Run reached past an unsafe source")
         print("PASS fetched source filesystem policy (runner unit gate)")
 
     def reject_remote_symlink_build(self):
@@ -437,6 +568,7 @@ class Suite:
 
     def run(self):
         self.reject_unsafe_fetched_sources()
+        self.runner_mechanics()
         self.prepare()
         # Ordinary operations must neither initialize authority nor stage files.
         for args in [("gen",), ("shell",), ("run", "args"), ("build", "app")]:
@@ -462,10 +594,11 @@ class Suite:
         first = self.graph()
         print("PASS file/directory/diamond graph, argv, readonly, exclusions")
         self.reject_unsandboxed_runner()
+        self.reject_unsafe_project_entries()
 
         # A unique nonce prevents a cached derivation from faking isolation.
         token = secrets.token_hex(24).encode()
-        # The project/snapshots remain under TMPDIR in the caller's cache.
+        # The project remains under TMPDIR in the caller's cache.
         # A tiny external probe needs traversable parents: HOME may be 0700,
         # which would make denial a permissions result rather than isolation.
         with tempfile.TemporaryDirectory(
@@ -502,8 +635,8 @@ class Suite:
         (self.project / "task-produced.txt").unlink()
         del self.snapshot_files["task-produced.txt"]
         fourth = self.graph()
-        require(third != fourth, "deleted file survived snapshot refresh")
-        print("PASS fresh snapshots after untracked edits, tasks and deletions")
+        require(third != fourth, "deleted file survived a fresh build")
+        print("PASS fresh project copies after untracked edits, tasks and deletions")
 
         for name, diagnostic in [
             ("missing", "declared output is missing"),
@@ -514,6 +647,16 @@ class Suite:
             require(not result.stdout and b"built " not in result.stderr,
                     "failed build published success metadata")
         print("PASS missing/symlink outputs fail without publishing success")
+
+        # A build sees its environment's tools and nothing else: neither an
+        # undeclared interpreter nor the shell earlier versions supplied.
+        for name, tool in [("undeclared", "python3"),
+                           ("undeclared-shell", "sh")]:
+            result = self.cli("build", name, good=False,
+                              contains=f"build command not found: {tool}")
+            require(not result.stdout and b"built " not in result.stderr,
+                    "undeclared tool published success")
+        print("PASS undeclared build tools are not found")
 
         before = tree(self.generated), tree(self.workspace)
         asset = self.project / "assets/message.txt"
@@ -529,7 +672,7 @@ class Suite:
         original = self.graph()
         print("PASS dirty local source rejected until explicit update")
 
-        # Unsupported dependency closure must fail before any Nix or snapshot.
+        # Unsupported dependency closure must fail before any Nix or staging.
         config = self.project / "Blueprint.roc"
         foreign = self.config.replace(
             '"library",\n\t\t[\n\t\t\tUse("builder")',
@@ -577,7 +720,7 @@ def main():
     require(sys.platform == "linux" and platform.machine() == "x86_64",
             "B2 requires x86_64 Linux; unsupported is not a pass")
     require((ROOT / "blueprint").is_file(), "build ./blueprint first")
-    # Respect caller TMPDIR; potentially large snapshots must not use /tmp.
+    # Respect caller TMPDIR; potentially large projects must not use /tmp.
     work = Path(tempfile.mkdtemp(prefix="blueprint-b2-"))
     try:
         Suite(work).run()

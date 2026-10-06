@@ -11,7 +11,7 @@ The runner copies the listed fixture inputs into a temporary project and renders
 `Blueprint.roc.in` with the local platform and the immutable nixpkgs revision
 already recorded in `fixtures/consumer/inputs.lock`. It never changes repository
 pins. Every Nix subprocess is transparently logged and executed with
-`--offline`; the pinned source and Python/stdenv/Bash/coreutils closures must
+`--offline`; the pinned source and Python/stdenv/coreutils closures must
 already be cached. Missing cache entries fail, not skip. Dependency provisioning
 is separate from user build-command networking. Remote builders are disabled.
 
@@ -29,6 +29,11 @@ Assertions cover:
 - actual failed writes to source files/directories and dependency outputs;
 - filtered local inputs, VCS metadata, authority, workspace and generated roots;
 - fresh snapshots after untracked edits, task-generated files and deletion;
+- project symlinks and special files refused at any depth, the owner's execute
+  bit and non-UTF-8 names preserved, excluded entries never inspected;
+- the production runner on the host: fail-closed isolation before any effect,
+  exit codes, the declared `PATH` and output checks;
+- undeclared tools not found in a real build;
 - missing and symlink output failures with no successful artifact publication;
 - immutable lock bytes, inode, mode and mtime for ordinary commands, including
   real shell entry, task execution and builds; no implicit Nix lock commands;

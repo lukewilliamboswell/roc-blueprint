@@ -101,8 +101,8 @@ group_cli() {
 	step "Explicit update source safety and concurrent authority publication"
 	python3 scripts/test-update.py
 
-	step "Build snapshots, mode normalization and the isolation witness"
-	python3 scripts/test-snapshot.py
+	step "Staged isolation witness, build runner path and refusals"
+	python3 scripts/test-isolation.py
 }
 
 group_nix() {
