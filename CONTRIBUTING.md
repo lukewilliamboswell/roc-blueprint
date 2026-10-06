@@ -72,7 +72,8 @@ roc test blueprint-cli/main.roc             # the CLI's, the Nix provider's and 
 roc build blueprint-cli/main.roc --output=./blueprint
 (cd examples/all-settings && ../../blueprint run --help) # try the CLI
 scripts/test.roc                            # everything CI runs
-scripts/test.roc unit cli                   # or only some groups
+scripts/test.roc unit cli                   # or only some groups: static, unit,
+                                            # cli, scenarios, builds, package, fuzz
 scripts/fuzz.roc 300                        # fuzz each target for 5 minutes
 ```
 
@@ -92,12 +93,16 @@ See
 (formatting; no tracked object file, archive or import library; the CLI's use of
 the Provider contract; `roc_overlay` against `flake.lock`; the flake's list of
 core modules and its version), `unit` (the platform's, the scripts', the CLI's
-and the consumer's `expect`s and the configuration fixtures), `cli`, `nix`,
+and the consumer's `expect`s and the configuration fixtures), `cli`,
+`scenarios` (`test_scenarios.roc`, `test_roc_packages.roc` and the golden
+flakes parsed by Nix), `builds` (`test_builds.roc` and `test_workflows.roc`),
 `package` (the flake's package and development shell, the packaged CLI building
 an artifact with only Nix on `PATH`, and the platform bundled against the local
 core, see below) and `fuzz` (each target's committed corpus, replayed, which
 takes seconds; `.github/workflows/fuzz.yml` fuzzes each target for five minutes
-every week and uploads any crashing input).
+every week and uploads any crashing input). `scenarios` and `builds` are the
+real-Nix suites, split into two groups of about the same length so that CI runs
+them as two jobs at the same time.
 `scripts/test_config.roc` runs the compiler on generated `Blueprint.roc`
 fixtures: the platform's own rules, which only a compiler run can show (a
 setting given twice or not at all, in `Lower.roc`, and each checked name's
@@ -206,7 +211,7 @@ The complete suite requires x86_64 Linux and a running Nix daemon; the
 development shell supplies the rest. `zig build` builds the platform host for
 all four targets, so on Apple Silicon macOS the CLI's tests, the native CLI and
 the evaluation of a `Blueprint.roc` work too. Sandboxed builds, and so the
-`nix` and `package` groups, remain x86_64 Linux only.
+`scenarios`, `builds` and `package` groups, remain x86_64 Linux only.
 
 ## The Spec
 

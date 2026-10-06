@@ -10,13 +10,13 @@ import StaticChecks
 
 ## Everything CI checks, in groups that CI runs as separate jobs.
 ##
-## The `cli` and `nix` groups use `./blueprint`. They build it unless
+## The `cli`, `scenarios` and `builds` groups use `./blueprint`. They build it unless
 ## `BLUEPRINT_PREBUILT=1` says the caller already put a tested binary there.
 ## The caller then answers for the platform hosts too: when every
 ## `targets/<target>/libhost.a` is present, they are used as they are, and
 ## when any is missing all are built.
 TestSuite := [].{
-	groups = ["static", "unit", "cli", "nix", "package", "fuzz"]
+	groups = ["static", "unit", "cli", "scenarios", "builds", "package", "fuzz"]
 
 	## The groups a command line asks for: all of them, in order, when it names none.
 	requested : List(Str) -> Try(List(Str), [UnknownGroup(Str)])
@@ -114,9 +114,13 @@ group! = |context, name, done|
 		ready = build_cli!(context, prepare!(context, done)?)?
 		cli!(context)?
 		Ok(ready)
-	} else if name == "nix" {
+	} else if name == "scenarios" {
 		ready = build_cli!(context, prepare!(context, done)?)?
-		nix!(context)?
+		scenarios!(context)?
+		Ok(ready)
+	} else if name == "builds" {
+		ready = build_cli!(context, prepare!(context, done)?)?
+		builds!(context)?
 		Ok(ready)
 	} else if name == "package" {
 		prepared = prepare!(context, done)?
@@ -255,19 +259,15 @@ cli! = |context| {
 	script!(context, "test_isolation", [])
 }
 
-nix! : Context => Try({}, _)
-nix! = |context| {
+## The real-Nix suites are two groups of about the same length, so that CI
+## runs them as two jobs at the same time. This one enters environments.
+scenarios! : Context => Try({}, _)
+scenarios! = |context| {
 	step!("Examples, scoped overlays, system-scoped tools and renamed commands through real Nix")?
 	script!(context, "test_scenarios", [])?
 
 	step!("Locked Roc packages: published for tasks, private to sandboxed builds")?
 	script!(context, "test_roc_packages", [])?
-
-	step!("Sandboxed artifacts, isolation, sources and immutable locks")?
-	script!(context, "test_builds", [])?
-
-	step!("Ordered workflows, failure propagation and fresh build operations")?
-	script!(context, "test_workflows", [])?
 
 	step!("Golden flakes parse as Nix")?
 	tests = "${context.root}/blueprint-nix/tests"
@@ -279,6 +279,16 @@ nix! = |context| {
 		_ = Process.succeed!(Process.command("nix-instantiate", ["--parse", "${tests}/${golden}"], context.root))?
 	}
 	Ok({})
+}
+
+## The other real-Nix group: sandboxed builds, alone and in workflows.
+builds! : Context => Try({}, _)
+builds! = |context| {
+	step!("Sandboxed artifacts, isolation, sources and immutable locks")?
+	script!(context, "test_builds", [])?
+
+	step!("Ordered workflows, failure propagation and fresh build operations")?
+	script!(context, "test_workflows", [])
 }
 
 packaged! : Context => Try({}, _)
@@ -355,7 +365,11 @@ packaged_build! = |context, package_path, work| {
 	)
 }
 
-expect TestSuite.requested([]) == Ok(["static", "unit", "cli", "nix", "package", "fuzz"])
+expect TestSuite.requested([]) == Ok(["static", "unit", "cli", "scenarios", "builds", "package", "fuzz"])
+expect TestSuite.requested(["scenarios", "builds"]) == Ok(["scenarios", "builds"])
+
+# The real-Nix suites were one group, `nix`; it is not kept as a second name.
+expect TestSuite.requested(["nix"]) == Err(UnknownGroup("nix"))
 expect TestSuite.requested(["unit", "cli"]) == Ok(["unit", "cli"])
 expect TestSuite.requested(["unit", "units"]) == Err(UnknownGroup("units"))
 expect TestSuite.packaged_project("../pf/main.roc", "github:NixOS/nixpkgs/abc").contains("Packages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\")))")
