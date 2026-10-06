@@ -1,6 +1,6 @@
 # Locked sources and dependent artifacts
 
-From the repository's contributor shell, build the local platform host and CLI
+From the repository's development shell (`nix develop`), build the local platform host and CLI
 as described in [CONTRIBUTING](../../CONTRIBUTING.md), then:
 
 ```sh

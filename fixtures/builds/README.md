@@ -1,6 +1,6 @@
 # Real build gates
 
-Run from the repository root, in the contributor shell, after building the
+Run from the repository root, in the development shell (`nix develop`), after building the
 platform host and the CLI:
 
 ```sh

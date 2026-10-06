@@ -5,6 +5,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     roc-overlay.url = "github:roc-lang/roc-overlay";
     roc-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    # The official prebuilt Zig. nixpkgs builds its own against LLVM, which
+    # makes the development shell several times larger.
+    zig-overlay.url = "github:mitchellh/zig-overlay";
+    zig-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -12,6 +16,7 @@
       self,
       nixpkgs,
       roc-overlay,
+      zig-overlay,
     }:
     let
       systems = [
@@ -140,14 +145,12 @@
           devShells.default = pkgs.mkShellNoCC {
             packages = [
               roc
-              pkgs.zig_0_16
+              zig-overlay.packages.${system}."0.16.0"
               pkgs.coreutils
               pkgs.gitMinimal
               pkgs.curl
               pkgs.gnutar
               pkgs.gzip
-              # Remove with the last Python test (scripts/*.py).
-              pkgs.python3
             ];
           };
         };

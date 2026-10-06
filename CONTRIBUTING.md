@@ -276,8 +276,7 @@ Blueprint's own tree digest from core `Tree`) and provider-namespaced
 `hints`. The Nix provider's hint carries its declared input identity and the
 complete native lock graph; decoding rejects a lock whose Sources disagree with
 those pins, so hand edits to either side fail. Older JSON locks are not
-migrated: run `blueprint update`. `scripts/lockfile.py` reads locks in tests,
-and `fuzz/lock-parse` fuzzes the parser.
+migrated: run `blueprint update`. `fuzz/lock-parse` fuzzes the parser.
 
 ### Compatibility
 
