@@ -19,7 +19,7 @@ NixProvider :: [].{
 	provider : Provider
 	provider = Provider.{
 		name: "nix",
-		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands"],
+		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages"],
 		render: |spec| render(spec).map_ok(
 			|contents| [{ path: "flake.nix", contents }],
 		),
@@ -79,6 +79,7 @@ NixProvider :: [].{
 		argv : List(Str),
 		contents : Str,
 		action : [Generate, Shell(Str), Run(Str), Build(Str)],
+		roc_packages : List(Spec.RocPackage),
 	}
 
 	## Expand only semantic requests. Every atomic request shares this selection
@@ -238,7 +239,13 @@ NixProvider :: [].{
 			}
 			_ => {}
 		}
-		Ok({ project, inputs, builds: $builds, argv: $argv, contents, action: $action })
+		# Only a shell or task runs Roc on the host; a build has its own cache.
+		entered = match $action {
+			Shell(_) | Run(_) => $names
+			_ => []
+		}
+		roc_packages = project.roc_packages.keep_if(|entry| entered.contains(entry.environment))
+		Ok({ project, inputs, builds: $builds, argv: $argv, contents, action: $action, roc_packages })
 	}
 
 	## Derive executable data only after complete structure, selected capability,
@@ -268,9 +275,20 @@ NixProvider :: [].{
 	## An isolation observation belongs to one explicit build, never an artifact name.
 	## Recheck supplied local pins on every step, including after source-editing tasks.
 	materialize_plan = |selected, target, layout, derived| {
-		{ builds, argv, contents, action, .. } = selected
+		{ builds, argv, contents, action, roc_packages, .. } = selected
 		base_ref = "path:${layout.generated_root}"
 		var $operations = derived.operations
+		match roc_packages.first() {
+			Ok(first) => {
+				$operations = $operations.append(
+					RocPackages({
+						names: roc_packages.map(|entry| entry.name),
+						locate: locate_roc_packages(layout, first.environment),
+					}),
+				)
+			}
+			Err(_) => {}
+		}
 		match action {
 			Build(_) => {
 				$operations = $operations.append(Isolation({ mnt: caller_mnt, net: caller_net }))
@@ -298,6 +316,23 @@ NixProvider :: [].{
 			),
 		}
 	}
+
+	## Where one environment's locked Roc bundles are unpacked, as JSON. The
+	## staged lock pins every input and may not change, so this reads exactly
+	## the trees the Lock names and fetches one only if it is not yet present.
+	locate_roc_packages : Layout, Str -> List(Str)
+	locate_roc_packages = |layout, environment| [
+		"nix",
+		"eval",
+		"--json",
+		"--no-update-lock-file",
+		"--no-write-lock-file",
+		"path:${layout.generated_root}#${roc_packages_output}.${environment}",
+	]
+
+	## The flake output `locate_roc_packages` evaluates, per environment.
+	roc_packages_output : Str
+	roc_packages_output = "blueprintRocPackages"
 
 	## Placeholders the executor replaces with the caller's namespace identities
 	## and its own executable path when it stages a build's files (see
@@ -514,7 +549,7 @@ NixProvider :: [].{
 		check_attr_names(
 			"the raw flake outputs",
 			$flake_raw.map(|a| a.name),
-			["devShells", "packages"],
+			["devShells", "packages", roc_packages_output],
 		)?
 		for shell in spec.shells {
 			if shell.name.starts_with("blueprint-env-") {
@@ -638,6 +673,10 @@ NixProvider :: [].{
 			$rendered = append_rendered($rendered, "        };\n")?
 		}
 		$rendered = append_rendered($rendered, "      };\n")?
+		$rendered = append_rendered(
+			$rendered,
+			render_roc_packages(environments.map(|e| e.name), spec.roc_packages),
+		)?
 		if !builds.is_empty() {
 			$rendered = append_rendered($rendered, render_source(copied))?
 			for system in spec.systems {
@@ -650,7 +689,7 @@ NixProvider :: [].{
 						.map_err(|_| "unknown build environment")?
 					$rendered = append_rendered(
 						$rendered,
-						render_build(build, env, spec.system_tools, spec.commands, system),
+						render_build(build, env, spec.system_tools, spec.commands, spec.roc_packages, system),
 					)?
 				}
 				$rendered = append_rendered(
@@ -788,8 +827,19 @@ NixProvider :: [].{
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
 	## The builder is `blueprint __build-runner`, with no shell around it. Its
 	## own tools are absolute paths; argv and metadata enter through JSON.
-	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), Str -> Str
-	render_build = |build, environment, system_tools, commands, system| {
+	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.RocPackage), Str -> Str
+	render_build = |build, environment, system_tools, commands, roc_packages, system| {
+		# A build has no network, so the runner gives Roc a cache of its own
+		# holding these. Other builds' derivations stay as they were.
+		bundles = roc_packages.keep_if(|entry| entry.environment == environment.name).map(roc_package_location)
+		package_lines = if bundles.is_empty() {
+			[]
+		} else {
+			[
+				"              roc_packages = [ ${Str.join_with(bundles, " ")} ];",
+				"              ln = \"\${pkgs.coreutils}/bin/ln\";",
+			]
+		}
 		sources = source_names(environment, system_tools, commands)
 		primary = sources.first() ?? "default"
 		overlays = environment.overlays.map(
@@ -843,11 +893,36 @@ NixProvider :: [].{
 					.concat(" [ ${Str.join_with(dependencies, " ")} ];"),
 				"              readlink = \"\${pkgs.coreutils}/bin/readlink\";",
 				"              chmod = \"\${pkgs.coreutils}/bin/chmod\";",
+			]),
+		).concat(lines(package_lines)).concat(
+			lines([
 				"            };",
 				"            passAsFile = [ \"blueprintSpec\" ];",
 				"          };",
 			]),
 		)
+	}
+
+	## One locked bundle: the hash Roc looks for and its unpacked store path.
+	roc_package_location : Spec.RocPackage -> Str
+	roc_package_location = |entry|
+		"{ name = ${quote(entry.name)}; path = inputs.${quote(entry.source)}.outPath; }"
+
+	## The output a shell or task consumer evaluates to find an environment's
+	## locked bundles. Absent unless a selected environment has Roc packages.
+	render_roc_packages : List(Str), List(Spec.RocPackage) -> Str
+	render_roc_packages = |environments, roc_packages| {
+		entries = environments.keep_if(|name| roc_packages.any(|entry| entry.environment == name)).map(
+			|name| {
+				bundles = roc_packages.keep_if(|entry| entry.environment == name).map(roc_package_location)
+				"        ${quote(name)} = [ ${Str.join_with(bundles, " ")} ];"
+			},
+		)
+		if entries.is_empty() {
+			""
+		} else {
+			lines(["      ${roc_packages_output} = {"]).concat(lines(entries)).concat(lines(["      };"]))
+		}
 	}
 
 	raw_attrs : Spec.Raw -> Try(List({ name : Str, value : Value }), Str)
@@ -1533,6 +1608,138 @@ expect match plan_fixture(Request.Shell("default")) {
 	]
 		and plan.artifacts.is_empty()
 	_ => False
+}
+
+# Roc packages: `packages` locks one bundle, `scripts` inherits it and adds
+# another, and `builder` has none.
+roc_project : Spec
+roc_project = {
+	..TestData.project({
+		..TestData.data,
+		environments: [
+			TestData.builder,
+			{ name: "packages", parents: [], tools: [], overlays: [] },
+			{ name: "scripts", parents: ["packages"], tools: [], overlays: [] },
+		],
+		shells: [{ name: "default", environment: "builder" }, { name: "scripts", environment: "scripts" }],
+		tasks: TestData.data.tasks.append({ name: "script", environment: "scripts", run: ["roc", "main.roc"] }),
+		build_sources: [
+			{ name: "assets", ref: "path:./assets" },
+			{ name: "roc-abc", ref: "tarball+https://example.test/abc.tar.zst" },
+			{ name: "roc-def", ref: "tarball+https://example.test/def.tar.zst" },
+		],
+		builds: [TestData.library, { ..TestData.library, name: "script", environment: "scripts" }],
+		requires_: ["sources", "builds", "roc-packages"],
+	}),
+	roc_packages: [
+		{ environment: "packages", name: "abc", source: "roc-abc" },
+		{ environment: "scripts", name: "def", source: "roc-def" },
+	],
+}
+
+roc_plan : Request -> Try(Steps, Str)
+roc_plan = |request| {
+	node = |hash|
+		"\"roc-${hash}\": { \"flake\": false, \"locked\": { \"narHash\": \"sha256-mhO52EWOvxHOyTFt0V1hM6Oo6mlpNo2PFlxQtcmCJBc=\", \"type\": \"tarball\", \"url\": \"https://example.test/${hash}.tar.zst\" }, \"original\": { \"type\": \"tarball\", \"url\": \"https://example.test/${hash}.tar.zst\" } },"
+	native = native_lock
+		.replace_each("    \"root\": {", "    ${node("abc")}\n    ${node("def")}\n    \"root\": {")
+		.replace_each("\"default\": \"default\" }", "\"default\": \"default\", \"roc-abc\": \"roc-abc\", \"roc-def\": \"roc-def\" }")
+	locks = resolved(roc_project, native)?
+	NixProvider.plan(roc_project, request, "x86_64-linux", TestData.layout, locks)
+}
+
+roc_packages_output : Str
+roc_packages_output = Str.join_with(
+	[
+		"      blueprintRocPackages = {",
+		"        \"scripts\" = [ { name = \"abc\"; path = inputs.\"roc-abc\".outPath; } { name = \"def\"; path = inputs.\"roc-def\".outPath; } ];",
+		"      };",
+		"",
+	],
+	"\n",
+)
+
+# A task or shell whose environment has Roc packages publishes them after its
+# verified files are staged: every inherited bundle, located from the staged
+# lock alone.
+expect {
+	publish = RocPackages({
+		names: ["abc", "def"],
+		locate: [
+			"nix",
+			"eval",
+			"--json",
+			"--no-update-lock-file",
+			"--no-write-lock-file",
+			"path:/generated#blueprintRocPackages.scripts",
+		],
+	})
+	verify = VerifyTree({ path: "/project/assets", digest: assets_tree })
+	match (roc_plan(Request.Run("script", ["extra"])), roc_plan(Request.Shell("scripts"))) {
+		(Ok({ steps: [task] }), Ok({ steps: [shell] })) =>
+			task.operations == [verify, publish] and shell.operations == [verify, publish]
+				and task.argv.take_last(3) == ["roc", "main.roc", "extra"]
+					and task.files.first().map_ok(|file| file.contents.contains(roc_packages_output)) == Ok(True)
+						and shell.files.first().map_ok(|file| file.contents.contains(roc_packages_output)) == Ok(True)
+		_ => False
+	}
+}
+
+# An environment without Roc packages costs nothing: no operation, and no
+# output in its flake, even though the project locks bundles for another.
+expect [Request.Run("check", []), Request.Shell("default")].all(
+	|request|
+		match roc_plan(request) {
+			Ok({ steps: [plan] }) => plan.operations == [VerifyTree({ path: "/project/assets", digest: assets_tree })]
+				and plan.files.first().map_ok(|file| file.contents.contains("blueprintRocPackages") or file.contents.contains("roc_packages")) == Ok(False)
+			_ => False
+		},
+)
+
+# A build publishes nothing on the host. Its specification names the bundles
+# and the `ln` that links them into the build's own cache, and a build whose
+# environment has none keeps the specification it always had.
+expect match (roc_plan(Request.Build("script")), roc_plan(Request.Build("library")), roc_plan(Request.Generate)) {
+	(Ok({ steps: [script] }), Ok({ steps: [library] }), Ok({ steps: [generate] })) => {
+		host_only = |step| !step.operations.any(
+			|operation|
+				match operation {
+					RocPackages(_) => True
+					_ => False
+				},
+		)
+		with_packages = Str.join_with(
+			[
+				"              chmod = \"\${pkgs.coreutils}/bin/chmod\";",
+				"              roc_packages = [ { name = \"abc\"; path = inputs.\"roc-abc\".outPath; } { name = \"def\"; path = inputs.\"roc-def\".outPath; } ];",
+				"              ln = \"\${pkgs.coreutils}/bin/ln\";",
+				"            };",
+				"",
+			],
+			"\n",
+		)
+		without = "              chmod = \"\${pkgs.coreutils}/bin/chmod\";\n            };\n"
+		contents = |step| step.files.first().map_ok(|file| file.contents) ?? ""
+		host_only(script) and host_only(library) and host_only(generate)
+			and contents(script).contains(with_packages) and !contents(script).contains(without)
+				and contents(library).contains(without) and !contents(library).contains("roc_packages")
+					and !contents(library).contains("bin/ln")
+	}
+	_ => False
+}
+
+# Inspection renders the locked bundles and every environment's output.
+expect match NixProvider.render(roc_project) {
+	Ok(text) => text.contains("    \"roc-abc\" = { url = \"tarball+https://example.test/abc.tar.zst\"; flake = false; };\n")
+		and text.contains(roc_packages_output)
+			and !text.contains("shellHook")
+	Err(_) => False
+}
+
+# The output name belongs to the provider.
+expect {
+	raw = { backend: "nix", target: "flake", value: Value.Attrs([{ name: "blueprintRocPackages", value: Value.Int(1) }]) }
+	rejects({ ..simple, requires_: ["raw"], raw: [raw] }, "which the Nix provider writes itself")
 }
 
 # Generate produces no provider command or observation and never writes authority.
