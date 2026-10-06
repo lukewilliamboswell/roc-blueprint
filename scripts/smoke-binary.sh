@@ -16,12 +16,18 @@ WORK="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 PLATFORM="$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$ROOT/blueprint-platform/main.roc" "$WORK")"
 
+# Built beforehand: inside a here-document bash drops the double quotes in the
+# word of ${var:+word}, which left the setting without its string quotes.
+packages=""
+if [[ -n "${SMOKE_PACKAGES:-}" ]]; then
+	packages=$'\n\t'"Packages(\"default\", From(NixPackages(\"$SMOKE_PACKAGES\"))),"
+fi
+
 cat >"$WORK/Blueprint.roc" <<EOF
 app [config] { pf: platform "$PLATFORM" }
 
 config = [
-	Name("smoke"),${SMOKE_PACKAGES:+
-	Packages("default", From(NixPackages("$SMOKE_PACKAGES"))),}
+	Name("smoke"),$packages
 	Overlay("roc", "github:roc-lang/roc-overlay"),
 	Environment("dev", [Tools(["git"]), Overlays(["roc"]), Command("roc-stable", "rocpkgs.nightly")]),
 	Shell("default", [Use("dev")]),
