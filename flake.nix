@@ -108,8 +108,10 @@
               runHook preInstall
               install -Dm755 blueprint "$out/bin/blueprint"
               # Default to the pinned Roc; ROC in the environment still wins.
+              # Builds run chmod and readlink; the host's own come first.
               wrapProgram "$out/bin/blueprint" \
-                --set-default ROC ${lib.getExe roc}
+                --set-default ROC ${lib.getExe roc} \
+                --suffix PATH : ${lib.makeBinPath [ pkgs.coreutils ]}
               runHook postInstall
             '';
             meta = {
