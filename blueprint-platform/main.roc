@@ -63,7 +63,7 @@ import WorkflowName
 import core.Spec
 
 # Keep lowering at the top level so `roc check` validates the whole config.
-# scripts/test-config.sh exercises both this platform and its bundled form.
+# scripts/test_config.roc exercises this platform, and scripts/bundle.roc its bundled form.
 rendered : Str
 rendered = or_crash(Lower.lower(config)).to_str()
 

@@ -51,7 +51,7 @@ files = |_| {
 	}
 }
 
-# B2 emits unused Auto too; alias it to the existing identical nixpkgs pin.
+# The planner emits unused Auto too; alias it to the existing identical nixpkgs pin.
 # This fixture-only seed completion changes no locked node or fetch identity.
 complete_native_lock : Str
 complete_native_lock = native_lock.replace_each(
@@ -92,6 +92,18 @@ expect match files({}) {
 		"/consumer/work/generated/flake.lock",
 	] and generated.first().map_ok(|file| file.contents) == Ok(planned_golden)
 	Err(_) => False
+}
+
+# The staged lock is the supplied native graph, compactly encoded with its
+# nodes last: planning from the authority adds, drops and reorders no pin.
+# No value in the fixture holds a space.
+expect {
+	compact = complete_native_lock.replace_each("\n", "").replace_each(" ", "")
+	nodes = compact.drop_prefix("{\"nodes\":").drop_suffix(",\"root\":\"root\",\"version\":7}")
+	match files({}) {
+		Ok(generated) => nodes != compact and generated.last().map_ok(|file| file.contents) == Ok("{\"root\":\"root\",\"version\":7,\"nodes\":${nodes}}\n")
+		Err(_) => False
+	}
 }
 
 # Generate needs neither provider commands nor filesystem observations here.

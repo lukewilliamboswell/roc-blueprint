@@ -1,6 +1,6 @@
 # Locked sources and dependent artifacts
 
-From the repository's contributor shell, build the local platform host and CLI
+From the repository's development shell (`nix develop`), build the local platform host and CLI
 as described in [CONTRIBUTING](../../CONTRIBUTING.md), then:
 
 ```sh
@@ -13,8 +13,14 @@ roc check Blueprint.roc
 
 `update` explicitly initializes `Blueprint.lock` (or deliberately updates it).
 Normal builds/workflows preserve that authority. The implicit default package
-source is Auto; the reference Nix consumer selects nixpkgs. Package names such
-as `python3` remain backend-native, not a universal tool catalog.
+source is Auto; the reference Nix consumer selects nixpkgs.
+
+The task and both builds are Roc scripts in `scripts/`, run as
+`roc-stable scripts/<name>.roc`. The `dev` environment declares that one
+pinned compiler with `Command`, and with `RocPackages` the bundles the scripts
+name: basic-cli, and `http`, which basic-cli depends on. A build has no
+network, so a bundle that is not listed there cannot be resolved in one.
+`roc deps scripts/check.roc` prints what a script depends on.
 
 `build app` builds `library` first. Its stdout is the artifact path resolved by
 the planned Nix command, not `dist/app.txt` in your checkout. Read that printed
@@ -55,7 +61,8 @@ back to its current working-tree bytes.
   authority change fails, but no lock excludes two that publish together.
   There is no cross-step artifact-name cache, automatic update, or rollback.
 
-The B3 integration gate runs a **temporary copy** of this complete example,
-substituting only its local platform location and a supplied existing fixture
-package revision. It checks real build/workflow bytes and immutable authority;
-checked-in example files and repository pins are never updated by that smoke.
+The workflow suite (`scripts/test_workflows.roc`) runs a **temporary copy** of
+this complete example, substituting only its local platform location and the
+package and Roc overlay revisions the fixtures pin. It checks real
+build/workflow bytes and immutable authority; checked-in example files and
+repository pins are never updated by that smoke.

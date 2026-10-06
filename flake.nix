@@ -5,6 +5,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     roc-overlay.url = "github:roc-lang/roc-overlay";
     roc-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    # The official prebuilt Zig. nixpkgs builds its own against LLVM, which
+    # makes the development shell several times larger.
+    zig-overlay.url = "github:mitchellh/zig-overlay";
+    zig-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -12,6 +16,7 @@
       self,
       nixpkgs,
       roc-overlay,
+      zig-overlay,
     }:
     let
       systems = [
@@ -132,28 +137,21 @@
             program = lib.getExe blueprint;
           };
 
-          # `nix develop github:lukewilliamboswell/roc-blueprint` gives `blueprint`
-          # and the Roc it was built with.
-          devShells = {
-            default = pkgs.mkShell {
-              packages = [
-                blueprint
-                roc
-              ];
-            };
-
-            # For working on roc-blueprint itself; see CONTRIBUTING.md.
-            contributor = pkgs.mkShell {
-              packages = [
-                blueprint
-                roc
-                pkgs.zig_0_16
-                pkgs.python3
-                pkgs.zstd
-                pkgs.git
-                pkgs.curl
-              ];
-            };
+          # The one definition of the development toolchain: contributors and
+          # every CI job run the scripts through `nix develop -c`. It holds the
+          # pinned Roc, Zig for the platform host, and the programs the scripts
+          # in scripts/ start. `blueprint` itself is not here, so entering the
+          # shell never compiles the CLI; `nix run` and `nix build` provide it.
+          devShells.default = pkgs.mkShellNoCC {
+            packages = [
+              roc
+              zig-overlay.packages.${system}."0.16.0"
+              pkgs.coreutils
+              pkgs.gitMinimal
+              pkgs.curl
+              pkgs.gnutar
+              pkgs.gzip
+            ];
           };
         };
       outputs = nixpkgs.lib.genAttrs systems forSystem;

@@ -36,7 +36,7 @@ version = "0.4.0-rc2"
 
 ## The provider every command goes through. This is the only reference to a
 ## concrete provider: everything else uses the Provider contract
-## (docs/architecture.adoc, invariant 7; checked by scripts/test.sh).
+## (docs/architecture.adoc, invariant 7; checked by scripts/test.roc).
 provider : Provider
 provider = NixProvider.provider
 

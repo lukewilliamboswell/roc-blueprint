@@ -34,7 +34,7 @@ LinkInputs := [].{
 	lock_file = "link-inputs.lock.json"
 	platform_dir = "blueprint-platform"
 
-	## Licences and the inventory go here so `scripts/bundle.sh` can ship them.
+	## Licences and the inventory go here so `scripts/bundle.roc` can ship them.
 	notices_dir = "blueprint-platform/linker-inputs"
 
 	## The files `blueprint-platform/main.roc` links, relative to both the

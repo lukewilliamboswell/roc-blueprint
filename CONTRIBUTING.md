@@ -10,7 +10,7 @@ blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
   core-release           (when present) the released core bundle URL a platform release uses
 blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
   Project.roc            pure normalization, references and provider capability checks
-  fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip
+  fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip, lock-parse
 blueprint-nix/           importable pure Nix provider (depends only on blueprint-core)
   NixProvider.roc        shared pure request planning and flake rendering
   Locks.roc              Nix pins <-> the Lock: Sources plus a "nix" hint
@@ -18,13 +18,22 @@ blueprint-nix/           importable pure Nix provider (depends only on blueprint
 blueprint-cli/           the blueprint CLI (basic-cli + weaver); as `blueprint __build-runner`
                          it is also each build's in-derivation argv/output/isolation check
 fixtures/consumer/       independent consumer of the Spec and Nix packages
+fixtures/overlays/       overlay flakes for scripts/test_scenarios.roc
 examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
 examples/composition/    imported pure module returning reusable task settings
-examples/artifacts/      runnable source/dependency/workflow example and scripts
+examples/artifacts/      runnable source/dependency/workflow example and its Roc scripts
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
-scripts/                 test.sh, bundle.sh, fuzz.sh, link_inputs.roc, test_roc_packages.roc (Roc scripts share scripts/src/)
+scripts/                 Roc scripts, run from the repository root; their modules are in scripts/src/
+  test.roc               everything CI checks, in groups; runs the test_*.roc suites
+  link_inputs.roc        fetch or check the platform's linker inputs
+  bundle.roc             bundle core or the platform into dist/ and smoke-test the bundle
+  build_release.roc      cross-build the CLI and its smoke-test program for each released system
+  smoke_binary.roc       run a built CLI with no Roc and no Python of its own
+  fuzz.roc               replay or fuzz the roc-fuzz targets
+  release_notes.roc      write a release's notes for the release workflows
+  test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
 link-inputs.lock.json    the linker-input release the platform links, pinned by content
-flake.nix                builds blueprint with the pinned Roc; user and contributor shells
+flake.nix                builds blueprint with the pinned Roc; the development shell
 ```
 
 The local platform and CLI share `blueprint-core`, including
@@ -38,12 +47,16 @@ Provider, Lock, stages) and invariants are defined in
 Full development and CI require x86_64 Linux with Nix and flakes enabled.
 
 ```sh
-nix develop .#contributor
+nix develop
 ```
 
 gives Roc (the nightly in `.roc-version`, from
-[roc-overlay](https://github.com/roc-lang/roc-overlay)), Zig, `blueprint`,
-python3, zstd, git and curl. Nix itself is also needed for `blueprint`.
+[roc-overlay](https://github.com/roc-lang/roc-overlay)), Zig 0.16 and the
+programs the scripts start: coreutils, git, curl and tar (and python3, until the
+last Python test is ported). This shell is the one definition of the toolchain:
+every CI job runs its scripts through `nix develop -c`, so what passes in the
+shell is what CI runs. `blueprint` is not in the shell, so entering it never
+compiles the CLI; build it as below, or use `nix run .`.
 
 `blueprint-cli/main.roc` uses the released basic-cli platform by URL. Roc
 downloads it on first use outside Nix; the Nix blueprint package fetches the same
@@ -55,58 +68,95 @@ archive by hash, so its sandboxed build needs no network.
 scripts/link_inputs.roc fetch             # the musl runtime files the platform links
 (cd blueprint-platform && zig build)      # targets/<target>/libhost.a for all four hosts
 roc test blueprint-core/main.roc      # Spec round trips and format tests
-roc test blueprint-cli/main.roc             # includes the golden flake test
+roc test blueprint-cli/main.roc             # the CLI's, the Nix provider's and every core expect
 roc build blueprint-cli/main.roc --output=./blueprint
 (cd examples/all-settings && ../../blueprint run --help) # try the CLI
-./scripts/test.sh                           # everything CI runs
-./scripts/test.sh unit cli                  # or only some groups
-scripts/fuzz.sh 300                         # fuzz each target for 5 minutes
+scripts/test.roc                            # everything CI runs
+scripts/test.roc unit cli                   # or only some groups
+scripts/fuzz.roc 300                        # fuzz each target for 5 minutes
 ```
+
+The `.roc` files in `scripts/` are Roc programs; they start other programs by
+argument list, not through a shell. Run one from the repository root with the
+pinned `roc` on `PATH`, or as `"$ROC" scripts/test.roc`.
 
 The platform's linker inputs are not committed. `scripts/link_inputs.roc fetch`
 downloads the release pinned in `link-inputs.lock.json` into `.cache/link-inputs/`,
 verifies it and installs the files beside `libhost.a`; nothing that evaluates a
-`Blueprint.roc` against the local platform links without them. It is a Roc
-script: run it from the repository root with the pinned `roc` on `PATH`, or as
-`"$ROC" scripts/link_inputs.roc fetch`. `scripts/link_inputs.roc check` verifies
-what is installed without the network. See
+`Blueprint.roc` against the local platform links without them.
+`scripts/link_inputs.roc check` verifies what is installed without the network.
+See
 [blueprint-platform/targets/README.md](blueprint-platform/targets/README.md).
 
-`scripts/test.sh` is the full CI entry point: it fails if an object file, archive
-or import library is tracked, fetches and verifies the linker inputs, builds the flake, invokes both
-platform bundle modes (see below), and then runs each fuzz target for 30 seconds.
-`scripts/test-config.sh` checks valid configurations, imported-module composition,
-required settings, duplicates, unknown references, cycles and explicit-provider
-tool grammar at compile time. It compares emitted Spec for inherited versus inline
-environments, omitted versus explicit Auto, and composed versus inline settings.
-Both bundle gates retain those assertions against the served platform, plus the
-all-settings example.
-`python3 scripts/test-cli.py` exercises the built CLI with and without a
+`scripts/test.roc` is the full CI entry point. Its groups are `static`
+(formatting; no tracked object file, archive or import library; the CLI's use of
+the Provider contract; `roc_overlay` against `flake.lock`; the flake's list of
+core modules and its version), `unit` (the platform's, the scripts', the CLI's
+and the consumer's `expect`s and the configuration fixtures), `cli`, `nix`,
+`package` (the flake's package and development shell, the packaged CLI building
+an artifact with only Nix on `PATH`, and the platform bundled against the local
+core, see below) and `fuzz` (each target's committed corpus, replayed, which
+takes seconds; `.github/workflows/fuzz.yml` fuzzes each target for five minutes
+every week and uploads any crashing input).
+`scripts/test_config.roc` runs the compiler on generated `Blueprint.roc`
+fixtures: the platform's own rules, which only a compiler run can show (a
+setting given twice or not at all, in `Lower.roc`, and each checked name's
+`from_quote`), a few core rules and bounds as witnesses that shared validation
+surfaces at compile time, and that settings composed from an imported module
+emit the same Spec as inline ones. Every other rule of `Project.validate` has an
+`expect` in `blueprint-core/Project.roc`. The bundle gate repeats a few of the
+fixtures against the served platform, plus the all-settings example.
+`scripts/test_cli.roc` exercises the built CLI with and without a
 configuration, checks validation and help/version handling, and records Nix
 argv to verify shell selection and task arguments without entering a shell.
+It holds what only a run can show: the order of checks before any effect, how
+often the configuration is evaluated, exact provider argv and error text. Rules
+that a pure `expect` in `blueprint-core` or `blueprint-nix` already holds are
+not repeated there.
 The all-settings integration tests separately run tasks through real Nix.
-`scripts/test-b1.sh` executes imported composition tasks with exact argv-byte
-assertions and noncommutative overlays in both orders, including inheritance
-and an unselected-overlay native failure. `scripts/test-consumer.sh` checks
-staged bytes, supplied-lock preservation, scoped overlay evaluation, native
-missing-package diagnostics and package-target rejection. Parse fuzzing also
-checks successful semantic normalization for idempotence.
-`scripts/test-b2.py` adds real offline-capable artifact/dependency/source tests,
-including host-file and TCP isolation with positive host controls, fail-closed
-runner checks, exact argv, immutable locks, freshness and relocation. It also
-checks what Nix copies from the project (bytes, the owner's execute bit, raw
-names, exclusions, refused symlinks and special files) and that an undeclared
-tool is not found. It runs `blueprint __build-runner` directly on the host for
-the checks that need no sandbox, with a hand-written witness naming namespaces
-the host does not have.
-`scripts/test-b3.py` adds real ordered task/build workflows, nested repetitions,
-failure stops, snapshot/dependency freshness, repeated locked-source verification,
-whole-closure preflight and immutable authority, including out-of-tree layouts.
-`scripts/test-update.py` checks local-source preflight, authority observation and
-concurrent publication. `scripts/test-isolation.py` checks what a build stages
+`scripts/test_scenarios.roc` writes projects and runs them through the real
+CLI and real Nix: the all-settings and extensions examples, noncommutative
+overlays in both orders with inheritance, an unselected overlay's native
+missing-package failure and a declared overlay that throws if evaluated,
+system-scoped tools on Linux and macOS with the package-target rejection of an
+unscoped one, and renamed commands. A project it writes pins its inputs to the
+revisions in `fixtures/consumer/inputs.lock` and `flake.lock`, and its
+`Blueprint.lock` is read-only and compared after every step.
+`fixtures/consumer/main.roc` holds the staged bytes and supplied-lock
+preservation as `expect`s. Parse fuzzing also checks successful semantic
+normalization for idempotence.
+`scripts/test_builds.roc` runs real sandboxed builds of artifacts,
+dependencies and sources, including host-file and TCP isolation with positive
+host controls, fail-closed runner checks, exact argv, immutable locks,
+freshness and relocation. It also checks what Nix copies from the project
+(bytes, the owner's execute bit, raw names, exclusions, refused symlinks and
+special files) and that an undeclared tool is not found. It runs
+`blueprint __build-runner` directly on the host for the checks that need no
+sandbox, with a hand-written witness naming namespaces the host does not have.
+`scripts/test_workflows.roc` runs real ordered task/build workflows, nested
+repetitions, failure stops, snapshot/dependency freshness, repeated
+locked-source verification, whole-closure preflight and immutable authority,
+including out-of-tree layouts, and then a temporary copy of the complete
+artifacts example. Both are Roc scripts on the harness in
+`scripts/src/BuildHarness.roc`, and the tasks and builds of their fixtures are
+Roc scripts run as `roc-stable` through `RocPackages`. Their inputs are pinned
+in `fixtures/consumer/inputs.lock` and `fixtures/roc-inputs.lock.json`; one
+first step fetches them and every later Nix call is recorded and run with
+`--offline`. See [fixtures/builds/README.md](fixtures/builds/README.md).
+`scripts/test_update.roc` checks local-source preflight, authority observation and
+concurrent publication. `scripts/test_isolation.roc` checks what a build stages
 about its caller: the namespace identities, the CLI's own path as the runner,
 and the refusals when either cannot be used. Both put a failing
 `python3` on `PATH`: the CLI itself must not use a host Python.
+These three are Roc scripts, run from the repository root with `./blueprint`
+built; `ROC` names the compiler. They replace every tool the CLI runs with one
+program, `scripts/stubs/tool.roc`, which each test builds once and installs
+under several names (`roc-record`, `roc-wire`, `roc-probe`, `nix`, `guix`,
+`python3`, `readlink`). A copy decides what to be from its own file name and
+how to behave from `STUB_*` variables, and records each invocation as a file
+holding one line of JSON in `<name>-calls/` under its working directory. Its
+header lists what each name does. `scripts/src/CliHarness.roc` holds what the
+three tests share.
 `scripts/test_roc_packages.roc` is a Roc script, like `link_inputs.roc`. It
 runs the real CLI and Nix with a Roc package cache of its own in a temporary
 directory, and refuses to run if that directory lies inside `~/.cache`. It
@@ -116,7 +166,7 @@ leave nothing behind, and that a sandboxed build resolves its bundles with no
 network while the same build without one of them does not.
 Normal execution tests explicitly initialize authority with `update` first.
 The complete artifacts example is executed in a temporary copy by
-the workflow integration script (`scripts/test-b3.py`).
+the workflow suite (`scripts/test_workflows.roc`).
 
 ## Nightly updates
 
@@ -127,8 +177,8 @@ manual dispatch, using the SHA-pinned reusable workflow from
 the shared updater supports this file without `compiler_roots` configuration.
 
 `.github/roc-nightly.json` selects `ci.yml`, whose `nightly_validation` dispatch
-runs all of `scripts/test.sh`: tests, CLI execution, Nix builds, both platform
-bundle smoke tests and fuzzing. The tag-triggered release workflows are not
+runs all of `scripts/test.roc`: tests, CLI execution, Nix builds, the platform
+bundle smoke test against the local core and the fuzz corpus replay. The tag-triggered release workflows are not
 dispatched and validation does not publish. A separate Nightly configuration
 workflow checks the consumer configuration on pull requests.
 
@@ -140,18 +190,20 @@ with the validation workflow when changing CI. Once the workflows are on
 `main`, manually dispatch the updater and inspect the candidate's validation
 results.
 
-The Nix overlay is independently locked. A nightly absent from the locked
-overlay will fail Nix validation and cannot auto-merge. Update the `roc-overlay`
-input with `nix flake update roc-overlay` once upstream lists that nightly,
-then retry the updater. Do not skip the Nix check to accept a compiler bump.
+The Nix overlay is independently locked, and CI takes its compiler from the
+flake's development shell. A nightly absent from the locked overlay therefore
+fails every job and cannot auto-merge. Update the `roc-overlay` input with
+`nix flake update roc-overlay` once upstream lists that nightly, set
+`NixProvider.roc_overlay` to match, then retry the updater.
 
 The October 4 nightly (`nightly-2026-10-04-130536d`) rejects redundant type
 exposes, so it needs the basic-cli 0.24.0 release and roc-fuzz 0.4.3.
 
-The complete suite requires x86_64 Linux, Zig 0.16 and a running Nix daemon. To test the CLI alone on macOS,
-run the CLI unit tests and build with the pinned Roc binary. The native
-CLI can run on macOS, but executing a Blueprint.roc still requires the
-blueprint platform's Linux target.
+The complete suite requires x86_64 Linux and a running Nix daemon; the
+development shell supplies the rest. `zig build` builds the platform host for
+all four targets, so on Apple Silicon macOS the CLI's tests, the native CLI and
+the evaluation of a `Blueprint.roc` work too. Sandboxed builds, and so the
+`nix` and `package` groups, remain x86_64 Linux only.
 
 ## The Spec
 
@@ -224,8 +276,7 @@ Blueprint's own tree digest from core `Tree`) and provider-namespaced
 `hints`. The Nix provider's hint carries its declared input identity and the
 complete native lock graph; decoding rejects a lock whose Sources disagree with
 those pins, so hand edits to either side fail. Older JSON locks are not
-migrated: run `blueprint update`. `scripts/lockfile.py` reads locks in tests,
-and `fuzz/lock-parse` fuzzes the parser.
+migrated: run `blueprint update`. `fuzz/lock-parse` fuzzes the parser.
 
 ### Compatibility
 
@@ -246,11 +297,13 @@ atomic planner as standalone tasks/builds. Execute each step's operations, stage
 its files, then invoke its argv; stop immediately on failure. The entire plan
 must succeed before effects.
 The caller owns all effects; no provider registry or serialized config recipes
-are involved. `blueprint-core/Provider.roc` is the Core/Provider contract:
-`preflight`, `realise` (Steps from the Lock text), `resolve` plus
-`lock_from_native` (what to stage and run to produce new pins) and `render`.
-The CLI uses only that record; `scripts/test.sh` fails if it reaches into a
-provider's modules directly. Nix is the only implemented provider. It:
+are involved. `blueprint-core/Provider.roc` is the Core/Provider contract: a
+`name`, the `features` the provider implements, `render`, `preflight`,
+`realise` (Steps from the Lock), `resolve` plus `lock_from_native` (what to
+stage and run to produce new pins) and `compiler` (the argv that fetches the
+pinned Roc). The CLI uses only that record; `scripts/test.roc` fails if it
+reaches into a provider's modules directly. Nix is the only implemented
+provider. It:
 
 - resolves Auto to its default nixpkgs source, without provider autodetection;
 - imports each selected environment's package sources per system with only
@@ -296,9 +349,10 @@ or an effectful platform. `Locks.decode` parses the Lock, checks that its Source
 "nix" hint's pins, and validates the native Nix graph; `Locks.derive` validates declaration/ordered-overlay identity
 and translates local project-relative paths into a disposable working lock.
 `NixProvider.plan` uses that translation. The former opaque-text `render_files`
-seam was removed, not retained as a bypass. `scripts/test-consumer.sh` compiles
-an independent app using these APIs, including caller-selected paths, decoded
-supplied authority and exact argv. `scripts/test-b2.py` separately proves actual
+seam was removed, not retained as a bypass. `fixtures/consumer/main.roc` is an
+independent app using these APIs, including caller-selected paths, decoded
+supplied authority and exact argv; `scripts/test.roc` checks it and runs its
+`expect`s. `scripts/test_builds.roc` separately proves actual
 relocated local-source translation.
 
 `gen`, `shell`, `run`, `build` and `workflow` require existing matching authority. Only
@@ -326,37 +380,44 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
   `blueprint-platform/core-release`, set `version` in `blueprint-cli/main.roc`
   and `flake.nix` to the release, then push a tag like `X.Y.Z`. `release.yml`
   runs the tests, cross-builds the `blueprint` binaries on Linux with
-  `scripts/build-release.sh`, runs each on its own kind of machine with
-  `scripts/smoke-binary.sh`, and only then publishes release `X.Y.Z` with the
-  platform bundle, the binaries and their sha256 sums.
+  `scripts/build_release.roc`, runs each on its own kind of machine, and only
+  then publishes release `X.Y.Z` with the platform bundle, the binaries and
+  their sha256 sums. The machines that run the arm64 Linux and macOS binaries
+  have Nix and deliberately no Roc, so `build_release.roc` also cross-builds
+  `scripts/smoke_binary.roc` for each system and they run that
+  (`dist/smoke-<system> dist/blueprint-<system>`).
 
 A binary fetches the compiler named in `.roc-version` from the roc-overlay
 revision in `NixProvider.roc_overlay`. Change that constant whenever
-`flake.lock` moves the `roc-overlay` input; `scripts/test.sh` fails when the two
+`flake.lock` moves the `roc-overlay` input; `scripts/test.roc` fails when the two
 differ.
 
 A tag with a `-` in it (e.g. `X.Y.Z-rc1`) is published as a pre-release.
 
 During development the platform uses `core: "../blueprint-core/main.roc"`. `roc bundle`
-only packs files below the entry point's directory, so `scripts/bundle.sh
+only packs files below the entry point's directory, so `scripts/bundle.roc
 platform <core-url>` bundles a staged copy whose `core:` is the given URL. With
-no URL it bundles the local `blueprint-core/` and serves it from localhost. Either way
-it then serves the platform bundle from localhost and runs
-`examples/all-settings/Blueprint.roc` against it, plus the shared configuration
-and composition regressions. There are two gates:
+no URL it bundles the local `blueprint-core/` and serves it from localhost.
+Either way it then serves the platform bundle itself, from a port the operating
+system assigns, while the compiler checks a few of the configuration fixtures
+and runs `examples/all-settings/Blueprint.roc` against it. The compiler gets an
+empty package cache for this, so it must download the bundle. The modules and
+linker inputs packed are those in the directories and in the `targets:` section
+of `blueprint-platform/main.roc`. There are two gates:
 
 ```sh
-scripts/bundle.sh platform
-scripts/bundle.sh platform "$(< blueprint-platform/core-release)"
+scripts/bundle.roc platform
+scripts/bundle.roc platform "$(< blueprint-platform/core-release)"
 ```
 
-Before bundling the platform, `scripts/bundle.sh` runs
+Before bundling the platform, `scripts/bundle.roc` makes the check of
 `scripts/link_inputs.roc check`, so only linker inputs matching
 `link-inputs.lock.json` are packed. Their licences and `dependency.json`
-inventory go into the bundle under `linker-inputs/`, and `release.yml` records
-the linker-input release and the lock's SHA-256 in the release notes.
+inventory go into the bundle under `linker-inputs/`, and
+`scripts/release_notes.roc` records the linker-input release and the lock's
+SHA-256 in the release notes.
 
-`scripts/test.sh` runs the first on every commit. `release.yml` runs the second
+`scripts/test.roc` runs the first on every commit. `release.yml` runs the second
 when a platform release is tagged, and the release fails if the pinned core
 cannot build the platform. A change that adds a Spec field therefore merges
 with the existing pin; publish a `core-X.Y.Z` release containing the field and
@@ -370,7 +431,7 @@ package served with two hashes.
 To adopt a newer basic-cli release, change the URL in `blueprint-cli/main.roc`
 and `fixtures/consumer/main.roc`, then update the matching entry in `rocPackages`
 in `flake.nix` with the new URL and hash (`nix store prefetch-file <url>`). Add
-any new transitive dependency to the same list. Rerun `scripts/test.sh` and the
+any new transitive dependency to the same list. Rerun `scripts/test.roc` and the
 pinned-core bundle gate.
 If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
 

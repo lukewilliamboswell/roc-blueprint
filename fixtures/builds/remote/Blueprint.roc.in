@@ -1,0 +1,15 @@
+# One build whose only input is fetched over HTTP; the suite supplies the
+# platform, the pinned inputs, the source's address and a fresh nonce.
+app [config] {
+	pf: platform "@PLATFORM@",
+}
+
+config = [
+	Name("remote-source-policy"),
+	Systems(["x86_64-linux"]),
+	Packages("default", From(NixPackages("@PACKAGES@"))),
+	Overlay("roc", "@ROC_OVERLAY@"),
+	Environment("builder", [Overlays(["roc"]), Command("roc-stable", "rocpkgs.@ROC_COMPILER@"), RocPackages([@ROC_PACKAGES@])]),
+	Source("remote", "@SOURCE@"),
+	Build("remote", [Use("builder"), Inputs(["remote"]), Run(["roc-stable", "run.roc", "--", "@NONCE@"]), Output("output")]),
+]

@@ -53,8 +53,8 @@ Development and verified execution require x86_64 Linux and
 [Nix](https://nixos.org/download) with flakes enabled. From this checkout:
 
 ```sh
-nix develop .                 # blueprint plus its pinned Roc compiler
-nix develop .#contributor     # also supplies build/test tools
+nix run . -- --help           # the blueprint CLI, built with its pinned Roc compiler
+nix develop                   # the toolchain for working on this repository
 ```
 
 You can add `packages.x86_64-linux.blueprint` from this source flake to your
@@ -71,7 +71,7 @@ it through Nix from a pinned roc-overlay revision. Set `ROC` to choose the
 executable yourself; it must be that same nightly.
 
 Use each release's binary with that release's platform URL. The upstream flake
-is also available via `nix develop github:lukewilliamboswell/roc-blueprint`.
+also runs the CLI directly: `nix run github:lukewilliamboswell/roc-blueprint`.
 Do not assume a published release accepts this development API.
 
 `Systems` controls generated Nix output shapes; it neither installs platform
@@ -232,17 +232,22 @@ runtime operations to the CLI.
 
 ### Artifact builds
 
-Inside `config`, with `scripts/build.py` in the project:
+Inside `config`, with `scripts/build.roc` in the project and the `scripts`
+environment of [Roc packages](#roc-packages) above:
 
 ```roc
 Source("assets", "path:./assets"),
 Build("app", [
-	Use("dev"),
+	Use("scripts"),
 	Inputs(["assets"]),
-	Run(["python3", "scripts/build.py"]),
+	Run(["roc-stable", "scripts/build.roc"]),
 	Output("dist/app"),
 ]),
 ```
+
+`Run` is any argv; nothing about a build requires Roc. Roc takes the first
+`--` of its arguments for itself, so pass a script its own arguments after
+one: `Run(["roc-stable", "scripts/build.roc", "--", "--release"])`.
 
 Run `blueprint update`, then `blueprint build app`. The printed store path is
 resolved by Nix and contains exactly the declared file or directory. Missing
@@ -263,7 +268,9 @@ versions also put `python3`, coreutils and `bash` there, so a build that ran
 `sh`, `cp`, `mkdir` or `python3` without declaring it now fails with `build
 command not found`, or inside its own script when that script calls one: add
 the tool (`bash`, `coreutils`, `python3`) to the environment's `Tools`. A build
-also no longer sees the variables Nix's `stdenv` used to export.
+also no longer sees the variables Nix's `stdenv` used to export. A tool may
+give what it runs more than the build was given: the Roc compiler's package
+puts coreutils and a C compiler on the `PATH` of a script it runs.
 The `blueprint` executable is itself each build's builder inside the sandbox,
 so `blueprint build` refuses to run unless that executable is an x86_64 Linux
 one.

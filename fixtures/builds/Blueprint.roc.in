@@ -1,4 +1,4 @@
-# Real build graph; the runner supplies the platform and cached package set.
+# Real build graph; the suite supplies the platform and the pinned inputs.
 app [config] {
 	pf: platform "@PLATFORM@",
 }
@@ -7,20 +7,33 @@ config = [
 	Name("build-integration"),
 	Systems(["x86_64-linux"]),
 	Packages("default", From(NixPackages("@PACKAGES@"))),
-	Environment("builder", [Tools(["python3"])]),
+	Overlay("roc", "@ROC_OVERLAY@"),
+	# The fixture's tasks and builds are Roc scripts: one pinned compiler and
+	# the bundles those scripts name, and no other tool. Roc takes the first
+	# `--` for itself, so each command has one before the script's arguments.
+	Environment(
+		"builder",
+		[
+			Overlays(["roc"]),
+			Command("roc-stable", "rocpkgs.@ROC_COMPILER@"),
+			RocPackages([@ROC_PACKAGES@]),
+		],
+	),
+	Environment("coreutils", [Tools(["coreutils"])]),
+	Environment("bare", []),
 	Packages("foreign", From(GuixPackages("https://example.invalid/guix"))),
 	Environment("foreign", [Tools(["foreign#python"])]),
 	Shell("default", [Use("builder")]),
 	Source("assets", "path:./assets"),
 	Source("extra", "path:./packages"),
-	Task("args", [Use("builder"), Run(["python3", "task.py", "args"])]),
-	Task("edit", [Use("builder"), Run(["python3", "task.py", "edit"])]),
-	Task("control", [Use("builder"), Run(["python3", "probe.py", "host"])]),
+	Task("args", [Use("builder"), Run(["roc-stable", "task.roc", "--", "args"])]),
+	Task("edit", [Use("builder"), Run(["roc-stable", "task.roc", "--", "edit"])]),
+	Task("control", [Use("builder"), Run(["roc-stable", "probe.roc", "--", "host"])]),
 	Build(
 		"library",
 		[
 			Use("builder"),
-			Run(["python3", "build.py", "library"]),
+			Run(["roc-stable", "build.roc", "--", "library"]),
 			Output("dist/library"),
 		],
 	),
@@ -30,7 +43,7 @@ config = [
 			Use("builder"),
 			Inputs(["assets"]),
 			Needs(["library"]),
-			Run(["python3", "build.py", "bundle"]),
+			Run(["roc-stable", "build.roc", "--", "bundle"]),
 			Output("dist/bundle"),
 		],
 	),
@@ -41,8 +54,9 @@ config = [
 			Inputs(["assets"]),
 			Needs(["library", "bundle"]),
 			Run([
-				"python3",
-				"build.py",
+				"roc-stable",
+				"build.roc",
+				"--",
 				"app",
 				"",
 				"two words",
@@ -62,49 +76,19 @@ config = [
 		"isolation",
 		[
 			Use("builder"),
-			Run(["python3", "probe.py", "sandbox"]),
+			Run(["roc-stable", "probe.roc", "--", "sandbox"]),
 			Output("dist/isolation"),
 		],
 	),
-	Build(
-		"missing",
-		[
-			Use("builder"),
-			Run(["python3", "build.py", "missing"]),
-			Output("dist/missing"),
-		],
-	),
-	Build(
-		"symlink",
-		[
-			Use("builder"),
-			Run(["python3", "build.py", "symlink"]),
-			Output("dist/symlink"),
-		],
-	),
-	Environment("bare", []),
-	Build(
-		"undeclared",
-		[
-			Use("bare"),
-			Run(["python3", "build.py", "library"]),
-			Output("dist/library"),
-		],
-	),
-	Build(
-		"undeclared-shell",
-		[
-			Use("builder"),
-			Run(["sh", "-c", "mkdir dist && echo implicit >dist/shell"]),
-			Output("dist/shell"),
-		],
-	),
-	Build(
-		"nested-link",
-		[
-			Use("builder"),
-			Run(["python3", "build.py", "nested-link"]),
-			Output("dist/nested-link"),
-		],
-	),
+	# A command that succeeds without writing its declared output.
+	Build("missing", [Use("coreutils"), Run(["true"]), Output("dist/missing")]),
+	# The declared output is itself a link.
+	Build("symlink", [Use("coreutils"), Run(["ln", "-s", "untracked.txt", "linked"]), Output("linked")]),
+	# The declared output is a project directory that gains a link.
+	Build("nested-link", [Use("coreutils"), Run(["ln", "-s", "/etc/passwd", "nested/escape"]), Output("nested")]),
+	# None of these commands is declared: `roc-stable` belongs to another
+	# environment, and `builder` has neither a shell nor coreutils.
+	Build("undeclared", [Use("bare"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
+	Build("undeclared-shell", [Use("builder"), Run(["sh", "-c", "mkdir dist && echo implicit >dist/shell"]), Output("dist/shell")]),
+	Build("undeclared-coreutils", [Use("builder"), Run(["ls"]), Output("dist/listing")]),
 ]
