@@ -52,8 +52,8 @@ nix develop
 
 gives Roc (the nightly in `.roc-version`, from
 [roc-overlay](https://github.com/roc-lang/roc-overlay)), Zig 0.16 and the
-programs the scripts start: coreutils, git, curl and tar (and python3, until the
-last Python test is ported). This shell is the one definition of the toolchain:
+programs the scripts start: coreutils, git, curl, tar and gzip. It has no
+Python. This shell is the one definition of the toolchain:
 every CI job runs its scripts through `nix develop -c`, so what passes in the
 shell is what CI runs. `blueprint` is not in the shell, so entering it never
 compiles the CLI; build it as below, or use `nix run .`.
