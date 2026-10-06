@@ -5,6 +5,9 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     roc-overlay.url = "github:roc-lang/roc-overlay";
     roc-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    # roc-overlay uses this only for x86_64-darwin, which this flake does not
+    # expose; following nixpkgs keeps a second nixpkgs out of flake.lock.
+    roc-overlay.inputs.nixpkgs-darwin.follows = "nixpkgs";
     # The official prebuilt Zig. nixpkgs builds its own against LLVM, which
     # makes the development shell several times larger.
     zig-overlay.url = "github:mitchellh/zig-overlay";

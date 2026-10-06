@@ -1,0 +1,68 @@
+name: Floating inputs
+
+# CI and releases smoke-test each binary with every input pinned, so they
+# gate on this repository alone. A new user's project is not pinned: it takes
+# Blueprint's default package source, the roc-overlay's default branch and its
+# newest nightly. This runs the same smoke test in that floating form, weekly
+# or on request, on the three released systems. A failure here means upstream
+# moved; it blocks nothing.
+on:
+  schedule:
+    - cron: "47 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/toolchain
+
+      - name: Fetch and verify the platform's linker inputs
+        run: nix develop -c scripts/link_inputs.roc fetch
+
+      - name: Cross-build the release binaries and their smoke-test programs
+        run: nix develop -c scripts/build_release.roc
+
+      - name: Upload the binaries, platform hosts and linker inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: blueprint-binaries
+          path: |
+            dist/blueprint-*
+            dist/smoke-*
+            blueprint-platform/targets/*/*.a
+            blueprint-platform/targets/*/crt1.o
+          if-no-files-found: error
+
+  # These runners have Nix and no Roc, as a new user's machine may.
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, system: x86_64-linux }
+          - { runner: ubuntu-24.04-arm, system: aarch64-linux }
+          - { runner: macos-latest, system: aarch64-darwin }
+    name: ${{ matrix.system }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: blueprint-binaries
+
+      - name: Smoke test the binary with floating inputs
+        run: |
+          chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
+          dist/smoke-${{ matrix.system }} --floating dist/blueprint-${{ matrix.system }}

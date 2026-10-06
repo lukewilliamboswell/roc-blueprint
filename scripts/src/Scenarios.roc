@@ -44,6 +44,14 @@ Scenarios := [].{
 
 		## The outputs of the generated flake lack the first texts and hold the second.
 		Generated(List(Str), List(Str)),
+
+		## `nix develop` of this dev shell takes the bash it runs from the
+		## source locked at this reference, and looks nothing up in the registry.
+		LockedBash(Str, Str),
+
+		## `./blueprint` with these arguments while `Blueprint.lock` is as a
+		## blueprint from before the `nixpkgs` alias wrote it: without the edge.
+		BeforeAlias(List(Str), Check),
 	]
 
 	## `Example` runs in a directory of this repository and updates when its
@@ -123,6 +131,8 @@ Scenarios := [].{
 			executable: [],
 			steps: [
 				Cli(["run", "base"], Prints("base\n")),
+				# The entry that task was just run in, in a flake with local inputs.
+				LockedBash("devShells.x86_64-linux.blueprint-env-base", packages_ref),
 				Cli(["run", "patched"], Prints("patch:base\n")),
 				# Overlays do not commute: applied last, `first` replaces the patch.
 				Cli(["run", "reverse"], Prints("base\n")),
@@ -205,6 +215,9 @@ Scenarios := [].{
 				Cli(["run", "version"], LineStarts("Roc compiler version ")),
 				Cli(["run", "script"], Says("Hello from a roc-stable script")),
 				Launchers("path", ["greet", "roc-stable"]),
+				LockedBash("devShells.x86_64-linux.default", packages_ref),
+				# A lock from before the alias still runs, untouched and without a word from Nix.
+				BeforeAlias(["run", "greet"], Says("Hello, world!")),
 				Eval("devShells.aarch64-darwin.default.drvPath", Succeeds),
 			],
 		},
@@ -253,6 +266,49 @@ Scenarios := [].{
 					Ok(text) => "the generated outputs do not contain ${Str.inspect(text)}"
 					Err(_) => ""
 				}
+		}
+	}
+
+	## What `nix develop --debug` printed when it chose its own bash, or "" if
+	## that bash comes from the source locked at `reference`.
+	##
+	## Nix says which flake it takes `bashInteractive` from only at this log
+	## level. The lines are required, not only the registry's absence, so a Nix
+	## that words them differently fails here instead of passing unnoticed.
+	## Success alone shows nothing: when the registry cannot be reached Nix
+	## falls back to the `bash` on `PATH` and still exits 0, and a machine's own
+	## registry may resolve `nixpkgs` without the network.
+	bash_problem : Process.Outcome, Str -> Str
+	bash_problem = |outcome, reference| {
+		log = outcome.stderr
+		if outcome.code != 0 {
+			"expected exit 0, got ${outcome.code.to_str()}"
+		} else if !log.contains("using nixpkgs flake '${reference}?narHash=") {
+			"nix develop did not report using nixpkgs flake '${reference}'"
+		} else if !log.contains("evaluating derivation '${reference}?narHash=") or !log.contains("#bashInteractive'") {
+			"nix develop did not evaluate bashInteractive from ${reference}"
+		} else if log.contains("flake:nixpkgs") {
+			"nix develop looked nixpkgs up in the registry"
+		} else if log.contains("modified lock file") {
+			"the staged lock is incomplete: Nix had an input to add"
+		} else {
+			""
+		}
+	}
+
+	## A `Blueprint.lock` without the root edge that makes `nixpkgs` follow
+	## `default`: the lock an earlier blueprint wrote for the same pins. The
+	## edge is the last field of the root node's inputs or it is not removed.
+	without_alias : Str -> Str
+	without_alias = |lock| {
+		edge = "(value (List ((Str \"default\")))))"
+		match lock.split_on(edge) {
+			[before, after] => {
+				named = before.trim_end()
+				opened = named.drop_suffix("(name \"nixpkgs\")").trim_end()
+				if named.ends_with("(name \"nixpkgs\")") and opened.ends_with(" (") "${opened.drop_suffix(" (")}${after}" else lock
+			}
+			_ => lock
 		}
 	}
 
@@ -320,6 +376,14 @@ one! = |context, scenario, index|
 		}
 	}
 
+## Give a read-only file new contents and leave it read-only.
+replace! : Str, Str => Try({}, _)
+replace! = |file, text| {
+	chmod!("u+w", file)?
+	Path.write_utf8!(Path.utf8(file), text)?
+	chmod!("a-w", file)
+}
+
 chmod! : Str, Str => Try({}, _)
 chmod! = |mode, target|
 	Cmd.new_str("chmod").args_str([mode, "--", target]).exec_cmd!().map_err(|_| ChmodFailed(target))
@@ -360,6 +424,32 @@ step! = |context, project, step|
 				names.all(|name| found.contains(name)) and found.all(|name| names.contains(name)),
 				"unexpected launcher contents: ${Str.join_with(found, " ")}",
 			)
+		}
+		LockedBash(attribute, reference) => {
+			job = Process.command("nix", ["develop", "--debug", "--no-update-lock-file", "--no-write-lock-file", "path:${project}/.blueprint#${attribute}", "--command", "true"], project)
+			outcome = Process.traced!(job)?
+			reason = Scenarios.bash_problem(outcome, reference)
+			if !reason.is_empty() {
+				kept = outcome.stderr.split_on("\n").keep_if(|line| line.contains("nixpkgs") or line.contains("registry") or line.contains("lock file") or line.starts_with("error"))
+				return Script.fail!("${Str.join_with(kept, "\n")}\n${job.label}: ${reason}")
+			}
+			Ok({})
+		}
+		BeforeAlias(args, check) => {
+			file = "${project}/Blueprint.lock"
+			written = Path.read_utf8!(Path.utf8(file))?
+			earlier = Scenarios.without_alias(written)
+			Process.check!(earlier != written, "`blueprint update` did not record the nixpkgs alias in Blueprint.lock")?
+			replace!(file, earlier)?
+			outcome = Process.traced!(Process.command(context.blueprint, args, project))
+			kept = Path.read_utf8!(Path.utf8(file))
+			staged = Path.read_utf8!(Path.utf8("${project}/.blueprint/flake.lock"))
+			replace!(file, written)?
+			reason = Scenarios.verdict(check, outcome?)
+			Process.check!(reason.is_empty(), "with a lock from before the alias, ${Str.join_with(args, " ")}: ${reason}\n${outcome?.stderr}")?
+			Process.check!(!outcome?.stderr.contains("lock"), "with a lock from before the alias, Nix or blueprint complained:\n${outcome?.stderr}")?
+			Process.check!(kept? == earlier, "a lock from before the alias was rewritten outside `blueprint update`")?
+			Process.check!(staged?.contains("\"nixpkgs\":[\"default\"]"), "the staged lock of a lock from before the alias lacks the edge")
 		}
 		Generated(lacks, holds) => {
 			flake = Path.read_utf8!(Path.utf8("${project}/.blueprint/flake.nix"))?
@@ -458,3 +548,46 @@ expect Scenarios.scenarios("github:NixOS/nixpkgs/abc", "github:roc-lang/roc-over
 		},
 )
 expect Scenarios.scenarios("p", "o").len() == 5
+
+# What Nix 2.35 prints at --debug when the flake has an input named nixpkgs,
+# and what it printed for a generated flake before one followed `default`.
+locked_bash_log =
+	\\using nixpkgs flake 'github:NixOS/nixpkgs/4975466d?narHash=sha256-xJ%2BX4h%3D'
+	\\evaluating derivation 'github:NixOS/nixpkgs/4975466d?narHash=sha256-xJ%2BX4h%3D#bashInteractive'...
+	\\trying flake output attribute 'legacyPackages.x86_64-linux.bashInteractive'
+	\\
+
+registry_bash_log =
+	\\evaluating derivation 'flake:nixpkgs#bashInteractive'...
+	\\reading registry '/etc/nix/registry.json'
+	\\resolved flakeref 'flake:nixpkgs' against registry 3 exactly
+	\\looked up 'flake:nixpkgs' -> 'https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst'
+	\\trying flake output attribute 'legacyPackages.x86_64-linux.bashInteractive'
+	\\
+
+debugged : Str -> Process.Outcome
+debugged = |log| { code: 0, stdout: "", stderr: log }
+
+expect Scenarios.bash_problem(debugged(locked_bash_log), "github:NixOS/nixpkgs/4975466d") == ""
+expect Scenarios.bash_problem(debugged(registry_bash_log), "github:NixOS/nixpkgs/4975466d") == "nix develop did not report using nixpkgs flake 'github:NixOS/nixpkgs/4975466d'"
+
+# Another revision's bash, a registry lookup beside the locked one, a lock Nix
+# had to complete, silence and failure are each a problem.
+expect Scenarios.bash_problem(debugged(locked_bash_log), "github:NixOS/nixpkgs/0000000") != ""
+expect Scenarios.bash_problem(debugged("${locked_bash_log}${registry_bash_log}"), "github:NixOS/nixpkgs/4975466d") == "nix develop looked nixpkgs up in the registry"
+expect Scenarios.bash_problem(debugged("warning: not writing modified lock file of flake 'path:/p':\n${locked_bash_log}"), "github:NixOS/nixpkgs/4975466d") == "the staged lock is incomplete: Nix had an input to add"
+expect Scenarios.bash_problem(debugged(""), "github:NixOS/nixpkgs/4975466d") != ""
+expect Scenarios.bash_problem(debugged(locked_bash_log.replace_each("evaluating derivation", "skipping")), "github:NixOS/nixpkgs/4975466d") == "nix develop did not evaluate bashInteractive from github:NixOS/nixpkgs/4975466d"
+expect Scenarios.bash_problem({ code: 1, stdout: "", stderr: locked_bash_log }, "github:NixOS/nixpkgs/4975466d") == "expected exit 0, got 1"
+
+# Two fresh scenarios check which bash `nix develop` takes: a task's entry and a shell alias.
+expect Scenarios.scenarios("p", "o").map(|scenario| scenario.steps.keep_if(|step| step == LockedBash("devShells.x86_64-linux.default", "p") or step == LockedBash("devShells.x86_64-linux.blueprint-env-base", "p")).len()) == [0, 0, 1, 0, 1]
+
+# The edge an update now records is removed whole, leaving balanced text;
+# a lock without it, or with another edge of that name, is left as it is.
+expect Scenarios.without_alias("(value (Str \"default\"))) (\n\t\t\t(name \"nixpkgs\")\n\t\t\t(value (List ((Str \"default\")))))))))") == "(value (Str \"default\")))))))"
+expect Scenarios.without_alias("(value (Str \"default\")))))))") == "(value (Str \"default\")))))))"
+expect Scenarios.without_alias("(\n(name \"nixpkgs\")\n(value (Str \"nixpkgs\")))") == "(\n(name \"nixpkgs\")\n(value (Str \"nixpkgs\")))"
+
+# An input of another name that follows `default` is not the alias.
+expect Scenarios.without_alias("(a) (\n(name \"other\")\n(value (List ((Str \"default\")))))") == "(a) (\n(name \"other\")\n(value (List ((Str \"default\")))))"

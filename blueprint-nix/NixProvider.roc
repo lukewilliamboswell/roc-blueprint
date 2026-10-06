@@ -82,10 +82,20 @@ NixProvider :: [].{
 		roc_packages : List(Spec.RocPackage),
 	}
 
+	## The most text a workflow's distinct requests may render together, flakes
+	## and argv: 16 MiB.
+	workflow_budget : U64
+	workflow_budget = 16777216
+
 	## Expand only semantic requests. Every atomic request shares this selection
 	## and renderer; never reload config or defer later capability/layout checks.
 	prepare : Spec, Request, Str, Layout -> Try(List(Prepared), Str)
-	prepare = |spec, request, target, layout| {
+	prepare = |spec, request, target, layout| prepare_within(spec, request, target, layout, workflow_budget)
+
+	## `prepare` with the workflow allowance as a parameter, so the accounting
+	## is tested with kilobytes. Callers use `prepare`.
+	prepare_within : Spec, Request, Str, Layout, U64 -> Try(List(Prepared), Str)
+	prepare_within = |spec, request, target, layout, allowance| {
 		project = Project.validate(spec)?
 		match request {
 			Request.Workflow(name) => {
@@ -107,7 +117,7 @@ NixProvider :: [].{
 								atomic,
 								target,
 								layout,
-								Limited(16777216 - $bytes),
+								Limited(allowance - $bytes),
 							)?
 							$bytes = $bytes + fresh.contents.to_utf8().len()
 								+ fresh.argv.fold(0, |n, arg| n + arg.to_utf8().len())
@@ -126,7 +136,7 @@ NixProvider :: [].{
 						[],
 						Unplanned,
 						Some({ inputs, layout }),
-						Limited(16777216),
+						Limited(allowance),
 					)?
 					check_layout(project, target, layout)?
 				}
@@ -251,8 +261,12 @@ NixProvider :: [].{
 	## Derive executable data only after complete structure, selected capability,
 	## target, caller layout and authoritative lock checks. No effects occur here.
 	plan : Spec, Request, Str, Layout, Locks -> Try(Steps, Str)
-	plan = |spec, request, target, layout, locks| {
-		prepared = prepare(spec, request, target, layout)?
+	plan = |spec, request, target, layout, locks| plan_within(spec, request, target, layout, locks, workflow_budget)
+
+	## `plan` with the workflow allowance as a parameter, as `prepare_within`.
+	plan_within : Spec, Request, Str, Layout, Locks, U64 -> Try(Steps, Str)
+	plan_within = |spec, request, target, layout, locks, allowance| {
+		prepared = prepare_within(spec, request, target, layout, allowance)?
 		derived = Locks.derive(locks, Project.validate(spec)?, layout)?
 		var $steps = []
 		var $templates = []
@@ -575,6 +589,8 @@ NixProvider :: [].{
 			]),
 		)?
 		# Inspection retains scoped inputs; plans emit stable full declarations.
+		# Either way `declared` is exactly what this flake declares.
+		var $declared = []
 		match staging {
 			None => {
 				for source in spec.sources.keep_if(
@@ -585,6 +601,7 @@ NixProvider :: [].{
 						NixPackages(ref) => ref
 						GuixPackages(_) => return Err("Nix cannot use Guix source ${source.name}")
 					}
+					$declared = $declared.append({ name: source.name, kind: "packages" })
 					$rendered = append_rendered(
 						$rendered,
 						"    ${quote(source.name)}.url = ${quote(url)};\n",
@@ -594,12 +611,14 @@ NixProvider :: [].{
 					|i| i.kind == Flake
 						or environments.any(|e| e.overlays.contains(i.name)),
 				) {
+					$declared = $declared.append({ name: input.name, kind: "flake" })
 					$rendered = append_rendered(
 						$rendered,
 						"    ${quote(input.name)}.url = ${quote(input.url)};\n",
 					)?
 				}
 				for source in spec.build_sources {
+					$declared = $declared.append({ name: source.name, kind: "source" })
 					$rendered = append_rendered(
 						$rendered,
 						"    ${quote(source.name)} = { url = ${quote(source.ref)}; "
@@ -611,6 +630,7 @@ NixProvider :: [].{
 				for input in data.inputs {
 					url = quote(Locks.input_url(input, data.layout))
 					flake = if input.flake "true" else "false"
+					$declared = $declared.append({ name: input.name, kind: input.kind })
 					$rendered = append_rendered(
 						$rendered,
 						"    ${quote(input.name)} = { url = ${url}; "
@@ -619,6 +639,7 @@ NixProvider :: [].{
 				}
 			}
 		}
+		$rendered = append_rendered($rendered, render_shell_alias($declared))?
 		$rendered = append_rendered(
 			$rendered,
 			lines([
@@ -707,6 +728,16 @@ NixProvider :: [].{
 		}
 		$rendered = append_rendered($rendered, lines(["    };", "}"]))?
 		Ok(Str.join_with($rendered.chunks, ""))
+	}
+
+	## The input `nix develop` takes its own bash from, pinned like the source
+	## it follows. Without it Nix uses the registry's floating nixpkgs for that
+	## bash on every shell and task, whatever the Lock says. See
+	## `Locks.shell_source` for which source is followed and when none is.
+	render_shell_alias : List({ name : Str, kind : Str }) -> Str
+	render_shell_alias = |declared| match Locks.shell_source(declared) {
+		Ok(target) => "    ${quote(Locks.shell_alias)}.follows = ${quote(target)};\n"
+		Err(NoAlias) => ""
 	}
 
 	## mkShell comes from the first tool's source, keeping unrelated providers
@@ -1090,6 +1121,83 @@ expect match NixProvider.render(mk(simple)) {
 	)
 	Err(_) => False
 }
+
+# `nix develop` takes its own bash from the input named nixpkgs: the flake
+# gives that name to the default source, after the inputs it declares.
+expect match NixProvider.render(mk(simple)) {
+	Ok(text) => text.contains(
+		"  inputs = {\n    \"default\".url = \"github:NixOS/nixpkgs/nixos-unstable\";\n    \"nixpkgs\".follows = \"default\";\n  };\n",
+	)
+	Err(_) => False
+}
+
+alias_environment : Str, List(Str) -> Spec.Environment
+alias_environment = |name, sources| { ..base, name, tools: sources.map(|source| { source, name: "git" }) }
+
+alias_lines : TestSpec -> Try(List(Str), Str)
+alias_lines = |t| Ok(NixProvider.render(mk(t))?.split_on("\n").keep_if(|line| line.contains("follows") or line.contains("\"nixpkgs\"")))
+
+stable : Spec.Source
+stable = { name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }
+
+# `default` is followed wherever it is declared; without it, the first
+# rendered package source is. An overlay or other input is never followed.
+expect {
+	both = {
+		..simple,
+		sources: [stable, { name: "default", provider: Auto }],
+		inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }],
+		environments: [{ ..alias_environment("dev", ["stable", "default"]), overlays: ["roc"] }],
+	}
+	only_named = {
+		..simple,
+		sources: [stable, { name: "older", provider: NixPackages("github:NixOS/nixpkgs/nixos-23.11") }],
+		environments: [alias_environment("dev", ["older", "stable"])],
+	}
+	alias_lines(both) == Ok(["    \"nixpkgs\".follows = \"default\";"])
+		and alias_lines(only_named) == Ok(["    \"nixpkgs\".follows = \"stable\";"])
+}
+
+# Inspection renders only the sources an environment uses, so the alias
+# follows one of those: never an input this flake does not declare.
+expect {
+	project = mk({
+		..simple,
+		sources: [stable],
+		environments: [alias_environment("dev", ["stable"]), alias_environment("plain", ["default"])],
+		shells: [{ name: "default", environment: "dev" }, { name: "plain", environment: "plain" }],
+	})
+	lines_of = |name| Ok(NixProvider.render_environment(project, name)?.split_on("\n").keep_if(|line| line.contains("follows")))
+	lines_of("dev") == Ok(["    \"nixpkgs\".follows = \"stable\";"])
+		and lines_of("plain") == Ok(["    \"nixpkgs\".follows = \"default\";"])
+}
+
+# A project that declares an input named nixpkgs keeps it, whatever its kind:
+# no second declaration of that name is written and nothing follows.
+expect {
+	as_source = {
+		..simple,
+		sources: [{ name: "nixpkgs", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		environments: [alias_environment("dev", ["default", "nixpkgs"])],
+	}
+	as_overlay = {
+		..simple,
+		inputs: [{ name: "nixpkgs", url: "github:example/overlay", kind: Overlay }],
+		environments: [{ ..base, overlays: ["nixpkgs"] }],
+	}
+	as_input = { ..simple, inputs: [{ name: "nixpkgs", url: "github:example/flake", kind: Flake }] }
+	alias_lines(as_source) == Ok(["    \"nixpkgs\".url = \"github:NixOS/nixpkgs/nixos-24.05\";", "            \"nixpkgs\" = import inputs.\"nixpkgs\" { inherit system overlays; };", "            sets.\"nixpkgs\".\"git\""])
+		and alias_lines(as_overlay) == Ok(["    \"nixpkgs\".url = \"github:example/overlay\";", "          overlays = [ inputs.\"nixpkgs\".overlays.default ];"])
+			and alias_lines(as_input) == Ok(["    \"nixpkgs\".url = \"github:example/flake\";"])
+}
+
+# The rule itself: package sources only, `default` first, none when the name
+# is taken or there is no Nix package source.
+expect Locks.shell_source([{ name: "assets", kind: "source" }, { name: "stable", kind: "packages" }, { name: "default", kind: "auto" }]) == Ok("default")
+expect Locks.shell_source([{ name: "roc", kind: "overlay" }, { name: "stable", kind: "packages" }, { name: "older", kind: "packages" }]) == Ok("stable")
+expect Locks.shell_source([{ name: "default", kind: "packages" }, { name: "nixpkgs", kind: "source" }]) == Err(NoAlias)
+expect Locks.shell_source([{ name: "default", kind: "overlay" }, { name: "utils", kind: "flake" }, { name: "assets", kind: "source" }]) == Err(NoAlias)
+expect Locks.shell_source([]) == Err(NoAlias)
 
 # Tasks need stable entries even when no alias refers to their environment.
 expect match NixProvider.render(
@@ -1610,6 +1718,29 @@ expect match plan_fixture(Request.Shell("default")) {
 	_ => False
 }
 
+# A staged plan declares every input, so its alias does not depend on the
+# request: a task in an environment that uses only `stable` still follows
+# `default`, and the working lock carries the matching edge.
+expect {
+	data = {
+		..TestData.data,
+		sources: [stable, { name: "default", provider: Auto }],
+		environments: [TestData.builder, alias_environment("pinned", ["stable"])],
+		tasks: TestData.data.tasks.append({ name: "pinned", environment: "pinned", run: ["git"] }),
+	}
+	project = TestData.project(data)
+	native = native_lock.replace_each("\"assets\": \"assets\"", "\"assets\": \"assets\", \"stable\": \"stable\"").replace_each(
+		"\"default\": {",
+		"\"stable\": { \"locked\": { \"lastModified\": 1, \"narHash\": \"sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=\", \"owner\": \"NixOS\", \"repo\": \"nixpkgs\", \"rev\": \"4975466d324710c576dc11ad614684e6bd8cad8e\", \"type\": \"github\" }, \"original\": { \"owner\": \"NixOS\", \"ref\": \"nixos-24.05\", \"repo\": \"nixpkgs\", \"type\": \"github\" } },\n    \"default\": {",
+	)
+	locks = resolved(project, native)?
+	plan = NixProvider.plan(project, Request.Run("pinned", []), "x86_64-linux", TestData.layout, locks)?
+	match plan.steps.first().map_ok(|step| step.files) {
+		Ok([flake, lock]) => flake.contents.contains("    \"default\" = { url = \"github:NixOS/nixpkgs/nixos-unstable\"; flake = true; };\n    \"assets\" = { url = \"path:/project/assets\"; flake = false; };\n    \"nixpkgs\".follows = \"default\";\n  };\n")
+			and lock.path == "/generated/flake.lock" and lock.contents.contains("\"nixpkgs\":[\"default\"]")
+		_ => False
+	}
+}
 # Roc packages: `packages` locks one bundle, `scripts` inherits it and adds
 # another, and `builder` has none.
 roc_project : Spec
@@ -2139,11 +2270,32 @@ expect {
 		]
 }
 
-# Distinct requests count all rendered systems toward the 16 MiB budget.
-# Four valid near-1-MiB build argv render over budget; three remain below it.
+# The allowance callers get is 16 MiB. The expects below hold its accounting
+# with allowances of a few kilobytes, through the same code.
+expect NixProvider.workflow_budget == 16 * 1024 * 1024
+
+over_budget : Str
+over_budget = "workflow plan exceeds 16 MiB of distinct rendered requests"
+
+## What one request costs a workflow: its rendered flake and its argv.
+request_bytes : Spec, Request -> Try(U64, Str)
+request_bytes = |project, request| {
+	prepared = NixProvider.prepare_atomic(Project.validate(project)?, request, "x86_64-linux", TestData.layout, Unlimited)?
+	Ok(prepared.contents.to_utf8().len() + prepared.argv.fold(0, |n, arg| n + arg.to_utf8().len()))
+}
+
+within : Spec, Str, U64 -> Try({}, Str)
+within = |project, workflow, allowance| {
+	_ = NixProvider.prepare_within(project, Request.Workflow(workflow), "x86_64-linux", TestData.layout, allowance)?
+	Ok({})
+}
+
+# Distinct requests add up, each counting every rendered system. The request
+# that crosses the allowance is the one refused: three requests fit in exactly
+# their own size, the fourth needs its own bytes too, to the byte.
 expect {
 	var $payload = "x"
-	while $payload.to_utf8().len() < 1048576 {
+	while $payload.to_utf8().len() < 1024 {
 		$payload = $payload.concat($payload)
 	}
 	names = ["one", "two", "three", "four"]
@@ -2154,7 +2306,7 @@ expect {
 			|name| {
 				..TestData.library,
 				name,
-				run: ["x", $payload.drop_prefix("x")],
+				run: ["x", $payload],
 			},
 		),
 		workflows: [
@@ -2167,45 +2319,51 @@ expect {
 				],
 			},
 			{ name: "over", steps: names.map(|name| BuildArtifact(name)) },
+			{ name: "again", steps: names.concat(names).map(|name| BuildArtifact(name)) },
 		],
 	})
+	one = request_bytes(project, Request.Build("one"))?
+	four = request_bytes(project, Request.Build("four"))?
+	three = one + request_bytes(project, Request.Build("two"))? + request_bytes(project, Request.Build("three"))?
 	locks = plan_locks?
-	below = NixProvider.plan(
+	below = NixProvider.plan_within(
 		project,
 		Request.Workflow("below"),
 		"x86_64-linux",
 		TestData.layout,
 		locks,
+		three,
 	)?
-	diagnostic = "workflow plan exceeds 16 MiB of distinct rendered requests"
-	below.steps.len() == 3 and NixProvider.preflight(
-		project,
-		Request.Workflow("over"),
-		"x86_64-linux",
-		TestData.layout,
-	) == Err(diagnostic) and NixProvider.plan(
-		project,
-		Request.Workflow("over"),
-		"x86_64-linux",
-		TestData.layout,
-		locks,
-	).map_ok(|plan| plan.steps) == Err(diagnostic)
+	# The payload is rendered once for each of the four systems.
+	one > 4 * 1024 and one < 5 * 1024 + 8192
+		and below.steps.len() == 3
+			and within(project, "below", three) == Ok({})
+				and within(project, "below", three - 1) == Err(over_budget)
+					and within(project, "over", three) == Err(over_budget)
+						and within(project, "over", three + four - 1) == Err(over_budget)
+							and within(project, "over", three + four) == Ok({})
+								# A repeated request is the same recipe and costs nothing more.
+								and within(project, "again", three + four) == Ok({})
+									and NixProvider.plan_within(
+										project,
+										Request.Workflow("over"),
+										"x86_64-linux",
+										TestData.layout,
+										locks,
+										three,
+									).map_ok(|plan| plan.steps) == Err(over_budget)
 }
 
-# One valid atomic step can exceed the budget through its dependency closure.
-# Reject during definition emission, not after assembling 126 MiB of argv.
+# One valid atomic step can exceed the allowance through its dependency
+# closure alone: every definition of the closure is charged as it is emitted.
 expect {
-	var $payload = "x"
-	while $payload.to_utf8().len() < 524288 {
-		$payload = $payload.concat($payload)
-	}
 	var $dependencies = []
 	var $index = 0.U64
 	while $index < 63 {
 		$dependencies = $dependencies.append({
 			..TestData.library,
 			name: "dep-${$index.to_str()}",
-			run: ["x", $payload],
+			run: ["x", "payload"],
 		})
 		$index = $index + 1
 	}
@@ -2219,29 +2377,31 @@ expect {
 		}),
 		workflows: [{ name: "large", steps: [BuildArtifact("root")] }],
 	})
-	diagnostic = "workflow plan exceeds 16 MiB of distinct rendered requests"
+	closure = request_bytes(project, Request.Build("root"))?
+	leaf = request_bytes(project, Request.Build("dep-0"))?
 	Project.validate(project).is_ok()
 		and Project.build_closure(project, "root").map_ok(List.len) == Ok(64)
-			and NixProvider.preflight(
-				project,
-				Request.Workflow("large"),
-				"x86_64-linux",
-				TestData.layout,
-			) == Err(diagnostic)
-				and NixProvider.plan(
-					project,
-					Request.Workflow("large"),
-					"x86_64-linux",
-					TestData.layout,
-					plan_locks?,
-				).map_ok(|plan| plan.steps) == Err(diagnostic)
+			# The closure is 64 definitions on four systems, not one.
+			and closure > 32 * leaf
+				and within(project, "large", closure) == Ok({})
+					and within(project, "large", closure - 1) == Err(over_budget)
+						and within(project, "large", 32 * leaf) == Err(over_budget)
+							and NixProvider.plan_within(
+								project,
+								Request.Workflow("large"),
+								"x86_64-linux",
+								TestData.layout,
+								plan_locks?,
+								closure - 1,
+							).map_ok(|plan| plan.steps) == Err(over_budget)
 }
 
-# A closure exactly at the public cap succeeds (even repeated); adding one
+# A closure exactly at the allowance succeeds (even repeated); adding one
 # byte to its last definition fails before returning any executable prefix.
 expect {
+	allowance = 65536
 	var $payload = "x"
-	while $payload.to_utf8().len() < 1048576 {
+	while $payload.to_utf8().len() < allowance {
 		$payload = $payload.concat($payload)
 	}
 	var $dependencies = []
@@ -2250,7 +2410,7 @@ expect {
 		$dependencies = $dependencies.append({
 			..TestData.library,
 			name: "dep-${$index.to_str()}",
-			run: ["x", $payload.drop_prefix("x")],
+			run: ["x", "payload"],
 		})
 		$index = $index + 1
 	}
@@ -2271,16 +2431,8 @@ expect {
 			],
 		}),
 	)?
-	baseline = NixProvider.prepare_atomic(
-		project,
-		Request.Build("root"),
-		"x86_64-linux",
-		TestData.layout,
-		Unlimited,
-	)?
-	bytes = baseline.contents.to_utf8().len()
-		+ baseline.argv.fold(0, |n, arg| n + arg.to_utf8().len())
-	padding = Str.from_utf8($payload.to_utf8().take_first(16777216 - bytes)) ?? ""
+	bytes = request_bytes(project, Request.Build("root"))?
+	padding = Str.from_utf8($payload.to_utf8().take_first(allowance - bytes)) ?? ""
 	at_limit = {
 		..project,
 		builds: project.builds.map(
@@ -2298,37 +2450,35 @@ expect {
 		),
 	}
 	locks = plan_locks?
-	plan = NixProvider.plan(
+	plan = NixProvider.plan_within(
 		at_limit,
 		Request.Workflow("limit"),
 		"x86_64-linux",
 		TestData.layout,
 		locks,
+		allowance,
 	)?
-	diagnostic = "workflow plan exceeds 16 MiB of distinct rendered requests"
-	plan.steps.len() == 2 and plan.steps.all(
-		|step| match step.files.first() {
-			Ok(flake) => flake.contents.to_utf8().len()
-				+ step.argv.fold(0, |n, arg| n + arg.to_utf8().len()) == 16777216
-			Err(_) => False
-		},
-	) and Project.validate(over_limit).is_ok() and NixProvider.preflight(
-		at_limit,
-		Request.Workflow("limit"),
-		"x86_64-linux",
-		TestData.layout,
-	) == Ok({}) and NixProvider.preflight(
-		over_limit,
-		Request.Workflow("limit"),
-		"x86_64-linux",
-		TestData.layout,
-	) == Err(diagnostic) and NixProvider.plan(
-		over_limit,
-		Request.Workflow("limit"),
-		"x86_64-linux",
-		TestData.layout,
-		locks,
-	).map_ok(|sequence| sequence.steps) == Err(diagnostic)
+	bytes < allowance and padding.to_utf8().len() == allowance - bytes
+		and plan.steps.len() == 2 and plan.steps.all(
+			|step| match step.files.first() {
+				Ok(flake) => flake.contents.to_utf8().len()
+					+ step.argv.fold(0, |n, arg| n + arg.to_utf8().len()) == allowance
+				Err(_) => False
+			},
+		) and Project.validate(over_limit).is_ok()
+			and within(at_limit, "limit", allowance) == Ok({})
+				and within(over_limit, "limit", allowance) == Err(over_budget)
+					and within(over_limit, "limit", allowance + 1) == Ok({})
+						and NixProvider.plan_within(
+							over_limit,
+							Request.Workflow("limit"),
+							"x86_64-linux",
+							TestData.layout,
+							locks,
+							allowance,
+						).map_ok(|sequence| sequence.steps) == Err(over_budget)
+							# Callers reach the same accounting with the 16 MiB allowance.
+							and NixProvider.preflight(over_limit, Request.Workflow("limit"), "x86_64-linux", TestData.layout) == Ok({})
 }
 
 # The shared renderer charges every actual byte, including escaped Raw,

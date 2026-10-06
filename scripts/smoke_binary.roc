@@ -18,8 +18,11 @@ import src/SmokeBinary
 ##
 ##   dist/smoke-aarch64-darwin dist/blueprint-aarch64-darwin
 ##
-## `SMOKE_PACKAGES` names the default package source when the built-in one
-## does not support this machine, as on Intel macOS.
+## The project it gives the binary resolves pinned revisions (see
+## `scripts/src/SmokeBinary.roc`). With `--floating` before the binary it
+## resolves what a new user's project would that day:
+##
+##   dist/smoke-x86_64-linux --floating dist/blueprint-x86_64-linux
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	arguments = args.map(OsStr.display)
@@ -27,10 +30,10 @@ main! = |args| {
 	if SmokeBinary.is_python(program) {
 		return SmokeBinary.python!(arguments)
 	}
-	result = match arguments {
-		[binary] => SmokeBinary.run!(binary)
-		_ => {
-			_ = Stderr.line!("usage: scripts/smoke_binary.roc BLUEPRINT_BINARY")
+	result = match SmokeBinary.requested(arguments) {
+		Ok(request) => SmokeBinary.run!(request.binary, request.inputs)
+		Err(Usage) => {
+			_ = Stderr.line!("usage: scripts/smoke_binary.roc [--floating] BLUEPRINT_BINARY")
 			return Err(Exit(2))
 		}
 	}

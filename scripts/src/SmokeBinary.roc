@@ -3,8 +3,12 @@ import cli.Env
 import cli.OsStr
 import cli.Path
 import cli.Stdout
+import FlakeLock
 import Process
 import Script
+import "../../.roc-version" as roc_version : Str
+import "../../flake.lock" as flake_lock : Str
+import "../../fixtures/consumer/inputs.lock" as fixture_lock : Str
 
 ## Run a built `blueprint` binary on this machine with no Roc of its own: it
 ## must fetch its compiler, evaluate a `Blueprint.roc`, realise an environment
@@ -14,6 +18,15 @@ import Script
 ## only Nix can run it. Built that way it is also the Python it leaves on
 ## `PATH`: started under the name `python3`, it records that it was used and
 ## fails.
+##
+## The project it writes pins everything it resolves, so a release is gated
+## on this repository and not on what moved upstream that day: packages at the
+## nixpkgs revision of `fixtures/consumer/inputs.lock`, the overlay at the
+## roc-overlay revision of `flake.lock` (the two the real-Nix scenarios use)
+## and the compiler at the nightly in `.roc-version`. The three files are
+## compiled into this program, so they cannot disagree with it and a machine
+## that runs it needs none of them. `Floating` writes instead what a new
+## user's project holds, for the weekly run that watches upstream.
 SmokeBinary := [].{
 
 	## Where a `python3` started by the binary under test records its arguments.
@@ -27,17 +40,50 @@ SmokeBinary := [].{
 		\\}
 		\\
 
-	## The project the binary is given. `packages_ref` names the default
-	## package source where the built-in one does not support this machine.
-	blueprint_roc : Str, Str -> Str
-	blueprint_roc = |platform_path, packages_ref| {
-		source = if packages_ref.is_empty() [] else ["	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),"]
+	## What the project resolves: fixed revisions, or whatever is newest.
+	Inputs : [Pinned, Floating]
+
+	## A package source, the Roc overlay and the compiler attribute in it.
+	## An empty `source` leaves the provider's default source.
+	References : { source : Str, overlay : Str, compiler : Str }
+
+	floating : References
+	floating = { source: "", overlay: "github:roc-lang/roc-overlay", compiler: "rocpkgs.nightly" }
+
+	## The pins of the committed files, or which of them has none.
+	pinned : Try(References, [NoPin(Str)])
+	pinned = references(fixture_lock, flake_lock, roc_version)
+
+	references : Str, Str, Str -> Try(References, [NoPin(Str)])
+	references = |packages_lock, overlay_lock, version| {
+		tag = version.split_on("\n").first() ?? ""
+		if !tag.starts_with("nightly-") {
+			return Err(NoPin(".roc-version"))
+		}
+		Ok({
+			source: FlakeLock.ref(FlakeLock.locked(packages_lock, "nixpkgs").map_err(|_| NoPin("fixtures/consumer/inputs.lock"))?),
+			overlay: FlakeLock.ref(FlakeLock.locked(overlay_lock, "roc-overlay").map_err(|_| NoPin("flake.lock"))?),
+			compiler: "rocpkgs.${tag}",
+		})
+	}
+
+	resolved : Inputs -> Try(References, [NoPin(Str)])
+	resolved = |inputs|
+		match inputs {
+			Pinned => pinned
+			Floating => Ok(floating)
+		}
+
+	## The project the binary is given.
+	blueprint_roc : Str, References -> Str
+	blueprint_roc = |platform_path, inputs| {
+		declared = if inputs.source.is_empty() [] else ["	Packages(\"default\", From(NixPackages(\"${inputs.source}\"))),"]
 		Str.join_with(
 			["app [config] { pf: platform \"${platform_path}\" }", "", "config = [", "	Name(\"smoke\"),"]
-				.concat(source)
+				.concat(declared)
 				.concat([
-					"	Overlay(\"roc\", \"github:roc-lang/roc-overlay\"),",
-					"	Environment(\"dev\", [Tools([\"git\"]), Overlays([\"roc\"]), Command(\"roc-stable\", \"rocpkgs.nightly\")]),",
+					"	Overlay(\"roc\", \"${inputs.overlay}\"),",
+					"	Environment(\"dev\", [Tools([\"git\"]), Overlays([\"roc\"]), Command(\"roc-stable\", \"${inputs.compiler}\")]),",
 					"	Shell(\"default\", [Use(\"dev\")]),",
 					"	Task(\"git\", [Use(\"dev\"), Run([\"git\", \"--version\"])]),",
 					"	Task(\"script\", [Use(\"dev\"), Run([\"./hello.roc\"])]),",
@@ -46,6 +92,19 @@ SmokeBinary := [].{
 				]),
 			"\n",
 		)
+	}
+
+	## What a command line asks for: the binary, after an optional `--floating`.
+	requested : List(Str) -> Try({ binary : Str, inputs : Inputs }, [Usage])
+	requested = |arguments| {
+		(inputs, rest) = match arguments {
+			["--floating", .. as others] => (Floating, others)
+			_ => (Pinned, arguments)
+		}
+		match rest {
+			[binary] => if binary.is_empty() or binary.starts_with("-") Err(Usage) else Ok({ binary, inputs })
+			_ => Err(Usage)
+		}
 	}
 
 	## Whether a program started under this name is the stand-in Python.
@@ -71,26 +130,30 @@ SmokeBinary := [].{
 	}
 
 	## Smoke-test the binary at `binary`, from the repository root.
-	run! : Str => Try({}, _)
-	run! = |binary| {
+	run! : Str, Inputs => Try({}, _)
+	run! = |binary, inputs| {
 		root = Path.to_str(Path.canonicalize!(Env.cwd!()?)?)?
 		blueprint = Path.to_str(Path.canonicalize!(Path.utf8(binary))?)?
 		# macOS temporary directories sit behind a symlink; the relative
 		# platform path must be computed from the real location.
 		work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-smoke-")?)?)?
-		result = smoke!(root, blueprint, work)
+		result = smoke!(root, blueprint, work, inputs)
 		_ = Path.delete_all!(Path.utf8(work))
 		result
 	}
 }
 
-smoke! : Str, Str, Str => Try({}, _)
-smoke! = |root, blueprint, work| {
+smoke! : Str, Str, Str, SmokeBinary.Inputs => Try({}, _)
+smoke! = |root, blueprint, work, inputs| {
 	project = "${work}/project"
 	Path.create_all!(Path.utf8(project))?
-	packages_ref = Env.var_str!(OsStr.from_str("SMOKE_PACKAGES")) ?? ""
+	references = match SmokeBinary.resolved(inputs) {
+		Ok(chosen) => chosen
+		Err(NoPin(file)) => return Script.fail!("${file} has no pin for the smoke test")
+	}
+	Script.info!("==>", "packages ${if references.source.is_empty() "the provider's default" else references.source}, overlay ${references.overlay}, compiler ${references.compiler}")?
 	platform_path = Process.relative(project, "${root}/blueprint-platform/main.roc")
-	Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), SmokeBinary.blueprint_roc(platform_path, packages_ref))?
+	Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), SmokeBinary.blueprint_roc(platform_path, references))?
 	Path.write_utf8!(Path.utf8("${project}/hello.roc"), SmokeBinary.hello_script)?
 	Cmd.new_str("chmod").args_str(["+x", "${project}/hello.roc"]).exec_cmd!().map_err(|_| ChmodFailed)?
 
@@ -148,12 +211,49 @@ smoke! = |root, blueprint, work| {
 	}
 	machine = Env.platform!()
 	python = if records "a python3 that records its use" else "a failing python3"
-	Script.pass!("blueprint binary smoke test passed on ${Str.inspect(machine.os)} ${Str.inspect(machine.arch)}, with no roc and ${python} on PATH")
+	resolved = match inputs {
+		Pinned => "pinned"
+		Floating => "floating"
+	}
+	Script.pass!("blueprint binary smoke test passed on ${Str.inspect(machine.os)} ${Str.inspect(machine.arch)} with ${resolved} inputs, no roc and ${python} on PATH")
 }
 
 expect SmokeBinary.is_python("python3") and SmokeBinary.is_python("/tmp/work/no-python/python3")
 expect !SmokeBinary.is_python("smoke-x86_64-linux") and !SmokeBinary.is_python("dist/smoke-aarch64-darwin") and !SmokeBinary.is_python("")
-expect !SmokeBinary.blueprint_roc("../pf/main.roc", "").contains("Packages(")
-expect SmokeBinary.blueprint_roc("../pf/main.roc", "").starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nconfig = [\n\tName(\"smoke\"),\n\tOverlay(")
-expect SmokeBinary.blueprint_roc("../pf/main.roc", "github:NixOS/nixpkgs/abc").contains("\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\"))),\n\tOverlay(")
+# The floating project is what a new user's holds: no package source of its
+# own, the overlay's default branch and its newest nightly.
+expect !SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).contains("Packages(")
+expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nconfig = [\n\tName(\"smoke\"),\n\tOverlay(\"roc\", \"github:roc-lang/roc-overlay\"),\n")
+expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).contains("Command(\"roc-stable\", \"rocpkgs.nightly\")")
+
+sample_pins : SmokeBinary.References
+sample_pins = { source: "github:NixOS/nixpkgs/abc", overlay: "github:roc-lang/roc-overlay/def", compiler: "rocpkgs.nightly-2026-10-04-130536d" }
+
+# The pinned project names a revision or tag for everything it resolves.
+expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\"))),\n\tOverlay(\"roc\", \"github:roc-lang/roc-overlay/def\"),\n")
+expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("Command(\"roc-stable\", \"rocpkgs.nightly-2026-10-04-130536d\")")
+
+lock_sample : Str, Str, Str -> Str
+lock_sample = |node, repo, rev| "{\n  \"nodes\": {\n    \"${node}\": {\n      \"locked\": {\n        \"narHash\": \"sha256-AAAA\",\n        \"owner\": \"o\",\n        \"repo\": \"${repo}\",\n        \"rev\": \"${rev}\",\n        \"type\": \"github\"\n      }\n    }\n  }\n}\n"
+
+expect SmokeBinary.references(lock_sample("nixpkgs", "nixpkgs", "abc"), lock_sample("roc-overlay", "roc-overlay", "def"), "nightly-1\n") == Ok({ source: "github:o/nixpkgs/abc", overlay: "github:o/roc-overlay/def", compiler: "rocpkgs.nightly-1" })
+
+# A file without its pin is named; nothing falls back to a floating reference.
+expect SmokeBinary.references("{}", lock_sample("roc-overlay", "roc-overlay", "def"), "nightly-1\n") == Err(NoPin("fixtures/consumer/inputs.lock"))
+expect SmokeBinary.references(lock_sample("nixpkgs", "nixpkgs", "abc"), lock_sample("nixpkgs", "nixpkgs", "abc"), "nightly-1\n") == Err(NoPin("flake.lock"))
+expect SmokeBinary.references(lock_sample("nixpkgs", "nixpkgs", "abc"), lock_sample("roc-overlay", "roc-overlay", "def"), "\n") == Err(NoPin(".roc-version"))
+
+# The committed files hold all three pins, each a full revision or a nightly tag.
+expect SmokeBinary.resolved(Floating) == Ok(SmokeBinary.floating)
+expect match SmokeBinary.resolved(Pinned) {
+	Ok(pins) =>
+		pins.source.starts_with("github:NixOS/nixpkgs/") and pins.source.to_utf8().len() == 61
+			and pins.overlay.starts_with("github:roc-lang/roc-overlay/") and pins.overlay.to_utf8().len() == 68
+				and pins.compiler.starts_with("rocpkgs.nightly-2")
+	Err(_) => False
+}
 expect SmokeBinary.is_script_host("/home/me/.cache/roc/nightly/tmp/G7Edog/smoke_binary.roc") and !SmokeBinary.is_script_host("/repo/dist/smoke-x86_64-linux")
+
+expect SmokeBinary.requested(["dist/blueprint-x86_64-linux"]) == Ok({ binary: "dist/blueprint-x86_64-linux", inputs: Pinned })
+expect SmokeBinary.requested(["--floating", "dist/blueprint-x86_64-linux"]) == Ok({ binary: "dist/blueprint-x86_64-linux", inputs: Floating })
+expect [[], ["--floating"], ["--pinned", "blueprint"], ["blueprint", "--floating"], ["--floating", "--floating", "blueprint"], ["a", "b"], [""]].all(|arguments| SmokeBinary.requested(arguments) == Err(Usage))

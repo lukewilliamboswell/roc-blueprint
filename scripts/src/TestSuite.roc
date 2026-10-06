@@ -12,6 +12,9 @@ import StaticChecks
 ##
 ## The `cli` and `nix` groups use `./blueprint`. They build it unless
 ## `BLUEPRINT_PREBUILT=1` says the caller already put a tested binary there.
+## The caller then answers for the platform hosts too: when every
+## `targets/<target>/libhost.a` is present, they are used as they are, and
+## when any is missing all are built.
 TestSuite := [].{
 	groups = ["static", "unit", "cli", "nix", "package", "fuzz"]
 
@@ -41,6 +44,11 @@ TestSuite := [].{
 			],
 			"\n",
 		)
+
+	## The platform hosts among the files its targets link: what `zig build`
+	## makes. The rest are fetched linker inputs.
+	hosts : List(Str) -> List(Str)
+	hosts = |target_inputs| target_inputs.keep_if(|file| file.ends_with("/libhost.a"))
 
 	## Run the named groups from the repository root.
 	run! : Str, List(Str) => Try({}, _)
@@ -131,9 +139,32 @@ prepare! = |context, done| {
 	# Unconditional: a restored cache is storage, not authority. The archive is
 	# rehashed against link-inputs.lock.json whether or not it was downloaded.
 	script!(context, "link_inputs", ["fetch"])?
-	step!("Build the platform host")?
-	Process.passthrough!(Process.command("zig", ["build"], "${context.root}/blueprint-platform"))?
+	hosts = match Bundle.target_inputs(read!(context, "${Bundle.platform_dir}/main.roc")?) {
+		Ok(files) => TestSuite.hosts(files)
+		Err(NoTargets) => return Script.fail!("${Bundle.platform_dir}/main.roc declares no targets")
+	}
+	if context.prebuilt and present!(context, hosts) {
+		# No host is committed, so in a job that starts from a checkout these
+		# are the ones the caller put there with its binary, built from this
+		# commit by the same workflow run.
+		step!("Use the ${hosts.len().to_str()} prebuilt platform hosts (BLUEPRINT_PREBUILT=1)")?
+	} else {
+		step!("Build the platform host")?
+		Process.passthrough!(Process.command("zig", ["build"], "${context.root}/blueprint-platform"))?
+	}
 	Ok({ ..done, prepared: True })
+}
+
+## Whether every one of these files of the platform directory exists.
+present! : Context, List(Str) => Bool
+present! = |context, files| {
+	var $missing = files.is_empty()
+	for file in files {
+		if !(Path.is_file!(Path.utf8("${context.root}/${Bundle.platform_dir}/${file}")) ?? False) {
+			$missing = True
+		}
+	}
+	!$missing
 }
 
 build_cli! : Context, Done => Try(Done, _)
@@ -328,3 +359,7 @@ expect TestSuite.requested([]) == Ok(["static", "unit", "cli", "nix", "package",
 expect TestSuite.requested(["unit", "cli"]) == Ok(["unit", "cli"])
 expect TestSuite.requested(["unit", "units"]) == Err(UnknownGroup("units"))
 expect TestSuite.packaged_project("../pf/main.roc", "github:NixOS/nixpkgs/abc").contains("Packages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\")))")
+
+# The hosts are the built files of every target the platform declares.
+expect TestSuite.hosts(["targets/x64musl/crt1.o", "targets/x64musl/libhost.a", "targets/x64musl/libc.a", "targets/arm64mac/libhost.a"]) == ["targets/x64musl/libhost.a", "targets/arm64mac/libhost.a"]
+expect TestSuite.hosts(["targets/x64musl/libhost.a.sig", "targets/x64musl/crt1.o"]).is_empty()

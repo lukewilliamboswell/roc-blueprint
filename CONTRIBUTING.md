@@ -119,7 +119,10 @@ CLI and real Nix: the all-settings and extensions examples, noncommutative
 overlays in both orders with inheritance, an unselected overlay's native
 missing-package failure and a declared overlay that throws if evaluated,
 system-scoped tools on Linux and macOS with the package-target rejection of an
-unscoped one, and renamed commands. A project it writes pins its inputs to the
+unscoped one, and renamed commands. It also runs `nix develop --debug` on a
+staged flake and requires Nix's own report that its bash comes from the locked
+package source, with no registry lookup, and runs a task with the `nixpkgs`
+edge removed from `Blueprint.lock`, as an earlier blueprint wrote it. A project it writes pins its inputs to the
 revisions in `fixtures/consumer/inputs.lock` and `flake.lock`, and its
 `Blueprint.lock` is read-only and compared after every step.
 `fixtures/consumer/main.roc` holds the staged bytes and supplied-lock
@@ -275,8 +278,14 @@ provider converts its NAR hashes for remote inputs, and local inputs carry
 Blueprint's own tree digest from core `Tree`) and provider-namespaced
 `hints`. The Nix provider's hint carries its declared input identity and the
 complete native lock graph; decoding rejects a lock whose Sources disagree with
-those pins, so hand edits to either side fail. Older JSON locks are not
-migrated: run `blueprint update`. `fuzz/lock-parse` fuzzes the parser.
+those pins, so hand edits to either side fail. The graph's root holds one edge
+that is no declared input: `nixpkgs`, following the package source
+`Locks.shell_source` selects, which Nix writes for the alias in the generated
+flake (see Providers). Decoding accepts that edge only as the declarations
+determine it. A Lock written before the alias has no such edge and is still
+valid: `Locks.derive` adds it to the working lock, which changes no pin, so
+nothing needs `blueprint update` and the next update records it. Older JSON
+locks are not migrated: run `blueprint update`. `fuzz/lock-parse` fuzzes the parser.
 
 ### Compatibility
 
@@ -312,6 +321,12 @@ provider. It:
   unrelated valid source/environment declarations. `render` selects all
   shell/task/build environments; `render_environment` selects one. Whole-project
   structure, required features, declared targets and Nix Raw remain checked;
+- declares `nixpkgs` as an input that `follows` the `default` package source,
+  or the first Nix package source when there is no `default`, and nothing when
+  the project declares an input of that name. `nix develop` takes the bash it
+  runs from the input called `nixpkgs` and otherwise from the registry's
+  floating one, which no Lock pins. The alias is one name for the whole flake,
+  so it cannot follow each environment's own source;
 - emits native package attributes without translation, fallback or availability
   filtering: missing/unavailable packages fail in Nix. Explicit `system_tools`
   select packages for their named System before Nix evaluates them. Each
@@ -386,6 +401,20 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
   have Nix and deliberately no Roc, so `build_release.roc` also cross-builds
   `scripts/smoke_binary.roc` for each system and they run that
   (`dist/smoke-<system> dist/blueprint-<system>`).
+  The project the smoke test writes pins what it resolves: packages at the
+  nixpkgs revision in `fixtures/consumer/inputs.lock`, the overlay at the
+  roc-overlay revision in `flake.lock` and the compiler at the nightly in
+  `.roc-version`, all compiled into the smoke program. A release therefore
+  does not depend on what moved upstream that day.
+  `.github/workflows/floating.yml` runs the same test weekly with `--floating`,
+  which resolves what a new user's project would: Blueprint's default package
+  source, the overlay's default branch and its newest nightly.
+
+`build_release.roc` compiles every released file with `--no-cache`: with Roc's
+compile cache, one source and target gave different bytes depending on what the
+cache already held. It also compiles the x86_64 Linux CLI a second time and
+fails unless the two are byte-identical. The three CLI binaries are compiled at
+the same time, each about 2.3 GB at its peak.
 
 A binary fetches the compiler named in `.roc-version` from the roc-overlay
 revision in `NixProvider.roc_overlay`. Change that constant whenever
@@ -415,7 +444,11 @@ Before bundling the platform, `scripts/bundle.roc` makes the check of
 `link-inputs.lock.json` are packed. Their licences and `dependency.json`
 inventory go into the bundle under `linker-inputs/`, and
 `scripts/release_notes.roc` records the linker-input release and the lock's
-SHA-256 in the release notes.
+SHA-256 in the release notes. The notes of a platform release list what else it
+was built from: the Roc nightly and the Zig version, the roc-overlay revision
+and the hashes of the two compiler archives it supplied, the flake's nixpkgs
+revision, the core bundle, and the Roc packages compiled into the CLI as
+`roc deps blueprint-cli/main.roc` resolves them.
 
 `scripts/test.roc` runs the first on every commit. `release.yml` runs the second
 when a platform release is tagged, and the release fails if the pinned core
