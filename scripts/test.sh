@@ -67,6 +67,9 @@ scripts/test-b1.sh
 step "System-scoped tools through real Nix on Linux and macOS"
 scripts/test-system-tools.sh
 
+step "Renamed commands through real Nix"
+scripts/test-command.sh
+
 step "B2 sandboxed artifacts, isolation, sources and immutable locks"
 python3 scripts/test-b2.py
 

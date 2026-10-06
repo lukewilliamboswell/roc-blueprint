@@ -20,7 +20,7 @@ NixProvider :: [].{
 	provider : Provider
 	provider = Provider.{
 		name: "nix",
-		features: ["raw", "sources", "builds", "workflows", "system-tools"],
+		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands"],
 		render: |spec| render(spec).map_ok(
 			|contents| [{ path: "flake.nix", contents }],
 		),
@@ -519,7 +519,7 @@ NixProvider :: [].{
 		match staging {
 			None => {
 				for source in spec.sources.keep_if(
-					|s| environments.any(|e| source_names(e, spec.system_tools).contains(s.name)),
+					|s| environments.any(|e| source_names(e, spec.system_tools, spec.commands).contains(s.name)),
 				) {
 					url = match source.provider {
 						Auto => default_nixpkgs
@@ -573,7 +573,7 @@ NixProvider :: [].{
 		for environment in environments {
 			$rendered = append_rendered(
 				$rendered,
-				render_environment_definition(environment, spec.system_tools),
+				render_environment_definition(environment, spec.system_tools, spec.commands),
 			)?
 		}
 		$rendered = append_rendered(
@@ -626,7 +626,7 @@ NixProvider :: [].{
 						.map_err(|_| "unknown build environment")?
 					$rendered = append_rendered(
 						$rendered,
-						render_build(build, env, spec.system_tools, system, snapshot),
+						render_build(build, env, spec.system_tools, spec.commands, system, snapshot),
 					)?
 				}
 				$rendered = append_rendered(
@@ -648,9 +648,9 @@ NixProvider :: [].{
 
 	## mkShell comes from the first tool's source, keeping unrelated providers
 	## outside the request. Empty environments use the default source instead.
-	source_names : Spec.Environment, List(Spec.SystemTools) -> List(Str)
-	source_names = |environment, system_tools| {
-		all_tools = environment.tools.concat(system_tools.keep_if(|entry| entry.environment == environment.name).fold([], |tools, entry| tools.concat(entry.tools)))
+	source_names : Spec.Environment, List(Spec.SystemTools), List(Spec.Command) -> List(Str)
+	source_names = |environment, system_tools, commands| {
+		all_tools = environment.tools.concat(system_tools.keep_if(|entry| entry.environment == environment.name).fold([], |tools, entry| tools.concat(entry.tools))).concat(commands.keep_if(|entry| entry.environment == environment.name).map(|entry| entry.tool))
 		# With no shared tools, the default source builds the shell even on
 		# Systems where none of the scoped tools apply.
 		initial = if environment.tools.is_empty() ["default"] else []
@@ -661,9 +661,19 @@ NixProvider :: [].{
 		)
 	}
 
-	render_environment_definition : Spec.Environment, List(Spec.SystemTools) -> Str
-	render_environment_definition = |environment, system_tools| {
-		sources = source_names(environment, system_tools)
+	## A package holding only bin/<name>, which execs the tool's main program.
+	## The tool's own bin directory stays off PATH, so a renamed compiler can
+	## share an environment with another of the same name.
+	command_package : Spec.Command -> Str
+	command_package = |command| {
+		set = "sets.${quote(command.tool.source)}"
+		target = "${set}.${attr_path(command.tool.name.split_on("."))}"
+		"(${set}.writeShellScriptBin ${quote(command.name)} ''exec \${${set}.lib.getExe ${target}} \"$@\"'')"
+	}
+
+	render_environment_definition : Spec.Environment, List(Spec.SystemTools), List(Spec.Command) -> Str
+	render_environment_definition = |environment, system_tools, commands| {
+		sources = source_names(environment, system_tools, commands)
 		primary = sources.first() ?? "default"
 		overlays = environment.overlays.map(
 			|name| "inputs.${quote(name)}.overlays.default",
@@ -677,6 +687,10 @@ NixProvider :: [].{
 			|tool|
 				"            sets.${quote(tool.source)}."
 					.concat(attr_path(tool.name.split_on("."))),
+		).concat(
+			commands.keep_if(|entry| entry.environment == environment.name).map(
+				|entry| "            ${command_package(entry)}",
+			),
 		)
 		scoped = system_tools.keep_if(|entry| entry.environment == environment.name).map(
 			|entry| {
@@ -705,9 +719,9 @@ NixProvider :: [].{
 
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
 	## Runner tool paths are explicit; argv and metadata enter through JSON.
-	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), Str, Str -> Str
-	render_build = |build, environment, system_tools, system, snapshot| {
-		sources = source_names(environment, system_tools)
+	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), Str, Str -> Str
+	render_build = |build, environment, system_tools, commands, system, snapshot| {
+		sources = source_names(environment, system_tools, commands)
 		primary = sources.first() ?? "default"
 		overlays = environment.overlays.map(
 			|name| "inputs.${quote(name)}.overlays.default",
@@ -721,7 +735,7 @@ NixProvider :: [].{
 		tools = selected_tools.map(
 			|tool|
 				"sets.${quote(tool.source)}.${attr_path(tool.name.split_on("."))}",
-		)
+		).concat(commands.keep_if(|entry| entry.environment == environment.name).map(command_package))
 		inputs = build.inputs.map(
 			|name|
 				"{ name = ${quote(name)}; path = inputs.${quote(name)}; }",
@@ -905,6 +919,7 @@ mk = |t| Spec.{
 	inputs: t.inputs,
 	environments: t.environments,
 	system_tools: [],
+	commands: [],
 	shells: t.shells,
 	tasks: t.tasks,
 	build_sources: [],
@@ -1063,6 +1078,24 @@ expect {
 		Err(_) => False
 	}
 }
+
+# A command adds only a launcher for the tool's main program, and its source
+# joins the environment's package sets even when no plain tool uses it.
+expect {
+	project = {
+		..mk(simple),
+		sources: [{ name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		requires_: ["commands"],
+		commands: [{ environment: "dev", name: "roc-stable", tool: { source: "stable", name: "rocpkgs.nightly-2026-09-10-a670e34" } }],
+	}
+	match NixProvider.render(project) {
+		Ok(text) => text.contains("(sets.\"stable\".writeShellScriptBin \"roc-stable\" ''exec \${sets.\"stable\".lib.getExe sets.\"stable\".\"rocpkgs\".\"nightly-2026-09-10-a670e34\"} \"$@\"'')") and
+			text.contains("\"stable\" = import inputs.\"stable\"")
+		Err(_) => False
+	}
+}
+
+expect NixProvider.render({ ..mk(simple), commands: [{ environment: "dev", name: "vcs", tool: { source: "default", name: "git" } }] }).is_err()
 
 # Auto tool syntax is checked for the selected provider before any effects.
 expect NixProvider.render(

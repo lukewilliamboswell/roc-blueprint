@@ -7,7 +7,7 @@
 Describe reusable environments, argv tasks, sandboxed artifact builds and ordered
 workflows in `Blueprint.roc`. The reference CLI executes pure Nix plans.
 
-**Status (Spec 2.3):** these examples use the local source platform, not the
+**Status (Spec 2.4):** these examples use the local source platform, not the
 latest published release. The architecture, terminology and invariants are in
 [docs/architecture.adoc](docs/architecture.adoc).
 
@@ -98,13 +98,15 @@ settings:
 | `Raw(backend, target, Val)` | Provider-specific data; see below. |
 | `Custom(kind, name, Val)` | Extension data. The current CLI rejects unsupported extensions. |
 
-Inside an `Environment`, `Tools` and `Overlays` occur at most once, while
-`ToolsFor` occurs at most once per System:
+Inside an `Environment`, `Tools` and `Overlays` occur at most once, `ToolsFor`
+occurs at most once per System, and `Command` occurs at most once per command
+name:
 
 | Setting | Meaning |
 |---|---|
 | `Tools(List(Tool))` | Native package names. `"git"` uses source `default`; `"stable#jq"` uses source `stable`. |
 | `ToolsFor(System, List(Tool))` | Add tools only for a declared target System. Each System occurs at most once per Environment. |
+| `Command(Str, Tool)` | Expose one tool's main program under another command name, without adding the tool's own executables. |
 | `Overlays(List(InputName))` | Ordered selection of declared overlay names. |
 | `Extend(EnvName)` | Inherit one environment's tools and overlays before appending this environment's selections. |
 
@@ -142,6 +144,24 @@ Environment("dev", [
 `ToolsFor` is provider-neutral Spec intent. It applies to inherited environments,
 shells, tasks and builds on that System; undeclared systems and duplicate
 declarations are rejected during evaluation.
+
+`Command` keeps a pinned tool beside another tool of the same name. For example,
+repository scripts can run on one fixed Roc release while the project is built
+with whichever `roc` is already on `PATH`:
+
+```roc
+Overlay("roc", "github:roc-lang/roc-overlay"),
+Environment("dev", [
+	Overlays(["roc"]),
+	Command("roc-stable", "rocpkgs.nightly-2026-09-10-a670e34"),
+]),
+```
+
+The environment gains `roc-stable` and no `roc`, so a script can start with
+`#!/usr/bin/env roc-stable`. The command runs the tool's main program as its
+package declares it; a package that declares none fails in Nix. Command names
+are plain file names. An extending environment inherits commands and replaces
+one by declaring the same name.
 
 Use ordinary Roc lists and functions for composition, not a plugin registry.
 [ProjectTasks.roc](examples/composition/ProjectTasks.roc) returns
@@ -254,7 +274,7 @@ structural validation and required-feature checks still apply. Full rendering
 ## How it works
 
 The platform lowers and validates the whole config at top level, then prints
-Spec 2.3 as an S-expression. The CLI invokes Roc, parses and revalidates that
+Spec 2.4 as an S-expression. The CLI invokes Roc, parses and revalidates that
 Spec through the shared pure `Project` boundary, explicitly selects Nix, and
 owns file writes, locking and execution. The importable core and Nix renderer
 perform no host discovery or effects.

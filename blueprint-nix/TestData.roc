@@ -116,6 +116,7 @@ TestData :: [].{
 		inputs: t.inputs,
 		environments: t.environments,
 		system_tools: [],
+		commands: [],
 		shells: t.shells,
 		tasks: t.tasks,
 		build_sources: t.build_sources,

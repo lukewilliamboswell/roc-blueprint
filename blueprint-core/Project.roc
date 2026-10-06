@@ -32,6 +32,17 @@ Project :: [].{
 	valid_task_name : Str -> Bool
 	valid_task_name = |name| !name.is_empty() and name.split_on(".").all(valid_name)
 
+	## A file name on PATH: no separators, and no leading dash or dot.
+	valid_command_name : Str -> Bool
+	valid_command_name = |name| {
+		bytes = name.to_utf8()
+		first_ok = match bytes.first() {
+			Ok(b) => b != '-' and b != '.'
+			Err(_) => False
+		}
+		first_ok and bytes.all(|b| letter(b) or (b >= '0' and b <= '9') or b == '-' or b == '_' or b == '.' or b == '+')
+	}
+
 	letter : U8 -> Bool
 	letter = |b| (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z')
 
@@ -206,6 +217,20 @@ Project :: [].{
 				return Err("DuplicateToolsFor: environment ${entry.environment} on ${entry.system}")
 			}
 		}
+		if !spec.commands.is_empty() and !spec.requires_.contains("commands") {
+			return Err("commands require feature: commands")
+		}
+		for entry in spec.commands {
+			if !spec.environments.any(|e| e.name == entry.environment) {
+				return Err("unknown environment for command: ${entry.environment}")
+			}
+			if !valid_command_name(entry.name) {
+				return Err("invalid command name: ${entry.name}")
+			}
+			if spec.commands.keep_if(|other| other.environment == entry.environment and other.name == entry.name).len() > 1 {
+				return Err("DuplicateCommand: environment ${entry.environment}: ${entry.name}")
+			}
+		}
 		for input in spec.inputs {
 			if !valid_ref(input.url) {
 				return Err("invalid input reference: ${input.name}")
@@ -213,15 +238,18 @@ Project :: [].{
 		}
 		var $environments = []
 		var $system_tools = []
+		var $commands = []
 		for env in spec.environments {
 			resolved = resolve(spec.environments, env.name, [])?
+			env_commands = resolve_commands(spec.environments, spec.commands, env.name, [])?
+			$commands = $commands.concat(env_commands)
 			for system in declared_systems {
 				tools_for_system = resolve_system_tools(spec.environments, spec.system_tools, env.name, system, [])?
 				if !tools_for_system.is_empty() {
 					$system_tools = $system_tools.append({ environment: env.name, system, tools: tools_for_system })
 				}
 			}
-			all_tools = resolved.tools.concat($system_tools.keep_if(|entry| entry.environment == env.name).fold([], |tools, entry| tools.concat(entry.tools)))
+			all_tools = resolved.tools.concat($system_tools.keep_if(|entry| entry.environment == env.name).fold([], |tools, entry| tools.concat(entry.tools))).concat(env_commands.map(|entry| entry.tool))
 			for t in all_tools {
 				parsed = tool("${t.source}#${t.name}")?
 				source = sources.find_first(|s| s.name == parsed.source).map_err(|_| "unknown source: ${t.source}")?
@@ -290,7 +318,7 @@ Project :: [].{
 				return Err("empty Raw provider or target")
 			}
 		}
-		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
+		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
 	}
 
 	## Whole-project checks precede expansion, even for an empty request.
@@ -496,6 +524,31 @@ Project :: [].{
 		}
 	}
 
+	## Commands inherit parent first. A child's command replaces an inherited
+	## command of the same name, keeping the parent's position.
+	resolve_commands : List(Spec.Environment), List(Spec.Command), Str, List(Str) -> Try(List(Spec.Command), Str)
+	resolve_commands = |environments, entries, name, visiting| {
+		if visiting.contains(name) or visiting.len() >= 128 {
+			return Err("environment cycle or inheritance limit: ${name}")
+		}
+		env = environments.find_first(|e| e.name == name).map_err(|_| "unknown environment: ${name}")?
+		own = entries.keep_if(|entry| entry.environment == name)
+		match env.parents {
+			[] => Ok(own)
+			[parent] => {
+				inherited = resolve_commands(environments, entries, parent, visiting.append(name))?
+				kept = inherited.map(
+					|entry| {
+						replacement = own.find_first(|o| o.name == entry.name).map_ok(|o| o.tool) ?? entry.tool
+						{ environment: name, name: entry.name, tool: replacement }
+					},
+				)
+				Ok(kept.concat(own.keep_if(|o| !inherited.any(|entry| entry.name == o.name))))
+			}
+			_ => Err("environment ${name} has several parents")
+		}
+	}
+
 	## Check only the requested environment's normalized dependency closure.
 	## This models Guix shell capability without implementing a Guix executor.
 	check_environment : Spec, ProviderName, Str -> Try({}, Str)
@@ -506,7 +559,7 @@ Project :: [].{
 			return Err("Guix does not support overlays in environment ${name}")
 		}
 		# An empty environment still uses the default provider's environment builder.
-		all_tools = env.tools.concat(project.system_tools.keep_if(|entry| entry.environment == name).fold([], |tools, entry| tools.concat(entry.tools)))
+		all_tools = env.tools.concat(project.system_tools.keep_if(|entry| entry.environment == name).fold([], |tools, entry| tools.concat(entry.tools))).concat(project.commands.keep_if(|entry| entry.environment == name).map(|entry| entry.tool))
 		source_names = if all_tools.is_empty() ["default"] else unique(all_tools.map(|t| t.source))
 		for source_name in source_names {
 			source = project.sources.find_first(|s| s.name == source_name).map_err(|_| "unknown source: ${source_name}")?
@@ -555,6 +608,7 @@ fixture = |environments| Spec.{
 	],
 	environments,
 	system_tools: [],
+	commands: [],
 	shells: [],
 	tasks: [],
 	build_sources: [],
@@ -667,6 +721,7 @@ build_fixture = |builds| Spec.{
 	inputs: [],
 	environments: [{ name: "builder", parents: [], tools: [], overlays: [] }],
 	system_tools: [],
+	commands: [],
 	shells: [],
 	tasks: [],
 	build_sources: [{ name: "assets", ref: "path:./assets" }],
@@ -715,6 +770,44 @@ expect Project.validate(build_fixture([{ ..library, run: [""] }])) == Err("empty
 expect Project.validate(build_fixture([{ ..library, run: ["cmd", Str.from_utf8([0]) ?? ""] }])) == Err("NUL in argv: library")
 expect ["", "/absolute", ".", "..", "./artifact", "dist/../escape", "dist//file", "dist/", "C:/file", "dist\\file", "line\nbreak"].all(|output| Project.validate(build_fixture([{ ..library, output }])).is_err())
 expect Project.validate(build_fixture([{ ..library, output: "dist/my artifact" }])).is_ok()
+# Commands inherit parent first; a child replaces a same-named command in place.
+expect {
+	git = { source: "default", name: "git" }
+	spec = {
+		..fixture([base, { ..child, overlays: [] }]),
+		requires_: ["commands"],
+		commands: [
+			{ environment: "base", name: "vcs", tool: git },
+			{ environment: "base", name: "py", tool: git },
+			{ environment: "dev", name: "py", tool: { source: "default", name: "python3" } },
+			{ environment: "dev", name: "roc-stable", tool: { source: "nix", name: "rocpkgs.nightly" } },
+		],
+	}
+	match Project.validate(spec) {
+		Ok(valid) => valid.commands == [
+			{ environment: "base", name: "vcs", tool: git },
+			{ environment: "base", name: "py", tool: git },
+			{ environment: "dev", name: "vcs", tool: git },
+			{ environment: "dev", name: "py", tool: { source: "default", name: "python3" } },
+			{ environment: "dev", name: "roc-stable", tool: { source: "nix", name: "rocpkgs.nightly" } },
+		]
+		Err(_) => False
+	}
+}
+
+expect {
+	entry = { environment: "base", name: "vcs", tool: { source: "default", name: "git" } }
+	spec = { ..fixture([base]), commands: [entry] }
+	Project.validate(spec) == Err("commands require feature: commands") and
+		Project.validate({ ..spec, requires_: ["commands"], commands: [entry, entry] }) == Err("DuplicateCommand: environment base: vcs") and
+			Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, environment: "missing" }] }) == Err("unknown environment for command: missing") and
+				Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing") and
+					Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, tool: { source: "nix", name: "python@3" } }] }).is_err()
+}
+
+expect ["roc-stable", "python3.12", "g++", "_x"].all(Project.valid_command_name)
+expect ["", "-rf", ".hidden", "bin/roc", "two words", "a\nb", "$(x)", "a\"b"].all(|name| !Project.valid_command_name(name))
+
 expect ["path:./assets", "path:assets", "github:example/assets", "git+https://example.test/assets.git", "https://example.test/assets.tar.gz"].all(Project.valid_build_source_ref)
 expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../escape", "path:./assets/../escape", "path:assets?dir=../escape", "file:/absolute", "git+file:///absolute", "github:", "https://", "path:line\nbreak"].all(|ref| !Project.valid_build_source_ref(ref))
 
@@ -722,7 +815,7 @@ expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../esc
 build_source_fixture : List(Spec.BuildSource), List(Str) -> Spec
 build_source_fixture = |build_sources, requires_| {
 	spec = build_fixture([library])
-	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
+	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
 }
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["builds"])) == Err("build sources require feature: sources")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["sources"])) == Err("builds require feature: builds")
@@ -786,6 +879,7 @@ workflow_features = |workflows, features| Spec.{
 	inputs: [],
 	environments: [{ name: "builder", parents: [], tools: [], overlays: [] }],
 	system_tools: [],
+	commands: [],
 	shells: [],
 	tasks: [{ name: "check.all", environment: "builder", run: ["cmd"] }],
 	build_sources: [{ name: "assets", ref: "path:./assets" }],

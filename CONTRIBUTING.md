@@ -27,7 +27,7 @@ flake.nix                builds blueprint with the pinned Roc; user and contribu
 ```
 
 The local platform and CLI share `blueprint-core`, including
-`Project.validate`. The Spec wire format is major 2 (currently 2.3); published
+`Project.validate`. The Spec wire format is major 2 (currently 2.4); published
 major-1 bundles are not compatible. The architecture, terminology (Spec,
 Provider, Lock, stages) and invariants are defined in
 [docs/architecture.adoc](docs/architecture.adoc); keep it in sync with changes.
@@ -143,7 +143,7 @@ blueprint platform's Linux target.
 
 In outline:
 
-- `format` — `((major 2) (minor 3))`; see compatibility below.
+- `format` — `((major 2) (minor 4))`; see compatibility below.
 - `name`, `systems` (strings such as `"x86_64-linux"`).
 - `sources` — `{ name, provider }`, where provider is `Auto`,
   `NixPackages(Str)` or `GuixPackages(Str)`. Validation supplies
@@ -154,6 +154,8 @@ In outline:
   single parent, deduplicates parent-first selections and clears `parents`.
 - `system_tools` — optional `{ environment, system, tools }` selections. They
   inherit parent first and only enter the environment on their named System.
+- `commands` — optional `{ environment, name, tool }` launchers. Validation
+  flattens inheritance; a child replaces a same-named inherited command.
 - `shells` — `{ name, environment }` aliases.
 - `tasks` — `{ name, environment, run }`, with nonempty executable argv.
 - `build_sources` — `{ name, ref }`, locked non-flake sources, separate from
@@ -166,7 +168,7 @@ In outline:
   wire field keeps the name `backend`).
 - `extensions` — `{ kind, name, value }`, blocks a provider may understand.
 - `requires` — features the config uses beyond the core (`"raw"`,
-  `"extensions"`, `"sources"`, `"builds"`, `"workflows"`, `"system-tools"`), so an older `blueprint` can say what's missing.
+  `"extensions"`, `"sources"`, `"builds"`, `"workflows"`, `"system-tools"`, `"commands"`), so an older `blueprint` can say what's missing.
 
 `Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its S-expression encoder
 and parser are hand-written to avoid recursive-codec derivation problems.
@@ -236,7 +238,9 @@ provider's modules directly. Nix is the only implemented provider. It:
   structure, required features, declared targets and Nix Raw remain checked;
 - emits native package attributes without translation, fallback or availability
   filtering: missing/unavailable packages fail in Nix. Explicit `system_tools`
-  select packages for their named System before Nix evaluates them;
+  select packages for their named System before Nix evaluates them. Each
+  `commands` entry becomes a package holding one launcher that execs the
+  tool's main program;
 - rejects unsupported Nix target declarations and restricts build requests to
   x86_64 Linux. Other supported output shapes are not execution evidence;
 - renders `raw` for backend `"nix"` at `shell:<alias>` and `flake` as data,

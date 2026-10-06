@@ -43,8 +43,11 @@ Config :: [].{
 
 	## Tools and Overlays occur at most once. ToolsFor occurs at most once per
 	## System. Extend inherits tools and overlays parent first; an omitted or
-	## empty list does not clear inherited values.
-	EnvironmentSetting : [Tools(List(Tool)), ToolsFor(System, List(Tool)), Overlays(List(InputName)), Extend(EnvName)]
+	## empty list does not clear inherited values. Command exposes one tool's
+	## main program under another name and may repeat with distinct names; the
+	## tool's own executables are not added. A child replaces an inherited
+	## Command of the same name.
+	EnvironmentSetting : [Tools(List(Tool)), ToolsFor(System, List(Tool)), Command(Str, Tool), Overlays(List(InputName)), Extend(EnvName)]
 
 	## A shell is an alias for exactly one environment.
 	ShellSetting : [Use(EnvName)]
