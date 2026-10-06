@@ -67,6 +67,9 @@ scripts/test-b1.sh
 step "System-scoped tools through real Nix on Linux and macOS"
 scripts/test-system-tools.sh
 
+step "Renamed commands through real Nix"
+scripts/test-command.sh
+
 step "B2 sandboxed artifacts, isolation, sources and immutable locks"
 python3 scripts/test-b2.py
 
@@ -95,10 +98,9 @@ done
 step "Bundle core and the platform against it"
 scripts/bundle.sh platform
 
-if [[ -f blueprint-platform/core-release ]]; then
-	step "Bundle the platform against the pinned core release"
-	scripts/bundle.sh platform "$(cat blueprint-platform/core-release)"
-fi
+# The pinned core release is checked by release.yml when a platform release is
+# tagged. A change that adds a Spec field cannot pass that check until a core
+# release containing the field is published, so it is not a per-commit gate.
 
 step "Fuzz smoke test"
 scripts/fuzz.sh

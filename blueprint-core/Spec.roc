@@ -18,6 +18,7 @@ Spec := {
 	inputs : List({ name : Str, url : Str, kind : [Overlay, Flake] }),
 	environments : List({ name : Str, parents : List(Str), tools : List({ source : Str, name : Str }), overlays : List(Str) }),
 	system_tools : List({ environment : Str, system : Str, tools : List({ source : Str, name : Str }) }),
+	commands : List({ environment : Str, name : Str, tool : { source : Str, name : Str } }),
 	shells : List({ name : Str, environment : Str }),
 	tasks : List({ name : Str, environment : Str, run : List(Str) }),
 	build_sources : List({ name : Str, ref : Str }),
@@ -47,6 +48,10 @@ Spec := {
 	Tool : { source : Str, name : Str }
 	Environment : { name : Str, parents : List(Str), tools : List(Tool), overlays : List(Str) }
 	SystemTools : { environment : Str, system : Str, tools : List(Tool) }
+
+	## One tool's main program under another command name. The environment
+	## receives only that command, not the tool's own executables.
+	Command : { environment : Str, name : Str, tool : Tool }
 	Shell : { name : Str, environment : Str }
 	Task : { name : Str, environment : Str, run : List(Str) }
 
@@ -68,7 +73,7 @@ Spec := {
 	Raw : { backend : Str, target : Str, value : Value }
 
 	current_format : Format
-	current_format = { major: 2, minor: 3 }
+	current_format = { major: 2, minor: 4 }
 
 	empty : Str -> Spec
 	empty = |name| Spec.{
@@ -80,6 +85,7 @@ Spec := {
 		inputs: [],
 		environments: [],
 		system_tools: [],
+		commands: [],
 		shells: [],
 		tasks: [],
 		build_sources: [],
@@ -112,6 +118,7 @@ Spec := {
 				inputs: wire.inputs ?? [],
 				environments: wire.environments ?? [],
 				system_tools: wire.system_tools ?? [],
+				commands: wire.commands ?? [],
 				shells: wire.shells ?? [],
 				tasks: wire.tasks ?? [],
 				build_sources: wire.build_sources ?? [],
@@ -136,6 +143,7 @@ Wire : {
 	inputs : Try(List(Spec.Input), [Missing]),
 	environments : Try(List(Spec.Environment), [Missing]),
 	system_tools : Try(List(Spec.SystemTools), [Missing]),
+	commands : Try(List(Spec.Command), [Missing]),
 	shells : Try(List(Spec.Shell), [Missing]),
 	tasks : Try(List(Spec.Task), [Missing]),
 	build_sources : Try(List(Spec.BuildSource), [Missing]),
@@ -149,7 +157,12 @@ expect Spec.parse(Spec.empty("x").to_str()) == Ok(Spec.empty("x"))
 
 expect {
 	spec = { ..Spec.empty("x"), requires_: ["system-tools"], system_tools: [{ environment: "dev", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] }] }
-	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 3 }
+	Spec.parse(spec.to_str()) == Ok(spec)
+}
+
+expect {
+	spec = { ..Spec.empty("x"), requires_: ["commands"], commands: [{ environment: "dev", name: "roc-stable", tool: { source: "default", name: "rocpkgs.nightly" } }] }
+	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 4 }
 }
 expect Spec.parse("((format ((major 1) (minor 0))) (shells 42))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
 expect Spec.parse("((format ((major 3) (minor 0))))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))

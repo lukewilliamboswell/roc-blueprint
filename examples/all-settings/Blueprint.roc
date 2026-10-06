@@ -16,6 +16,7 @@ config = [
 		[
 			Extend("base"),
 			Tools(["python3Packages.requests", "stable#jq"]),
+			Command("json-query", "stable#jq"),
 			Overlays(["roc"]),
 		],
 	),

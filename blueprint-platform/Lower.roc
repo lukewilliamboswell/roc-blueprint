@@ -15,6 +15,7 @@ Lower :: [].{
 		inputs : List(Spec.Input),
 		environments : List(Spec.Environment),
 		system_tools : List(Spec.SystemTools),
+		commands : List(Spec.Command),
 		shells : List(Spec.Shell),
 		tasks : List(Spec.Task),
 		build_sources : List(Spec.BuildSource),
@@ -31,7 +32,7 @@ Lower :: [].{
 	lower : List(Config.Setting) -> Try(Spec, Str)
 	lower = |settings| {
 		initial : Acc
-		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
+		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
 		acc = settings.fold(Ok(initial), |result, setting| add(result?, setting))?
 		name = match acc.names {
 			[] => return Err("MissingName: declare Name once")
@@ -50,6 +51,7 @@ Lower :: [].{
 				.concat(if acc.builds.is_empty() [] else ["builds"])
 				.concat(if acc.workflows.is_empty() [] else ["workflows"])
 				.concat(if acc.system_tools.is_empty() [] else ["system-tools"])
+				.concat(if acc.commands.is_empty() [] else ["commands"])
 		Project.validate(
 			Spec.{
 				format: Spec.current_format,
@@ -60,6 +62,7 @@ Lower :: [].{
 				inputs: acc.inputs,
 				environments: acc.environments,
 				system_tools: acc.system_tools,
+				commands: acc.commands,
 				shells: acc.shells,
 				tasks: acc.tasks,
 				build_sources: acc.build_sources,
@@ -81,7 +84,7 @@ Lower :: [].{
 			Overlay(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Overlay }) }
 			Environment(name, inner) => {
 				lowered = environment(name.to_str(), inner)?
-				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools) }
+				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools), commands: acc.commands.concat(lowered.commands) }
 			}
 			Shell(name, inner) => { ..acc, shells: acc.shells.append(shell(name.to_str(), inner)?) }
 			Task(name, inner) => { ..acc, tasks: acc.tasks.append(task(name.to_str(), inner)?) }
@@ -116,14 +119,15 @@ Lower :: [].{
 			From(GuixPackages(channel)) => GuixPackages(channel)
 		}
 
-	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools) }, Str)
+	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command) }, Str)
 	environment = |name, inner| {
 		draft = inner.fold(
-			{ tools: [], system_tools: [], overlays: [], parents: [] },
+			{ tools: [], system_tools: [], commands: [], overlays: [], parents: [] },
 			|acc, setting|
 				match setting {
 					Tools(tools) => { ..acc, tools: acc.tools.append(tools.map(|tool| tool.to_spec())) }
 					ToolsFor(system, tools) => { ..acc, system_tools: acc.system_tools.append({ environment: name, system: system.to_str(), tools: tools.map(|tool| tool.to_spec()) }) }
+					Command(command, tool) => { ..acc, commands: acc.commands.append({ environment: name, name: command, tool: tool.to_spec() }) }
 					Overlays(overlays) => { ..acc, overlays: acc.overlays.append(overlays.map(|overlay| overlay.to_str())) }
 					Extend(parent) => { ..acc, parents: acc.parents.append(parent.to_str()) }
 				},
@@ -137,7 +141,7 @@ Lower :: [].{
 		if draft.parents.len() > 1 {
 			return Err("DuplicateExtend: environment ${name}")
 		}
-		Ok({ environment: { name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] }, system_tools: draft.system_tools })
+		Ok({ environment: { name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] }, system_tools: draft.system_tools, commands: draft.commands })
 	}
 
 	shell : Str, List(Config.ShellSetting) -> Try(Spec.Shell, Str)
