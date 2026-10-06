@@ -19,38 +19,19 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  # Cross-builds every release binary once. The cli and nix jobs test the
+  # x86_64 Linux one, so the binary that is tested is the binary that ships.
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/toolchain
 
-      - name: Read pinned Roc nightly
-        run: printf 'ROC_NIGHTLY_TAG=%s\n' "$(sed -n '1p' .roc-version)" >> "$GITHUB_ENV"
+      - run: scripts/test.sh static
 
-      - name: Install Roc
-        uses: roc-lang/setup-roc@f5a74bf90aa694b43ab4a7cbfdb19273bc6aa697
-        with:
-          version: nightly-new-compiler
-          nightly-tag: ${{ env.ROC_NIGHTLY_TAG }}
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
-
-      - name: Restore the linker-input download cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .cache/link-inputs
-          key: link-inputs-${{ hashFiles('link-inputs.lock.json') }}
-
-      # Fetches the linker inputs first, verifying them against
-      # link-inputs.lock.json whether or not the cache was restored.
-      - run: ./scripts/test.sh
+      - name: Fetch and verify the platform's linker inputs
+        run: roc scripts/link_inputs.roc fetch
 
       - name: Cross-build the release binaries
         run: scripts/build-release.sh
@@ -58,9 +39,9 @@ jobs:
       - name: Smoke test the Linux binary
         run: scripts/smoke-binary.sh dist/blueprint-x86_64-linux
 
-      # The jobs below evaluate a Blueprint.roc against this checkout's
-      # platform without Roc or Zig of their own, so they take the built hosts
-      # and the verified linker inputs from here.
+      # Later jobs evaluate a Blueprint.roc against this checkout's platform;
+      # some have no Roc or Zig of their own, so they take the built hosts and
+      # the verified linker inputs from here.
       - name: Upload the binaries, platform hosts and linker inputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -71,18 +52,58 @@ jobs:
             blueprint-platform/targets/*/crt1.o
           if-no-files-found: error
 
+  # Groups of scripts/test.sh that need no CLI binary start at once.
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [unit, package, fuzz]
+    name: ${{ matrix.group }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/toolchain
+
+      - run: scripts/test.sh ${{ matrix.group }}
+
       - name: Upload fuzz crash inputs
-        if: failure()
+        if: failure() && matrix.group == 'fuzz'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fuzz-artifacts
           path: fuzz-artifacts/
           if-no-files-found: ignore
 
+  # Groups that drive the CLI use the binary the build job produced.
+  cli:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [cli, nix]
+    name: ${{ matrix.group }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/toolchain
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: blueprint-binaries
+
+      - name: Use the built binary
+        run: install -m 755 dist/blueprint-x86_64-linux blueprint
+
+      - run: scripts/test.sh ${{ matrix.group }}
+        env:
+          BLUEPRINT_PREBUILT: 1
+
   # Two binaries are cross-built for machines the Linux job cannot run, so
   # run each where it must work.
   binaries:
-    needs: test
+    needs: build
     strategy:
       fail-fast: false
       matrix:
@@ -97,6 +118,11 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
 
+      - name: Cache Nix downloads
+        uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
+        with:
+          use-flakehub: false
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: blueprint-binaries
@@ -107,3 +133,12 @@ jobs:
         run: |
           chmod +x dist/blueprint-${{ matrix.system }}
           scripts/smoke-binary.sh dist/blueprint-${{ matrix.system }}
+
+  # The one required check: green only when every job above succeeded.
+  test:
+    if: always()
+    needs: [build, checks, cli, binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job succeeded
+        run: test "${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}" = true

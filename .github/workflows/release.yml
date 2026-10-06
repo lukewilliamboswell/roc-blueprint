@@ -21,42 +21,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Read pinned Roc nightly
-        run: printf 'ROC_NIGHTLY_TAG=%s\n' "$(sed -n '1p' .roc-version)" >> "$GITHUB_ENV"
-
-      - name: Install Roc
-        uses: roc-lang/setup-roc@f5a74bf90aa694b43ab4a7cbfdb19273bc6aa697
-        with:
-          version: nightly-new-compiler
-          nightly-tag: ${{ env.ROC_NIGHTLY_TAG }}
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
-        with:
-          version: 0.16.0
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+      - uses: ./.github/actions/toolchain
 
       - name: The CLI reports the version being released
         run: grep -qF "version = \"${GITHUB_REF_NAME}\"" blueprint-cli/main.roc
 
-      - name: Restore the linker-input download cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .cache/link-inputs
-          key: link-inputs-${{ hashFiles('link-inputs.lock.json') }}
+      - name: Fetch and verify the platform's linker inputs
+        run: roc scripts/link_inputs.roc fetch
 
-      # Fetches the linker inputs first, verifying them against
-      # link-inputs.lock.json whether or not the cache was restored.
+      # Built once: the tests below run the binary that is published.
+      - name: Cross-build the CLI binaries
+        run: scripts/build-release.sh
+
+      - name: Use the built binary
+        run: install -m 755 dist/blueprint-x86_64-linux blueprint
+
       - name: Test (including a localhost bundle smoke test)
         run: ./scripts/test.sh
+        env:
+          BLUEPRINT_PREBUILT: 1
 
       - name: Bundle against the pinned core release
         run: scripts/bundle.sh platform "$(cat blueprint-platform/core-release)"
-
-      - name: Cross-build the CLI binaries
-        run: scripts/build-release.sh
 
       - name: Smoke test the Linux binary
         run: scripts/smoke-binary.sh dist/blueprint-x86_64-linux

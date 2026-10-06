@@ -59,6 +59,7 @@ roc test blueprint-cli/main.roc             # includes the golden flake test
 roc build blueprint-cli/main.roc --output=./blueprint
 (cd examples/all-settings && ../../blueprint run --help) # try the CLI
 ./scripts/test.sh                           # everything CI runs
+./scripts/test.sh unit cli                  # or only some groups
 scripts/fuzz.sh 300                         # fuzz each target for 5 minutes
 ```
 
