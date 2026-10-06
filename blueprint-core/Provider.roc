@@ -8,7 +8,6 @@ import Steps
 import Lock
 
 Provider := {
-
 	## Short name, e.g. "nix". Spec `raw` entries naming it are for this provider.
 	name : Str,
 

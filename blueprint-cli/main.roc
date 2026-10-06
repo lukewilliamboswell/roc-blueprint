@@ -4,10 +4,10 @@
 ## this CLI consumes pure plans and owns file/process effects. Only explicit
 ## update publishes the authority; ordinary operations use its resolved pins.
 app [main!] {
-	pf: platform "../.basic-cli/main.roc",
-	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
 	core: "../blueprint-core/main.roc",
 	nix: "../blueprint-nix/main.roc",
+	pf: platform "../.basic-cli/main.roc",
+	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
 }
 
 import pf.Cmd
@@ -222,7 +222,7 @@ main! = |raw_args| {
 					Err(Exit(1))
 				}
 			}
-		}
+	}
 }
 
 run! = |command, loaded, context| {

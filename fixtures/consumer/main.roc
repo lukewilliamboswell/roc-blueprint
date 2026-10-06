@@ -1,8 +1,8 @@
 # Independent consumer of pure planning and decoded authority, never the CLI.
 app [main!] {
-	pf: platform "../../.basic-cli/main.roc",
 	core: "../../blueprint-core/main.roc",
 	nix: "../../blueprint-nix/main.roc",
+	pf: platform "../../.basic-cli/main.roc",
 }
 
 import pf.Stdout

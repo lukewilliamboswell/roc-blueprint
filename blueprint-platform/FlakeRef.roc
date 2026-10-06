@@ -12,7 +12,7 @@ FlakeRef :: { url : Str }.{
 				} else {
 					Ok(FlakeRef.{ url: raw })
 				}
-			}
+		}
 	}
 
 	to_str : FlakeRef -> Str
