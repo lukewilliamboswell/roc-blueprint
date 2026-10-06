@@ -387,6 +387,11 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
   `scripts/smoke_binary.roc` for each system and they run that
   (`dist/smoke-<system> dist/blueprint-<system>`).
 
+`build_release.roc` compiles every released file with `--no-cache`: with Roc's
+compile cache, one source and target gave different bytes depending on what the
+cache already held. It also compiles the x86_64 Linux CLI a second time and
+fails unless the two are byte-identical.
+
 A binary fetches the compiler named in `.roc-version` from the roc-overlay
 revision in `NixProvider.roc_overlay`. Change that constant whenever
 `flake.lock` moves the `roc-overlay` input; `scripts/test.roc` fails when the two

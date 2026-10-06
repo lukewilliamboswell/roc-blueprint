@@ -27,6 +27,16 @@ Release := [].{
 	## The program each system's binary is built from, and its name in `dist/`.
 	programs = [{ source: "blueprint-cli/main.roc", name: "blueprint" }, { source: "scripts/smoke_binary.roc", name: "smoke" }]
 
+	## The compiler's arguments for one released file. `--no-cache`: with Roc's
+	## compile cache the same source and target gave different bytes depending
+	## on what the cache already held, so a released file is always compiled
+	## from nothing. It costs no time: a cached build of the CLI is no faster.
+	build_args : Str, Str, Str -> List(Str)
+	build_args = |source, target, output| ["build", source, "--target=${target}", "--no-cache", "--output=${output}"]
+
+	## The released file the build compiles a second time, to compare.
+	twice = { source: "blueprint-cli/main.roc", target: "x64musl", name: "blueprint-x86_64-linux" }
+
 	## Where `nix store prefetch-file --json` says it put the file.
 	store_path : Str -> Try(Str, [NoStorePath])
 	store_path = |json| {
@@ -89,6 +99,7 @@ build! = |root, work| {
 			Script.info!("==>", output)?
 		}
 	}
+	reproducible!(roc, root, work, dist)?
 
 	var $sums = ""
 	for released in Release.systems {
@@ -104,7 +115,7 @@ build! = |root, work| {
 ## failure is retried once.
 compile! : Str, Str, Str, Str, Str => Try({}, _)
 compile! = |roc, root, source, target, output| {
-	job = Process.command(roc, ["build", source, "--target=${target}", "--output=${output}"], root)
+	job = Process.command(roc, Release.build_args(source, target, output), root)
 	first = Process.traced!(job)?
 	if first.code != 0 {
 		Stdout.write!("${first.stdout}${first.stderr}")?
@@ -114,6 +125,19 @@ compile! = |roc, root, source, target, output| {
 	Process.check!(size > 0, "${output} was not built")
 }
 
+## Build the x86_64 Linux CLI a second time and require the bytes that were
+## just built: a release must be a function of its source and compiler.
+reproducible! : Str, Str, Str, Str => Try({}, _)
+reproducible! = |roc, root, work, dist| {
+	checked = Release.twice
+	again = "${work}/${checked.name}"
+	compile!(roc, root, checked.source, checked.target, again)?
+	first = Integrity.digest(Path.read_bytes!(Path.utf8("${dist}/${checked.name}"))?)
+	second = Integrity.digest(Path.read_bytes!(Path.utf8(again))?)
+	Process.check!(first == second, "${checked.name} is not reproducible: built twice from one source, its sha256 was ${first} and then ${second}")?
+	Script.pass!("${checked.name} built twice is byte-identical (sha256 ${first})")
+}
+
 expect Release.store_path("{\"hash\":\"sha256-abc=\",\"storePath\":\"/nix/store/abc-roc.tar.gz\"}\n") == Ok("/nix/store/abc-roc.tar.gz")
 expect Release.store_path("{\"hash\":\"sha256-abc=\",\"storePath\":\"/elsewhere\"}") == Err(NoStorePath)
 expect Release.store_path("error: hash mismatch") == Err(NoStorePath)
@@ -121,3 +145,9 @@ expect Release.store_path("error: hash mismatch") == Err(NoStorePath)
 # The format of `sha256sum`: digest, two spaces, name.
 expect Release.checksum_line("blueprint-x86_64-linux", "abc".to_utf8()) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  blueprint-x86_64-linux\n"
 expect Release.systems.map(|released| released.system) == ["x86_64-linux", "aarch64-linux", "aarch64-darwin"]
+
+# Every released file is compiled without the compile cache.
+expect Release.build_args("blueprint-cli/main.roc", "x64musl", "dist/blueprint-x86_64-linux") == ["build", "blueprint-cli/main.roc", "--target=x64musl", "--no-cache", "--output=dist/blueprint-x86_64-linux"]
+
+# The file built twice is one of the released files, named as `dist/` names it.
+expect Release.programs.any(|program| program.source == Release.twice.source and Release.systems.any(|released| released.target == Release.twice.target and "${program.name}-${released.system}" == Release.twice.name))
