@@ -1,14 +1,14 @@
 //! Builds the roc-blueprint platform host into targets/<target>/libhost.a.
 //!
 //! The musl runtime files beside libhost.a (crt1.o, libc.a, libzigc.a,
-//! libcompiler_rt.a) are not built here; they are vendored, see
-//! targets/README.md.
+//! libcompiler_rt.a) are not built here; scripts/link_inputs.roc installs them
+//! from a locked release, see targets/README.md.
 const std = @import("std");
 
 const Target = struct {
     dir: []const u8,
     query: std.Target.Query,
-    /// Linux links the vendored musl runtime's compiler-rt; macOS has none.
+    /// Linux links the fetched musl runtime's compiler-rt; macOS has none.
     bundle_compiler_rt: bool,
 };
 

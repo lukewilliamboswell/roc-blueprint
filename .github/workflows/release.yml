@@ -41,6 +41,14 @@ jobs:
       - name: The CLI reports the version being released
         run: grep -qF "version = \"${GITHUB_REF_NAME}\"" blueprint-cli/main.roc
 
+      - name: Restore the linker-input download cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/link-inputs
+          key: link-inputs-${{ hashFiles('link-inputs.lock.json') }}
+
+      # Fetches the linker inputs first, verifying them against
+      # link-inputs.lock.json whether or not the cache was restored.
       - name: Test (including a localhost bundle smoke test)
         run: ./scripts/test.sh
 
@@ -58,6 +66,8 @@ jobs:
           read -r _ pf < <(grep '^roc-blueprint ' dist/bundles.txt)
           core_url="$(cat blueprint-platform/core-release)"
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          link_inputs="$(python3 -c 'import json; print(json.load(open("link-inputs.lock.json"))["release"])')"
+          read -r link_lock _ < <(sha256sum link-inputs.lock.json)
           cat > dist/notes.md <<NOTES
           Platform (use in \`Blueprint.roc\`):
 
@@ -68,6 +78,8 @@ jobs:
           The \`blueprint\` CLI is attached for Linux and macOS on x86_64 and arm64, with sha256 sums in \`blueprint.sha256\`. It needs Nix, and fetches its own Roc compiler through Nix.
 
           Uses roc-blueprint-core \`${core_url}\`. Built with Roc \`${ROC_NIGHTLY_TAG}\`. The platform supports x64musl, arm64musl, arm64mac and x64mac.
+
+          Linker inputs: roc-platform-template-zig release \`${link_inputs}\` (\`link-inputs.lock.json\` sha256 \`${link_lock}\`).
           NOTES
           printf '%s\n' "$pf" > dist/platform-bundle
 
@@ -76,7 +88,8 @@ jobs:
           name: release
           path: |
             dist/
-            blueprint-platform/targets/*/libhost.a
+            blueprint-platform/targets/*/*.a
+            blueprint-platform/targets/*/crt1.o
           if-no-files-found: error
 
   binaries:

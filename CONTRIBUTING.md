@@ -6,7 +6,7 @@
 blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
   *.roc                  setting types, checked values, lowering to the Spec
   host/, build.zig       Zig host, built into targets/<target>/libhost.a
-  targets/               linker inputs; all but libhost.a are vendored (see its README)
+  targets/               linker inputs, none committed: libhost.a is built, the rest fetched (see its README)
   core-release           (when present) the released core bundle URL a platform release uses
 blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
   Project.roc            pure normalization, references and provider capability checks
@@ -22,7 +22,8 @@ examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
 examples/composition/    imported pure module returning reusable task settings
 examples/artifacts/      runnable source/dependency/workflow example and scripts
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
-scripts/                 test.sh, bundle.sh, fuzz.sh
+scripts/                 test.sh, bundle.sh, fuzz.sh, link_inputs.roc (Roc scripts share scripts/src/)
+link-inputs.lock.json    the linker-input release the platform links, pinned by content
 flake.nix                builds blueprint with the pinned Roc; user and contributor shells
 ```
 
@@ -42,7 +43,7 @@ nix develop .#contributor
 
 gives Roc (the nightly in `.roc-version`, from
 [roc-overlay](https://github.com/roc-lang/roc-overlay)), Zig, `blueprint`,
-python3, zstd and git. Nix itself is also needed for `blueprint`.
+python3, zstd, git and curl. Nix itself is also needed for `blueprint`.
 
 `blueprint-cli/main.roc` uses the released basic-cli platform by URL. Roc
 downloads it on first use outside Nix; the Nix blueprint package fetches the same
@@ -51,6 +52,7 @@ archive by hash, so its sandboxed build needs no network.
 ## Building and testing
 
 ```sh
+scripts/link_inputs.roc fetch             # the musl runtime files the platform links
 (cd blueprint-platform && zig build)      # targets/<target>/libhost.a for all four hosts
 roc test blueprint-core/main.roc      # Spec round trips and format tests
 roc test blueprint-cli/main.roc             # includes the golden flake test
@@ -60,7 +62,17 @@ roc build blueprint-cli/main.roc --output=./blueprint
 scripts/fuzz.sh 300                         # fuzz each target for 5 minutes
 ```
 
-`scripts/test.sh` is the full CI entry point: it builds the flake, invokes both
+The platform's linker inputs are not committed. `scripts/link_inputs.roc fetch`
+downloads the release pinned in `link-inputs.lock.json` into `.cache/link-inputs/`,
+verifies it and installs the files beside `libhost.a`; nothing that evaluates a
+`Blueprint.roc` against the local platform links without them. It is a Roc
+script: run it from the repository root with the pinned `roc` on `PATH`, or as
+`"$ROC" scripts/link_inputs.roc fetch`. `scripts/link_inputs.roc check` verifies
+what is installed without the network. See
+[blueprint-platform/targets/README.md](blueprint-platform/targets/README.md).
+
+`scripts/test.sh` is the full CI entry point: it fetches and verifies the linker
+inputs, builds the flake, invokes both
 platform bundle modes (see below), and then runs each fuzz target for 30 seconds.
 `scripts/test-config.sh` checks valid configurations, imported-module composition,
 required settings, duplicates, unknown references, cycles and explicit-provider
@@ -306,6 +318,12 @@ and composition regressions. There are two gates:
 scripts/bundle.sh platform
 scripts/bundle.sh platform "$(< blueprint-platform/core-release)"
 ```
+
+Before bundling the platform, `scripts/bundle.sh` runs
+`scripts/link_inputs.roc check`, so only linker inputs matching
+`link-inputs.lock.json` are packed. Their licences and `dependency.json`
+inventory go into the bundle under `linker-inputs/`, and `release.yml` records
+the linker-input release and the lock's SHA-256 in the release notes.
 
 `scripts/test.sh` runs the first on every commit. `release.yml` runs the second
 when a platform release is tagged, and the release fails if the pinned core

@@ -42,6 +42,14 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
 
+      - name: Restore the linker-input download cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/link-inputs
+          key: link-inputs-${{ hashFiles('link-inputs.lock.json') }}
+
+      # Fetches the linker inputs first, verifying them against
+      # link-inputs.lock.json whether or not the cache was restored.
       - run: ./scripts/test.sh
 
       - name: Cross-build the release binaries
@@ -50,13 +58,17 @@ jobs:
       - name: Smoke test the Linux binary
         run: scripts/smoke-binary.sh dist/blueprint-x86_64-linux
 
-      - name: Upload the binaries and platform hosts
+      # The jobs below evaluate a Blueprint.roc against this checkout's
+      # platform without Roc or Zig of their own, so they take the built hosts
+      # and the verified linker inputs from here.
+      - name: Upload the binaries, platform hosts and linker inputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: blueprint-binaries
           path: |
             dist/blueprint-*
-            blueprint-platform/targets/*/libhost.a
+            blueprint-platform/targets/*/*.a
+            blueprint-platform/targets/*/crt1.o
           if-no-files-found: error
 
       - name: Upload fuzz crash inputs

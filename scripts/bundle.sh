@@ -18,6 +18,10 @@
 # platform's development dependency `core: "../blueprint-core/main.roc"` can't be bundled
 # as-is; a staged copy of the platform gets `core: CORE_URL` instead.
 #
+# The platform bundle carries the linker inputs installed by
+# `scripts/link_inputs.roc fetch`, with their licences and inventory under
+# linker-inputs/. They are verified against link-inputs.lock.json first.
+#
 # Every platform bundle is smoke-tested: it is served from localhost with a
 # release-like versioned path, valid/invalid configs are checked, and
 # examples/all-settings/Blueprint.roc is run against it.
@@ -85,19 +89,22 @@ platform)
 	echo "==> Building libhost.a"
 	(cd "$ROOT/blueprint-platform" && zig build)
 
-	echo "==> Checking vendored linker inputs"
-	(cd "$ROOT/blueprint-platform/targets" && sha256sum --quiet -c x64musl.sha256 arm64musl.sha256)
+	echo "==> Checking the linker inputs against link-inputs.lock.json"
+	(cd "$ROOT" && "$ROC" scripts/link_inputs.roc check)
 
 	echo "==> Bundling roc-blueprint (core: $CORE_URL)"
-	mkdir -p "$STAGE"/platform/targets/{x64musl,arm64musl,arm64mac,x64mac}
+	mkdir -p "$STAGE"/platform/targets/{x64musl,arm64musl,arm64mac,x64mac} "$STAGE/platform/linker-inputs/licenses"
 	cp "$ROOT"/blueprint-platform/*.roc "$STAGE/platform/"
 	cp "$ROOT"/blueprint-platform/targets/x64musl/{crt1.o,libhost.a,libc.a,libzigc.a,libcompiler_rt.a} "$STAGE/platform/targets/x64musl/"
 	cp "$ROOT"/blueprint-platform/targets/arm64musl/{crt1.o,libhost.a,libc.a,libzigc.a,libcompiler_rt.a} "$STAGE/platform/targets/arm64musl/"
 	cp "$ROOT"/blueprint-platform/targets/arm64mac/libhost.a "$STAGE/platform/targets/arm64mac/"
 	cp "$ROOT"/blueprint-platform/targets/x64mac/libhost.a "$STAGE/platform/targets/x64mac/"
+	# The check above proved this directory holds exactly the locked files.
+	cp "$ROOT"/blueprint-platform/linker-inputs/dependency.json "$STAGE/platform/linker-inputs/"
+	cp "$ROOT"/blueprint-platform/linker-inputs/licenses/* "$STAGE/platform/linker-inputs/licenses/"
 	sed -i "s#\"../blueprint-core/main.roc\"#\"$CORE_URL\"#" "$STAGE/platform/main.roc"
 	grep -qF "\"$CORE_URL\"" "$STAGE/platform/main.roc" || { echo "failed to rewrite the core dependency" >&2; exit 1; }
-	pf_bundle="$(cd "$STAGE/platform" && bundle . main.roc $(ls *.roc | grep -v '^main.roc$') targets/x64musl/* targets/arm64musl/* targets/arm64mac/* targets/x64mac/*)"
+	pf_bundle="$(cd "$STAGE/platform" && bundle . main.roc $(ls *.roc | grep -v '^main.roc$') targets/x64musl/* targets/arm64musl/* targets/arm64mac/* targets/x64mac/* linker-inputs/dependency.json linker-inputs/licenses/*)"
 	echo "    $pf_bundle"
 	echo "roc-blueprint $pf_bundle" >>"$DIST/bundles.txt"
 
