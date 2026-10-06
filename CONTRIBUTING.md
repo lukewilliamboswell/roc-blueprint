@@ -386,6 +386,14 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
   have Nix and deliberately no Roc, so `build_release.roc` also cross-builds
   `scripts/smoke_binary.roc` for each system and they run that
   (`dist/smoke-<system> dist/blueprint-<system>`).
+  The project the smoke test writes pins what it resolves: packages at the
+  nixpkgs revision in `fixtures/consumer/inputs.lock`, the overlay at the
+  roc-overlay revision in `flake.lock` and the compiler at the nightly in
+  `.roc-version`, all compiled into the smoke program. A release therefore
+  does not depend on what moved upstream that day.
+  `.github/workflows/floating.yml` runs the same test weekly with `--floating`,
+  which resolves what a new user's project would: Blueprint's default package
+  source, the overlay's default branch and its newest nightly.
 
 `build_release.roc` compiles every released file with `--no-cache`: with Roc's
 compile cache, one source and target gave different bytes depending on what the

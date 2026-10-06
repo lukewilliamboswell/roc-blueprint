@@ -132,8 +132,6 @@ jobs:
           name: blueprint-binaries
 
       - name: Smoke test the binary
-        env:
-          SMOKE_PACKAGES: ${{ matrix.packages }}
         run: |
           chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
           dist/smoke-${{ matrix.system }} dist/blueprint-${{ matrix.system }}
