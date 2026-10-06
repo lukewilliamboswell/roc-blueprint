@@ -33,7 +33,7 @@ scripts/                 Roc scripts, run from the repository root; their module
   release_notes.roc      write a release's notes for the release workflows
   test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
 link-inputs.lock.json    the linker-input release the platform links, pinned by content
-flake.nix                builds blueprint with the pinned Roc; the development shell
+flake.nix                builds blueprint with the pinned Roc; the development shell; the release cross-compiler
 ```
 
 The local platform and CLI share `blueprint-core`, including
@@ -415,8 +415,13 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
   which resolves what a new user's project would: Blueprint's default package
   source, the overlay's default branch and its newest nightly.
 
-`build_release.roc` compiles the three CLI binaries at the same time, each
-about 2.3 GB at its peak.
+`build_release.roc` takes its compiler from the flake: `nix build .#roc-cross`
+is the x86_64 Linux compiler archive of the nightly in `.roc-version` with the
+`darwin/` sysroot of the Apple Silicon archive beside it, which Roc needs to
+link macOS programs. Both are fetched by the URL and hash the locked
+roc-overlay records. The package is not in the development shell, so only a
+release build downloads the macOS archive. The three CLI binaries are compiled
+at the same time, each about 2.3 GB at its peak.
 
 A binary fetches the compiler named in `.roc-version` from the roc-overlay
 revision in `NixProvider.roc_overlay`. Change that constant whenever

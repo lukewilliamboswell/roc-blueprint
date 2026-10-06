@@ -5,6 +5,7 @@ import cli.Path
 import Bundle
 import FlakeLock
 import Process
+import Release
 import Script
 import StaticChecks
 
@@ -305,6 +306,8 @@ packaged! = |context| {
 		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#packages.${system}.blueprint.drvPath"], context.root))?
 		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#devShells.${system}.default.drvPath"], context.root))?
 	}
+	# The release compiler exists for the one system that cross-builds.
+	_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#packages.${Release.compiler_system}.${Release.toolchain}.drvPath"], context.root))?
 
 	step!("Nix flake: the packaged blueprint builds an artifact with nothing but Nix on PATH")?
 	work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-packaged-")?)?)?
