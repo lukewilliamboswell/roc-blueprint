@@ -106,11 +106,20 @@ the host does not have.
 `scripts/test-b3.py` adds real ordered task/build workflows, nested repetitions,
 failure stops, snapshot/dependency freshness, repeated locked-source verification,
 whole-closure preflight and immutable authority, including out-of-tree layouts.
-`scripts/test-update.py` checks local-source preflight, authority observation and
-concurrent publication. `scripts/test-isolation.py` checks what a build stages
+`scripts/test_update.roc` checks local-source preflight, authority observation and
+concurrent publication. `scripts/test_isolation.roc` checks what a build stages
 about its caller: the namespace identities, the CLI's own path as the runner,
 and the refusals when either cannot be used. Both put a failing
 `python3` on `PATH`: the CLI itself must not use a host Python.
+These three are Roc scripts, run from the repository root with `./blueprint`
+built; `ROC` names the compiler. They replace every tool the CLI runs with one
+program, `scripts/stubs/tool.roc`, which each test builds once and installs
+under several names (`roc-record`, `roc-wire`, `roc-probe`, `nix`, `guix`,
+`python3`, `readlink`). A copy decides what to be from its own file name and
+how to behave from `STUB_*` variables, and records each invocation as a file
+holding one line of JSON in `<name>-calls/` under its working directory. Its
+header lists what each name does. `scripts/src/CliHarness.roc` holds what the
+three tests share.
 `scripts/test_roc_packages.roc` is a Roc script, like `link_inputs.roc`. It
 runs the real CLI and Nix with a Roc package cache of its own in a temporary
 directory, and refuses to run if that directory lies inside `~/.cache`. It
