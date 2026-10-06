@@ -20,8 +20,17 @@ config = [
 			Overlays(["roc"]),
 		],
 	),
+	# Roc programs run in `scripts` resolve this locked bundle without a download.
+	Environment(
+		"scripts",
+		[
+			Extend("dev"),
+			RocPackages(["https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"]),
+		],
+	),
 	Shell("default", [Use("dev")]),
 	Shell("ci", [Use("base")]),
+	Shell("scripts", [Use("scripts")]),
 	Task("hello", [Use("dev"), Run(["git", "--version"])]),
 	Task("ci-hello", [Use("base"), Run(["git", "--version"])]),
 	Raw(

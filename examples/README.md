@@ -1,12 +1,12 @@
 # Examples
 
-These are foundation source examples using the local platform and Spec 2.4, not
+These are foundation source examples using the local platform and Spec 2.5, not
 examples for the latest published platform. Each directory keeps its
 `Blueprint.roc` and related files together.
 
 - [all-settings](all-settings/Blueprint.roc): Auto and explicit Nix package
   sources, a named overlay scoped to `dev`, parent-first environment inheritance,
-  shell aliases, argv tasks and raw Nix settings. `ci` uses `base` without that
+  shell aliases, argv tasks, a locked Roc package and raw Nix settings. `ci` uses `base` without that
   overlay. The integration and bundle scripts exercise this app.
 - [composition](composition/Blueprint.roc): imports
   [ProjectTasks.roc](composition/ProjectTasks.roc), whose pure
