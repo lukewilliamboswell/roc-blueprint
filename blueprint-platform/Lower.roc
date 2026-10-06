@@ -16,6 +16,7 @@ Lower :: [].{
 		environments : List(Spec.Environment),
 		system_tools : List(Spec.SystemTools),
 		commands : List(Spec.Command),
+		roc_packages : List(Spec.RocPackage),
 		shells : List(Spec.Shell),
 		tasks : List(Spec.Task),
 		build_sources : List(Spec.BuildSource),
@@ -32,7 +33,7 @@ Lower :: [].{
 	lower : List(Config.Setting) -> Try(Spec, Str)
 	lower = |settings| {
 		initial : Acc
-		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
+		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], roc_packages: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
 		acc = settings.fold(Ok(initial), |result, setting| add(result?, setting))?
 		name = match acc.names {
 			[] => return Err("MissingName: declare Name once")
@@ -52,6 +53,7 @@ Lower :: [].{
 				.concat(if acc.workflows.is_empty() [] else ["workflows"])
 				.concat(if acc.system_tools.is_empty() [] else ["system-tools"])
 				.concat(if acc.commands.is_empty() [] else ["commands"])
+				.concat(if acc.roc_packages.is_empty() [] else ["roc-packages"])
 		Project.validate(
 			Spec.{
 				format: Spec.current_format,
@@ -63,6 +65,7 @@ Lower :: [].{
 				environments: acc.environments,
 				system_tools: acc.system_tools,
 				commands: acc.commands,
+				roc_packages: acc.roc_packages,
 				shells: acc.shells,
 				tasks: acc.tasks,
 				build_sources: acc.build_sources,
@@ -84,7 +87,9 @@ Lower :: [].{
 			Overlay(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Overlay }) }
 			Environment(name, inner) => {
 				lowered = environment(name.to_str(), inner)?
-				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools), commands: acc.commands.concat(lowered.commands) }
+				# Environments sharing a bundle share its one locked source.
+				new_sources = lowered.roc_sources.keep_if(|source| !acc.build_sources.contains(source))
+				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools), commands: acc.commands.concat(lowered.commands), roc_packages: acc.roc_packages.concat(lowered.roc_packages), build_sources: acc.build_sources.concat(new_sources) }
 			}
 			Shell(name, inner) => { ..acc, shells: acc.shells.append(shell(name.to_str(), inner)?) }
 			Task(name, inner) => { ..acc, tasks: acc.tasks.append(task(name.to_str(), inner)?) }
@@ -119,15 +124,16 @@ Lower :: [].{
 			From(GuixPackages(channel)) => GuixPackages(channel)
 		}
 
-	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command) }, Str)
+	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command), roc_packages : List(Spec.RocPackage), roc_sources : List(Spec.BuildSource) }, Str)
 	environment = |name, inner| {
 		draft = inner.fold(
-			{ tools: [], system_tools: [], commands: [], overlays: [], parents: [] },
+			{ tools: [], system_tools: [], commands: [], roc_urls: [], overlays: [], parents: [] },
 			|acc, setting|
 				match setting {
 					Tools(tools) => { ..acc, tools: acc.tools.append(tools.map(|tool| tool.to_spec())) }
 					ToolsFor(system, tools) => { ..acc, system_tools: acc.system_tools.append({ environment: name, system: system.to_str(), tools: tools.map(|tool| tool.to_spec()) }) }
 					Command(command, tool) => { ..acc, commands: acc.commands.append({ environment: name, name: command, tool: tool.to_spec() }) }
+					RocPackages(urls) => { ..acc, roc_urls: acc.roc_urls.append(urls) }
 					Overlays(overlays) => { ..acc, overlays: acc.overlays.append(overlays.map(|overlay| overlay.to_str())) }
 					Extend(parent) => { ..acc, parents: acc.parents.append(parent.to_str()) }
 				},
@@ -138,10 +144,34 @@ Lower :: [].{
 		if draft.overlays.len() > 1 {
 			return Err("DuplicateOverlays: environment ${name}")
 		}
+		if draft.roc_urls.len() > 1 {
+			return Err("DuplicateRocPackages: environment ${name}")
+		}
+		var $roc_packages = []
+		var $roc_sources = []
+		for url in draft.roc_urls.first() ?? [] {
+			bundle = roc_bundle(url)?
+			if !$roc_packages.any(|entry| entry.name == bundle.name) {
+				$roc_packages = $roc_packages.append({ environment: name, name: bundle.name, source: bundle.source.name })
+				$roc_sources = $roc_sources.append(bundle.source)
+			}
+		}
 		if draft.parents.len() > 1 {
 			return Err("DuplicateExtend: environment ${name}")
 		}
-		Ok({ environment: { name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] }, system_tools: draft.system_tools, commands: draft.commands })
+		Ok({ environment: { name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] }, system_tools: draft.system_tools, commands: draft.commands, roc_packages: $roc_packages, roc_sources: $roc_sources })
+	}
+
+	## A release bundle URL ends in `<content hash>.tar.zst`. The hash is the
+	## directory Roc looks for in its package cache.
+	roc_bundle : Str -> Try({ name : Str, source : Spec.BuildSource }, Str)
+	roc_bundle = |url| {
+		file = url.split_on("/").last() ?? ""
+		hash = file.drop_suffix(".tar.zst")
+		if !url.starts_with("https://") or !file.ends_with(".tar.zst") or !Project.valid_name(hash) {
+			return Err("invalid Roc package URL: ${url}; expected https://.../<hash>.tar.zst")
+		}
+		Ok({ name: hash, source: { name: "roc-${hash}", ref: "tarball+${url}" } })
 	}
 
 	shell : Str, List(Config.ShellSetting) -> Try(Spec.Shell, Str)

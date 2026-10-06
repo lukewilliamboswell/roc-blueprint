@@ -69,6 +69,9 @@ scripts/test-system-tools.sh
 step "Renamed commands through real Nix"
 scripts/test-command.sh
 
+step "Locked Roc packages without downloads"
+scripts/test-roc-packages.sh
+
 step "B2 sandboxed artifacts, isolation, sources and immutable locks"
 python3 scripts/test-b2.py
 

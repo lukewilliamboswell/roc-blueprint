@@ -20,7 +20,7 @@ NixProvider :: [].{
 	provider : Provider
 	provider = Provider.{
 		name: "nix",
-		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands"],
+		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages"],
 		render: |spec| render(spec).map_ok(
 			|contents| [{ path: "flake.nix", contents }],
 		),
@@ -573,7 +573,7 @@ NixProvider :: [].{
 		for environment in environments {
 			$rendered = append_rendered(
 				$rendered,
-				render_environment_definition(environment, spec.system_tools, spec.commands),
+				render_environment_definition(environment, spec.system_tools, spec.commands, spec.roc_packages),
 			)?
 		}
 		$rendered = append_rendered(
@@ -626,7 +626,7 @@ NixProvider :: [].{
 						.map_err(|_| "unknown build environment")?
 					$rendered = append_rendered(
 						$rendered,
-						render_build(build, env, spec.system_tools, spec.commands, system, snapshot),
+						render_build(build, env, spec.system_tools, spec.commands, spec.roc_packages, system, snapshot),
 					)?
 				}
 				$rendered = append_rendered(
@@ -671,8 +671,33 @@ NixProvider :: [].{
 		"(${set}.writeShellScriptBin ${quote(command.name)} ''exec \${${set}.lib.getExe ${target}} \"$@\"'')"
 	}
 
-	render_environment_definition : Spec.Environment, List(Spec.SystemTools), List(Spec.Command) -> Str
-	render_environment_definition = |environment, system_tools, commands| {
+	## Entering the shell links each locked bundle into Roc's package cache
+	## unless a real directory is already there. Roc then resolves the URL
+	## without downloading. A shellHook set through Raw runs afterwards.
+	roc_package_hook : List(Spec.RocPackage) -> List(Str)
+	roc_package_hook = |entries| {
+		links = entries.map(
+			|entry| "            blueprint_roc_link ${quote(entry.name)} \"\${inputs.${quote(entry.source)}}\"",
+		)
+		[
+			"        } // extra // {",
+			"          shellHook = ''",
+			"            blueprint_roc_cache=\"''\${XDG_CACHE_HOME:-$HOME/.cache}/roc/packages\"",
+			"            mkdir -p \"$blueprint_roc_cache\"",
+			"            blueprint_roc_link() {",
+			"              if [ -L \"$blueprint_roc_cache/$1\" ] || [ ! -e \"$blueprint_roc_cache/$1\" ]; then",
+			"                ln -sfn \"$2\" \"$blueprint_roc_cache/$1\"",
+			"              fi",
+			"            }",
+		].concat(links).concat([
+			"            unset -f blueprint_roc_link",
+			"          '' + (extra.shellHook or \"\");",
+			"        });",
+		])
+	}
+
+	render_environment_definition : Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.RocPackage) -> Str
+	render_environment_definition = |environment, system_tools, commands, roc_packages| {
 		sources = source_names(environment, system_tools, commands)
 		primary = sources.first() ?? "default"
 		overlays = environment.overlays.map(
@@ -709,18 +734,37 @@ NixProvider :: [].{
 				"          packages = [",
 			]),
 		).concat(lines(tools))
-		suffix = if scoped.is_empty() {
-			lines(["          ];", "        } // extra);"])
+		package_end = if scoped.is_empty() {
+			lines(["          ];"])
 		} else {
-			lines(["          ]"]).concat(lines(scoped)).concat(lines(["          ;", "        } // extra);"]))
+			lines(["          ]"]).concat(lines(scoped)).concat(lines(["          ;"]))
 		}
-		prefix.concat(suffix)
+		own_packages = roc_packages.keep_if(|entry| entry.environment == environment.name)
+		close = if own_packages.is_empty() {
+			lines(["        } // extra);"])
+		} else {
+			lines(roc_package_hook(own_packages))
+		}
+		prefix.concat(package_end).concat(close)
 	}
 
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
 	## Runner tool paths are explicit; argv and metadata enter through JSON.
-	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), Str, Str -> Str
-	render_build = |build, environment, system_tools, commands, system, snapshot| {
+	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.RocPackage), Str, Str -> Str
+	render_build = |build, environment, system_tools, commands, roc_packages, system, snapshot| {
+		package_links = roc_packages.keep_if(|entry| entry.environment == environment.name).map(
+			|entry| "{ name = ${quote(entry.name)}; path = inputs.${quote(entry.source)}; }",
+		)
+		# The runner links these into a cache of its own; builds have no network.
+		package_lines = if package_links.is_empty() {
+			[]
+		} else {
+			[
+				"              rocPackages = pkgs.linkFarm "
+					.concat(quote("blueprint-roc-packages-${build.name}"))
+					.concat(" [ ${Str.join_with(package_links, " ")} ];"),
+			]
+		}
 		sources = source_names(environment, system_tools, commands)
 		primary = sources.first() ?? "default"
 		overlays = environment.overlays.map(
@@ -783,6 +827,9 @@ NixProvider :: [].{
 				"              artifacts = pkgs.linkFarm "
 					.concat(quote("blueprint-artifacts-${build.name}"))
 					.concat(" [ ${Str.join_with(dependencies, " ")} ];"),
+			]),
+		).concat(lines(package_lines)).concat(
+			lines([
 				"            };",
 				"            passAsFile = [ \"blueprintSpec\" ];",
 				"          } ''",
@@ -920,6 +967,7 @@ mk = |t| Spec.{
 	environments: t.environments,
 	system_tools: [],
 	commands: [],
+	roc_packages: [],
 	shells: t.shells,
 	tasks: t.tasks,
 	build_sources: [],
@@ -1096,6 +1144,29 @@ expect {
 }
 
 expect NixProvider.render({ ..mk(simple), commands: [{ environment: "dev", name: "vcs", tool: { source: "default", name: "git" } }] }).is_err()
+
+# Roc packages are linked into the cache on shell entry, before any raw hook.
+expect {
+	project = {
+		..mk(simple),
+		requires_: ["sources", "roc-packages"],
+		build_sources: [{ name: "roc-abc", ref: "tarball+https://example.test/abc.tar.zst" }],
+		roc_packages: [{ environment: "dev", name: "abc", source: "roc-abc" }],
+	}
+	match NixProvider.render(project) {
+		Ok(text) => text.contains("\"roc-abc\" = { url = \"tarball+https://example.test/abc.tar.zst\"; flake = false; };") and
+			text.contains("blueprint_roc_link \"abc\" \"\${inputs.\"roc-abc\"}\"") and
+				text.contains("blueprint_roc_cache=\"''\${XDG_CACHE_HOME:-$HOME/.cache}/roc/packages\"") and
+					text.contains("'' + (extra.shellHook or \"\");")
+		Err(_) => False
+	}
+}
+
+# Environments without Roc packages keep the plain shell form.
+expect match NixProvider.render(mk(simple)) {
+	Ok(text) => text.contains("} // extra);") and !text.contains("shellHook")
+	Err(_) => False
+}
 
 # Auto tool syntax is checked for the selected provider before any effects.
 expect NixProvider.render(

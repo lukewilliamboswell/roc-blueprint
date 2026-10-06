@@ -81,6 +81,15 @@ def main():
         BLUEPRINT_ARTIFACTS=spec["artifacts"],
     )
     Path(environment["HOME"]).mkdir()
+    if "rocPackages" in spec:
+        # Roc writes a sidecar beside each package, so the cache directory is
+        # ours and only its entries point into the store.
+        cache = Path.cwd() / "blueprint-cache"
+        packages = cache / "roc" / "packages"
+        packages.mkdir(parents=True)
+        for entry in Path(spec["rocPackages"]).iterdir():
+            (packages / entry.name).symlink_to(entry.resolve())
+        environment["XDG_CACHE_HOME"] = str(cache)
     result = subprocess.run(
         spec["argv"], cwd=work, env=environment, check=False
     )

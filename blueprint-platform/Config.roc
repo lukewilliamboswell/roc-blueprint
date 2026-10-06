@@ -46,8 +46,10 @@ Config :: [].{
 	## empty list does not clear inherited values. Command exposes one tool's
 	## main program under another name and may repeat with distinct names; the
 	## tool's own executables are not added. A child replaces an inherited
-	## Command of the same name.
-	EnvironmentSetting : [Tools(List(Tool)), ToolsFor(System, List(Tool)), Command(Str, Tool), Overlays(List(InputName)), Extend(EnvName)]
+	## Command of the same name. RocPackages occurs at most once and lists
+	## released Roc bundle URLs to lock and place in Roc's package cache, so
+	## Roc programs in the environment resolve them without downloading.
+	EnvironmentSetting : [Tools(List(Tool)), ToolsFor(System, List(Tool)), Command(Str, Tool), RocPackages(List(Str)), Overlays(List(InputName)), Extend(EnvName)]
 
 	## A shell is an alias for exactly one environment.
 	ShellSetting : [Use(EnvName)]

@@ -7,7 +7,7 @@
 Describe reusable environments, argv tasks, sandboxed artifact builds and ordered
 workflows in `Blueprint.roc`. The reference CLI executes pure Nix plans.
 
-**Status (Spec 2.4):** these examples use the local source platform, not the
+**Status (Spec 2.5):** these examples use the local source platform, not the
 latest published release. The architecture, terminology and invariants are in
 [docs/architecture.adoc](docs/architecture.adoc).
 
@@ -99,14 +99,15 @@ settings:
 | `Custom(kind, name, Val)` | Extension data. The current CLI rejects unsupported extensions. |
 
 Inside an `Environment`, `Tools` and `Overlays` occur at most once, `ToolsFor`
-occurs at most once per System, and `Command` occurs at most once per command
-name:
+occurs at most once per System, `Command` occurs at most once per command
+name, and `RocPackages` occurs at most once:
 
 | Setting | Meaning |
 |---|---|
 | `Tools(List(Tool))` | Native package names. `"git"` uses source `default`; `"stable#jq"` uses source `stable`. |
 | `ToolsFor(System, List(Tool))` | Add tools only for a declared target System. Each System occurs at most once per Environment. |
 | `Command(Str, Tool)` | Expose one tool's main program under another command name, without adding the tool's own executables. |
+| `RocPackages(List(Str))` | Released Roc bundle URLs to lock and place in Roc's package cache. |
 | `Overlays(List(InputName))` | Ordered selection of declared overlay names. |
 | `Extend(EnvName)` | Inherit one environment's tools and overlays before appending this environment's selections. |
 
@@ -162,6 +163,30 @@ The environment gains `roc-stable` and no `roc`, so a script can start with
 package declares it; a package that declares none fails in Nix. Command names
 are plain file names. An extending environment inherits commands and replaces
 one by declaring the same name.
+
+`RocPackages` lets Roc programs in an environment resolve their URL
+dependencies without downloading them:
+
+```roc
+Environment("dev", [
+	RocPackages([
+		"https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+		"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
+	]),
+]),
+```
+
+`blueprint update` records each bundle in `Blueprint.lock` like any other
+source. Entering the environment links the locked copies into Roc's package
+cache (`$XDG_CACHE_HOME/roc/packages`, or `~/.cache/roc/packages`), and a
+sandboxed build receives a cache of its own. A package Roc already downloaded
+there is left alone.
+
+List every bundle the programs need, including dependencies of dependencies:
+basic-cli above depends on `http`. Blueprint does not read package headers, so
+a bundle missing from the list is downloaded by Roc as usual in a shell or
+task, and fails to resolve in a sandboxed build, which has no network. Each URL
+must be `https://` and end in `<hash>.tar.zst`.
 
 Use ordinary Roc lists and functions for composition, not a plugin registry.
 [ProjectTasks.roc](examples/composition/ProjectTasks.roc) returns
@@ -274,7 +299,7 @@ structural validation and required-feature checks still apply. Full rendering
 ## How it works
 
 The platform lowers and validates the whole config at top level, then prints
-Spec 2.4 as an S-expression. The CLI invokes Roc, parses and revalidates that
+Spec 2.5 as an S-expression. The CLI invokes Roc, parses and revalidates that
 Spec through the shared pure `Project` boundary, explicitly selects Nix, and
 owns file writes, locking and execution. The importable core and Nix renderer
 perform no host discovery or effects.
