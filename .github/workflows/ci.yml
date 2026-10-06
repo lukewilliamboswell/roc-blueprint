@@ -38,13 +38,10 @@ jobs:
       - name: Cross-build the release binaries and their smoke-test programs
         run: nix develop -c scripts/build_release.roc
 
-      # Outside the dev shell: the binary must work with no Roc on PATH.
-      - name: Smoke test the Linux binary
-        run: dist/smoke-x86_64-linux dist/blueprint-x86_64-linux
-
       # Later jobs evaluate a Blueprint.roc against this checkout's platform;
       # some have no Roc or Zig of their own, so they take the built hosts and
-      # the verified linker inputs from here.
+      # the verified linker inputs from here. Uploaded before the smoke test,
+      # so the jobs that wait for the artifact start without waiting for it.
       - name: Upload the binaries, platform hosts and linker inputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -55,6 +52,11 @@ jobs:
             blueprint-platform/targets/*/*.a
             blueprint-platform/targets/*/crt1.o
           if-no-files-found: error
+
+      # Outside the dev shell: the binary must work with no Roc on PATH. A
+      # failure here still fails this job, and so the required `test` check.
+      - name: Smoke test the Linux binary
+        run: dist/smoke-x86_64-linux dist/blueprint-x86_64-linux
 
   # Groups of scripts/test.roc that need no CLI binary start at once.
   checks:
@@ -100,6 +102,8 @@ jobs:
       - name: Use the built binary
         run: install -m 755 dist/blueprint-x86_64-linux blueprint
 
+      # The artifact also holds the platform hosts the build job built from
+      # this commit; with BLUEPRINT_PREBUILT they are used, not rebuilt.
       - run: nix develop -c scripts/test.roc ${{ matrix.group }}
         env:
           BLUEPRINT_PREBUILT: 1

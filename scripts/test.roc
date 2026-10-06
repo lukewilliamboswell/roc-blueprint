@@ -18,6 +18,8 @@ import src/TestSuite
 ## Groups: static, unit, cli, nix, package, fuzz. CI runs them as parallel
 ## jobs. The cli and nix groups use ./blueprint; they build it unless
 ## BLUEPRINT_PREBUILT=1 says the caller already put a tested binary there.
+## With it, platform hosts that are all present are not rebuilt either: set it
+## only when both were built from the commit under test.
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	names = match TestSuite.requested(args.map(OsStr.display)) {
