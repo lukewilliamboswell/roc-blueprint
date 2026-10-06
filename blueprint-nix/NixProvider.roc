@@ -82,10 +82,20 @@ NixProvider :: [].{
 		roc_packages : List(Spec.RocPackage),
 	}
 
+	## The most text a workflow's distinct requests may render together, flakes
+	## and argv: 16 MiB.
+	workflow_budget : U64
+	workflow_budget = 16777216
+
 	## Expand only semantic requests. Every atomic request shares this selection
 	## and renderer; never reload config or defer later capability/layout checks.
 	prepare : Spec, Request, Str, Layout -> Try(List(Prepared), Str)
-	prepare = |spec, request, target, layout| {
+	prepare = |spec, request, target, layout| prepare_within(spec, request, target, layout, workflow_budget)
+
+	## `prepare` with the workflow allowance as a parameter, so the accounting
+	## is tested with kilobytes. Callers use `prepare`.
+	prepare_within : Spec, Request, Str, Layout, U64 -> Try(List(Prepared), Str)
+	prepare_within = |spec, request, target, layout, allowance| {
 		project = Project.validate(spec)?
 		match request {
 			Request.Workflow(name) => {
@@ -107,7 +117,7 @@ NixProvider :: [].{
 								atomic,
 								target,
 								layout,
-								Limited(16777216 - $bytes),
+								Limited(allowance - $bytes),
 							)?
 							$bytes = $bytes + fresh.contents.to_utf8().len()
 								+ fresh.argv.fold(0, |n, arg| n + arg.to_utf8().len())
@@ -126,7 +136,7 @@ NixProvider :: [].{
 						[],
 						Unplanned,
 						Some({ inputs, layout }),
-						Limited(16777216),
+						Limited(allowance),
 					)?
 					check_layout(project, target, layout)?
 				}
@@ -251,8 +261,12 @@ NixProvider :: [].{
 	## Derive executable data only after complete structure, selected capability,
 	## target, caller layout and authoritative lock checks. No effects occur here.
 	plan : Spec, Request, Str, Layout, Locks -> Try(Steps, Str)
-	plan = |spec, request, target, layout, locks| {
-		prepared = prepare(spec, request, target, layout)?
+	plan = |spec, request, target, layout, locks| plan_within(spec, request, target, layout, locks, workflow_budget)
+
+	## `plan` with the workflow allowance as a parameter, as `prepare_within`.
+	plan_within : Spec, Request, Str, Layout, Locks, U64 -> Try(Steps, Str)
+	plan_within = |spec, request, target, layout, locks, allowance| {
+		prepared = prepare_within(spec, request, target, layout, allowance)?
 		derived = Locks.derive(locks, Project.validate(spec)?, layout)?
 		var $steps = []
 		var $templates = []
@@ -2256,11 +2270,32 @@ expect {
 		]
 }
 
-# Distinct requests count all rendered systems toward the 16 MiB budget.
-# Four valid near-1-MiB build argv render over budget; three remain below it.
+# The allowance callers get is 16 MiB. The expects below hold its accounting
+# with allowances of a few kilobytes, through the same code.
+expect NixProvider.workflow_budget == 16 * 1024 * 1024
+
+over_budget : Str
+over_budget = "workflow plan exceeds 16 MiB of distinct rendered requests"
+
+## What one request costs a workflow: its rendered flake and its argv.
+request_bytes : Spec, Request -> Try(U64, Str)
+request_bytes = |project, request| {
+	prepared = NixProvider.prepare_atomic(Project.validate(project)?, request, "x86_64-linux", TestData.layout, Unlimited)?
+	Ok(prepared.contents.to_utf8().len() + prepared.argv.fold(0, |n, arg| n + arg.to_utf8().len()))
+}
+
+within : Spec, Str, U64 -> Try({}, Str)
+within = |project, workflow, allowance| {
+	_ = NixProvider.prepare_within(project, Request.Workflow(workflow), "x86_64-linux", TestData.layout, allowance)?
+	Ok({})
+}
+
+# Distinct requests add up, each counting every rendered system. The request
+# that crosses the allowance is the one refused: three requests fit in exactly
+# their own size, the fourth needs its own bytes too, to the byte.
 expect {
 	var $payload = "x"
-	while $payload.to_utf8().len() < 1048576 {
+	while $payload.to_utf8().len() < 1024 {
 		$payload = $payload.concat($payload)
 	}
 	names = ["one", "two", "three", "four"]
@@ -2271,7 +2306,7 @@ expect {
 			|name| {
 				..TestData.library,
 				name,
-				run: ["x", $payload.drop_prefix("x")],
+				run: ["x", $payload],
 			},
 		),
 		workflows: [
@@ -2284,45 +2319,51 @@ expect {
 				],
 			},
 			{ name: "over", steps: names.map(|name| BuildArtifact(name)) },
+			{ name: "again", steps: names.concat(names).map(|name| BuildArtifact(name)) },
 		],
 	})
+	one = request_bytes(project, Request.Build("one"))?
+	four = request_bytes(project, Request.Build("four"))?
+	three = one + request_bytes(project, Request.Build("two"))? + request_bytes(project, Request.Build("three"))?
 	locks = plan_locks?
-	below = NixProvider.plan(
+	below = NixProvider.plan_within(
 		project,
 		Request.Workflow("below"),
 		"x86_64-linux",
 		TestData.layout,
 		locks,
+		three,
 	)?
-	diagnostic = "workflow plan exceeds 16 MiB of distinct rendered requests"
-	below.steps.len() == 3 and NixProvider.preflight(
-		project,
-		Request.Workflow("over"),
-		"x86_64-linux",
-		TestData.layout,
-	) == Err(diagnostic) and NixProvider.plan(
-		project,
-		Request.Workflow("over"),
-		"x86_64-linux",
-		TestData.layout,
-		locks,
-	).map_ok(|plan| plan.steps) == Err(diagnostic)
+	# The payload is rendered once for each of the four systems.
+	one > 4 * 1024 and one < 5 * 1024 + 8192
+		and below.steps.len() == 3
+			and within(project, "below", three) == Ok({})
+				and within(project, "below", three - 1) == Err(over_budget)
+					and within(project, "over", three) == Err(over_budget)
+						and within(project, "over", three + four - 1) == Err(over_budget)
+							and within(project, "over", three + four) == Ok({})
+								# A repeated request is the same recipe and costs nothing more.
+								and within(project, "again", three + four) == Ok({})
+									and NixProvider.plan_within(
+										project,
+										Request.Workflow("over"),
+										"x86_64-linux",
+										TestData.layout,
+										locks,
+										three,
+									).map_ok(|plan| plan.steps) == Err(over_budget)
 }
 
-# One valid atomic step can exceed the budget through its dependency closure.
-# Reject during definition emission, not after assembling 126 MiB of argv.
+# One valid atomic step can exceed the allowance through its dependency
+# closure alone: every definition of the closure is charged as it is emitted.
 expect {
-	var $payload = "x"
-	while $payload.to_utf8().len() < 524288 {
-		$payload = $payload.concat($payload)
-	}
 	var $dependencies = []
 	var $index = 0.U64
 	while $index < 63 {
 		$dependencies = $dependencies.append({
 			..TestData.library,
 			name: "dep-${$index.to_str()}",
-			run: ["x", $payload],
+			run: ["x", "payload"],
 		})
 		$index = $index + 1
 	}
@@ -2336,29 +2377,31 @@ expect {
 		}),
 		workflows: [{ name: "large", steps: [BuildArtifact("root")] }],
 	})
-	diagnostic = "workflow plan exceeds 16 MiB of distinct rendered requests"
+	closure = request_bytes(project, Request.Build("root"))?
+	leaf = request_bytes(project, Request.Build("dep-0"))?
 	Project.validate(project).is_ok()
 		and Project.build_closure(project, "root").map_ok(List.len) == Ok(64)
-			and NixProvider.preflight(
-				project,
-				Request.Workflow("large"),
-				"x86_64-linux",
-				TestData.layout,
-			) == Err(diagnostic)
-				and NixProvider.plan(
-					project,
-					Request.Workflow("large"),
-					"x86_64-linux",
-					TestData.layout,
-					plan_locks?,
-				).map_ok(|plan| plan.steps) == Err(diagnostic)
+			# The closure is 64 definitions on four systems, not one.
+			and closure > 32 * leaf
+				and within(project, "large", closure) == Ok({})
+					and within(project, "large", closure - 1) == Err(over_budget)
+						and within(project, "large", 32 * leaf) == Err(over_budget)
+							and NixProvider.plan_within(
+								project,
+								Request.Workflow("large"),
+								"x86_64-linux",
+								TestData.layout,
+								plan_locks?,
+								closure - 1,
+							).map_ok(|plan| plan.steps) == Err(over_budget)
 }
 
-# A closure exactly at the public cap succeeds (even repeated); adding one
+# A closure exactly at the allowance succeeds (even repeated); adding one
 # byte to its last definition fails before returning any executable prefix.
 expect {
+	allowance = 65536
 	var $payload = "x"
-	while $payload.to_utf8().len() < 1048576 {
+	while $payload.to_utf8().len() < allowance {
 		$payload = $payload.concat($payload)
 	}
 	var $dependencies = []
@@ -2367,7 +2410,7 @@ expect {
 		$dependencies = $dependencies.append({
 			..TestData.library,
 			name: "dep-${$index.to_str()}",
-			run: ["x", $payload.drop_prefix("x")],
+			run: ["x", "payload"],
 		})
 		$index = $index + 1
 	}
@@ -2388,16 +2431,8 @@ expect {
 			],
 		}),
 	)?
-	baseline = NixProvider.prepare_atomic(
-		project,
-		Request.Build("root"),
-		"x86_64-linux",
-		TestData.layout,
-		Unlimited,
-	)?
-	bytes = baseline.contents.to_utf8().len()
-		+ baseline.argv.fold(0, |n, arg| n + arg.to_utf8().len())
-	padding = Str.from_utf8($payload.to_utf8().take_first(16777216 - bytes)) ?? ""
+	bytes = request_bytes(project, Request.Build("root"))?
+	padding = Str.from_utf8($payload.to_utf8().take_first(allowance - bytes)) ?? ""
 	at_limit = {
 		..project,
 		builds: project.builds.map(
@@ -2415,37 +2450,35 @@ expect {
 		),
 	}
 	locks = plan_locks?
-	plan = NixProvider.plan(
+	plan = NixProvider.plan_within(
 		at_limit,
 		Request.Workflow("limit"),
 		"x86_64-linux",
 		TestData.layout,
 		locks,
+		allowance,
 	)?
-	diagnostic = "workflow plan exceeds 16 MiB of distinct rendered requests"
-	plan.steps.len() == 2 and plan.steps.all(
-		|step| match step.files.first() {
-			Ok(flake) => flake.contents.to_utf8().len()
-				+ step.argv.fold(0, |n, arg| n + arg.to_utf8().len()) == 16777216
-			Err(_) => False
-		},
-	) and Project.validate(over_limit).is_ok() and NixProvider.preflight(
-		at_limit,
-		Request.Workflow("limit"),
-		"x86_64-linux",
-		TestData.layout,
-	) == Ok({}) and NixProvider.preflight(
-		over_limit,
-		Request.Workflow("limit"),
-		"x86_64-linux",
-		TestData.layout,
-	) == Err(diagnostic) and NixProvider.plan(
-		over_limit,
-		Request.Workflow("limit"),
-		"x86_64-linux",
-		TestData.layout,
-		locks,
-	).map_ok(|sequence| sequence.steps) == Err(diagnostic)
+	bytes < allowance and padding.to_utf8().len() == allowance - bytes
+		and plan.steps.len() == 2 and plan.steps.all(
+			|step| match step.files.first() {
+				Ok(flake) => flake.contents.to_utf8().len()
+					+ step.argv.fold(0, |n, arg| n + arg.to_utf8().len()) == allowance
+				Err(_) => False
+			},
+		) and Project.validate(over_limit).is_ok()
+			and within(at_limit, "limit", allowance) == Ok({})
+				and within(over_limit, "limit", allowance) == Err(over_budget)
+					and within(over_limit, "limit", allowance + 1) == Ok({})
+						and NixProvider.plan_within(
+							over_limit,
+							Request.Workflow("limit"),
+							"x86_64-linux",
+							TestData.layout,
+							locks,
+							allowance,
+						).map_ok(|sequence| sequence.steps) == Err(over_budget)
+							# Callers reach the same accounting with the 16 MiB allowance.
+							and NixProvider.preflight(over_limit, Request.Workflow("limit"), "x86_64-linux", TestData.layout) == Ok({})
 }
 
 # The shared renderer charges every actual byte, including escaped Raw,
