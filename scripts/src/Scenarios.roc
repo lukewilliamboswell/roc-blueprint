@@ -231,6 +231,16 @@ Scenarios := [].{
 		},
 	]
 
+	## The lines only one of two texts holds, `-` for the first and `+` for the second.
+	changed_lines : Str, Str -> Str
+	changed_lines = |before, after| {
+		old = before.split_on("\n")
+		new = after.split_on("\n")
+		removed = old.keep_if(|line| !new.contains(line)).map(|line| "- ${line}")
+		added = new.keep_if(|line| !old.contains(line)).map(|line| "+ ${line}")
+		Str.join_with(removed.concat(added), "\n")
+	}
+
 	## A script with no header of its own, run by the environment's `roc-stable`.
 	roc_stable_script =
 		\\#!/usr/bin/env roc-stable
@@ -404,8 +414,9 @@ steps! = |context, project, lock, remaining|
 		[] => Ok({})
 		[step, .. as rest] => {
 			step!(context, project, step)?
-			if !lock.is_empty() and Path.read_utf8!(Path.utf8("${project}/Blueprint.lock"))? != lock {
-				return Script.fail!("a step after `blueprint update` changed Blueprint.lock")
+			now = if lock.is_empty() "" else Path.read_utf8!(Path.utf8("${project}/Blueprint.lock"))?
+			if now != lock {
+				return Script.fail!("a step after `blueprint update` changed Blueprint.lock:\n${Scenarios.changed_lines(lock, now)}")
 			}
 			steps!(context, project, lock, rest)
 		}
@@ -603,3 +614,6 @@ expect Scenarios.without_alias("(\n(name \"nixpkgs\")\n(value (Str \"nixpkgs\"))
 
 # An input of another name that follows `default` is not the alias.
 expect Scenarios.without_alias("(a) (\n(name \"other\")\n(value (List ((Str \"default\")))))") == "(a) (\n(name \"other\")\n(value (List ((Str \"default\")))))"
+
+expect Scenarios.changed_lines("a\nb\nc\n", "a\nx\nc\n") == "- b\n+ x"
+expect Scenarios.changed_lines("a\n", "a\n") == ""
