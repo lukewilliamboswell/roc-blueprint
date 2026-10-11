@@ -112,7 +112,7 @@ name, and `RocPackages` occurs at most once:
 
 | Setting | Meaning |
 |---|---|
-| `Tools(List(Tool))` | Native package names. `"git"` uses source `default`; `"stable#jq"` uses source `stable`. |
+| `Tools(List(Tool))` | Native package names. `"git"` uses source `default`; `"stable#jq"` uses source `stable`. A Nix name is an attribute path; quote a segment that contains dots, as in `"zigpkgs.\"0.16.0\""`. |
 | `ToolsFor(System, List(Tool))` | Add tools only for a declared target System. Each System occurs at most once per Environment. |
 | `Command(Str, Tool)` | Expose one tool's main program under another command name, without adding the tool's own executables. |
 | `RocPackages(List(Str))` | Released Roc bundle URLs to lock, so Roc programs in the environment resolve them without downloading. |
