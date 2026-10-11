@@ -32,7 +32,7 @@ import nix.NixProvider
 import "compiler-version" as compiler_version : Str
 
 version : Str
-version = "0.4.0-rc2"
+version = "0.4.0"
 
 ## The provider every command goes through. This is the only reference to a
 ## concrete provider: everything else uses the Provider contract
