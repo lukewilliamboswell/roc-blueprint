@@ -29,7 +29,7 @@ import core.Provider
 import core.Lock
 import core.Tree
 import nix.NixProvider
-import "../.roc-version" as compiler_version : Str
+import "compiler-version" as compiler_version : Str
 
 version : Str
 version = "0.4.0-rc2"

@@ -32,9 +32,20 @@
           pkgs = import nixpkgs { inherit system; };
           lib = pkgs.lib;
 
-          # The Roc nightly pinned in .roc-version, from roc-overlay.
-          rocTag = lib.trim (builtins.readFile ./.roc-version);
+          # The compiler the product is built with and that a released
+          # `blueprint` fetches: the nightly in blueprint-cli/compiler-version,
+          # from roc-overlay.
+          rocTag = lib.trim (builtins.readFile ./blueprint-cli/compiler-version);
           roc = roc-overlay.packages.${system}.${rocTag};
+
+          # The compiler the scripts in scripts/ run on, under the command name
+          # `roc-stable` alone. It moves only by a reviewed edit here, so the
+          # scripts keep working while the product moves to a newer nightly.
+          rocStableTag = "nightly-2026-10-04-130536d";
+          rocStable = pkgs.runCommand "roc-stable-${rocStableTag}" { } ''
+            mkdir -p "$out/bin"
+            ln -s ${lib.getExe roc-overlay.packages.${system}.${rocStableTag}} "$out/bin/roc-stable"
+          '';
 
           # The compiler scripts/build_release.roc cross-builds every released
           # binary with: the x86_64 Linux archive unpacked as it is, with the
@@ -106,7 +117,6 @@
               root = ./.;
               fileset = lib.fileset.unions [
                 ./blueprint-cli
-                ./.roc-version
                 ./blueprint-nix
                 ./blueprint-core/main.roc
                 ./blueprint-core/Spec.roc
@@ -169,12 +179,14 @@
 
           # The one definition of the development toolchain: contributors and
           # every CI job run the scripts through `nix develop -c`. It holds the
-          # pinned Roc, Zig for the platform host, and the programs the scripts
-          # in scripts/ start. `blueprint` itself is not here, so entering the
+          # product compiler as `roc`, the scripts' compiler as `roc-stable`,
+          # Zig for the platform host, and the programs the scripts in scripts/
+          # start. `blueprint` itself is not here, so entering the
           # shell never compiles the CLI; `nix run` and `nix build` provide it.
           devShells.default = pkgs.mkShellNoCC {
             packages = [
               roc
+              rocStable
               zig-overlay.packages.${system}."0.16.0"
               pkgs.coreutils
               pkgs.gitMinimal

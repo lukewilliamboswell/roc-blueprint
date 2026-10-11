@@ -167,7 +167,7 @@ cases! = |bench| {
 	record = "${bench.bin}/roc-record"
 	probe = "${bench.bin}/roc-probe"
 	wire_roc = "${bench.bin}/roc-wire"
-	pin = Path.read_utf8!(Path.utf8("${bench.root}/.roc-version"))?.trim()
+	pin = Path.read_utf8!(Path.utf8("${bench.root}/blueprint-cli/compiler-version"))?.trim()
 	test = {
 		bench,
 		pin,

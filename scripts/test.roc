@@ -1,4 +1,4 @@
-#!/usr/bin/env roc
+#!/usr/bin/env roc-stable
 app [main!] {
 	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
 }
@@ -10,7 +10,8 @@ import cli.Stderr
 import src/TestSuite
 
 ## Everything CI checks. Run from the repository root, inside `nix develop`
-## or with the same tools on `PATH`: roc, zig 0.16, nix, git, tar and curl.
+## or with the same tools on `PATH`: roc-stable, roc, zig 0.16, nix, git, tar
+## and curl.
 ##
 ##   scripts/test.roc                  every group, in order
 ##   scripts/test.roc unit package     only those groups
