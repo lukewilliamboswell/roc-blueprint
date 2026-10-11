@@ -7,6 +7,7 @@ import core.Layout
 import core.Steps
 import core.Provider
 import Locks
+import LockJson
 
 ## Package names are native Nix attributes, never translated or filtered.
 ## Each environment imports its sources with only its ordered overlay stack.
@@ -56,9 +57,13 @@ NixProvider :: [].{
 					return Err("no input named ${Str.join_with(unknown, ", ")}; Blueprint.roc declares ${Str.join_with(declared.map(|input| input.name), ", ")}")
 				}
 				derived = Locks.derive(Locks.from_lock(lock)?, project, layout)?
+				# Nix leaves a lock it has nothing to change in as it found it,
+				# so stage it in the order Nix writes: the published Lock then
+				# reads the same whichever of the two wrote the native one.
+				kept = LockJson.encode(LockJson.sorted(LockJson.decode(derived.contents)?))
 				local = declared.keep_if(|input| input.ref.starts_with("path:") and !names.contains(input.name)).map(|input| input.name)
 				Ok({
-					files: files.append({ path: native_lock, contents: derived.contents }),
+					files: files.append({ path: native_lock, contents: kept }),
 					locals,
 					argv: ["nix", "flake", "update"].concat(names).concat(local).concat(flake),
 					native_lock,

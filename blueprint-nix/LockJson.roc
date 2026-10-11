@@ -1,5 +1,7 @@
 # Bounded JSON data codec for native Nix lock graphs and authority envelopes.
 # Duplicate keys, malformed Unicode and trailing input fail before planning.
+import core.Project
+
 LockJson := [
 	Object(List({ name : Str, value : LockJson })),
 	Array(List(LockJson)),
@@ -95,6 +97,19 @@ LockJson := [
 			),
 		)
 	}
+
+	## The same value with the fields of every object in byte order of their
+	## names, the order Nix writes a lock in.
+	sorted : LockJson -> LockJson
+	sorted = |value|
+		match value {
+			Object(fields) => Object(
+				fields.map(|entry| { name: entry.name, value: sorted(entry.value) })
+					.sort_with(|left, right| Project.bytewise(left.name, right.name)),
+			)
+			Array(items) => Array(items.map(sorted))
+			_ => value
+		}
 
 	Parsed : { value : LockJson, next : U64 }
 	parse : List(U8), U64, U64 -> Try(Parsed, Str)
@@ -388,3 +403,5 @@ expect {
 	LockJson.decode($nested).is_err()
 		and LockJson.decode(LockJson.encode(LockJson.Array($items))).is_err()
 }
+
+expect LockJson.decode("{\"b\":[{\"z\":1,\"a\":2}],\"a\":{\"d\":\"x\",\"c\":true}}").map_ok(|value| LockJson.encode(LockJson.sorted(value))) == Ok("{\"a\":{\"c\":true,\"d\":\"x\"},\"b\":[{\"a\":2,\"z\":1}]}")
