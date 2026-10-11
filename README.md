@@ -34,6 +34,7 @@ config = [
 
 ```sh
 blueprint update         # explicitly initialize/update dependency pins
+blueprint update roc     # update the input named roc, keeping the other pins
 blueprint shell          # enter the default shell's environment
 blueprint shell ci       # enter base, without the roc overlay
 blueprint run version    # run argv directly in dev
@@ -328,6 +329,7 @@ Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 | `blueprint workflow NAME` | Execute an ordered task/build workflow, stopping on failure |
 | `blueprint tasks` | List tasks and their environments |
 | `blueprint update` | Explicitly initialize/update and atomically publish the authoritative lock |
+| `blueprint update INPUT...` | Update only the named package sources, inputs or build sources, keeping every other pin of a lock that is current for `Blueprint.roc`. Local `path:` inputs are read again either way |
 | `blueprint check` | Run the compiler check and validate all shell/task/build environments without requiring a lock |
 | `blueprint spec` / `blueprint flake` | Print the Spec or the generated flake |
 | `blueprint --help` | Project help; subcommand help lists tasks, aliases and builds |

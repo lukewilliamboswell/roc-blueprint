@@ -302,6 +302,24 @@ cases! = |bench| {
 	CliHarness.check!(special_left.is_empty(), "a fifo authority left ${Str.join_with(special_left, " ")}")?
 	Script.pass!("an authority that is a fifo: gen, shell and update fail without reading it")?
 
+	# Named inputs: there must be a current lock to keep the other pins from
+	# and every name must be declared, both before any effect. Then the
+	# provider is given the names with the lock's own native lock beside the
+	# flake: the stub fails a named update that finds none.
+	named = project!(test, "named", CliUpdateTest.wire)?
+	named_lock = "${named}/Blueprint.lock"
+	refused!(run!(test, named, ["update", "default"], [])?, "without input names first", "a named update with no lock")?
+	no_effects!(named, "a named update with no lock")?
+	CliHarness.exited!(run!(test, named, ["update"], [("STUB_NIX_REV", "a")])?, 0, "the update before a named one")?
+	before_named = CliHarness.identity!(named_lock)?
+	refused!(run!(test, named, ["update", "default", "nope"], [])?, "no input named nope", "an update of an undeclared input")?
+	CliHarness.check!(CliHarness.identity!(named_lock)? == before_named, "an update of an undeclared input rewrote the authority")?
+	CliHarness.exited!(run!(test, named, ["update", "default"], [("STUB_NIX_REV", "b")])?, 0, "a named update")?
+	CliHarness.check!(pinned_rev!(named_lock)? == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "a named update did not publish its pins")?
+	updates = CliHarness.calls!("${named}/nix-calls")?.map(|call| call.drop_last(1))
+	CliHarness.same_calls!(updates, [["flake", "update", "--flake"], ["flake", "update", "default", "--flake"]], "the provider calls of a full and a named update")?
+	Script.pass!("update INPUT: refused with no lock or an undeclared name before any effect; otherwise the provider updates that input beside the staged lock")?
+
 	used = CliHarness.calls!(python_log)?
 	CliHarness.check!(used.is_empty(), "blueprint ran a host python3: ${Str.inspect(used)}")?
 	Script.pass!("Update preflight, concurrent authority CAS and immutable gen tests passed without a host Python (stubbed Nix/compiler)")

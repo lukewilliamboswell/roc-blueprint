@@ -28,17 +28,43 @@ NixProvider :: [].{
 			lock = Locks.from_lock(text).map_err(|m| InvalidLock(m))?
 			plan(spec, request, target, layout, lock).map_err(|m| Unrealisable(m))
 		},
-		resolve: |spec, target, layout| Ok({
-			files: update_files(spec, target, layout)?,
-			locals: local_checks(spec, target, layout)?,
-			argv: ["nix", "flake", "update", "--flake", "path:${layout.generated_root}"],
-			native_lock: "${layout.generated_root}/flake.lock",
-		}),
+		resolve,
 		lock_from_native: |spec, layout, text, trees| {
 			locks = Locks.from_nix(spec, layout, text)?
 			Ok(Locks.to_lock(locks.with_trees(layout, trees)?))
 		},
 		compiler: |tag| ["nix", "build", "--no-link", "--print-out-paths", "${roc_overlay}#\"${tag}\""],
+	}
+
+	## `nix flake update` resolves every input of the staged flake. Given
+	## names it resolves those and keeps the rest of the lock beside the flake,
+	## so a named update stages the Lock's own native lock first. A local input
+	## is named with them: Nix reads its tree again, as the Core hashes it again.
+	resolve : Spec, Str, Layout, Provider.Update -> Try(Provider.Resolution, Str)
+	resolve = |spec, target, layout, update| {
+		files = update_files(spec, target, layout)?
+		locals = local_checks(spec, target, layout)?
+		native_lock = "${layout.generated_root}/flake.lock"
+		flake = ["--flake", "path:${layout.generated_root}"]
+		match update {
+			All => Ok({ files, locals, argv: ["nix", "flake", "update"].concat(flake), native_lock })
+			Named(names, lock) => {
+				project = Project.validate(spec)?
+				declared = Locks.inputs(project)?
+				unknown = names.keep_if(|name| !declared.any(|input| input.name == name))
+				if !unknown.is_empty() {
+					return Err("no input named ${Str.join_with(unknown, ", ")}; Blueprint.roc declares ${Str.join_with(declared.map(|input| input.name), ", ")}")
+				}
+				derived = Locks.derive(Locks.from_lock(lock)?, project, layout)?
+				local = declared.keep_if(|input| input.ref.starts_with("path:") and !names.contains(input.name)).map(|input| input.name)
+				Ok({
+					files: files.append({ path: native_lock, contents: derived.contents }),
+					locals,
+					argv: ["nix", "flake", "update"].concat(names).concat(local).concat(flake),
+					native_lock,
+				})
+			}
+		}
 	}
 
 	## The roc-overlay revision that packages the compiler evaluating
@@ -1466,6 +1492,40 @@ import "tests/local.nix-lock.json" as native_lock : Str
 
 plan_locks : Try(Locks, Str)
 plan_locks = resolved(TestData.project(TestData.data), native_lock)
+
+# An update of everything is a bare `nix flake update` over the staged flake.
+expect {
+	project = TestData.project(TestData.data)
+	root = TestData.layout.generated_root
+	match (NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, All) {
+		Ok(all) => all.argv == ["nix", "flake", "update", "--flake", "path:${root}"] and all.files.map(|file| file.path) == ["${root}/flake.nix"]
+		Err(_) => False
+	}
+}
+
+# A named update stages the Lock's native lock for Nix to keep the other pins
+# from, and names each local input once, asked for or not.
+expect {
+	project = TestData.project(TestData.data)
+	root = TestData.layout.generated_root
+	lock = Locks.to_lock(plan_locks?)
+	asked = (NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, Named(["default"], lock))?
+	both = (NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, Named(["assets", "default"], lock))?
+	asked.argv == ["nix", "flake", "update", "default", "assets", "--flake", "path:${root}"]
+		and both.argv == ["nix", "flake", "update", "assets", "default", "--flake", "path:${root}"]
+			and asked.files.map(|file| file.path) == ["${root}/flake.nix", "${root}/flake.lock"]
+				and asked.native_lock == "${root}/flake.lock"
+}
+
+# A name Blueprint.roc does not declare is refused before any effect, and so
+# is a Lock resolved for other inputs.
+expect {
+	project = TestData.project(TestData.data)
+	lock = Locks.to_lock(plan_locks?)
+	renamed = { ..project, build_sources: [{ name: "other", ref: "path:./assets" }] }
+	(NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, Named(["assets", "nope"], lock)) == Err("no input named nope; Blueprint.roc declares default, assets")
+		and (NixProvider.provider.resolve)(renamed, "x86_64-linux", TestData.layout, Named(["other"], lock)).is_err()
+}
 
 ## Resolve fixture pins as the Core would: native lock, then tree digests.
 resolved : Spec, Str -> Try(Locks, Str)

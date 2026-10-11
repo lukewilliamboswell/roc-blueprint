@@ -49,6 +49,11 @@ Scenarios := [].{
 		## source locked at this reference, and looks nothing up in the registry.
 		LockedBash(Str, Str),
 
+		## `./blueprint update` of these inputs alone. Every reference of a
+		## fresh project names a revision, so the lock must then read as it
+		## did: the pins the update kept and the ones it resolved again.
+		UpdateInputs(List(Str)),
+
 		## `./blueprint` with these arguments while `Blueprint.lock` is as a
 		## blueprint from before the `nixpkgs` alias wrote it: without the edge.
 		BeforeAlias(List(Str), Check),
@@ -212,6 +217,9 @@ Scenarios := [].{
 			executable: ["hello.roc"],
 			steps: [
 				Cli(["run", "greet"], Says("Hello, world!")),
+				# The steps after this run from the lock a named update published.
+				UpdateInputs(["roc"]),
+				Cli(["update", "rocpkgs"], FailsWith("no input named rocpkgs")),
 				Cli(["run", "version"], LineStarts("Roc compiler version ")),
 				Cli(["run", "script"], Says("Hello from a roc-stable script")),
 				Launchers("path", ["greet", "roc-stable"]),
@@ -450,6 +458,10 @@ step! = |context, project, step|
 			Process.check!(!outcome?.stderr.contains("lock"), "with a lock from before the alias, Nix or blueprint complained:\n${outcome?.stderr}")?
 			Process.check!(kept? == earlier, "a lock from before the alias was rewritten outside `blueprint update`")?
 			Process.check!(staged?.contains("\"nixpkgs\":[\"default\"]"), "the staged lock of a lock from before the alias lacks the edge")
+		}
+		UpdateInputs(names) => {
+			_ = Process.succeed!(Process.command(context.blueprint, ["update"].concat(names), project))?
+			chmod!("a-w", "${project}/Blueprint.lock")
 		}
 		Generated(lacks, holds) => {
 			flake = Path.read_utf8!(Path.utf8("${project}/.blueprint/flake.nix"))?
