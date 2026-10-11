@@ -6,7 +6,7 @@ import cli.Stdout
 import FlakeLock
 import Process
 import Script
-import "../../.roc-version" as roc_version : Str
+import "../../blueprint-cli/compiler-version" as roc_version : Str
 import "../../flake.lock" as flake_lock : Str
 import "../../fixtures/consumer/inputs.lock" as fixture_lock : Str
 
@@ -23,7 +23,7 @@ import "../../fixtures/consumer/inputs.lock" as fixture_lock : Str
 ## on this repository and not on what moved upstream that day: packages at the
 ## nixpkgs revision of `fixtures/consumer/inputs.lock`, the overlay at the
 ## roc-overlay revision of `flake.lock` (the two the real-Nix scenarios use)
-## and the compiler at the nightly in `.roc-version`. The three files are
+## and the compiler at the nightly in `blueprint-cli/compiler-version`. The three files are
 ## compiled into this program, so they cannot disagree with it and a machine
 ## that runs it needs none of them. `Floating` writes instead what a new
 ## user's project holds, for the weekly run that watches upstream.
@@ -58,7 +58,7 @@ SmokeBinary := [].{
 	references = |packages_lock, overlay_lock, version| {
 		tag = version.split_on("\n").first() ?? ""
 		if !tag.starts_with("nightly-") {
-			return Err(NoPin(".roc-version"))
+			return Err(NoPin("blueprint-cli/compiler-version"))
 		}
 		Ok({
 			source: FlakeLock.ref(FlakeLock.locked(packages_lock, "nixpkgs").map_err(|_| NoPin("fixtures/consumer/inputs.lock"))?),
@@ -241,7 +241,7 @@ expect SmokeBinary.references(lock_sample("nixpkgs", "nixpkgs", "abc"), lock_sam
 # A file without its pin is named; nothing falls back to a floating reference.
 expect SmokeBinary.references("{}", lock_sample("roc-overlay", "roc-overlay", "def"), "nightly-1\n") == Err(NoPin("fixtures/consumer/inputs.lock"))
 expect SmokeBinary.references(lock_sample("nixpkgs", "nixpkgs", "abc"), lock_sample("nixpkgs", "nixpkgs", "abc"), "nightly-1\n") == Err(NoPin("flake.lock"))
-expect SmokeBinary.references(lock_sample("nixpkgs", "nixpkgs", "abc"), lock_sample("roc-overlay", "roc-overlay", "def"), "\n") == Err(NoPin(".roc-version"))
+expect SmokeBinary.references(lock_sample("nixpkgs", "nixpkgs", "abc"), lock_sample("roc-overlay", "roc-overlay", "def"), "\n") == Err(NoPin("blueprint-cli/compiler-version"))
 
 # The committed files hold all three pins, each a full revision or a nightly tag.
 expect SmokeBinary.resolved(Floating) == Ok(SmokeBinary.floating)

@@ -69,6 +69,29 @@ StaticChecks := [].{
 			}
 		}
 
+	## The scripts run on `roc-stable`, which the flake names. No other file
+	## may select a compiler for them: not a `.roc-version`, which the product's
+	## `blueprint-cli/compiler-version` replaced, and not a script that starts
+	## under another command, and not a `roc` field in a header. `tracked` is
+	## what git lists for `.roc-version`, `headers` the Roc files git finds
+	## with such a field, `shebangs` each script with its first line.
+	compilers_problem : Str, Str, List((Str, Str)) -> Str
+	compilers_problem = |tracked, headers, shebangs| {
+		others = shebangs.keep_if(|(_, line)| line != script_shebang).map(|(script, _)| script)
+		pinned = headers.split_on("\n").keep_if(|line| !line.is_empty())
+		if !tracked.trim().is_empty() {
+			".roc-version must not exist: the product compiler is named in blueprint-cli/compiler-version, the scripts' in flake.nix"
+		} else if !pinned.is_empty() {
+			"no header may pin a compiler with a roc field: ${Str.join_with(pinned, " ")}"
+		} else if !others.is_empty() {
+			"scripts must start with ${script_shebang}: ${Str.join_with(others, " ")}"
+		} else {
+			""
+		}
+	}
+
+	script_shebang = "#!/usr/bin/env roc-stable"
+
 	## The string a source file binds a name to, as in `name = "value"`.
 	constant : Str, Str -> Try(Str, [NoConstant])
 	constant = |source, name| {
@@ -159,6 +182,11 @@ expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-l
 expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-lang/roc-overlay/00000000?narHash=sha256-R4Zj%2B8w%2FE1L%3D\"\n") == "update roc_overlay in NixProvider.roc to github:roc-lang/roc-overlay/fb02fef7?narHash=sha256-R4Zj%2B8w%2FE1L%3D"
 expect StaticChecks.overlay_problem(lock_sample, "nothing here") != ""
 expect StaticChecks.overlay_problem("{}", "roc_overlay = \"x\"") == "flake.lock has no GitHub pin for roc-overlay"
+
+expect StaticChecks.compilers_problem("", "", [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) == ""
+expect StaticChecks.compilers_problem(".roc-version\n", "", []) != ""
+expect StaticChecks.compilers_problem("", "examples/a/main.roc\n", []) == "no header may pin a compiler with a roc field: examples/a/main.roc"
+expect StaticChecks.compilers_problem("", "", [("scripts/a.roc", "#!/usr/bin/env roc-stable"), ("scripts/b.roc", "#!/usr/bin/env roc"), ("scripts/c.roc", "app [main!] {")]) == "scripts must start with #!/usr/bin/env roc-stable: scripts/b.roc scripts/c.roc"
 
 expect StaticChecks.constant("  roc_overlay : Str\n  roc_overlay = \"abc\"\n", "roc_overlay") == Ok("abc")
 expect StaticChecks.constant("            version = \"0.4.0-rc2\";\n", "version") == Ok("0.4.0-rc2")

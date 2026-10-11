@@ -22,7 +22,7 @@ import StubTool
 ##   roc-record  record the arguments, then run `STUB_REAL_ROC` with them
 ##   roc-wire    `version` prints `STUB_ROC_VERSION`; `Blueprint.roc` prints `./wire.scm`
 ##   roc-probe   record; `version` prints `STUB_PROBE_VERSION`, exits `STUB_PROBE_STATUS`
-##   nix         record; `flake update` writes a `flake.lock` from `STUB_NIX_FIXTURE`
+##   nix         record; `flake update [INPUT...]` writes a `flake.lock` from `STUB_NIX_FIXTURE`
 ##               as `STUB_NIX_MODE` says (`declared` or `local`, the latter with
 ##               `STUB_NIX_REV`), after waiting at `STUB_NIX_PAUSE` if set;
 ##               `build` prints `STUB_NIX_OUT`; `develop` exits 23 if `STUB_NIX_FAIL`
@@ -90,7 +90,12 @@ act! = |role, args| {
 		Nix => {
 			record!("nix-calls", argv)?
 			match argv {
-				["flake", "update", "--flake", target] => flake_update!(target)
+				["flake", "update", "--flake", target] => flake_update!(target, [])
+				["flake", "update", .. as rest] =>
+					match rest.take_last(2) {
+						["--flake", target] => flake_update!(target, rest.drop_last(2))
+						_ => Err("unexpected nix flake update arguments: ${Str.join_with(rest, " ")}")
+					}
 				["build", ..] => written!("${variable!("STUB_NIX_OUT")?}\n")
 				["develop", ..] =>
 					if optional!("STUB_NIX_FAIL").is_ok() {
@@ -149,12 +154,17 @@ record! = |directory, argv| {
 
 ## Stand in for `nix flake update`: write the native lock beside the generated
 ## `flake.nix`. With a barrier, say this point was reached and wait for release.
-flake_update! : Str => Try(I32, Str)
-flake_update! = |target| {
+## Given input names, Nix keeps the other pins of the lock already there, so
+## one must be.
+flake_update! : Str, List(Str) => Try(I32, Str)
+flake_update! = |target, names| {
 	if !target.starts_with("path:/") {
 		return Err("unexpected flake reference: ${target}")
 	}
 	generated = target.drop_prefix("path:")
+	if !names.is_empty() and Path.read_utf8!(Path.utf8("${generated}/flake.lock")).is_err() {
+		return Err("no ${generated}/flake.lock to keep the pins of inputs other than ${Str.join_with(names, " ")}")
+	}
 	match optional!("STUB_NIX_PAUSE") {
 		Ok(barrier) => wait_at!(barrier)?
 		Err(_) => {}

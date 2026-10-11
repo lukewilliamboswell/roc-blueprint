@@ -67,10 +67,13 @@ Done : { prepared : Bool, built : Bool }
 step! : Str => Try({}, _)
 step! = |title| Script.info!("\n==>", title)
 
-## A repository script, run by the compiler under test with its own output.
+## The compiler the repository's scripts run on, not the one under test.
+stable = "roc-stable"
+
+## A repository script, run on `roc-stable` with its own output.
 script! : Context, Str, List(Str) => Try({}, _)
 script! = |context, name, args|
-	Process.passthrough!(Process.command(context.roc, ["scripts/${name}.roc"].concat(args), context.root))
+	Process.passthrough!(Process.command(stable, ["scripts/${name}.roc"].concat(args), context.root))
 
 compiler! : Context, List(Str) => Try({}, _)
 compiler! = |context, args| Process.passthrough!(Process.command(context.roc, args, context.root))
@@ -205,6 +208,18 @@ static! = |context| {
 	step!("The fetched compiler comes from the locked roc-overlay revision")?
 	problem!(StaticChecks.overlay_problem(read!(context, "flake.lock")?, read!(context, "blueprint-nix/NixProvider.roc")?))?
 
+	step!("The scripts run on roc-stable and nothing else selects a compiler")?
+	pinned = Process.succeed!(Process.command("git", ["ls-files", "--", ".roc-version"], context.root))?
+	scripts = file_names!("${context.root}/scripts")?.keep_if(|name| name.ends_with(".roc"))
+	var $shebangs = []
+	for script in scripts {
+		first = read!(context, "scripts/${script}")?.split_on("\n").first() ?? ""
+		$shebangs = $shebangs.append(("scripts/${script}", first))
+	}
+	# git grep exits 1 when no file matches.
+	headers = Process.capture!(Process.command("git", ["grep", "-lE", "^[[:space:]]*roc: \"", "--", "*.roc"], context.root))?
+	problem!(StaticChecks.compilers_problem(pinned.stdout, headers.stdout, $shebangs))?
+
 	step!("The flake lists the core package's modules and the CLI's version")?
 	flake = read!(context, "flake.nix")?
 	in_directory = Bundle.modules(file_names!("${context.root}/${Bundle.core_dir}")?)
@@ -219,7 +234,7 @@ unit! = |context| {
 
 	step!("Repository script tests")?
 	scripts = file_names!("${context.root}/scripts")?.keep_if(|name| name.ends_with(".roc"))
-	tested = Process.together!(scripts.map(|name| Process.command(context.roc, ["test", "scripts/${name}"], context.root)))?
+	tested = Process.together!(scripts.map(|name| Process.command(stable, ["test", "scripts/${name}"], context.root)))?
 	report_tests!(scripts, tested)?
 
 	step!("Compile-time configuration validation")?

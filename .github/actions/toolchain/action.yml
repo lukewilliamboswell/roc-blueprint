@@ -1,8 +1,8 @@
 name: Blueprint toolchain
 description: Nix, the flake's development shell, and the linker-input download cache.
 
-# The flake's default dev shell is the one definition of the toolchain: Roc at
-# the pinned nightly, Zig and the programs the scripts start. Jobs run every
+# The flake's default dev shell is the one definition of the toolchain: the product's
+# Roc, the scripts' `roc-stable`, Zig and the programs the scripts start. Jobs run every
 # script through `nix develop -c`.
 runs:
   using: composite

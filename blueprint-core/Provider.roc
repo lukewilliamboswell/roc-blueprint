@@ -25,8 +25,9 @@ Provider := {
 	## a stale Lock.
 	realise : Spec, Request, Str, Layout, Lock -> Try(Steps, [InvalidLock(Str), Unrealisable(Str)]),
 
-	## Resolve: what the Core must stage and run to produce a native lock.
-	resolve : Spec, Str, Layout -> Try(Resolution, Str),
+	## Resolve: what the Core must stage and run to produce a native lock, for
+	## every input or for the named ones alone.
+	resolve : Spec, Str, Layout, Update -> Try(Resolution, Str),
 
 	## Resolve: turn the native lock the resolve command wrote into a Lock. The
 	## Core supplies its own tree digests for `Resolution.locals` (by path) and
@@ -41,6 +42,12 @@ Provider := {
 
 	## Inspection returns relative names; executable Steps files are absolute.
 	File : { path : Str, contents : Str }
+
+	## Which pins an update resolves again. `Named` moves only the inputs with
+	## these names and keeps every other pin of the Lock, which the Core has
+	## already found current for the Spec. Local inputs hold no remote pin and
+	## are read again either way.
+	Update : [All, Named(List(Str), Lock)]
 
 	## `files` are staged, `locals` are checked for safety and hashed by the
 	## Core, then `argv` runs and writes `native_lock`, which `lock_from_native`

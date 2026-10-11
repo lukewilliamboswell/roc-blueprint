@@ -50,10 +50,16 @@ Full development and CI require x86_64 Linux with Nix and flakes enabled.
 nix develop
 ```
 
-gives Roc (the nightly in `.roc-version`, from
-[roc-overlay](https://github.com/roc-lang/roc-overlay)), Zig 0.16 and the
+gives two Roc compilers from
+[roc-overlay](https://github.com/roc-lang/roc-overlay), Zig 0.16 and the
 programs the scripts start: coreutils, git, curl, tar and gzip. It has no
-Python. This shell is the one definition of the toolchain:
+Python. `roc` is the product compiler, the nightly in
+`blueprint-cli/compiler-version`: it builds and tests the CLI, the packages and
+the platform, and a released `blueprint` fetches it. `roc-stable` is the
+nightly `rocStableTag` names in `flake.nix`: the scripts in `scripts/` start
+with `#!/usr/bin/env roc-stable` and run on it, so they keep working while the
+product moves to a newer nightly. The scripts reach the product compiler
+through `ROC`, or `roc` on `PATH`. This shell is the one definition of the toolchain:
 every CI job runs its scripts through `nix develop -c`, so what passes in the
 shell is what CI runs. `blueprint` is not in the shell, so entering it never
 compiles the CLI; build it as below, or use `nix run .`.
@@ -176,33 +182,29 @@ Normal execution tests explicitly initialize authority with `update` first.
 The complete artifacts example is executed in a temporary copy by
 the workflow suite (`scripts/test_workflows.roc`).
 
-## Nightly updates
+## Changing a compiler
 
-`.github/workflows/update-roc-nightly.yml` checks daily at 13:10 UTC, or on
-manual dispatch, using the SHA-pinned reusable workflow from
-[roc-automation](https://github.com/lukewilliamboswell/roc-automation).
-`.roc-version` remains the compiler pin for CI, releases and the Nix flake;
-the shared updater supports this file without `compiler_roots` configuration.
+Nothing moves either compiler automatically. Each moves in one reviewed pull
+request, with whatever the new compiler breaks fixed in the same request.
 
-`.github/roc-nightly.json` selects `ci.yml`, whose `nightly_validation` dispatch
-runs all of `scripts/test.roc`: tests, CLI execution, Nix builds, the platform
-bundle smoke test against the local core and the fuzz corpus replay. The tag-triggered release workflows are not
-dispatched and validation does not publish. A separate Nightly configuration
-workflow checks the consumer configuration on pull requests.
+To move the product compiler:
 
-The shared controller creates a signed pin-only PR and merges it only after
-validation and repository rules pass. The required check for this CI is `test`.
-The active main-branch ruleset requires that check from GitHub Actions, strict
-up-to-date checks, and pull requests. Keep its required check names aligned
-with the validation workflow when changing CI. Once the workflows are on
-`main`, manually dispatch the updater and inspect the candidate's validation
-results.
+1. Put the nightly's tag in `blueprint-cli/compiler-version`.
+2. If the locked roc-overlay predates that nightly, run
+   `nix flake update roc-overlay` and set `NixProvider.roc_overlay` to the
+   value `scripts/test.roc static` asks for.
+3. Set the compiler and overlay in `fixtures/roc-inputs.lock.json` to match.
+4. Move the basic-cli release in `blueprint-cli/main.roc`, the fixtures, the
+   examples and `rocPackages` in `flake.nix` if the nightly needs a newer one.
 
-The Nix overlay is independently locked, and CI takes its compiler from the
-flake's development shell. A nightly absent from the locked overlay therefore
-fails every job and cannot auto-merge. Update the `roc-overlay` input with
-`nix flake update roc-overlay` once upstream lists that nightly, set
-`NixProvider.roc_overlay` to match, then retry the updater.
+To move the scripts' compiler, change `rocStableTag` in `flake.nix`, and the
+basic-cli release in the headers of `scripts/*.roc` if it needs a newer one.
+`scripts/smoke_binary.roc` and `scripts/stubs/tool.roc` are the exceptions:
+the product compiler builds them, so their headers must suit both compilers.
+
+The required check is `test`. The active main-branch ruleset requires that
+check from GitHub Actions, strict up-to-date checks, and pull requests. Keep
+its required check names aligned with `ci.yml` when changing CI.
 
 The October 4 nightly (`nightly-2026-10-04-130536d`) rejects redundant type
 exposes, so it needs the basic-cli 0.24.0 release and roc-fuzz 0.4.3.
@@ -409,21 +411,22 @@ roc-blueprint and roc-blueprint-core have independent release cycles.
   The project the smoke test writes pins what it resolves: packages at the
   nixpkgs revision in `fixtures/consumer/inputs.lock`, the overlay at the
   roc-overlay revision in `flake.lock` and the compiler at the nightly in
-  `.roc-version`, all compiled into the smoke program. A release therefore
+  `blueprint-cli/compiler-version`, all compiled into the smoke program. A release therefore
   does not depend on what moved upstream that day.
   `.github/workflows/floating.yml` runs the same test weekly with `--floating`,
   which resolves what a new user's project would: Blueprint's default package
   source, the overlay's default branch and its newest nightly.
 
 `build_release.roc` takes its compiler from the flake: `nix build .#roc-cross`
-is the x86_64 Linux compiler archive of the nightly in `.roc-version` with the
+is the x86_64 Linux compiler archive of the nightly in
+`blueprint-cli/compiler-version` with the
 `darwin/` sysroot of the Apple Silicon archive beside it, which Roc needs to
 link macOS programs. Both are fetched by the URL and hash the locked
 roc-overlay records. The package is not in the development shell, so only a
 release build downloads the macOS archive. The three CLI binaries are compiled
 at the same time, each about 2.3 GB at its peak.
 
-A binary fetches the compiler named in `.roc-version` from the roc-overlay
+A binary fetches the compiler named in `blueprint-cli/compiler-version` from the roc-overlay
 revision in `NixProvider.roc_overlay`. Change that constant whenever
 `flake.lock` moves the `roc-overlay` input; `scripts/test.roc` fails when the two
 differ.
@@ -492,7 +495,7 @@ support for the `ROC` override.
 
 These remaining dependencies and workarounds still apply:
 
-- **Pinned Roc.** `.roc-version` selects the compiler, and the basic-cli
+- **Pinned Roc.** `blueprint-cli/compiler-version` selects the compiler, and the basic-cli
   release in `blueprint-cli/main.roc` must be compatible with it.
 - **`roc bundle --output-dir` must be on the same filesystem as the working
   directory.** Otherwise the bundler fails with `CrossDevice`.

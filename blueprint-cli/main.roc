@@ -29,7 +29,7 @@ import core.Provider
 import core.Lock
 import core.Tree
 import nix.NixProvider
-import "../.roc-version" as compiler_version : Str
+import "compiler-version" as compiler_version : Str
 
 version : Str
 version = "0.4.0-rc2"
@@ -47,7 +47,7 @@ Command : [
 	Build(Str),
 	Workflow(Str),
 	Tasks,
-	Update,
+	Update(List(Str)),
 	Check,
 	PrintSpec,
 	PrintFlake,
@@ -83,6 +83,13 @@ cli_for = |loaded| {
 			description: "Build a sandboxed artifact and its dependencies",
 			mapper: |c| c,
 		},
+	)
+	update_cmd = SubCmd.finish(
+		Cli.map(
+			Param.str_list({ name: "inputs", help: "Inputs to update, by name; every input when none is given." }),
+			|names| Update(names),
+		),
+		{ name: "update", description: "Update Blueprint.lock to the latest inputs", mapper: |c| c },
 	)
 	workflow_cmd = SubCmd.finish(
 		Cli.map(
@@ -155,7 +162,7 @@ cli_for = |loaded| {
 				build_cmd,
 				workflow_cmd,
 				SubCmd.empty({ name: "tasks", description: "List the tasks", value: Tasks }),
-				SubCmd.empty({ name: "update", description: "Update Blueprint.lock to the latest inputs", value: Update }),
+				update_cmd,
 				SubCmd.empty({ name: "check", description: "Validate Blueprint.roc", value: Check }),
 				SubCmd.empty({ name: "spec", description: "Print the Spec", value: PrintSpec }),
 				SubCmd.empty({ name: "flake", description: "Print the generated files", value: PrintFlake }),
@@ -243,7 +250,7 @@ run! = |command, loaded, context| {
 				Build(name) => realise!(spec, Request.Build(name), ctx)
 				Workflow(name) => realise!(spec, Request.Workflow(name), ctx)
 				Tasks => list_tasks!(spec)
-				Update => resolve!(spec, ctx)
+				Update(names) => resolve!(spec, names, ctx)
 				PrintSpec => Stdout.write!(spec.to_str())
 				PrintFlake => print_files!(spec)
 				Check => check!(loaded, ctx.layout.project_root)
@@ -1264,13 +1271,29 @@ list_tasks! = |spec| {
 }
 
 ## Explicit update alone resolves pins and atomically publishes the authority.
-resolve! : Spec, Context => Try({}, _)
-resolve! = |spec, ctx| {
+## With names it resolves those inputs and keeps the other pins of the
+## authority, which must exist and be current for Blueprint.roc.
+resolve! : Spec, List(Str), Context => Try({}, _)
+resolve! = |spec, names, ctx| {
 	layout = ctx.layout
-	resolution = (provider.resolve)(spec, ctx.target, layout)
-		.map_err(|message| RenderFailed(message))?
 	safe_path!(layout.lock_path)?
 	prior = authority_token!(layout.lock_path)?
+	update = if names.is_empty() {
+		All
+	} else {
+		if !(path(layout.lock_path).exists!()?) {
+			return Err(LockFailed("no lock to keep the other pins from; run `blueprint update` without input names first"))
+		}
+		if path(layout.lock_path).type!()? != IsFile {
+			return Err(UnsafePath(layout.lock_path))
+		}
+		lock = Lock.parse(path(layout.lock_path).read_utf8!()?)
+			.map_err(|_| LockFailed("unsupported Blueprint lock format; run `blueprint update` without input names"))?
+		lock.stale(spec).map_err(|message| LockFailed("${message} without input names"))?
+		Named(names, lock)
+	}
+	resolution = (provider.resolve)(spec, ctx.target, layout, update)
+		.map_err(|message| RenderFailed(message))?
 	# Reject ancestor escapes and nested symlinks before staging or fetching.
 	var $trees = []
 	for local in resolution.locals {
@@ -1282,12 +1305,13 @@ resolve! = |spec, ctx| {
 	if native_lock == layout.lock_path or !native_lock.starts_with("${layout.generated_root}/") {
 		return Err(UnsafePath(native_lock))
 	}
-	stage!(resolution.files, layout)?
 	# Derived state is disposable. Unlink it rather than letting the provider
-	# follow a stale hard-link alias while explicitly resolving fresh pins.
+	# follow a stale hard-link alias while explicitly resolving fresh pins; a
+	# named update stages the native lock it keeps pins from.
 	if path(native_lock).exists!()? {
 		path(native_lock).delete!()?
 	}
+	stage!(resolution.files, layout)?
 	exec!(resolution.argv, layout.project_root)?
 	safe_path!(native_lock)?
 	resolved = (provider.lock_from_native)(spec, layout, path(native_lock).read_utf8!()?, $trees)

@@ -10,7 +10,7 @@ import Script
 ## Roc links macOS programs against a minimal sysroot it expects beside its own
 ## executable. Only the macOS compiler archive ships that sysroot, so the
 ## compiler is the flake's `roc-cross` package: the Linux archive with the
-## macOS archive's sysroot beside it, for the nightly in `.roc-version`, each
+## macOS archive's sysroot beside it, for the nightly in `blueprint-cli/compiler-version`, each
 ## fetched by the URL and hash the flake's locked roc-overlay records.
 Release := [].{
 
@@ -78,7 +78,7 @@ Release := [].{
 
 build! : Str, Str => Try({}, _)
 build! = |root, roc| {
-	tag = Path.read_utf8!(Path.utf8("${root}/.roc-version"))?.split_on("\n").first() ?? ""
+	tag = Path.read_utf8!(Path.utf8("${root}/blueprint-cli/compiler-version"))?.split_on("\n").first() ?? ""
 	version = Process.succeed!(Process.command(roc, ["version"], root))?.stdout.trim()
 	Process.check!(version == "Roc compiler version ${tag}", "the compiler of .#${Release.toolchain} is \"${version}\", not ${tag}")?
 
