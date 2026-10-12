@@ -19,6 +19,8 @@ import "../../fixtures/overlays/unused/flake.nix" as unused_overlay : Str
 ## `fixtures/consumer/inputs.lock` and its overlay to the roc-overlay revision
 ## in `flake.lock`, so nothing it resolves moves. A script with a platform
 ## takes its compiler and that platform from `fixtures/roc-inputs.lock.json`.
+## The toolchain overlays are zig-overlay at the revision in `flake.lock` and
+## rust-overlay at `rust_overlay`.
 ## The two examples run as they are written, with the floating inputs a reader
 ## would copy.
 Scenarios := [].{
@@ -75,8 +77,15 @@ Scenarios := [].{
 	## The compiler a script with a platform runs on, and that platform's bundle.
 	Roc : { compiler : Str, basic_cli : Str }
 
-	scenarios : Str, Str, Roc -> List(Scenario)
-	scenarios = |packages_ref, overlay_ref, roc| [
+	## The overlays that name a toolchain's exact release in a quoted attribute.
+	Toolchains : { zig : Str, rust : Str }
+
+	## The rust-overlay revision the scenarios resolve. Move it when a
+	## scenario needs a Rust release it does not have.
+	rust_overlay = "github:oxalica/rust-overlay/c1cfa7a2c809d364ac1a7e9b3ec418afa3f19793"
+
+	scenarios : Str, Str, Roc, Toolchains -> List(Scenario)
+	scenarios = |packages_ref, overlay_ref, roc, toolchains| [
 		{
 			name: "all-settings example: check, list, update and run tasks",
 			place: Example("examples/all-settings"),
@@ -265,6 +274,40 @@ Scenarios := [].{
 				Cli(["run", "check", "--", "one", "two words"], Says("checked [one|two words] from the project root")),
 			],
 		},
+		{
+			name: "toolchain overlays: an exact Zig and an exact Rust, each named in a quoted attribute",
+			place: Fresh,
+			files: [
+				(
+					"Blueprint.roc",
+					Str.join_with(
+						[
+							"${header}config = [",
+							"	Name(\"toolchains\"),",
+							"	Systems([\"x86_64-linux\", \"aarch64-darwin\"]),",
+							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
+							"	Overlay(\"zig\", \"${toolchains.zig}\"),",
+							"	Overlay(\"rust\", \"${toolchains.rust}\"),",
+							"	Environment(\"zig\", [Overlays([\"zig\"]), Tools([\"zigpkgs.\\\"0.16.0\\\"\"])]),",
+							"	Environment(\"rust\", [Overlays([\"rust\"]), Tools([\"rust-bin.stable.\\\"1.95.0\\\".default\"])]),",
+							"	Shell(\"rust\", [Use(\"rust\")]),",
+							"	Task(\"zig\", [Use(\"zig\"), Run([\"zig\", \"version\"])]),",
+							"]",
+							"",
+						],
+						"\n",
+					),
+				),
+			],
+			executable: [],
+			steps: [
+				# Evaluated, not built: the toolchain is several hundred megabytes.
+				# The update's flake holds every shell; a task's holds its own.
+				Eval("devShells.x86_64-linux.rust.drvPath", Succeeds),
+				Eval("devShells.aarch64-darwin.rust.drvPath", Succeeds),
+				Cli(["run", "zig"], Prints("0.16.0\n")),
+			],
+		},
 	]
 
 	## The lines only one of two texts holds, `-` for the first and `+` for the second.
@@ -418,7 +461,8 @@ Scenarios := [].{
 			Ok(pins) => { compiler: pins.compiler, basic_cli: BuildHarness.basic_cli }
 			Err(PinsInvalid(reason)) => return Script.fail!(reason)
 		}
-		result = each!(context, scenarios(packages_ref, overlay_ref, roc), 0)
+		toolchains = { zig: pinned!(flake_lock, "zig-overlay", "flake.lock")?, rust: rust_overlay }
+		result = each!(context, scenarios(packages_ref, overlay_ref, roc, toolchains), 0)
 		# A scenario leaves its lock read-only.
 		_ = Cmd.new_str("chmod").args_str(["-R", "u+w", "--", work]).exec_cmd!()
 		_ = Path.delete_all!(Path.utf8(work))
@@ -637,8 +681,11 @@ expect Scenarios.generated_problem("  outputs = overlays = [ first ];", ["unused
 sample_roc : Scenarios.Roc
 sample_roc = { compiler: "nightly-1", basic_cli: "https://example.org/1.0.0/abc.tar.zst" }
 
+sample_toolchains : Scenarios.Toolchains
+sample_toolchains = { zig: "github:mitchellh/zig-overlay/abc", rust: "github:oxalica/rust-overlay/def" }
+
 # Every fresh project names the platform by the token and pins what it resolves.
-expect Scenarios.scenarios("github:NixOS/nixpkgs/abc", "github:roc-lang/roc-overlay/def", sample_roc).all(
+expect Scenarios.scenarios("github:NixOS/nixpkgs/abc", "github:roc-lang/roc-overlay/def", sample_roc, sample_toolchains).all(
 	|scenario|
 		match scenario.place {
 			Example(_) => scenario.files.is_empty()
@@ -649,7 +696,7 @@ expect Scenarios.scenarios("github:NixOS/nixpkgs/abc", "github:roc-lang/roc-over
 				}
 		},
 )
-expect Scenarios.scenarios("p", "o", sample_roc).len() == 6
+expect Scenarios.scenarios("p", "o", sample_roc, sample_toolchains).len() == 7
 
 # What Nix 2.35 prints at --debug when the flake has an input named nixpkgs,
 # and what it printed for a generated flake before one followed `default`.
@@ -683,7 +730,7 @@ expect Scenarios.bash_problem(debugged(locked_bash_log.replace_each("evaluating 
 expect Scenarios.bash_problem({ code: 1, stdout: "", stderr: locked_bash_log }, "github:NixOS/nixpkgs/4975466d") == "expected exit 0, got 1"
 
 # Two fresh scenarios check which bash `nix develop` takes: a task's entry and a shell alias.
-expect Scenarios.scenarios("p", "o", sample_roc).map(|scenario| scenario.steps.keep_if(|step| step == LockedBash("devShells.x86_64-linux.default", "p") or step == LockedBash("devShells.x86_64-linux.blueprint-env-base", "p")).len()) == [0, 0, 1, 0, 1, 0]
+expect Scenarios.scenarios("p", "o", sample_roc, sample_toolchains).map(|scenario| scenario.steps.keep_if(|step| step == LockedBash("devShells.x86_64-linux.default", "p") or step == LockedBash("devShells.x86_64-linux.blueprint-env-base", "p")).len()) == [0, 0, 1, 0, 1, 0, 0]
 
 # The edge an update now records is removed whole, leaving balanced text;
 # a lock without it, or with another edge of that name, is left as it is.
