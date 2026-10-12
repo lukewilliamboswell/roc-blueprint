@@ -5,7 +5,12 @@ import FlakeLock
 StaticChecks := [].{
 
 	## The Roc source directories `roc fmt --check` covers.
-	formatted = ["blueprint-core", "blueprint-platform", "blueprint-nix", "blueprint-cli", "fixtures", "examples", "scripts"]
+	formatted = ["blueprint-core", "blueprint-platform", "blueprint-nix", "blueprint-cli", "fixtures", "examples"]
+
+	## The directories `roc-stable fmt --check` covers instead. `roc fmt`
+	## rewrites a header's `roc` field to the nightly that runs it, so the
+	## scripts are formatted by the compiler their headers name.
+	formatted_stable = ["scripts"]
 
 	## Object files, archives and import libraries are fetched by content from
 	## the release in `link-inputs.lock.json`; none may be committed.
@@ -69,28 +74,58 @@ StaticChecks := [].{
 			}
 		}
 
-	## The scripts run on `roc-stable`, which the flake names. No other file
-	## may select a compiler for them: not a `.roc-version`, which the product's
-	## `blueprint-cli/compiler-version` replaced, and not a script that starts
-	## under another command, and not a `roc` field in a header. `tracked` is
-	## what git lists for `.roc-version`, `headers` the Roc files git finds
-	## with such a field, `shebangs` each script with its first line.
-	compilers_problem : Str, Str, List((Str, Str)) -> Str
-	compilers_problem = |tracked, headers, shebangs| {
+	## The scripts run on `roc-stable`, which the flake names as `rocStableTag`.
+	## Each script it runs says so twice: its first line starts it under that
+	## command, and its header's `roc` field names that same nightly, so
+	## another compiler refuses it. Nothing else selects a compiler: not a
+	## `.roc-version`, which the product's `blueprint-cli/compiler-version`
+	## replaced, and not a `roc` field in the platform, a package, an example
+	## or a fixture, which follow the product compiler. `tracked` is what git
+	## lists for `.roc-version`, `stable` the flake's tag, `pins` what git
+	## grep prints for the `roc` fields of every Roc file, `shebangs` each
+	## script with its first line.
+	compilers_problem : Str, Try(Str, [NoConstant]), Str, List((Str, Str)) -> Str
+	compilers_problem = |tracked, stable, pins, shebangs| {
 		others = shebangs.keep_if(|(_, line)| line != script_shebang).map(|(script, _)| script)
-		pinned = headers.split_on("\n").keep_if(|line| !line.is_empty())
+		found = header_pins(pins)
+		pinned = shebangs.map(|(script, _)| script).keep_if(|script| !product_built.contains(script))
+		stray = found.keep_if(|(file, _)| !pinned.contains(file)).map(|(file, _)| file)
 		if !tracked.trim().is_empty() {
 			".roc-version must not exist: the product compiler is named in blueprint-cli/compiler-version, the scripts' in flake.nix"
-		} else if !pinned.is_empty() {
-			"no header may pin a compiler with a roc field: ${Str.join_with(pinned, " ")}"
+		} else if !stray.is_empty() {
+			"only a script roc-stable runs may pin a compiler with a roc field: ${Str.join_with(stray, " ")}"
 		} else if !others.is_empty() {
 			"scripts must start with ${script_shebang}: ${Str.join_with(others, " ")}"
 		} else {
-			""
+			match stable {
+				Err(NoConstant) => "flake.nix does not name rocStableTag"
+				Ok(tag) => {
+					wrong = pinned.keep_if(|script| found.keep_if(|(file, _)| file == script).map(|(_, pin)| pin) != [tag])
+					if wrong.is_empty() "" else "scripts must pin rocStableTag in their header, as roc: \"${tag}\": ${Str.join_with(wrong, " ")}"
+				}
+			}
 		}
 	}
 
 	script_shebang = "#!/usr/bin/env roc-stable"
+
+	## The scripts the product compiler builds: the smoke program released
+	## beside each binary, and the tool the stubbed suites stand in for Nix
+	## with. A header that named `roc-stable`'s nightly would stop them the day
+	## the two compilers differ, so they name none.
+	product_built = ["scripts/smoke_binary.roc", "scripts/stubs/tool.roc"]
+
+	## Each file and nightly in what `git grep` prints for `roc` header
+	## fields: lines of `<file>:<indent>roc: "<tag>",`.
+	header_pins : Str -> List((Str, Str))
+	header_pins = |listed|
+		listed.split_on("\n").keep_if(|line| !line.is_empty()).map(
+			|line| {
+				file = line.split_on(":").first() ?? ""
+				pin = line.split_on("roc: \"").get(1).map_ok(|rest| rest.split_on("\"").first() ?? "") ?? ""
+				(file, pin)
+			},
+		)
 
 	## The string a source file binds a name to, as in `name = "value"`.
 	constant : Str, Str -> Try(Str, [NoConstant])
@@ -183,10 +218,23 @@ expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-l
 expect StaticChecks.overlay_problem(lock_sample, "nothing here") != ""
 expect StaticChecks.overlay_problem("{}", "roc_overlay = \"x\"") == "flake.lock has no GitHub pin for roc-overlay"
 
-expect StaticChecks.compilers_problem("", "", [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) == ""
-expect StaticChecks.compilers_problem(".roc-version\n", "", []) != ""
-expect StaticChecks.compilers_problem("", "examples/a/main.roc\n", []) == "no header may pin a compiler with a roc field: examples/a/main.roc"
-expect StaticChecks.compilers_problem("", "", [("scripts/a.roc", "#!/usr/bin/env roc-stable"), ("scripts/b.roc", "#!/usr/bin/env roc"), ("scripts/c.roc", "app [main!] {")]) == "scripts must start with #!/usr/bin/env roc-stable: scripts/b.roc scripts/c.roc"
+pin_sample = "scripts/test.roc:\troc: \"nightly-1\",\n"
+
+expect StaticChecks.header_pins("${pin_sample}examples/a/main.roc:    roc: \"0.1.0\" }\n") == [("scripts/test.roc", "nightly-1"), ("examples/a/main.roc", "0.1.0")]
+expect StaticChecks.header_pins("") == []
+
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), pin_sample, [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) == ""
+expect StaticChecks.compilers_problem(".roc-version\n", Ok("nightly-1"), "", []) != ""
+expect StaticChecks.compilers_problem("", Err(NoConstant), pin_sample, [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) == "flake.nix does not name rocStableTag"
+# A script without the pin, with another nightly's or with two.
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) == "scripts must pin rocStableTag in their header, as roc: \"nightly-1\": scripts/test.roc"
+expect StaticChecks.compilers_problem("", Ok("nightly-2"), pin_sample, [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) != ""
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "${pin_sample}${pin_sample}", [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) != ""
+# The product compiler builds the smoke program, so it pins nothing.
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable")]) == ""
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "scripts/smoke_binary.roc:\troc: \"nightly-1\",\n", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable")]) == "only a script roc-stable runs may pin a compiler with a roc field: scripts/smoke_binary.roc"
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "examples/a/main.roc:\troc: \"nightly-1\",\n", []) == "only a script roc-stable runs may pin a compiler with a roc field: examples/a/main.roc"
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable"), ("scripts/b.roc", "#!/usr/bin/env roc"), ("scripts/c.roc", "app [main!] {")]) == "scripts must start with #!/usr/bin/env roc-stable: scripts/b.roc scripts/c.roc"
 
 expect StaticChecks.constant("  roc_overlay : Str\n  roc_overlay = \"abc\"\n", "roc_overlay") == Ok("abc")
 expect StaticChecks.constant("            version = \"0.4.0-rc2\";\n", "version") == Ok("0.4.0-rc2")

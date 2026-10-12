@@ -196,6 +196,7 @@ static! : Context => Try({}, _)
 static! = |context| {
 	step!("Formatting")?
 	compiler!(context, ["fmt", "--check"].concat(StaticChecks.formatted))?
+	Process.passthrough!(Process.command(stable, ["fmt", "--check"].concat(StaticChecks.formatted_stable), context.root))?
 
 	step!("No binary linker input is tracked")?
 	listed = Process.succeed!(Process.command("git", ["ls-files", "--"].concat(StaticChecks.binary_patterns), context.root))?
@@ -208,7 +209,8 @@ static! = |context| {
 	step!("The fetched compiler comes from the locked roc-overlay revision")?
 	problem!(StaticChecks.overlay_problem(read!(context, "flake.lock")?, read!(context, "blueprint-nix/NixProvider.roc")?))?
 
-	step!("The scripts run on roc-stable and nothing else selects a compiler")?
+	step!("The scripts run on roc-stable, pin its nightly, and nothing else selects a compiler")?
+	flake = read!(context, "flake.nix")?
 	pinned = Process.succeed!(Process.command("git", ["ls-files", "--", ".roc-version"], context.root))?
 	scripts = file_names!("${context.root}/scripts")?.keep_if(|name| name.ends_with(".roc"))
 	var $shebangs = []
@@ -217,11 +219,10 @@ static! = |context| {
 		$shebangs = $shebangs.append(("scripts/${script}", first))
 	}
 	# git grep exits 1 when no file matches.
-	headers = Process.capture!(Process.command("git", ["grep", "-lE", "^[[:space:]]*roc: \"", "--", "*.roc"], context.root))?
-	problem!(StaticChecks.compilers_problem(pinned.stdout, headers.stdout, $shebangs))?
+	pins = Process.capture!(Process.command("git", ["grep", "-E", "^[[:space:]]*roc: \"", "--", "*.roc"], context.root))?
+	problem!(StaticChecks.compilers_problem(pinned.stdout, StaticChecks.constant(flake, "rocStableTag"), pins.stdout, $shebangs))?
 
 	step!("The flake lists the core package's modules and the CLI's version")?
-	flake = read!(context, "flake.nix")?
 	in_directory = Bundle.modules(file_names!("${context.root}/${Bundle.core_dir}")?)
 	problem!(StaticChecks.core_modules_problem(in_directory, Bundle.flake_core_modules(flake)))?
 	problem!(StaticChecks.version_problem(flake, cli_source))

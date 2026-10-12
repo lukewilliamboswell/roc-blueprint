@@ -199,10 +199,16 @@ To move the product compiler:
 4. Move the basic-cli release in `blueprint-cli/main.roc`, the fixtures, the
    examples and `rocPackages` in `flake.nix` if the nightly needs a newer one.
 
-To move the scripts' compiler, change `rocStableTag` in `flake.nix`, and the
-basic-cli release in the headers of `scripts/*.roc` if it needs a newer one.
+To move the scripts' compiler, change `rocStableTag` in `flake.nix` and the
+`roc: "<tag>"` field in the header of each `scripts/*.roc` to the same tag;
+`scripts/test.roc static` names any script that differs. Move the basic-cli
+release in those headers too if the nightly needs a newer one. A compiler
+other than the one a header names refuses the script, and `roc fmt` rewrites
+the field to the nightly that runs it, so the scripts are formatted with
+`roc-stable fmt scripts`.
 `scripts/smoke_binary.roc` and `scripts/stubs/tool.roc` are the exceptions:
-the product compiler builds them, so their headers must suit both compilers.
+the product compiler builds them, so their headers must suit both compilers
+and carry no `roc` field.
 
 The required check is `test`. The active main-branch ruleset requires that
 check from GitHub Actions, strict up-to-date checks, and pull requests. Keep
