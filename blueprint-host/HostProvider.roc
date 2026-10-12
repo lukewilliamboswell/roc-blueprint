@@ -243,7 +243,9 @@ HostProvider :: [].{
 		Project.check_argv(argv, name)?
 		check_environment(project, task.environment)?
 		commands = environment_commands(project, task.environment, target, layout)?
+		bundles = environment_bundles(project, task.environment, target)?
 		fetches = commands.map(|command| Fetch(command.archive))
+			.concat(if bundles.is_empty() [] else [RocBundles({ compiler: compiler_text, bundles })])
 		Ok({
 			action: Run(name),
 			files: [],
@@ -278,6 +280,35 @@ HostProvider :: [].{
 			Err("environment ${name} declares commands this host cannot supply: ${Str.join_with($refused, ", ")}; only a Roc nightly can be fetched, as in Command(\"roc-stable\", \"rocpkgs.nightly-2026-10-04-130536d\")")
 		}
 	}
+
+	## An environment's Roc packages, each downloaded from the URL its
+	## Blueprint.roc gives and unpacked by the compiler. A bundle's name is the
+	## hash of its bytes, which `roc unbundle` checks; the Lock's own digest
+	## of the bundle is of the tree as Nix unpacks it, and is not used here.
+	environment_bundles : Spec, Str, Str -> Try(List({ name : Str, download : List(Str), unbundle : List(Str) }), Str)
+	environment_bundles = |project, name, target| {
+		{ curl, .. } = programs(target)
+		var $bundles = []
+		for entry in project.roc_packages.keep_if(|declared| declared.environment == name) {
+			source = project.build_sources.find_first(|declared| declared.name == entry.source)
+				.map_err(|_| "unknown source of Roc package ${entry.name}: ${entry.source}")?
+			url = source.ref.drop_prefix("tarball+")
+			file = "${entry.name}.tar.zst"
+			if !Project.valid_name(entry.name) or !source.ref.starts_with("tarball+https://") or !url.ends_with("/${file}") {
+				return Err("Roc package ${entry.name} is not a bundle this host can download: ${source.ref}")
+			}
+			$bundles = $bundles.append({
+				name: entry.name,
+				download: [curl].concat(transfer).concat(["--output", file, url]),
+				unbundle: [compiler_text, "unbundle", file],
+			})
+		}
+		Ok($bundles)
+	}
+
+	## The text the executor replaces with its compiler (see `Steps.Operation`).
+	compiler_text : Str
+	compiler_text = "@blueprint-host-compiler@"
 
 	## A command an environment declares, where its program will be, and the
 	## directory that holds that program alone.
@@ -345,11 +376,8 @@ HostProvider :: [].{
 			project.system_tools.keep_if(|entry| entry.environment == name)
 				.fold([], |all, entry| all.concat(entry.tools)),
 		)
-		bundles = project.roc_packages.keep_if(|entry| entry.environment == name)
 		if !tools.is_empty() {
 			Err("environment ${name} declares tools, which this host cannot supply: ${Str.join_with(tools.map(tool_text), ", ")}")
-		} else if !bundles.is_empty() {
-			Err("environment ${name} declares Roc packages, which this host cannot supply")
 		} else {
 			Ok({})
 		}
@@ -558,3 +586,52 @@ expect HostProvider.in_project("../shared/report", "x86_64-windows", windows) ==
 expect HostProvider.in_project("../../../report.exe", "x86_64-windows", windows) == "D:/report.exe"
 expect HostProvider.in_project("tools\\report", "x86_64-linux", { ..windows, project_root: "/project" }) == "tools\\report"
 expect ["report", "/usr/bin/report", "C:/tools/report.exe", "C:\\tools\\report.exe"].all(|program| HostProvider.in_project(program, "x86_64-windows", windows) == program)
+
+packaged : Spec
+packaged = {
+	..stable,
+	requires_: ["commands", "roc-packages", "sources"],
+	roc_packages: [
+		{ environment: "base", name: "AEjfyaMFFbh8", source: "roc-AEjfyaMFFbh8" },
+		{ environment: "scripts", name: "6ZUwqYhCS8PU", source: "roc-6ZUwqYhCS8PU" },
+	],
+	build_sources: [
+		{ name: "roc-AEjfyaMFFbh8", ref: "tarball+https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8.tar.zst" },
+		{ name: "roc-6ZUwqYhCS8PU", ref: "tarball+https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU.tar.zst" },
+	],
+}
+
+# An environment's bundles, inherited first, are downloaded under their own
+# names and unpacked by the compiler, after its commands are fetched.
+expect
+	planned(packaged, Request.Run("version", []), "x86_64-windows", windows).map_ok(
+		|steps| steps.map(
+			|step| step.operations.map(
+				|operation|
+					match operation {
+						Fetch(_) => [["fetch"]]
+						Search(_) => [["search"]]
+						RocBundles({ compiler, bundles }) => [[compiler]].concat(bundles.map(|bundle| [bundle.name])).concat(bundles.map(|bundle| bundle.download)).concat(bundles.map(|bundle| bundle.unbundle))
+						_ => []
+					},
+			).join(),
+		),
+	) == Ok([
+		[
+			["fetch"],
+			["@blueprint-host-compiler@"],
+			["AEjfyaMFFbh8"],
+			["6ZUwqYhCS8PU"],
+			windows_curl.concat(["--output", "AEjfyaMFFbh8.tar.zst", "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8.tar.zst"]),
+			windows_curl.concat(["--output", "6ZUwqYhCS8PU.tar.zst", "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU.tar.zst"]),
+			["@blueprint-host-compiler@", "unbundle", "AEjfyaMFFbh8.tar.zst"],
+			["@blueprint-host-compiler@", "unbundle", "6ZUwqYhCS8PU.tar.zst"],
+			["search"],
+		],
+	])
+
+# A bundle is fetched over HTTPS from a file of its own name, or not at all.
+expect
+	["tarball+http://example.test/AEjfyaMFFbh8.tar.zst", "tarball+https://example.test/other.tar.zst", "https://example.test/AEjfyaMFFbh8.tar.zst", "github:example/AEjfyaMFFbh8.tar.zst"].all(
+		|ref| planned({ ..packaged, build_sources: [{ name: "roc-AEjfyaMFFbh8", ref }, { name: "roc-6ZUwqYhCS8PU", ref: "tarball+https://example.test/6ZUwqYhCS8PU.tar.zst" }] }, Request.Run("version", []), "x86_64-windows", windows) == Err("Roc package AEjfyaMFFbh8 is not a bundle this host can download: ${ref}"),
+	)

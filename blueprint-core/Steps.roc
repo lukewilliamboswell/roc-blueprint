@@ -41,6 +41,15 @@ Steps := { steps : List(Step) }.{
 	## `{ "name": ..., "path": ... }`, each path an unpacked bundle the provider
 	## has already verified against the Lock. Skip `locate` when nothing is
 	## missing.
+	## RocBundles: as RocPackages, for a provider that has no unpacked tree to
+	## point at. For each bundle whose `<name>/main.roc` is missing from Roc's
+	## package cache, make a fresh directory in the cache directory and run
+	## `download` and then `unbundle` there, as their working directory, with
+	## the text `compiler` replaced by the compiler the Core evaluates the
+	## configuration with. `download` writes `<name>.tar.zst`; `unbundle` must
+	## succeed, which is the check that those bytes are the bundle the name is
+	## the hash of, and leave `<name>/main.roc`. Publish that tree as
+	## RocPackages does, and delete the fresh directory whatever happened.
 	## Fetch: the step's command needs a released archive unpacked; see
 	## `Archive`.
 	## Search: the step's argv runs with these directories ahead of the
@@ -51,6 +60,12 @@ Steps := { steps : List(Step) }.{
 		Isolation({ mnt : Str, net : Str }),
 		Runner({ executable : Str, system : Str }),
 		RocPackages({ names : List(Str), locate : List(Str) }),
+		RocBundles(
+			{
+				compiler : Str,
+				bundles : List({ name : Str, download : List(Str), unbundle : List(Str) }),
+			},
+		),
 		Fetch(Archive),
 		Search(List(Str)),
 	]

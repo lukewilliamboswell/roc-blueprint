@@ -1224,6 +1224,7 @@ execute_step! = |step, ctx| {
 	layout = ctx.layout
 	var $files = step.files
 	var $roc_packages = []
+	var $roc_bundles = []
 	var $search = []
 	for operation in step.operations {
 		match operation {
@@ -1254,6 +1255,9 @@ execute_step! = |step, ctx| {
 					|file| { ..file, contents: file.contents.replace_each(executable, own) },
 				)
 			}
+			RocBundles(request) => {
+				$roc_bundles = $roc_bundles.append(request)
+			}
 			Fetch(archive) => {
 				_ = fetch!(archive, layout)?
 			}
@@ -1269,6 +1273,9 @@ execute_step! = |step, ctx| {
 	stage!($files, layout)?
 	for request in $roc_packages {
 		publish_roc_packages!(request.names, request.locate, layout.project_root, ctx.provider.name)?
+	}
+	for request in $roc_bundles {
+		publish_roc_bundles!(request.compiler, request.bundles, ctx)?
 	}
 	match step.action {
 		Build(name) => report_build!(step, name, layout.project_root)
@@ -1303,8 +1310,120 @@ expect roc_package_cache(Ok("cache".to_utf8()), Ok("/home/me".to_utf8()), "/proj
 expect roc_package_cache(Ok([0xff, '/', 'c']), Err(Unset), "/project".to_utf8()) == Ok("/project/".to_utf8().concat([0xff]).concat("/c/roc/packages".to_utf8()))
 expect roc_package_cache(Err(Unset), Err(Unset), "/project".to_utf8()) == Err(NoRocPackageCache)
 
+## Where Roc keeps URL packages on Windows, in the form held here: Roc reads
+## `XDG_CACHE_HOME` there too, then `LOCALAPPDATA`, and `HOME` last.
+windows_package_cache : Try(Str, _), Try(Str, _), Try(Str, _), Str -> Try(Str, [NoRocPackageCache])
+windows_package_cache = |xdg_cache_home, local_app_data, home, root| {
+	base = match (xdg_cache_home, local_app_data, home) {
+		(Ok(directory), _, _) => directory
+		(Err(_), Ok(directory), _) => directory
+		(Err(_), Err(_), Ok(directory)) => "${directory}/.cache"
+		(Err(_), Err(_), Err(_)) => return Err(NoRocPackageCache)
+	}
+	Ok(Paths.normalize("${Paths.resolve(root, base)}/roc/packages"))
+}
+
+expect windows_package_cache(Err(Unset), Ok("C:\\Users\\me\\AppData\\Local"), Ok("C:\\Users\\me"), "D:/a/project") == Ok("C:/Users/me/AppData/Local/roc/packages")
+expect windows_package_cache(Ok("D:\\cache"), Ok("C:\\Users\\me\\AppData\\Local"), Err(Unset), "D:/a/project") == Ok("D:/cache/roc/packages")
+expect windows_package_cache(Ok("cache"), Err(Unset), Err(Unset), "D:/a/project") == Ok("D:/a/project/cache/roc/packages")
+expect windows_package_cache(Err(Unset), Err(Unset), Ok("C:\\Users\\me"), "D:/a/project") == Ok("C:/Users/me/.cache/roc/packages")
+expect windows_package_cache(Err(Unset), Err(Unset), Err(Unset), "D:/a/project") == Err(NoRocPackageCache)
+
+## Roc's package cache on this host.
+roc_package_cache! : Str => Try(Path, _)
+roc_package_cache! = |root| {
+	unknown = |_| RocPackagesFailed("neither XDG_CACHE_HOME nor HOME says where Roc's package cache is")
+	match Env.platform!().os {
+		WINDOWS => {
+			text! = |name| Env.var_str!(OsStr.from_str(name))
+			directory = windows_package_cache(text!("XDG_CACHE_HOME"), text!("LOCALAPPDATA"), text!("HOME"), root)
+				.map_err(|_| RocPackagesFailed("none of XDG_CACHE_HOME, LOCALAPPDATA and HOME says where Roc's package cache is"))?
+			Ok(path(directory))
+		}
+		_ => {
+			xdg_cache_home = Env.var!(OsStr.from_str("XDG_CACHE_HOME")).map_ok(|value| value.to_bytes())
+			home = Env.var!(OsStr.from_str("HOME")).map_ok(|value| value.to_bytes())
+			Ok(Path.unix_bytes(roc_package_cache(xdg_cache_home, home, root.to_utf8()).map_err(unknown)?))
+		}
+	}
+}
+
+## An entry of a directory, in the directory's own representation.
 child : Path, Str -> Path
-child = |directory, name| Path.unix_bytes(directory.to_os_str().to_bytes().append('/').concat(name.to_utf8()))
+child = |directory, name| directory.join(name)
+
+## A directory of its own in Roc's package cache, for whatever is being
+## published as `name`. It is renamed to end in `.tmp`: Roc sweeps directories
+## of that name from its cache once they are a day old, so one abandoned by a
+## killed process does not stay forever.
+roc_package_staging! : Path, Str => Try(Path, _)
+roc_package_staging! = |cache, name| {
+	failed = |err| RocPackagesFailed("cannot stage Roc package ${name} in ${cache.display()}: ${Str.inspect(err)}")
+	created = Env.create_temp_dir_in!(cache, "blueprint-${name}.").map_err(failed)?
+	staging = match created.filename() {
+		Ok(own) => child(cache, "${own.display()}.tmp")
+		Err(err) => {
+			_ = created.delete_all!()
+			return Err(failed(err))
+		}
+	}
+	match created.rename!(staging) {
+		Ok({}) => Ok(staging)
+		Err(err) => {
+			_ = created.delete_all!()
+			Err(failed(err))
+		}
+	}
+}
+
+## Make each named bundle resolvable by Roc without Nix (see `RocBundles` in
+## `Steps.Operation`): the provider's argv download a missing one and the
+## compiler unpacks it, which fails unless the bytes are those the bundle's
+## name is the hash of. A bundle that is already there is left alone, and when
+## none is missing nothing runs.
+publish_roc_bundles! : Str, List({ name : Str, download : List(Str), unbundle : List(Str) }), Context => Try({}, _)
+publish_roc_bundles! = |placeholder, bundles, ctx| {
+	cache = roc_package_cache!(ctx.layout.project_root)?
+	var $missing = []
+	for bundle in bundles {
+		if !Project.valid_name(bundle.name) {
+			return Err(RocPackagesFailed("invalid Roc package name: ${bundle.name}"))
+		}
+		if !roc_package_present!(cache, bundle.name) {
+			$missing = $missing.append(bundle)
+		}
+	}
+	if $missing.is_empty() {
+		return Ok({})
+	}
+	compiler = roc!(ctx)?
+	cache.create_all!().map_err(|_| RocPackagesFailed("cannot create Roc's package cache ${cache.display()}"))?
+	for bundle in $missing {
+		fresh = roc_package_staging!(cache, "${bundle.name}.download")?
+		unbundle! = || {
+			Stderr.line!("blueprint: fetching Roc package ${bundle.name}")?
+			roc_bundle_exec!(bundle.download, fresh, bundle.name)?
+			roc_bundle_exec!(bundle.unbundle.map(|arg| arg.replace_each(placeholder, compiler)), fresh, bundle.name)?
+			publish_roc_package!(cache, bundle.name, child(fresh, bundle.name))
+		}
+		result = unbundle!()
+		cleanup = fresh.delete_all!()
+		result?
+		cleanup.map_err(|_| RocPackagesFailed("published Roc package ${bundle.name} but could not delete ${fresh.display()}"))?
+	}
+	Ok({})
+}
+
+## Run one argv of a bundle's fetch in its fresh directory.
+roc_bundle_exec! : List(Str), Path, Str => Try({}, _)
+roc_bundle_exec! = |argv, directory, name|
+	match argv {
+		[program, .. as args] =>
+			Cmd.new_str(program).args_str(args).cwd(directory).exec_cmd!()
+				.map_err(|_| RocPackagesFailed("cannot fetch Roc package ${name}: `${Str.join_with(argv, " ")}` failed; nothing was published"))
+
+		[] => Err(RocPackagesFailed("the provider cannot fetch Roc package ${name}"))
+	}
 
 ## Roc resolves a URL package from `<cache>/<hash>/main.roc` alone.
 roc_package_present! : Path, Str => Bool
@@ -1317,12 +1436,7 @@ roc_package_present! = |cache, name| child(child(cache, name), "main.roc").is_fi
 ## cache at any time; the next run publishes again.
 publish_roc_packages! : List(Str), List(Str), Str, Str => Try({}, _)
 publish_roc_packages! = |names, locate, root, provider| {
-	xdg_cache_home = Env.var!(OsStr.from_str("XDG_CACHE_HOME")).map_ok(|value| value.to_bytes())
-	home = Env.var!(OsStr.from_str("HOME")).map_ok(|value| value.to_bytes())
-	cache = Path.unix_bytes(
-		roc_package_cache(xdg_cache_home, home, root.to_utf8())
-			.map_err(|_| RocPackagesFailed("neither XDG_CACHE_HOME nor HOME says where Roc's package cache is"))?,
-	)
+	cache = roc_package_cache!(root)?
 	var $missing = []
 	for name in names {
 		if !Project.valid_name(name) {
@@ -1364,27 +1478,15 @@ locate_roc_packages! = |argv, root, provider|
 ##
 ## Every Roc process reads this cache, so `main.roc` must never appear before
 ## the rest. The tree is copied into a staging directory in the cache
-## directory itself and then renamed into place, which is atomic. The staging
-## directory is renamed to end in `.tmp` first: Roc sweeps directories of that
-## name from its cache once they are a day old, so one abandoned by a killed
-## process does not stay forever. Whatever happens, it is deleted on the way
-## out.
+## directory itself and then renamed into place, which is atomic. Whatever
+## happens, the staging directory is deleted on the way out.
 publish_roc_package! : Path, Str, Path => Try({}, _)
 publish_roc_package! = |cache, name, source| {
 	if !(source.join("main.roc").is_file!() ?? False) {
 		return Err(RocPackagesFailed("locked Roc package ${name} has no main.roc in ${source.display()}"))
 	}
 	final = child(cache, name)
-	created = Env.create_temp_dir_in!(cache, "blueprint-${name}.")
-		.map_err(|err| RocPackagesFailed("cannot stage Roc package ${name} in ${cache.display()}: ${Str.inspect(err)}"))?
-	staging = Path.unix_bytes(created.to_os_str().to_bytes().concat(".tmp".to_utf8()))
-	match created.rename!(staging) {
-		Ok({}) => {}
-		Err(err) => {
-			_ = created.delete_all!()
-			return Err(RocPackagesFailed("cannot stage Roc package ${name} in ${cache.display()}: ${Str.inspect(err)}"))
-		}
-	}
+	staging = roc_package_staging!(cache, name)?
 	publish! = || {
 		# The staging directory is private (mode 0700); the package is a
 		# child with ordinary permissions, so it can be deleted like any other.
@@ -1423,7 +1525,14 @@ publish_roc_package! = |cache, name, source| {
 copy_roc_package! : Path, Path => Try({}, _)
 copy_roc_package! = |source, target| {
 	for entry in source.list!()? {
-		copy = Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(basename(entry.to_os_str().to_bytes())))
+		copy = match entry.to_raw() {
+			# Windows has no path of bytes; a name there is text or it is refused.
+			WindowsU16s(_) => {
+				own = entry.filename().map_err(|_| RocPackagesFailed("Roc package holds an entry without a name: ${entry.display()}"))?
+				child(target, own.to_str().map_err(|_| RocPackagesFailed("Roc package holds a name that is not text: ${entry.display()}"))?)
+			}
+			_ => Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(basename(entry.to_os_str().to_bytes())))
+		}
 		match entry.type!()? {
 			IsDir => {
 				copy.create_dir!()?

@@ -1,6 +1,8 @@
 import cli.Env
 import cli.OsStr
 import cli.Path
+import core.Lock
+import core.Spec
 import CliHarness
 import Integrity
 import RocPackagesTest
@@ -139,6 +141,19 @@ lock! = |test, cwd| {
 	CliHarness.tool!(["chmod", "0444", "--", "${cwd}/Blueprint.lock"])?
 	Path.delete_all!(Path.utf8("${cwd}/.blueprint"))?
 	CliHarness.forget!("${cwd}/nix-calls")
+}
+
+## Write the lock a project's Spec asks for without resolving anything. The
+## stubbed Nix cannot pin a Roc bundle; the host provider reads no pin, only
+## that the lock is the Spec's.
+unresolved_lock! : Test, Str => Try({}, _)
+unresolved_lock! = |test, cwd| {
+	printed = CliHarness.blueprint!(test.bench, cwd, ["spec"], CliHarness.setting(test.env, [host]))?
+	CliHarness.exited!(printed, 0, "blueprint spec")?
+	match Spec.parse(printed.stdout) {
+		Ok(spec) => Path.write_utf8!(Path.utf8("${cwd}/Blueprint.lock"), Lock.to_str(Lock.{ format: Lock.current_format, intent: Lock.intent_of(spec), sources: [], hints: [] }))
+		Err(_) => Script.fail!("blueprint spec did not print a Spec:\n${printed.stdout}")
+	}
 }
 
 ## Nix did not run and nothing was generated.
@@ -341,6 +356,55 @@ cases! = |bench| {
 	CliHarness.exited!(elsewhere, 0, "run local from another directory")?
 	CliHarness.same_calls!(CliHarness.calls!("${running}/roc-stable-calls")?, [["from the project"]], "run local did not start the project's program in the project")?
 	Script.pass!("host provider: a relative program is started from the project root, not the caller's directory")?
+
+	# A Roc package is downloaded under its own name and unpacked by the
+	# compiler into Roc's package cache, once. The bundle is a real one, made
+	# here, so the compiler's check of its name against its bytes is real too.
+	library = "${bench.work}/package"
+	Path.create_dir!(Path.utf8(library))?
+	Path.write_utf8!(Path.utf8("${library}/main.roc"), "package [Hello] {}\n")?
+	Path.write_utf8!(Path.utf8("${library}/Hello.roc"), "Hello := [].{\n\tgreeting : Str\n\tgreeting = \"hello\"\n}\n")?
+	bundles = "${bench.work}/bundles"
+	Path.create_dir!(Path.utf8(bundles))?
+	bundled = CliHarness.invoke!({ program: bench.roc, args: ["bundle", "main.roc", "Hello.roc", "--output-dir", bundles], cwd: library, env: bench.env })?
+	CliHarness.exited!(bundled, 0, "roc bundle")?
+	file = match CliHarness.names!(bundles)? {
+		[only] if only.ends_with(".tar.zst") => only
+		other => return Script.fail!("roc bundle did not write one bundle: ${Str.inspect(other)}")
+	}
+	hash = file.drop_suffix(".tar.zst")
+	bundle_url = "https://example.invalid/releases/download/1.0.0/${file}"
+	packaged = project!(
+		test,
+		"packages",
+		[
+			"Name(\"host-test\"),",
+			"Environment(\"packages\", [RocPackages([\"${bundle_url}\"])]),",
+			"Task(\"use\", [Use(\"packages\"), Run([\"printf\", \"%s\\n\", \"ran with packages\"])]),",
+		],
+	)?
+	unresolved_lock!(test, packaged)?
+	cache = "${bench.work}/xdg-packages"
+	published = "${cache}/roc/packages"
+	bundling = [host, ("XDG_CACHE_HOME", cache), ("STUB_CURL_ARCHIVE", "${bundles}/${file}"), ("STUB_CURL_LOG", "${packaged}/curl-calls")]
+	CliHarness.contains!(run!(test, packaged, ["run", "use"], 0, bundling)?, "ran with packages\n", "run use")?
+	CliHarness.same_calls!(CliHarness.calls!("${packaged}/curl-calls")?, [CliHostTest.transfer.concat(["--output", file, bundle_url])], "run use did not download the bundle under its own name")?
+	CliHarness.check!(CliHarness.names!(published)? == [hash], "Roc's package cache holds more or less than the bundle: ${Str.inspect(CliHarness.names!(published)?)}")?
+	CliHarness.check!(Path.read_utf8!(Path.utf8("${published}/${hash}/main.roc"))? == "package [Hello] {}\n" and CliHarness.present!("${published}/${hash}/Hello.roc"), "the published package is not the bundle's tree")?
+	CliHarness.forget!("${packaged}/curl-calls")?
+	CliHarness.contains!(run!(test, packaged, ["run", "use"], 0, bundling.append(("STUB_CURL_STATUS", "22")))?, "ran with packages\n", "a second run use")?
+	CliHarness.same_calls!(CliHarness.calls!("${packaged}/curl-calls")?, [], "a package that is there was downloaded again")?
+	without_nix!(packaged)?
+
+	# Bytes that are not the bundle its name is the hash of are not published,
+	# and the task does not run.
+	other_cache = "${bench.work}/xdg-refused"
+	refused = run!(test, packaged, ["run", "use"], 1, [host, ("XDG_CACHE_HOME", other_cache), ("STUB_CURL_ARCHIVE", archive), ("STUB_CURL_LOG", "${packaged}/curl-calls")])?
+	CliHarness.contains!(refused, "cannot fetch Roc package ${hash}", "run use with other bytes")?
+	CliHarness.contains!(refused, "nothing was published", "run use with other bytes")?
+	CliHarness.check!(!refused.contains("ran with packages"), "the task ran without its package:\n${refused}")?
+	CliHarness.check!(CliHarness.names!("${other_cache}/roc/packages")? == [], "a refused bundle left something in Roc's package cache: ${Str.inspect(CliHarness.names!("${other_cache}/roc/packages")?)}")?
+	Script.pass!("host provider: a Roc package is downloaded and unbundled into Roc's cache once; other bytes are not published")?
 
 	# An environment's declarations are not ignored: a task that needs one is refused.
 	tooled = project!(test, "tooled", CliHostTest.plain.concat(["Environment(\"dev\", [Extend(\"plain\"), Tools([\"git\"])]),", "Task(\"status\", [Use(\"dev\"), Run([\"git\", \"status\"])]),"]))?

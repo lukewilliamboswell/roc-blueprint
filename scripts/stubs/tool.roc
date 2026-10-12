@@ -31,7 +31,8 @@ import StubTool
 ##   guix        record, exit 99
 ##   python3     record in the directory `STUB_PYTHON_LOG`, exit 97
 ##   readlink    print `STUB_READLINK`, or exit 1 without it
-##   curl        record; exit `STUB_CURL_STATUS` if set; with `--output FILE` copy
+##   curl        record, in the directory `STUB_CURL_LOG` if set; exit
+##               `STUB_CURL_STATUS` if set; with `--output FILE` copy
 ##               `STUB_CURL_ARCHIVE` there, otherwise print the file `STUB_CURL_RELEASE`
 ##   tar         record; `-xf ARCHIVE -C DIRECTORY` copies the tree `STUB_TAR_TREE`
 ##               into the directory
@@ -142,7 +143,7 @@ act! = |role, args| {
 			written!("stub roc-stable: ${Str.join_with(argv, " ")}\n")
 		}
 		Curl => {
-			record!("curl-calls", argv)?
+			record!(optional!("STUB_CURL_LOG") ?? "curl-calls", argv)?
 			match optional!("STUB_CURL_STATUS") {
 				Ok(status) => {
 					_ = Stderr.line!("curl: (22) the stub was told to fail")
