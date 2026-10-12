@@ -243,19 +243,21 @@ HostProvider :: [].{
 		Project.check_argv(argv, name)?
 		check_environment(project, task.environment)?
 		commands = environment_commands(project, task.environment, target, layout)?
+		fetches = commands.map(|command| Fetch(command.archive))
 		Ok({
 			action: Run(name),
 			files: [],
-			argv: started(argv, commands),
+			argv: started(argv, commands, task, target, layout)?,
 			artifacts: [],
-			operations: commands.map(|command| Fetch(command.archive)),
+			# The task's own children find the commands as the task does.
+			operations: if commands.is_empty() fetches else fetches.append(Search(commands.map(|command| command.directory))),
 		})
 	}
 
 	## An environment's commands, each with the archive that supplies it. Only
 	## a Roc nightly can be fetched; every other command is named in one
 	## refusal.
-	environment_commands : Spec, Str, Str, Layout -> Try(List({ name : Str, archive : Steps.Archive, executable : Str }), Str)
+	environment_commands : Spec, Str, Str, Layout -> Try(List(Supplied), Str)
 	environment_commands = |project, name, target, layout| {
 		declared = project.commands.keep_if(|entry| entry.environment == name)
 		var $supplied = []
@@ -263,7 +265,7 @@ HostProvider :: [].{
 		for command in declared {
 			match command_archive(command, target, layout) {
 				Ok({ archive, executable }) => {
-					$supplied = $supplied.append({ name: command.name, archive, executable })
+					$supplied = $supplied.append({ name: command.name, archive, executable, directory: "${archive.directory}/bin" })
 				}
 				Err(NotANightly) => {
 					$refused = $refused.append("${command.name} (${tool_text(command.tool)})")
@@ -277,19 +279,62 @@ HostProvider :: [].{
 		}
 	}
 
-	## A task that starts one of its environment's commands starts the fetched
-	## program itself.
-	started : List(Str), List({ name : Str, archive : Steps.Archive, executable : Str }) -> List(Str)
-	started = |argv, commands|
+	## A command an environment declares, where its program will be, and the
+	## directory that holds that program alone.
+	Supplied : { name : Str, archive : Steps.Archive, executable : Str, directory : Str }
+
+	## The command every Roc script names on its first line,
+	## `#!/usr/bin/env roc-stable`.
+	script_command : Str
+	script_command = "roc-stable"
+
+	## The argv that starts a task. A task that starts one of its
+	## environment's commands starts the fetched program itself. Windows does
+	## not read a script's first line, so a Roc script is started as the line
+	## asks everywhere: by `roc-stable`, with the script and then its
+	## arguments. Any other program named by a relative path is in the project,
+	## whatever directory the caller is in.
+	started : List(Str), List(Supplied), Spec.Task, Str, Layout -> Try(List(Str), Str)
+	started = |argv, commands, task, target, layout|
 		match argv {
 			[program, .. as rest] =>
-				match commands.find_first(|command| command.name == program) {
-					Ok(command) => [command.executable].concat(rest)
-					Err(_) => argv
+				if program.ends_with(".roc") {
+					match commands.find_first(|command| command.name == script_command) {
+						Ok(command) => Ok([command.executable].concat(argv))
+						Err(_) => Err("task ${task.name} runs the Roc script ${program}, which ${script_command} starts; give environment ${task.environment} a Command(\"${script_command}\", ...) that names a Roc nightly")
+					}
+				} else {
+					match commands.find_first(|command| command.name == program) {
+						Ok(command) => Ok([command.executable].concat(rest))
+						Err(_) => Ok([in_project(program, target, layout)].concat(rest))
+					}
 				}
 
-			[] => argv
+			[] => Ok(argv)
 		}
+
+	## A program as the process API finds it. A bare name is left to PATH and
+	## an absolute path is itself; a relative path is taken from the project
+	## root, where a task runs.
+	in_project : Str, Str, Layout -> Str
+	in_project = |program, target, layout| {
+		text = if target.ends_with("-windows") program.replace_each("\\", "/") else program
+		if !text.contains("/") or absolute(text) {
+			program
+		} else {
+			root = if layout.project_root.ends_with("/") layout.project_root.drop_suffix("/") else layout.project_root
+			parts = text.split_on("/").fold(
+				root.split_on("/"),
+				|kept, part|
+					match part {
+						"" | "." => kept
+						".." => if kept.len() > 1 kept.drop_last(1) else kept
+						_ => kept.append(part)
+					},
+			)
+			if parts.len() == 1 "${Str.join_with(parts, "/")}/" else Str.join_with(parts, "/")
+		}
+	}
 
 	## What an environment declares that this provider cannot supply.
 	check_environment : Spec, Str -> Try({}, Str)
@@ -405,6 +450,8 @@ stable = {
 	tasks: [
 		{ name: "version", environment: "scripts", run: ["roc-stable", "version"] },
 		{ name: "other", environment: "scripts", run: ["printf", "roc-stable"] },
+		{ name: "check", environment: "scripts", run: ["scripts/check_all.roc", "--quick"] },
+		{ name: "local", environment: "scripts", run: ["tools\\report.exe", "roc-stable"] },
 		{ name: "greet", environment: "mixed", run: ["greet"] },
 	],
 }
@@ -436,6 +483,7 @@ expect planned(stable, Request.Run("version", ["--verbose"]), "x86_64-windows", 
 					token: { text: "@blueprint-host-token@", input: "header = \"Authorization: Bearer @blueprint-host-token@\"\n", variables: ["GH_TOKEN", "GITHUB_TOKEN"] },
 				}),
 			}),
+			Search(["D:/a/project/.blueprint/host/commands/roc-stable/nightly-2026-10-04-130536d/bin"]),
 		],
 	},
 ])
@@ -461,7 +509,7 @@ expect
 	) == Ok([
 		(
 			["/project/.blueprint/host/commands/roc-stable/nightly-2026-10-04-130536d/bin/roc-stable", "version"],
-			[("curl", "tar", "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_arm64-2026-10-04-130536d.tar.gz", [{ from: "roc_nightly-linux_arm64-2026-10-04-130536d/roc", to: "bin/roc-stable" }])],
+			[("curl", "tar", "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_arm64-2026-10-04-130536d.tar.gz", [{ from: "roc_nightly-linux_arm64-2026-10-04-130536d/roc", to: "bin/roc-stable" }]), ("", "", "", [])],
 		),
 	])
 
@@ -494,3 +542,19 @@ expect (HostProvider.provider.compiler)("0.1.0", "x86_64-windows", windows) == E
 # One recorded digest for each System a task can run on, each 64 hex digits.
 expect HostProvider.supported_systems.all(|system| HostProvider.compilers.keep_if(|entry| entry.system == system).len() == 1)
 expect HostProvider.compilers.all(|entry| entry.sha256.to_utf8().len() == 64 and entry.sha256.to_utf8().all(|b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f')))
+
+# A Roc script is started as its first line asks, with its own path and then
+# its arguments; the path stays as the task wrote it, from the project root.
+expect planned(stable, Request.Run("check", ["extra"]), "x86_64-windows", windows).map_ok(|steps| steps.map(|step| step.argv)) == Ok([["D:/a/project/.blueprint/host/commands/roc-stable/nightly-2026-10-04-130536d/bin/roc-stable.exe", "scripts/check_all.roc", "--quick", "extra"]])
+expect planned(stable, Request.Run("check", []), "x86_64-linux", { ..windows, project_root: "/project", generated_root: "/project/.blueprint" }).map_ok(|steps| steps.map(|step| step.argv)) == Ok([["/project/.blueprint/host/commands/roc-stable/nightly-2026-10-04-130536d/bin/roc-stable", "scripts/check_all.roc", "--quick"]])
+
+# Without the command there is nothing to start the script with.
+expect planned({ ..sample, tasks: [{ name: "check", environment: "plain", run: ["scripts/check_all.roc"] }] }, Request.Run("check", []), "x86_64-windows", windows) == Err("task check runs the Roc script scripts/check_all.roc, which roc-stable starts; give environment plain a Command(\"roc-stable\", ...) that names a Roc nightly")
+
+# A program in the project is named in full, in either Windows spelling.
+expect planned(stable, Request.Run("local", []), "x86_64-windows", windows).map_ok(|steps| steps.map(|step| step.argv)) == Ok([["D:/a/project/tools/report.exe", "roc-stable"]])
+expect HostProvider.in_project("./tools/../bin/report", "x86_64-linux", { ..windows, project_root: "/project" }) == "/project/bin/report"
+expect HostProvider.in_project("../shared/report", "x86_64-windows", windows) == "D:/a/shared/report"
+expect HostProvider.in_project("../../../report.exe", "x86_64-windows", windows) == "D:/report.exe"
+expect HostProvider.in_project("tools\\report", "x86_64-linux", { ..windows, project_root: "/project" }) == "tools\\report"
+expect ["report", "/usr/bin/report", "C:/tools/report.exe", "C:\\tools\\report.exe"].all(|program| HostProvider.in_project(program, "x86_64-windows", windows) == program)

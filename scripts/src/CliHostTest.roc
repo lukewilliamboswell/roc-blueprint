@@ -33,6 +33,8 @@ CliHostTest := [].{
 		"Environment(\"plain\", []),",
 		"Shell(\"default\", [Use(\"plain\")]),",
 		"Task(\"say\", [Use(\"plain\"), Run([\"printf\", \"%s\\n\", \"configured argument\"])]),",
+		"Task(\"local\", [Use(\"plain\"), Run([\"tools/roc-stable\", \"from the project\"])]),",
+		"Task(\"script\", [Use(\"plain\"), Run([\"check.roc\"])]),",
 		"Build(\"app\", [Use(\"plain\"), Run([\"true\"]), Output(\"out\")]),",
 	]
 
@@ -48,6 +50,8 @@ CliHostTest := [].{
 		"Overlay(\"roc\", \"github:example/unused-overlay\"),",
 		"Environment(\"dev\", [Overlays([\"roc\"]), Command(\"roc-stable\", \"rocpkgs.${tag}\")]),",
 		"Task(\"version\", [Use(\"dev\"), Run([\"roc-stable\", \"version\"])]),",
+		"Task(\"check\", [Use(\"dev\"), Run([\"scripts/check_all.roc\", \"--quick\"])]),",
+		"Task(\"path\", [Use(\"dev\"), Run([\"printenv\", \"PATH\"])]),",
 	]
 
 	## How roc-lang/nightlies names the compiler archive for this machine.
@@ -315,6 +319,28 @@ cases! = |bench| {
 	CliHarness.same_calls!(CliHarness.calls!("${evaluating}/tar-calls")?, [], "a compiler archive with the wrong digest was unpacked")?
 	CliHarness.check!(CliHarness.names!("${evaluating}/.blueprint/host/roc")? == [], "a refused compiler left something in the workspace")?
 	Script.pass!("host provider: the evaluating compiler is fetched by its recorded digest, and other bytes are refused")?
+
+	# Windows does not read `#!/usr/bin/env roc-stable`, so a Roc script is
+	# started the way that line asks: by roc-stable, with the script's path as
+	# the task wrote it and then the arguments. Whatever the task starts finds
+	# the command too, ahead of everything the caller had on PATH.
+	Path.create_dir!(Path.utf8("${stable}/scripts"))?
+	Path.write_utf8!(Path.utf8("${stable}/scripts/check_all.roc"), "#!/usr/bin/env roc-stable\n")?
+	CliHarness.forget!("${stable}/roc-stable-calls")?
+	CliHarness.contains!(run!(fetching, stable, ["run", "check", "--", "one", "two words"], 0, [host])?, "stub roc-stable: scripts/check_all.roc --quick one two words\n", "run check")?
+	CliHarness.same_calls!(CliHarness.calls!("${stable}/roc-stable-calls")?, [["scripts/check_all.roc", "--quick", "one", "two words"]], "run check did not start the script through roc-stable")?
+	searched = run!(fetching, stable, ["run", "path"], 0, [host])?
+	CliHarness.check!(searched.starts_with("${store}/bin:${bench.bin}:"), "the command's directory is not ahead of the caller's PATH: ${searched}")?
+	CliHarness.contains!(run!(fetching, running, ["run", "script"], 1, [host])?, "task script runs the Roc script check.roc, which roc-stable starts; give environment plain a Command(\"roc-stable\", ...) that names a Roc nightly", "a Roc script without roc-stable")?
+	Script.pass!("host provider: a Roc script is started through roc-stable with its arguments; the command leads PATH")?
+
+	# A program named by a relative path is the project's, wherever the caller is.
+	Path.create_dir!(Path.utf8("${running}/tools"))?
+	Path.copy!(Path.utf8("${bench.work}/stub-tool"), Path.utf8("${running}/tools/roc-stable"))?
+	elsewhere = CliHarness.blueprint!(bench, bench.work, ["run", "local"], CliHarness.setting(test.env, [host, ("BLUEPRINT_ROOT", running)]))?
+	CliHarness.exited!(elsewhere, 0, "run local from another directory")?
+	CliHarness.same_calls!(CliHarness.calls!("${running}/roc-stable-calls")?, [["from the project"]], "run local did not start the project's program in the project")?
+	Script.pass!("host provider: a relative program is started from the project root, not the caller's directory")?
 
 	# An environment's declarations are not ignored: a task that needs one is refused.
 	tooled = project!(test, "tooled", CliHostTest.plain.concat(["Environment(\"dev\", [Extend(\"plain\"), Tools([\"git\"])]),", "Task(\"status\", [Use(\"dev\"), Run([\"git\", \"status\"])]),"]))?

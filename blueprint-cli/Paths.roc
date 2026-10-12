@@ -59,6 +59,31 @@ Paths := [].{
 		"${root}${Str.join_with(parts, "/")}"
 	}
 
+	## A path held here as its host writes it: `D:\a\b` for one that starts at
+	## a drive. Windows takes `/` in a file's path, but PATH is read by every
+	## program for itself, and not all of them do.
+	native : Str -> Str
+	native = |value|
+		match root_of(value) {
+			Ok("/") | Err(Relative) => value
+			Ok(_) => value.replace_each("/", "\\")
+		}
+
+	## Directories ahead of a search path the host already has. Windows
+	## separates the entries of PATH with `;`, every other host with `:`. A
+	## directory whose name holds the separator cannot be written in one.
+	search : List(Str), Str -> Try(Str, [Unsearchable(Str)])
+	search = |directories, existing| {
+		separator = if directories.any(|directory| root_of(directory) != Ok("/") and absolute(directory)) ";" else ":"
+		for directory in directories {
+			if !absolute(directory) or directory.contains(separator) {
+				return Err(Unsearchable(directory))
+			}
+		}
+		entries = directories.map(native)
+		Ok(Str.join_with(if existing.is_empty() entries else entries.append(existing), separator))
+	}
+
 	## The directory holding a normalized absolute path; a root holds itself.
 	parent : Str -> Str
 	parent = |value| {
@@ -105,3 +130,12 @@ expect Paths.normalize("D:/") == "D:/" and Paths.normalize("D:/..") == "D:/"
 
 expect Paths.parent("/project/.blueprint") == "/project" and Paths.parent("/project") == "/" and Paths.parent("/") == "/"
 expect Paths.parent("D:/a/project") == "D:/a" and Paths.parent("D:/a") == "D:/" and Paths.parent("D:/") == "D:/"
+
+expect Paths.native("D:/a/project/.blueprint") == "D:\\a\\project\\.blueprint" and Paths.native("D:/") == "D:\\"
+expect ["/project/.blueprint", "relative/path", "/project/a\\b"].all(|value| Paths.native(value) == value)
+
+expect Paths.search(["/w/roc-stable/bin", "/w/zig/bin"], "/usr/bin:/bin") == Ok("/w/roc-stable/bin:/w/zig/bin:/usr/bin:/bin")
+expect Paths.search(["/w/bin"], "") == Ok("/w/bin") and Paths.search([], "/usr/bin") == Ok("/usr/bin")
+expect Paths.search(["D:/w/roc-stable/bin"], "C:\\Windows\\System32;C:\\Program Files\\Git\\cmd") == Ok("D:\\w\\roc-stable\\bin;C:\\Windows\\System32;C:\\Program Files\\Git\\cmd")
+expect Paths.search(["/w/a:b/bin"], "/usr/bin") == Err(Unsearchable("/w/a:b/bin")) and Paths.search(["D:/w/a;b/bin"], "") == Err(Unsearchable("D:/w/a;b/bin"))
+expect Paths.search(["bin"], "/usr/bin") == Err(Unsearchable("bin"))

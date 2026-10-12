@@ -342,6 +342,38 @@ exec! = |argv, root|
 		[] => Ok({})
 	}
 
+## Run a step's argv with its directories ahead of the caller's PATH, so that
+## the argv and whatever it starts find the programs there first.
+exec_within! : List(Str), Str, List(Str) => Try({}, _)
+exec_within! = |argv, root, directories| {
+	if directories.is_empty() {
+		return exec!(argv, root)
+	}
+	existing = match Env.var!(OsStr.from_str("PATH")) {
+		Ok(value) => value.to_str_try().map_err(|_| Refused("PATH is not text, so nothing can be put ahead of it"))?
+		Err(_) => ""
+	}
+	search = Paths.search(directories, existing)
+		.map_err(|Unsearchable(directory)| Refused("${directory} cannot be an entry of PATH"))?
+	match argv {
+		[program, .. as args] =>
+			Cmd.new_str(program)
+				.args_str(args)
+				.cwd(path(root))
+				.env_str("PATH", search)
+				.exec_cmd!()
+				.map_err(
+					|err|
+						match err {
+							ExecCmdFailed({ exit_code, .. }) => CommandFailed(argv, exit_code)
+							other => other
+						},
+				)
+
+		[] => Ok({})
+	}
+}
+
 print_files! : Provider, Spec => Try({}, _)
 print_files! = |provider, spec| {
 	files = render(provider, spec)?
@@ -1192,6 +1224,7 @@ execute_step! = |step, ctx| {
 	layout = ctx.layout
 	var $files = step.files
 	var $roc_packages = []
+	var $search = []
 	for operation in step.operations {
 		match operation {
 			VerifyTree({ path: local, digest }) => {
@@ -1224,6 +1257,9 @@ execute_step! = |step, ctx| {
 			Fetch(archive) => {
 				_ = fetch!(archive, layout)?
 			}
+			Search(directories) => {
+				$search = $search.concat(directories)
+			}
 			# Locating the bundles reads the files staged below.
 			RocPackages(request) => {
 				$roc_packages = $roc_packages.append(request)
@@ -1236,7 +1272,7 @@ execute_step! = |step, ctx| {
 	}
 	match step.action {
 		Build(name) => report_build!(step, name, layout.project_root)
-		_ => exec!(step.argv, layout.project_root).map_err(
+		_ => exec_within!(step.argv, layout.project_root, $search).map_err(
 			|err|
 				match (step.action, err) {
 					(Run(name), CommandFailed(_, code)) => TaskFailed(name, code)

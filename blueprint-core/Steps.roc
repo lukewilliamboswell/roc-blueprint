@@ -43,6 +43,8 @@ Steps := { steps : List(Step) }.{
 	## missing.
 	## Fetch: the step's command needs a released archive unpacked; see
 	## `Archive`.
+	## Search: the step's argv runs with these directories ahead of the
+	## caller's PATH, first to last, and may name a program in one of them.
 	## Serialize workspace use; stop on any failed materialization operation.
 	Operation : [
 		VerifyTree({ path : Str, digest : Str }),
@@ -50,6 +52,7 @@ Steps := { steps : List(Step) }.{
 		Runner({ executable : Str, system : Str }),
 		RocPackages({ names : List(Str), locate : List(Str) }),
 		Fetch(Archive),
+		Search(List(Str)),
 	]
 
 	## A released archive to keep unpacked at `directory`. It is there when
