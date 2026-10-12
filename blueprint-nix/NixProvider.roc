@@ -212,9 +212,7 @@ NixProvider :: [].{
 		read_only = ["--no-update-lock-file", "--no-write-lock-file"]
 		match request {
 			Request.Generate => {
-				$names = project.shells.map(|s| s.environment)
-					.concat(project.tasks.map(|t| t.environment))
-					.concat(project.builds.map(|b| b.environment))
+				$names = whole(project)
 				for build in project.builds {
 					if !$builds.any(|selected| selected.name == build.name) {
 						for dependency in Project.build_closure(project, build.name)? {
@@ -435,9 +433,7 @@ NixProvider :: [].{
 		project = Project.validate(spec)?
 		check_layout(project, target, layout)?
 		inputs = Locks.inputs(project)?
-		names = project.shells.map(|s| s.environment)
-			.concat(project.tasks.map(|t| t.environment))
-			.concat(project.builds.map(|b| b.environment))
+		names = whole(project)
 		contents = render_selected(
 			project,
 			names,
@@ -494,10 +490,7 @@ NixProvider :: [].{
 	render = |spec| {
 		project = Project.validate(spec)?
 		_ = Locks.inputs(project)?
-		names = project.shells.map(|s| s.environment)
-			.concat(project.tasks.map(|t| t.environment))
-			.concat(project.builds.map(|b| b.environment))
-		render_selected(project, names, project.builds, Unplanned, None, Unlimited)
+		render_selected(project, whole(project), project.builds, Unplanned, None, Unlimited)
 	}
 
 	## A Shell/Run consumer selects one environment before staging any effects.
@@ -779,6 +772,25 @@ NixProvider :: [].{
 	render_shell_alias = |declared| match Locks.shell_source(declared) {
 		Ok(target) => "    ${quote(Locks.shell_alias)}.follows = ${quote(target)};\n"
 		Err(NoAlias) => ""
+	}
+
+	## The environments a rendering of the whole project holds: those of its
+	## shells, tasks and builds. In a project with no Nix source, a shell's or
+	## a task's environment that has no tool of a Nix source is left out,
+	## with its shells: nothing of it is Nix's, and the Core enters it without
+	## Nix. That is the case of a project whose only business with Nix is an
+	## input or a build source to lock. A build's environment always stays,
+	## so that a build Nix cannot build is refused by name.
+	whole : Spec -> List(Str)
+	whole = |project| {
+		builder = builder_source(project)
+		buildable = |name|
+			project.environments.find_first(|e| e.name == name)
+				.map_ok(|e| !source_names(e, project.system_tools, project.commands, project.configured_tools, builder).is_empty()) ?? True
+		project.shells.map(|s| s.environment)
+			.concat(project.tasks.map(|t| t.environment))
+			.keep_if(buildable)
+			.concat(project.builds.map(|b| b.environment))
 	}
 
 	## What builds an environment that has no tool of its own to take a
@@ -1187,10 +1199,22 @@ expect match NixProvider.render(mk({ ..simple, sources: [{ name: "guix", provide
 }
 
 # With no Nix source declared there is nothing to build such an environment
-# with, and nothing is invented: rendering it is refused, and the provider
-# has no file to show for the project.
-expect NixProvider.render(mk({ ..simple, sources: [] })) == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
-expect NixProvider.render(mk({ ..simple, sources: [{ name: "guix", provider: GuixPackages("channels") }] })) == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
+# with, and nothing is invented: asked for it alone, the provider refuses,
+# and it has no file to show for the project.
+expect NixProvider.render_environment(mk({ ..simple, sources: [] }), "dev") == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
+expect NixProvider.render_environment(mk({ ..simple, sources: [{ name: "guix", provider: GuixPackages("channels") }] }), "dev") == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
+
+# A rendering of the whole of such a project leaves the environment and its
+# shell out: what remains is what Nix has to lock, here an overlay. A build
+# is never left out: Nix cannot build it, and that is said.
+expect {
+	locking = mk({ ..simple, sources: [], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }], tasks: [{ name: "check", environment: "dev", run: ["true"] }] })
+	building = { ..locking, requires_: ["builds"], builds: [{ name: "app", environment: "dev", inputs: [], needs: [], run: ["true"], output: "out" }] }
+	NixProvider.whole(locking) == [] and NixProvider.whole(mk(simple)) == ["dev"] and NixProvider.whole(building) == ["dev"]
+		and NixProvider.render(locking).map_ok(|text| text.contains("mkShell") or text.contains("\"default\"")) == Ok(False)
+			and NixProvider.update_files(locking, "x86_64-linux", TestData.layout).map_ok(|files| files.map(|file| file.contents.contains("\"roc\" = { url = \"github:roc-lang/roc-overlay\"; flake = true; };"))) == Ok([True])
+				and NixProvider.render(building) == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
+}
 expect (NixProvider.provider.render)(mk({ ..simple, sources: [] })) == Ok([]) and (NixProvider.provider.render)(mk(simple)).map_ok(|files| files.map(|file| file.path)) == Ok(["flake.nix"])
 expect NixProvider.builder_source(mk({ ..simple, sources: [{ name: "guix", provider: GuixPackages("channels") }, stable, unstable] })) == ["stable"] and NixProvider.builder_source(mk({ ..simple, sources: [] })) == []
 

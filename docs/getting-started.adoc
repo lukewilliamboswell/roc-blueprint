@@ -5,7 +5,10 @@ task in the environment it describes.
 
 == Install blueprint
 
-You need https://nixos.org/download[Nix] with flakes enabled.
+You need https://nixos.org/download[Nix] with flakes enabled for the tools a
+project takes from a Nix package source, and for its sandboxed builds. A
+project that declares neither needs no Nix: `blueprint requirements` says
+which a project's tasks need.
 
 Each https://github.com/lukewilliamboswell/roc-blueprint/releases[release] attaches a `blueprint` binary for x86_64 Linux,
 arm64 Linux and Apple Silicon macOS, named `blueprint-x86_64-linux`,
@@ -32,9 +35,10 @@ https://lukewilliamboswell.github.io/roc-automation/actions.html#setup-blueprint
 action installs Nix and a release's binary and checks its sum.
 
 Loading a configuration runs one exact Roc nightly. The binary uses a `roc` on
-`PATH` when it is that nightly, and otherwise fetches it through Nix from a
-pinned roc-overlay revision. Set `ROC` to choose the executable yourself; it
-must be that same nightly.
+`PATH` when it is that nightly, and otherwise downloads it from its release,
+checks it against a digest the binary records, and keeps it in its store of
+downloads. Set `ROC` to choose the executable yourself; it must be that same
+nightly.
 
 == Write a first Blueprint.roc
 
