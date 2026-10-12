@@ -1,6 +1,8 @@
 # Authoring cardinality checks feed the shared whole-project validator.
 import Config
 import Recipes
+import System
+import Url
 import Val
 import core.Spec
 import core.Project
@@ -11,7 +13,7 @@ import core.Value
 Lower :: [].{
 	Acc : {
 		names : List(Str),
-		systems : List(List(Str)),
+		systems : List(List(System)),
 		sources : List(Spec.Source),
 		inputs : List(Spec.Input),
 		environments : List(Spec.Environment),
@@ -31,12 +33,12 @@ Lower :: [].{
 		raw : List(Spec.Raw),
 	}
 
-	## A declared program: its command name and the function that says, for a
-	## System, where it is downloaded from.
-	Recipe : { name : Str, recipe : (Str -> Config.Download) }
+	## A program an environment lists: its command name and the function that
+	## says, for a System, where it is downloaded from.
+	Recipe : { name : Str, recipe : (System -> Config.Download) }
 
 	## Explicit target defaults; never inferred from the compiling host.
-	default_systems : List(Str)
+	default_systems : List(System)
 	default_systems = ["x86_64-linux", "aarch64-linux", "x86_64-darwin", "aarch64-darwin"]
 
 	lower : List(Config.Setting) -> Try(Spec, Str)
@@ -72,7 +74,7 @@ Lower :: [].{
 				format: Spec.current_format,
 				name,
 				requires_,
-				systems,
+				systems: systems.map(|system| system.to_str()),
 				sources: acc.sources,
 				inputs: acc.inputs,
 				environments: acc.environments,
@@ -98,7 +100,7 @@ Lower :: [].{
 	add = |acc, setting| {
 		next = match setting {
 			Name(name) => { ..acc, names: acc.names.append(name) }
-			Systems(systems) => { ..acc, systems: acc.systems.append(systems.map(|s| s.to_str())) }
+			Systems(systems) => { ..acc, systems: acc.systems.append(systems) }
 			Packages(name, source) => { ..acc, sources: acc.sources.append({ name: name.to_str(), provider: provider(source) }) }
 			Input(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Flake }) }
 			Overlay(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Overlay }) }
@@ -106,7 +108,7 @@ Lower :: [].{
 				lowered = environment(name.to_str(), inner)?
 				# Environments sharing a bundle share its one locked source.
 				new_sources = lowered.roc_sources.keep_if(|source| !acc.build_sources.contains(source))
-				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools), commands: acc.commands.concat(lowered.commands), configured_tools: acc.configured_tools.concat(lowered.configured_tools), roc_packages: acc.roc_packages.concat(lowered.roc_packages), environment_programs: acc.environment_programs.concat(lowered.environment_programs), expects: acc.expects.concat(lowered.expects), build_sources: acc.build_sources.concat(new_sources) }
+				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools), commands: acc.commands.concat(lowered.commands), configured_tools: acc.configured_tools.concat(lowered.configured_tools), roc_packages: acc.roc_packages.concat(lowered.roc_packages), recipes: acc.recipes.concat(lowered.recipes), environment_programs: acc.environment_programs.concat(lowered.environment_programs), expects: acc.expects.concat(lowered.expects), build_sources: acc.build_sources.concat(new_sources) }
 			}
 			Shell(name, inner) => { ..acc, shells: acc.shells.append(shell(name.to_str(), inner)?) }
 			Task(name, inner) => { ..acc, tasks: acc.tasks.append(task(name.to_str(), inner)?) }
@@ -121,45 +123,50 @@ Lower :: [].{
 			}
 			Custom(kind, name, value) => { ..acc, extensions: acc.extensions.append({ kind, name, value: to_value(value) }) }
 			Raw(backend, target, value) => { ..acc, raw: acc.raw.append({ backend, target, value: to_value(value) }) }
-			Fetch(name, recipe) => { ..acc, recipes: acc.recipes.append({ name: name.to_str(), recipe }) }
 		}
 		Ok(next)
 	}
 
 	## Ask each recipe once for every declared System, in declaration order,
 	## and keep only its answers: the Spec holds data, never the function. A
-	## recipe's `Invalid` is the configuration's error. So is a program no
-	## declared System has, which nothing could ever run.
-	fetched : List(Recipe), List(Str) -> Try(List(Spec.Program), Str)
+	## program no declared System has could never run, and is refused.
+	##
+	## A program several environments list is one program: the same name
+	## must mean the same downloads. Functions cannot be compared, so two
+	## recipes under one name are compared by what they answer for the
+	## declared Systems. Two that differ only for a System the project does
+	## not declare are taken for the same program.
+	fetched : List(Recipe), List(System) -> Try(List(Spec.Program), Str)
 	fetched = |recipes, systems| {
 		var $programs = []
-		var $names = []
+		var $known = []
 		for entry in recipes {
-			if $names.contains(entry.name) {
-				return Err("DuplicateFetch: ${entry.name}")
-			}
-			$names = $names.append(entry.name)
-			var $available = False
+			var $answers = []
 			for system in systems {
 				match (entry.recipe)(system) {
 					File(url) => {
-						$available = True
-						$programs = $programs.append(program_entry(entry.name, system, File(url), []))
+						$answers = $answers.append(program_entry(entry.name, system, File(url), []))
 					}
-					Archive(url, format, path) => {
-						$available = True
-						$programs = $programs.append(program_entry(entry.name, system, Archive(url, format, path), []))
+					Archive(url, format, member) => {
+						$answers = $answers.append(program_entry(entry.name, system, Archive(url, format, member), []))
 					}
 					Mirrored(primary, alternates) => {
-						$available = True
-						$programs = $programs.append(program_entry(entry.name, system, primary, alternates))
+						$answers = $answers.append(program_entry(entry.name, system, primary, alternates))
 					}
 					Unavailable => {}
-					Invalid(message) => return Err("Fetch ${entry.name}: ${message}")
 				}
 			}
-			if !$available {
-				return Err("Fetch ${entry.name}: its recipe answers Unavailable for every declared system (${Str.join_with(systems, ", ")})")
+			if $answers.is_empty() {
+				return Err("Fetch ${entry.name}: its recipe answers Unavailable for every declared system (${Str.join_with(systems.map(|system| system.to_str()), ", ")})")
+			}
+			match $known.find_first(|other| other.name == entry.name) {
+				Ok(other) => if other.answers != $answers {
+					return Err("two different programs are named ${entry.name}: their recipes do not give the same downloads")
+				}
+				Err(_) => {
+					$known = $known.append({ name: entry.name, answers: $answers })
+					$programs = $programs.concat($answers)
+				}
 			}
 		}
 		Ok($programs)
@@ -167,19 +174,21 @@ Lower :: [].{
 
 	## One System's entry: the download's own URL first, then its alternates
 	## in the order they were given.
-	program_entry : Str, Str, Config.Primary, List(Str) -> Spec.Program
-	program_entry = |name, system, primary, alternates|
+	program_entry : Str, System, Config.Primary, List(Url) -> Spec.Program
+	program_entry = |name, system, primary, alternates| {
+		others = alternates.map(|url| url.to_str())
 		match primary {
-			File(url) => { name, system, urls: [url].concat(alternates), unpack: File, path: "" }
-			Archive(url, format, path) => {
+			File(url) => { name, system: system.to_str(), urls: [url.to_str()].concat(others), unpack: File, path: "" }
+			Archive(url, format, member) => {
 				unpack = match format {
 					TarGz => TarGz
 					TarXz => TarXz
 					Zip => Zip
 				}
-				{ name, system, urls: [url].concat(alternates), unpack, path }
+				{ name, system: system.to_str(), urls: [url.to_str()].concat(others), unpack, path: member.to_str() }
 			}
 		}
+	}
 
 	workflow_step : Config.WorkflowStep -> Spec.WorkflowStep
 	workflow_step = |step|
@@ -197,7 +206,7 @@ Lower :: [].{
 			From(GuixPackages(channel)) => GuixPackages(channel)
 		}
 
-	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command), configured_tools : List(Spec.ConfiguredTool), roc_packages : List(Spec.RocPackage), roc_sources : List(Spec.BuildSource), environment_programs : List(Spec.EnvironmentPrograms), expects : List(Spec.Expects) }, Str)
+	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command), configured_tools : List(Spec.ConfiguredTool), roc_packages : List(Spec.RocPackage), roc_sources : List(Spec.BuildSource), recipes : List(Recipe), environment_programs : List(Spec.EnvironmentPrograms), expects : List(Spec.Expects) }, Str)
 	environment = |name, inner| {
 		draft = inner.fold(
 			{ tools: [], system_tools: [], commands: [], configured_tools: [], roc_urls: [], overlays: [], parents: [], programs: [], expects: [] },
@@ -210,7 +219,17 @@ Lower :: [].{
 					RocPackages(urls) => { ..acc, roc_urls: acc.roc_urls.append(urls) }
 					Overlays(overlays) => { ..acc, overlays: acc.overlays.append(overlays.map(|overlay| overlay.to_str())) }
 					Extend(parent) => { ..acc, parents: acc.parents.append(parent.to_str()) }
-					Programs(names) => { ..acc, programs: acc.programs.append(names.map(|program| program.to_str())) }
+					Programs(programs) => {
+						..acc,
+						programs: acc.programs.append(
+							programs.map(
+								|program|
+									match program {
+										Fetch(command, recipe) => { name: command.to_str(), recipe }
+									},
+							),
+						),
+					}
 					Expect(names) => { ..acc, expects: acc.expects.append(names.map(|program| program.to_str())) }
 				},
 		)
@@ -243,7 +262,8 @@ Lower :: [].{
 		}
 		# An empty list selects nothing, so it leaves no entry behind.
 		selection = |lists| lists.keep_if(|names| !names.is_empty()).map(|names| { environment: name, programs: names })
-		Ok({ environment: { name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] }, system_tools: draft.system_tools, commands: draft.commands, configured_tools: draft.configured_tools, roc_packages: $roc_packages, roc_sources: $roc_sources, environment_programs: selection(draft.programs), expects: selection(draft.expects) })
+		recipes = draft.programs.first() ?? []
+		Ok({ environment: { name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] }, system_tools: draft.system_tools, commands: draft.commands, configured_tools: draft.configured_tools, roc_packages: $roc_packages, roc_sources: $roc_sources, recipes, environment_programs: selection([recipes.map(|entry| entry.name)]), expects: selection(draft.expects) })
 	}
 
 	## A release bundle URL ends in `<content hash>.tar.zst`. The hash is the
@@ -253,7 +273,7 @@ Lower :: [].{
 		file = url.split_on("/").last() ?? ""
 		hash = file.drop_suffix(".tar.zst")
 		if !url.starts_with("https://") or !file.ends_with(".tar.zst") or !Project.valid_name(hash) {
-			return Err("invalid Roc package URL: ${url}; expected https://.../<hash>.tar.zst")
+			return Err("invalid Roc package URL; expected https://.../<hash>.tar.zst:\n    ${url}")
 		}
 		Ok({ name: hash, source: { name: "roc-${hash}", ref: "tarball+${url}" } })
 	}
@@ -398,26 +418,37 @@ expect Lower.lower([Name("plain"), Environment("dev", [])]).map_ok(|spec| spec.r
 
 # A recipe from a local function: the release's version is captured, and the
 # System decides what the program is called there, or that there is none.
-tool_release : Str -> (Str -> Config.Download)
+tool_release : Str -> (System -> Config.Download)
 tool_release = |version|
 	|system|
 		match system {
-			"x86_64-linux" | "aarch64-darwin" => File("https://example.test/releases/${version}/tool-${system}")
+			"x86_64-linux" | "aarch64-darwin" => File("https://example.test/releases/${version}/tool-${system.to_str()}")
 			"x86_64-windows" => Archive("https://example.test/releases/${version}/tool-windows.zip", Zip, "tool/tool.exe")
 			_ => Unavailable
 		}
 
+tool : Config.Program
+tool = Fetch("tool", tool_release("1.2.0"))
+
+roc_stable : Config.Program
+roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))
+
 # Each recipe is asked once per declared System, in declaration order, and the
 # Spec holds its answers as data: one entry where the program exists and none
-# where it does not. Different recipes, capturing or not, share one list.
+# where it does not. Different recipes, capturing or not, share one list, and
+# a program two environments list is there once.
 expect match Lower.lower([
 	Name("fetching"),
 	Systems(["x86_64-linux", "aarch64-linux", "x86_64-windows"]),
-	Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")),
-	Fetch("tool", tool_release("1.2.0")),
-	Fetch("notes", |system| Archive("https://example.test/notes-${system}.tar.xz", TarXz, "notes/bin/notes")),
-	Environment("base", [Programs(["roc-stable"]), Expect(["git"])]),
-	Environment("dev", [Extend("base"), Programs(["tool", "roc-stable"]), Expect(["gh"])]),
+	Environment("base", [Programs([roc_stable]), Expect(["git"])]),
+	Environment(
+		"dev",
+		[
+			Extend("base"),
+			Programs([tool, roc_stable, Fetch("notes", |system| Archive("https://example.test/notes-${system.to_str()}.tar.xz", TarXz, "notes/bin/notes"))]),
+			Expect(["gh"]),
+		],
+	),
 	Environment("plain", [Programs([]), Expect([])]),
 ]) {
 	Ok(spec) => spec.requires_ == ["programs", "expects"]
@@ -431,43 +462,61 @@ expect match Lower.lower([
 			{ name: "notes", system: "aarch64-linux", urls: ["https://example.test/notes-aarch64-linux.tar.xz"], unpack: TarXz, path: "notes/bin/notes" },
 			{ name: "notes", system: "x86_64-windows", urls: ["https://example.test/notes-x86_64-windows.tar.xz"], unpack: TarXz, path: "notes/bin/notes" },
 		]
-			# Validation gives the child its parent's selections first.
-			and spec.environment_programs == [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["roc-stable", "tool"] }]
+			# Validation gives the child its parent's programs first.
+			and spec.environment_programs == [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["roc-stable", "tool", "notes"] }]
 				and spec.expects == [{ environment: "base", programs: ["git"] }, { environment: "dev", programs: ["git", "gh"] }]
 	Err(_) => False
 }
 
 # A System declared twice is asked about once.
-expect Lower.lower([Name("fetching"), Systems(["x86_64-linux", "x86_64-linux"]), Fetch("tool", tool_release("1.2.0"))]).map_ok(|spec| spec.programs.len()) == Ok(1)
+expect Lower.lower([Name("fetching"), Systems(["x86_64-linux", "x86_64-linux"]), Environment("dev", [Programs([tool])])]).map_ok(|spec| spec.programs.len()) == Ok(1)
 
 # With no Systems setting the recipe answers for the default ones.
-expect Lower.lower([Name("fetching"), Fetch("tool", tool_release("1.2.0"))]).map_ok(|spec| spec.programs.map(|program| program.system)) == Ok(["x86_64-linux", "aarch64-darwin"])
+expect Lower.lower([Name("fetching"), Environment("dev", [Programs([tool])])]).map_ok(|spec| spec.programs.map(|program| program.system)) == Ok(["x86_64-linux", "aarch64-darwin"])
+
+# A file recipe names the System in its URL, for every declared System.
+expect Lower.lower([Name("fetching"), Systems(["x86_64-linux", "aarch64-darwin"]), Environment("dev", [Programs([Fetch("tool", Recipes.file("https://example.test/{os}/tool-{system}"))])])]).map_ok(|spec| spec.programs.map(|program| program.urls)) == Ok([["https://example.test/linux/tool-x86_64-linux"], ["https://example.test/darwin/tool-aarch64-darwin"]])
 
 # A project that fetches nothing and expects nothing requires neither feature.
 expect Lower.lower([Name("plain"), Environment("dev", [Programs([]), Expect([])])]).map_ok(|spec| (spec.requires_, spec.environment_programs, spec.expects)) == Ok(([], [], []))
 expect Lower.lower([Name("expecting"), Environment("dev", [Expect(["git"])])]).map_ok(|spec| spec.requires_) == Ok(["expects"])
 
-# What a recipe calls invalid is the configuration's error, in its own words.
-expect Lower.lower([Name("invalid"), Fetch("roc-stable", Recipes.roc_nightly("v1.0"))]) == Err("Fetch roc-stable: \"v1.0\" is not a Roc nightly tag; expected nightly-YYYY-MM-DD-<commit>")
-expect Lower.lower([Name("invalid"), Systems(["x86_64-linux", "aarch64-darwin"]), Fetch("tool", |system| if system == "aarch64-darwin" Invalid("no build for ${system} since 2.0") else Unavailable)]) == Err("Fetch tool: no build for aarch64-darwin since 2.0")
-
 # A program no declared System has could never run.
-expect Lower.lower([Name("invalid"), Systems(["aarch64-linux", "riscv64-linux"]), Fetch("tool", tool_release("1.2.0"))]) == Err("Fetch tool: its recipe answers Unavailable for every declared system (aarch64-linux, riscv64-linux)")
+expect Lower.lower([Name("invalid"), Systems(["aarch64-linux", "riscv64-linux"]), Environment("dev", [Programs([tool])])]) == Err("Fetch tool: its recipe answers Unavailable for every declared system (aarch64-linux, riscv64-linux)")
+expect Lower.lower([Name("invalid"), Environment("dev", [Programs([Fetch("tool", |_| Unavailable)])])]) == Err("Fetch tool: its recipe answers Unavailable for every declared system (x86_64-linux, aarch64-linux, x86_64-darwin, aarch64-darwin)")
 
-# A name is declared once, even by a recipe that would answer nothing.
-expect Lower.lower([Name("invalid"), Fetch("tool", tool_release("1.2.0")), Fetch("tool", tool_release("1.3.0"))]) == Err("DuplicateFetch: tool")
-expect Lower.lower([Name("invalid"), Fetch("tool", tool_release("1.2.0")), Fetch("tool", |_| Unavailable)]) == Err("DuplicateFetch: tool")
+# One name is one program, wherever it is listed: the same recipe, or another
+# that answers the same for the declared Systems, is that program once.
+expect Lower.lower([
+	Name("shared"),
+	Systems(["x86_64-linux"]),
+	Environment("one", [Programs([tool])]),
+	Environment("two", [Programs([Fetch("tool", tool_release("1.2.0")), tool])]),
+	Environment("three", [Programs([Fetch("tool", |_| File("https://example.test/releases/1.2.0/tool-x86_64-linux"))])]),
+]).map_ok(|spec| (spec.programs.len(), spec.environment_programs.map(|entry| entry.programs))) == Ok((1, [["tool"], ["tool"], ["tool"]]))
+
+# Two recipes that answer differently are two programs, and cannot share a name.
+expect Lower.lower([Name("invalid"), Environment("one", [Programs([tool])]), Environment("two", [Programs([Fetch("tool", tool_release("1.3.0"))])])]) == Err("two different programs are named tool: their recipes do not give the same downloads")
+expect Lower.lower([Name("invalid"), Environment("dev", [Programs([tool, Fetch("tool", tool_release("1.3.0"))])])]) == Err("two different programs are named tool: their recipes do not give the same downloads")
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux", "x86_64-windows"]), Environment("one", [Programs([tool])]), Environment("two", [Programs([Fetch("tool", |system| if system == "x86_64-linux" File("https://example.test/releases/1.2.0/tool-x86_64-linux") else Unavailable)])])]) == Err("two different programs are named tool: their recipes do not give the same downloads")
+
+# They are compared on the declared Systems alone: these differ on Windows,
+# which this project does not declare.
+expect Lower.lower([Name("shared"), Systems(["x86_64-linux"]), Environment("one", [Programs([tool])]), Environment("two", [Programs([Fetch("tool", |system| if system == "x86_64-windows" Unavailable else File("https://example.test/releases/1.2.0/tool-x86_64-linux"))])])]).map_ok(|spec| spec.programs.len()) == Ok(1)
 
 expect Lower.lower([Name("invalid"), Environment("dev", [Programs([]), Programs([])])]) == Err("DuplicatePrograms: environment dev")
 expect Lower.lower([Name("invalid"), Environment("dev", [Expect(["git"]), Expect(["gh"])])]) == Err("DuplicateExpect: environment dev")
 
-# The shared validator sees what a recipe answered: a URL that is not a
-# download, a selection nothing declares, and one name with two origins.
-expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |system| File("http://example.test/tool-${system}"))]) == Err("program tool on x86_64-linux: \"http://example.test/tool-x86_64-linux\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
-expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Archive("https://example.test/tool.tar.gz", TarGz, "../tool"))]) == Err("program tool on x86_64-linux: invalid path in its archive: ../tool")
-expect Lower.lower([Name("invalid"), Environment("dev", [Programs(["tool"])])]) == Err("environment dev selects program tool, which no Fetch declares")
-expect Lower.lower([Name("invalid"), Fetch("tool", tool_release("1.2.0")), Environment("dev", [Programs(["tool"]), Expect(["tool"])])]) == Err("environment dev has tool as both a program and an expected tool")
-expect Lower.lower([Name("invalid"), Fetch("tool", tool_release("1.2.0")), Environment("base", [Command("tool", "hello")]), Environment("dev", [Extend("base"), Programs(["tool"])])]) == Err("environment dev has tool as both a program and a Command")
+# The shared validator sees what a recipe answered. A quoted URL or path is
+# refused where it is written; one that is assembled is refused here, with
+# the value on a line of its own.
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |system| File("http://example.test/tool-${system.to_str()}"))])])]) == Err("program tool on x86_64-linux has a URL that is not a download URL; expected https://<host>/<path> with no credentials, query or fragment:\n    http://example.test/tool-x86_64-linux")
+expect {
+	up = ".."
+	Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Archive("https://example.test/tool.tar.gz", TarGz, "${up}/tool"))])])]) == Err("program tool on x86_64-linux: invalid path in its archive:\n    ../tool")
+}
+expect Lower.lower([Name("invalid"), Environment("dev", [Programs([tool]), Expect(["tool"])])]) == Err("environment dev has tool as both a program and an expected tool")
+expect Lower.lower([Name("invalid"), Environment("base", [Command("tool", "hello")]), Environment("dev", [Extend("base"), Programs([tool])])]) == Err("environment dev has tool as both a program and a Command")
 expect Lower.lower([Name("invalid"), Environment("dev", [Command("git", "git"), Expect(["git"])])]) == Err("environment dev has git as both an expected tool and a Command")
 
 # Alternates for the same bytes follow the download's own URL, in order, for a
@@ -475,9 +524,16 @@ expect Lower.lower([Name("invalid"), Environment("dev", [Command("git", "git"), 
 expect Lower.lower([
 	Name("mirrored"),
 	Systems(["x86_64-linux"]),
-	Fetch("tool", |system| Mirrored(File("https://example.test/tool-${system}"), ["https://mirror.example.test/tool-${system}", "https://other.example.test/tool"])),
-	Fetch("notes", |_| Mirrored(Archive("https://example.test/notes.tar.gz", TarGz, "notes/bin/notes"), ["https://mirror.example.test/notes.tar.gz"])),
-	Fetch("plain", |_| Mirrored(File("https://example.test/plain"), [])),
+	Environment(
+		"dev",
+		[
+			Programs([
+				Fetch("tool", |system| Mirrored(File("https://example.test/tool-${system.to_str()}"), ["https://mirror.example.test/tool-${system.to_str()}", "https://other.example.test/tool"])),
+				Fetch("notes", |_| Mirrored(Archive("https://example.test/notes.tar.gz", TarGz, "notes/bin/notes"), ["https://mirror.example.test/notes.tar.gz"])),
+				Fetch("plain", |_| Mirrored(File("https://example.test/plain"), [])),
+			]),
+		],
+	),
 ]).map_ok(|spec| spec.programs) == Ok([
 	{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux", "https://mirror.example.test/tool-x86_64-linux", "https://other.example.test/tool"], unpack: File, path: "" },
 	{ name: "notes", system: "x86_64-linux", urls: ["https://example.test/notes.tar.gz", "https://mirror.example.test/notes.tar.gz"], unpack: TarGz, path: "notes/bin/notes" },
@@ -485,6 +541,6 @@ expect Lower.lower([
 ])
 
 # An alternate is held to the rule of every URL, and is given once.
-expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://mirror.example.test/tool", "http://mirror.example.test/tool"]))]) == Err("program tool on x86_64-linux: \"http://mirror.example.test/tool\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
-expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://example.test/tool"]))]) == Err("program tool on x86_64-linux names \"https://example.test/tool\" twice")
-expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Mirrored(Archive("https://example.test/tool.zip", Zip, "tool.exe"), ["https://mirror.example.test/tool.zip", "https://mirror.example.test/tool.zip"]))]) == Err("program tool on x86_64-linux names \"https://mirror.example.test/tool.zip\" twice")
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://mirror.example.test/tool", Url.assembled("http://mirror.example.test/tool")]))])])]) == Err("program tool on x86_64-linux has a URL that is not a download URL; expected https://<host>/<path> with no credentials, query or fragment:\n    http://mirror.example.test/tool")
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://example.test/tool"]))])])]) == Err("program tool on x86_64-linux names a URL twice:\n    https://example.test/tool")
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(Archive("https://example.test/tool.zip", Zip, "tool.exe"), ["https://mirror.example.test/tool.zip", "https://mirror.example.test/tool.zip"]))])])]) == Err("program tool on x86_64-linux names a URL twice:\n    https://mirror.example.test/tool.zip")

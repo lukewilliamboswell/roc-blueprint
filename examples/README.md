@@ -18,7 +18,7 @@ published platform. Each directory keeps its
   generated CLI, implicit tool installation or runtime code loading is involved.
   It also imports [Releases.roc](composition/Releases.roc), a recipe: a function
   from a release to where its `blueprint` is downloaded on each system, which
-  `Fetch` takes.
+  a `Fetch` in `Programs` takes.
 - [artifacts](artifacts/Blueprint.roc): a complete local locked source,
   sandboxed library/app dependency pair, and typed task/build workflow.
   [Usage and output](artifacts/README.md) include explicit update and read-only

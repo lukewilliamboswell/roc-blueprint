@@ -28,7 +28,7 @@ complete file with the current URL.
 | Project name. Required, once.
 
 | `Systems(List(System))`
-| Declared targets. Defaults to x86_64 and aarch64 on Linux and macOS; an empty list is invalid.
+| Declared targets, each `<arch>-<os>` of a known architecture (`x86_64`, `aarch64`, `riscv64`, `i686`, `armv7l`, `powerpc64le`) and operating system (`linux`, `darwin`, `windows`, `freebsd`). Defaults to x86_64 and aarch64 on Linux and macOS; an empty list is invalid.
 
 | `Packages(InputName, Auto)`
 | Named source using the consumer-selected provider's default. Omitting `Packages("default", Auto)` has the same meaning.
@@ -41,9 +41,6 @@ complete file with the current URL.
 
 | `Input(InputName, FlakeRef)`
 | Other flake input; not a tool source or overlay.
-
-| `Fetch(ProgramName, recipe)`
-| A program that is downloaded: its command name and a function from the System to `File(url)`, `Archive(url, format, path)`, `Unavailable` or `Invalid(message)`. `Mirrored(download, urls)` adds alternate URLs for the same bytes to a `File` or an `Archive`. Each name once. `Recipes.roc_nightly(tag)` is such a function.
 
 | `Environment(EnvName, List(EnvironmentSetting))`
 | Named tools and scoped overlays, optionally inherited.
@@ -97,8 +94,8 @@ and `Expect` occur at most once each:
 | `RocPackages(List(Str))`
 | Released Roc bundle URLs to lock, so Roc programs in the environment resolve them without downloading.
 
-| `Programs(List(ProgramName))`
-| The programs `Fetch` declares that the environment has on `PATH`, by name.
+| `Programs(List(Program))`
+| The programs the environment has on `PATH` that are downloaded: each is `Fetch(ProgramName, recipe)`, a command name and a function from the System to `File(url)`, `Archive(url, format, member)` or `Unavailable`. `Mirrored(download, urls)` adds alternate URLs for the same bytes to a `File` or an `Archive`. `Recipes.roc_nightly(tag)` and `Recipes.file(template)` are such functions.
 
 | `Expect(List(ProgramName))`
 | Programs the machine must already have on `PATH`. They are checked for, never installed, and no version is asked of them.
@@ -117,6 +114,23 @@ arguments remain separate strings, including extra CLI arguments after `--`.
 There is no `In` setting or implicit task environment. One name is only one
 of a program, an expected tool and a `Command` in an environment, including
 what it inherits.
+
+A program that several environments list is bound once, as in
+`roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))`,
+or inherited with `Extend`: one name always means the same downloads. Every
+text of a recipe is checked as what it is where it is written. A `System` is
+`<arch>-<os>` of an architecture and an operating system Blueprint knows, also
+in a `match` pattern and beside `==`; a `Url` is `https://<host>/<path>` with
+no credentials, query or fragment; a `Member` is a relative path inside an
+archive; a tag is `nightly-YYYY-MM-DD-<commit>`. Give a recipe of more than a
+line its type, `System -> Config.Download`, so that a mistake in it is
+reported on its own line.
+
+A `System` is not text. To write it into a URL, use
+`Recipes.file("https://example.org/1.0/tool-{system}")`, whose template also
+takes `{arch}` and `{os}`, or `"https://example.org/1.0/tool-${system.to_str()}"`.
+With `${system}` alone the compiler reports a type mismatch of
+`from_interpolation` on `Url`, at the first line of the file.
 
 == Choose where tools come from
 

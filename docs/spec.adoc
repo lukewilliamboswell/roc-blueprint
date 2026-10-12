@@ -67,10 +67,12 @@ and parser are hand-written to avoid recursive-codec derivation problems.
 `requires` is reserved in Roc; the Roc field is `requires_`, and `Sexpr` drops
 a trailing `_` on the wire. There is no major-1 shell `packages` field.
 
-`Lower.lower` checks authoring-setting cardinality, asks each `Fetch` recipe
-once for every declared System and keeps its answers as `programs` (the
-function never reaches the Spec, and a recipe's `Invalid` is the
-configuration's error), then calls `Project.validate` as a top-level constant. The CLI calls that same semantic validator after
+`Lower.lower` checks authoring-setting cardinality, asks the recipe of each
+`Fetch` in an environment's `Programs` once for every declared System and
+keeps its answers as `programs` (the function never reaches the Spec; a
+program listed by several environments is there once, and two recipes under
+one name that answer differently for the declared Systems are refused), then
+calls `Project.validate` as a top-level constant. The CLI calls that same semantic validator after
 `Spec.parse` and required-feature checks, so external Spec does not bypass reference
 or graph rules. `Spec.parse` rejects other majors before decoding nested records;
 parsing alone does not establish semantic validity.

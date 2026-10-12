@@ -383,22 +383,24 @@ Project :: [].{
 				return Err("program ${program.name} on ${program.system} has no URL")
 			}
 			# Alternates serve the same bytes, so each is held to the same rule.
+			# A long value stands on a line of its own in a message: the
+			# compiler wraps what it reports and would break one in two.
 			var $urls = []
 			for url in program.urls {
 				if !valid_download_url(url) {
-					return Err("program ${program.name} on ${program.system}: \"${url}\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
+					return Err("program ${program.name} on ${program.system} has a URL that is not a download URL; expected https://<host>/<path> with no credentials, query or fragment:\n    ${url}")
 				}
 				if $urls.contains(url) {
-					return Err("program ${program.name} on ${program.system} names \"${url}\" twice")
+					return Err("program ${program.name} on ${program.system} names a URL twice:\n    ${url}")
 				}
 				$urls = $urls.append(url)
 			}
 			match program.unpack {
 				File => if !program.path.is_empty() {
-					return Err("program ${program.name} on ${program.system}: a File is the program itself and has no path: ${program.path}")
+					return Err("program ${program.name} on ${program.system}: a File is the program itself and has no path:\n    ${program.path}")
 				}
 				_ => if !valid_output(program.path) {
-					return Err("program ${program.name} on ${program.system}: invalid path in its archive: ${program.path}")
+					return Err("program ${program.name} on ${program.system}: invalid path in its archive:\n    ${program.path}")
 				}
 			}
 		}
@@ -1791,17 +1793,17 @@ expect
 
 # The URL rule names the program, the System and the URL it refuses.
 expect
-	Project.validate({ ..fetching, programs: [{ ..linux_roc, system: "aarch64-darwin", urls: ["http://x/roc.tar.gz"] }] }) == Err("program roc-stable on aarch64-darwin: \"http://x/roc.tar.gz\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment") and
+	Project.validate({ ..fetching, programs: [{ ..linux_roc, system: "aarch64-darwin", urls: ["http://x/roc.tar.gz"] }] }) == Err("program roc-stable on aarch64-darwin has a URL that is not a download URL; expected https://<host>/<path> with no credentials, query or fragment:\n    http://x/roc.tar.gz") and
 		Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["https://token@example.test/tool"] }] }).is_err() and
 			Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["http://127.0.0.1:4000/tool"] }] }).is_ok()
 
 # An archive names the program inside it; a File is the program.
 expect
-	Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive: ") and
-		Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "../roc" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive: ../roc") and
-			Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "/usr/bin/roc" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive: /usr/bin/roc") and
+	Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive:\n    ") and
+		Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "../roc" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive:\n    ../roc") and
+			Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "/usr/bin/roc" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive:\n    /usr/bin/roc") and
 				Project.validate({ ..fetching, programs: [{ ..linux_roc, unpack: Zip, path: "roc/roc.exe" }, { ..linux_tool, unpack: TarXz, path: "bin/tool" }] }).is_ok() and
-					Project.validate({ ..fetching, programs: [{ ..linux_tool, path: "tool" }] }) == Err("program tool on x86_64-linux: a File is the program itself and has no path: tool")
+					Project.validate({ ..fetching, programs: [{ ..linux_tool, path: "tool" }] }) == Err("program tool on x86_64-linux: a File is the program itself and has no path:\n    tool")
 
 # A program shares no name with a source, an input or a build source, so that
 # `blueprint update <name>` means one thing.

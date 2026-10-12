@@ -23,7 +23,7 @@ files or run a test suite. No plugin registration, generated command line,
 implicit tool installation or runtime code loading is involved. It also
 imports `Releases.roc`, whose `blueprint : Str -> (Str -> Config.Download)`
 is a recipe: given a release, a function from the System to where that
-release's `blueprint` is downloaded, which `Fetch` takes.
+release's `blueprint` is downloaded, which a `Fetch` in `Programs` takes.
 
 artifacts::
 A complete local locked source, a sandboxed library and application that

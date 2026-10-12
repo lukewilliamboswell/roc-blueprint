@@ -12,10 +12,6 @@ config = [
 	Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
 	Input("utils", "github:numtide/flake-utils"),
 	Overlay("roc", "github:roc-lang/roc-overlay"),
-	# Programs that are downloaded rather than installed by a package source. A
-	# recipe says where from on each system; Blueprint.lock holds the digests.
-	Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")),
-	Fetch("blueprint", |system| File("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-${system}")),
 	Environment("base", [Tools(["git"])]),
 	Environment(
 		"dev",
@@ -27,14 +23,19 @@ config = [
 		],
 	),
 	# Roc programs run in `scripts` resolve this locked bundle without a download.
-	# The environment also has the two fetched programs, and expects the machine
-	# to have `gh`, which Blueprint checks for and does not install.
+	# The environment also has two programs that are downloaded rather than
+	# installed by a package source: a recipe says where from on each system,
+	# and Blueprint.lock holds the digests. It expects the machine to have `gh`,
+	# which Blueprint checks for and does not install.
 	Environment(
 		"scripts",
 		[
 			Extend("dev"),
 			RocPackages(["https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"]),
-			Programs(["roc-stable", "blueprint"]),
+			Programs([
+				Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")),
+				Fetch("blueprint", Recipes.file("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-{system}")),
+			]),
 			Expect(["gh"]),
 		],
 	),

@@ -33,15 +33,13 @@ CliProgramsTest := [].{
 	blueprint_roc : Str, List(Str) -> Str
 	blueprint_roc = |platform_path, settings| "app [config] { pf: platform \"${platform_path}\" }\nconfig = [\n${Str.join_with(settings.map(|line| "\t${line}\n"), "")}]\n"
 
-	## A project whose one environment has the archive's `roc-stable`, the
-	## file `tool`, and what it expects of the machine. `extra` are further
+	## A project whose one environment fetches `roc-stable` from an archive
+	## and `tool` as one file, and expects what it does of the machine. `extra` are further
 	## settings of that environment.
 	fetching : { roc : List(Str), tool : Str, expects : List(Str), extra : Str } -> List(Str)
 	fetching = |given| [
 		"Name(\"programs-test\"),",
-		"Fetch(\"roc-stable\", |_| ${mirrored("Archive(\"${given.roc.first() ?? ""}\", TarGz, \"pkg/roc-stable\")", given.roc.drop_first(1))}),",
-		"Fetch(\"tool\", |_| File(\"${given.tool}\")),",
-		"Environment(\"dev\", [Programs([\"roc-stable\", \"tool\"]), Expect([${Str.join_with(given.expects.map(|name| "\"${name}\""), ", ")}])${given.extra}]),",
+		"Environment(\"dev\", [Programs([Fetch(\"roc-stable\", |_| ${mirrored("Archive(\"${given.roc.first() ?? ""}\", TarGz, \"pkg/roc-stable\")", given.roc.drop_first(1))}), Fetch(\"tool\", |_| File(\"${given.tool}\"))]), Expect([${Str.join_with(given.expects.map(|name| "\"${name}\""), ", ")}])${given.extra}]),",
 		"Shell(\"default\", [Use(\"dev\")]),",
 		"Task(\"say\", [Use(\"dev\"), Run([\"roc-stable\", \"configured\"])]),",
 		"Task(\"tool\", [Use(\"dev\"), Run([\"tool\", \"--flag\"])]),",
@@ -401,8 +399,7 @@ system_of = |machine|
 
 expect CliProgramsTest.blueprint_roc("../pf/main.roc", ["Name(\"a\"),"]) == "app [config] { pf: platform \"../pf/main.roc\" }\nconfig = [\n\tName(\"a\"),\n]\n"
 expect CliProgramsTest.mirrored("File(\"a\")", []) == "File(\"a\")" and CliProgramsTest.mirrored("File(\"a\")", ["b", "c"]) == "Mirrored(File(\"a\"), [\"b\", \"c\"])"
-expect CliProgramsTest.fetching({ roc: ["http://127.0.0.1:1/a", "http://127.0.0.1:1/b"], tool: "http://127.0.0.1:1/t", expects: ["tar"], extra: ", Tools([\"git\"])" }).keep_if(|line| line.starts_with("Fetch(\"roc-stable\"") or line.starts_with("Environment")) == [
-	"Fetch(\"roc-stable\", |_| Mirrored(Archive(\"http://127.0.0.1:1/a\", TarGz, \"pkg/roc-stable\"), [\"http://127.0.0.1:1/b\"])),",
-	"Environment(\"dev\", [Programs([\"roc-stable\", \"tool\"]), Expect([\"tar\"]), Tools([\"git\"])]),",
+expect CliProgramsTest.fetching({ roc: ["http://127.0.0.1:1/a", "http://127.0.0.1:1/b"], tool: "http://127.0.0.1:1/t", expects: ["tar"], extra: ", Tools([\"git\"])" }).keep_if(|line| line.starts_with("Environment")) == [
+	"Environment(\"dev\", [Programs([Fetch(\"roc-stable\", |_| Mirrored(Archive(\"http://127.0.0.1:1/a\", TarGz, \"pkg/roc-stable\"), [\"http://127.0.0.1:1/b\"])), Fetch(\"tool\", |_| File(\"http://127.0.0.1:1/t\"))]), Expect([\"tar\"]), Tools([\"git\"])]),",
 ]
 expect system_of({ arch: X64, os: LINUX }) == "x86_64-linux" and system_of({ arch: AARCH64, os: MACOS }) == "aarch64-darwin"

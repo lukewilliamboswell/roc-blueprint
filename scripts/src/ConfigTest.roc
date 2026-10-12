@@ -16,8 +16,9 @@ import "../../examples/composition/Releases.roc" as composition_releases : Str
 ConfigTest := [].{
 
 	## What `roc check` must do with a fixture: accept it, reject it as an
-	## invalid Blueprint with this message, or reject a quoted name with it.
-	Kind : [Valid, Rejected(Str), BadQuote(Str)]
+	## invalid Blueprint with this message, reject a quoted value with it, or
+	## refuse it in another way, such as a type or a name, in these words.
+	Kind : [Valid, Rejected(Str), BadQuote(Str), Refused(Str)]
 
 	Fixture : { name : Str, kind : Kind, config : Str }
 
@@ -25,7 +26,7 @@ ConfigTest := [].{
 	Subset : [Full, Smoke]
 
 	fixtures : List(Fixture)
-	fixtures = valid_fixtures.concat(lower_fixtures).concat(quote_fixtures).concat(core_fixtures)
+	fixtures = valid_fixtures.concat(lower_fixtures).concat(quote_fixtures).concat(core_fixtures).concat(program_fixtures)
 
 	## One valid config, one rejection from each layer, the imported
 	## composition pair and one heavy bound.
@@ -80,18 +81,20 @@ ConfigTest := [].{
 				"(unpack TarGz)",
 				"(path \"roc_nightly-windows_x86_64-2026-10-04-130536d/roc.exe\")",
 				"(unpack Zip)",
-				"(urls (\"https://example.test/releases/1.0/tool-x86_64-linux\" \"https://mirror.example.test/releases/1.0/tool-x86_64-linux\"))",
+				"(urls (\"https://example.test/1.0/tool-linux\" \"https://mirror.example.test/1.0/tool-linux\"))",
+				"(urls (\"https://example.test/windows/notes-x86_64\"))",
 				"(unpack File)",
-				"(programs (\"roc-stable\" \"tool\"))",
+				"(programs (\"roc-stable\" \"tool\" \"notes\"))",
 				"(programs (\"git\" \"gh\"))",
 			],
 		),
 	]
 
-	## A fixture's app. One that names a recipe of the platform imports them.
+	## A fixture's app. One that names a module of the platform imports it.
 	app_source : Str, Str -> Str
 	app_source = |platform_ref, config| {
-		prelude = if config.contains("Recipes.") "import pf.Recipes\n\n" else ""
+		modules = ["Recipes.", "System ->", "Config."].keep_if(|use| config.contains(use)).map(|use| use.drop_suffix(".").drop_suffix(" ->"))
+		prelude = if modules.is_empty() "" else "${Str.join_with(modules.map(|needed| "import pf.${needed}"), "\n")}\n\n"
 		"app [config] { pf: platform \"${platform_ref}\" }\n\n${prelude}config = ${config}\n"
 	}
 
@@ -140,11 +143,21 @@ ConfigTest := [].{
 				} else {
 					"expected compile-time ${fixture.name} rejection containing '${message}' (exit 1), got exit ${code}"
 				}
+			# A rejected literal is reported with a caret on it, or against
+			# the definition being evaluated with its line and column: which
+			# of the two is not ours to rely on. Both say `invalid string`.
 			BadQuote(message) =>
 				if outcome.code == 1 and log.contains("invalid string") and log.contains(message) {
 					""
 				} else {
 					"expected checked-name rejection for ${fixture.name}, got exit ${code}"
+				}
+
+			Refused(message) =>
+				if outcome.code == 1 and log.contains(message) and !log.contains("Invalid Blueprint.roc:") {
+					""
+				} else {
+					"expected ${fixture.name} to be refused with '${message}' (exit 1), got exit ${code}"
 				}
 		}
 	}
@@ -173,7 +186,7 @@ ConfigTest := [].{
 		count = |keep| chosen.keep_if(keep).len().to_str()
 		Script.info!(
 			"   ",
-			"${count(is_valid)} valid configs accepted; ${count(is_rejected)} semantic errors and ${count(is_bad_quote)} checked-name errors rejected at compile time; equivalent Spec verified",
+			"${count(is_valid)} valid configs accepted; ${count(is_rejected)} semantic errors, ${count(is_bad_quote)} checked-name errors and ${count(is_refused)} type or name errors rejected at compile time; equivalent Spec verified",
 		)
 	}
 }
@@ -186,7 +199,18 @@ is_valid = |fixture|
 	}
 
 is_rejected : ConfigTest.Fixture -> Bool
-is_rejected = |fixture| !is_valid(fixture) and !is_bad_quote(fixture)
+is_rejected = |fixture|
+	match fixture.kind {
+		Rejected(_) => True
+		_ => False
+	}
+
+is_refused : ConfigTest.Fixture -> Bool
+is_refused = |fixture|
+	match fixture.kind {
+		Refused(_) => True
+		_ => False
+	}
 
 is_bad_quote : ConfigTest.Fixture -> Bool
 is_bad_quote = |fixture|
@@ -298,6 +322,9 @@ rejected = |name, message, config| { name, kind: Rejected(message), config }
 bad_quote : Str, Str, Str -> ConfigTest.Fixture
 bad_quote = |name, message, config| { name, kind: BadQuote(message), config }
 
+refused : Str, Str, Str -> ConfigTest.Fixture
+refused = |name, message, config| { name, kind: Refused(message), config }
+
 valid_fixtures : List(ConfigTest.Fixture)
 valid_fixtures = [
 	valid(
@@ -307,7 +334,7 @@ valid_fixtures = [
 	),
 	valid(
 		"EquivalentComposition",
-		\\[Name("composed"), Systems(["x86_64-linux"]), Fetch("blueprint", |system| File(Str.concat("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-", system))), Environment("base", [Tools(["git"])]), Environment("dev", [Tools(["git", "python3"])]), Environment("release", [Tools(["git", "python3"]), Programs(["blueprint"])]), Shell("default", [Use("dev")]), Task("fmt", [Use("dev"), Run(["python3", "--version"])]), Task("test", [Use("dev"), Run(["git", "--version"])]), Task("args", [Use("dev"), Run(["python3", "-c", "import json, sys; print(json.dumps(sys.argv[1:]))", "configured argument"])])]
+		\\[Name("composed"), Systems(["x86_64-linux"]), Environment("base", [Tools(["git"])]), Environment("dev", [Tools(["git", "python3"])]), Environment("release", [Tools(["git", "python3"]), Programs([Fetch("blueprint", Recipes.file("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-{system}"))])]), Shell("default", [Use("dev")]), Task("fmt", [Use("dev"), Run(["python3", "--version"])]), Task("test", [Use("dev"), Run(["git", "--version"])]), Task("args", [Use("dev"), Run(["python3", "-c", "import json, sys; print(json.dumps(sys.argv[1:]))", "configured argument"])])]
 		,
 	),
 	valid(
@@ -328,13 +355,6 @@ valid_fixtures = [
 	valid(
 		"SystemTools",
 		\\[Name("systems"), Systems(["x86_64-linux", "aarch64-darwin"]), Environment("base", [Tools(["git"]), ToolsFor("x86_64-linux", ["wayland"])]), Environment("dev", [Extend("base"), ToolsFor("x86_64-linux", ["alsa-lib"])]), Shell("default", [Use("dev")])]
-		,
-	),
-	# Recipes from the platform and from a lambda, one of them unavailable on a
-	# declared system; selections and expectations inherit parent first.
-	valid(
-		"Programs",
-		\\[Name("programs"), Systems(["x86_64-linux", "x86_64-windows"]), Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")), Fetch("tool", |system| if system == "x86_64-linux" Mirrored(File(Str.concat("https://example.test/releases/1.0/tool-", system)), [Str.concat("https://mirror.example.test/releases/1.0/tool-", system)]) else Unavailable), Environment("base", [Programs(["roc-stable"]), Expect(["git"])]), Environment("dev", [Extend("base"), Programs(["tool", "roc-stable"]), Expect(["gh"])]), Task("check", [Use("dev"), Run(["scripts/check_all.roc"])])]
 		,
 	),
 	# Builds use ordinary typed settings, including forward dependencies.
@@ -449,45 +469,6 @@ lower_fixtures = [
 		,
 	),
 	rejected(
-		"DuplicateFetch",
-		"DuplicateFetch: tool",
-		\\[Name("invalid"), Fetch("tool", |_| File("https://example.test/tool")), Fetch("tool", |_| Unavailable)]
-		,
-	),
-	rejected(
-		"DuplicatePrograms",
-		"DuplicatePrograms: environment dev",
-		\\[Name("invalid"), Environment("dev", [Programs([]), Programs([])])]
-		,
-	),
-	rejected(
-		"DuplicateExpect",
-		"DuplicateExpect: environment dev",
-		\\[Name("invalid"), Environment("dev", [Expect(["git"]), Expect(["gh"])])]
-		,
-	),
-	# What a recipe calls invalid is reported in its own words, never a crash
-	# of the recipe. The compiler wraps a long message, so each of these is
-	# matched by its start; `Lower.roc` holds the whole text.
-	rejected(
-		"InvalidRecipe",
-		"Fetch roc-stable: \"v1.0\" is not a Roc nightly tag",
-		\\[Name("invalid"), Fetch("roc-stable", Recipes.roc_nightly("v1.0"))]
-		,
-	),
-	rejected(
-		"InvalidLocalRecipe",
-		"Fetch tool: no build for x86_64-linux",
-		\\[Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |system| Invalid(Str.concat("no build for ", system)))]
-		,
-	),
-	rejected(
-		"UnavailableEverywhere",
-		"Fetch roc-stable: its recipe answers Unavailable",
-		\\[Name("invalid"), Systems(["riscv64-linux"]), Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))]
-		,
-	),
-	rejected(
 		"MissingBuildUse",
 		"MissingUse",
 		\\[Name("bad"), Build("app", [Run(["true"]), Output("out")])]
@@ -589,29 +570,10 @@ quote_fixtures = [
 		\\[Name("bad"), Environment("bad/name", [])]
 		,
 	),
-	bad_quote(
-		"BadFetchName",
-		"is not a program name",
-		\\[Name("bad"), Fetch("bin/tool", |_| Unavailable)]
-		,
-	),
-	bad_quote(
-		"BadProgramsName",
-		"is not a program name",
-		\\[Name("bad"), Environment("dev", [Programs(["-tool"])])]
-		,
-	),
-	bad_quote(
-		"BadExpectName",
-		"is not a program name",
-		\\[Name("bad"), Environment("dev", [Expect(["/usr/bin/git"])])]
-		,
-	),
 ]
 
 ## Witnesses that the shared validator runs at compile time: one reference
-## rule, one graph rule, one argv rule, two bounds on generated graphs, and
-## what it makes of a recipe's answers.
+## rule, one graph rule, one argv rule, and two bounds on generated graphs.
 core_fixtures : List(ConfigTest.Fixture)
 core_fixtures = [
 	rejected(
@@ -624,42 +586,6 @@ core_fixtures = [
 		"BuildCycle",
 		"build cycle",
 		\\[Name("bad"), Environment("builder", []), Build("app", [Use("builder"), Needs(["library"]), Run(["true"]), Output("out")]), Build("library", [Use("builder"), Needs(["app"]), Run(["true"]), Output("out")])]
-		,
-	),
-	rejected(
-		"InsecureDownload",
-		"is not a download URL",
-		\\[Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| File("http://example.test/tool"))]
-		,
-	),
-	rejected(
-		"DuplicateMirror",
-		"program tool on x86_64-linux names",
-		\\[Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://example.test/tool"]))]
-		,
-	),
-	rejected(
-		"InsecureMirror",
-		"is not a download URL",
-		\\[Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Mirrored(Archive("https://example.test/tool.tar.gz", TarGz, "tool"), ["http://mirror.example.test/tool.tar.gz"]))]
-		,
-	),
-	rejected(
-		"UndeclaredProgram",
-		"selects program roc-stable",
-		\\[Name("invalid"), Environment("dev", [Programs(["roc-stable"])])]
-		,
-	),
-	rejected(
-		"ProgramAndCommand",
-		"has roc-stable as both",
-		\\[Name("invalid"), Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")), Environment("base", [Command("roc-stable", "rocpkgs.nightly")]), Environment("dev", [Extend("base"), Programs(["roc-stable"])])]
-		,
-	),
-	rejected(
-		"ProgramAndExpect",
-		"has tool as both a program",
-		\\[Name("invalid"), Fetch("tool", |_| File("https://example.test/tool")), Environment("dev", [Programs(["tool"]), Expect(["tool"])])]
 		,
 	),
 	rejected("WorkflowNul", "NUL in argv", "[${workflow_base}, Workflow(\"ci\", [RunTask(\"check.all\", [Str.from_utf8([0]) ?? \"\"])])]"),
@@ -704,8 +630,8 @@ accepted = { code: 0, stdout: "No errors found", stderr: "" }
 crashed : Str -> Process.Outcome
 crashed = |text| { code: 1, stdout: "", stderr: text }
 
-expect ConfigTest.fixtures.len() == 62
-expect ConfigTest.selected(Full).len() == 65 and ConfigTest.selected(Smoke).map(|fixture| fixture.name) == ["Valid", "EquivalentComposition", "MissingName", "BadWorkflowName", "UnknownSource", "WorkflowExpansion", "Composed"]
+expect ConfigTest.fixtures.len() == 73
+expect ConfigTest.selected(Full).len() == 76 and ConfigTest.selected(Smoke).map(|fixture| fixture.name) == ["Valid", "EquivalentComposition", "MissingName", "BadWorkflowName", "UnknownSource", "WorkflowExpansion", "Composed"]
 
 # Every name is used once, and every name another table mentions exists.
 expect {
@@ -749,3 +675,192 @@ expect missing_marker("RocPackages", "name \"roc-abc123\"", []) == Err(NoneMissi
 
 expect spec_of(["A", "B"], ["a", "b"], "B") == Ok("b")
 expect spec_of(["A", "B"], ["a", "b"], "C") == Err(NotEmitted)
+
+## A recipe of the fixture's own, with its type, for the fixtures that need
+## one beside `config`.
+recipe_definition =
+	\\
+	\\
+	\\tool : System -> Config.Download
+	\\tool = |system|
+	\\	match system {
+	\\		"x86_64-linux" => Mirrored(File("https://example.test/1.0/tool-linux"), ["https://mirror.example.test/1.0/tool-linux"])
+	\\		_ => Unavailable
+	\\	}
+	\\
+	\\roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))
+
+## Fetched programs and expected tools: what is accepted, and each mistake
+## with the check that refuses it. A quoted value is refused by its own type
+## where it is written; a value the list cannot hold is a type error; a
+## misspelt binding is no name at all; and what only the whole configuration
+## shows is lowering's or the shared validator's.
+program_fixtures : List(ConfigTest.Fixture)
+program_fixtures = [
+	# Recipes from the platform, a template and a function of the fixture's
+	# own, one unavailable on a declared system; a shared binding; programs
+	# and expectations inherited parent first.
+	valid(
+		"Programs",
+		"[Name(\"programs\"), Systems([\"x86_64-linux\", \"x86_64-windows\"]), Environment(\"base\", [Programs([roc_stable]), Expect([\"git\"])]), Environment(\"dev\", [Extend(\"base\"), Programs([Fetch(\"tool\", tool), roc_stable, Fetch(\"notes\", Recipes.file(\"https://example.test/{os}/notes-{arch}\"))]), Expect([\"gh\"])]), Task(\"check\", [Use(\"dev\"), Run([\"scripts/check_all.roc\"])])]${recipe_definition}",
+	),
+	valid(
+		"SystemText",
+		"[Name(\"programs\"), Systems([\"x86_64-linux\"]), Environment(\"dev\", [Programs([Fetch(\"tool\", |system| if system == \"x86_64-linux\" File(\"https://example.test/tool-\${system.to_str()}\") else Unavailable)])])]",
+	),
+	rejected(
+		"DuplicatePrograms",
+		"DuplicatePrograms: environment dev",
+		\\[Name("invalid"), Environment("dev", [Programs([]), Programs([])])]
+		,
+	),
+	rejected(
+		"DuplicateExpect",
+		"DuplicateExpect: environment dev",
+		\\[Name("invalid"), Environment("dev", [Expect(["git"]), Expect(["gh"])])]
+		,
+	),
+	rejected(
+		"UnavailableEverywhere",
+		"Fetch roc-stable: its recipe answers Unavailable",
+		\\[Name("invalid"), Systems(["riscv64-linux"]), Environment("dev", [Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))])])]
+		,
+	),
+	rejected(
+		"TwoProgramsOneName",
+		"two different programs are named tool",
+		\\[Name("invalid"), Environment("one", [Programs([Fetch("tool", Recipes.file("https://example.test/1.0/tool-{system}"))])]), Environment("two", [Programs([Fetch("tool", Recipes.file("https://example.test/2.0/tool-{system}"))])])]
+		,
+	),
+	rejected(
+		"DuplicateMirror",
+		"program tool on x86_64-linux names a URL twice",
+		\\[Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://example.test/tool"]))])])]
+		,
+	),
+	# A URL that is assembled is not checked where it is written: the shared
+	# validator refuses it, with the URL on a line of its own.
+	rejected(
+		"InsecureAssembledUrl",
+		"has a URL that is not",
+		"[Name(\"invalid\"), Systems([\"x86_64-linux\"]), Environment(\"dev\", [Programs([Fetch(\"tool\", |system| File(\"http://example.test/tool-\${system.to_str()}\"))])])]",
+	),
+	rejected(
+		"ProgramAndCommand",
+		"has roc-stable as both",
+		\\[Name("invalid"), Environment("base", [Command("roc-stable", "rocpkgs.nightly")]), Environment("dev", [Extend("base"), Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))])])]
+		,
+	),
+	rejected(
+		"ProgramAndExpect",
+		"has tool as both a program",
+		\\[Name("invalid"), Environment("dev", [Programs([Fetch("tool", Recipes.file("https://example.test/tool"))]), Expect(["tool"])])]
+		,
+	),
+	# A misspelt system is refused in a pattern and beside `==`, though the
+	# branch it guards would never be taken.
+	bad_quote(
+		"SystemTypoInPattern",
+		"is not an operating system Blueprint",
+		"[Name(\"bad\"), Environment(\"dev\", [Programs([Fetch(\"tool\", typo)])])]\n\ntypo : System -> Config.Download\ntypo = |system|\n\tmatch system {\n\t\t\"x86_64-linux\" => File(\"https://example.test/tool\")\n\t\t\"aarch64-linx\" => File(\"https://example.test/tool-arm\")\n\t\t_ => Unavailable\n\t}",
+	),
+	bad_quote(
+		"SystemTypoInEquality",
+		"is not an architecture Blueprint knows",
+		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |system| if system == "x86-linux" Unavailable else File("https://example.test/tool"))])])]
+		,
+	),
+	bad_quote(
+		"SystemTypoInSystems",
+		"is not a system",
+		\\[Name("bad"), Systems(["x86_64-linux", "macos"])]
+		,
+	),
+	bad_quote(
+		"SwappedArchiveArguments",
+		"is a URL, not the path of a program",
+		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |_| Archive("tool/bin/tool", TarGz, "https://example.test/tool.tar.gz"))])])]
+		,
+	),
+	bad_quote(
+		"BadMember",
+		"is not the path of a program inside",
+		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |_| Archive("https://example.test/tool.tar.gz", TarGz, "../bin/tool"))])])]
+		,
+	),
+	bad_quote(
+		"BadNightlyTag",
+		"is not a Roc nightly tag",
+		\\[Name("bad"), Environment("dev", [Programs([Fetch("roc-stable", Recipes.roc_nightly("v1.0"))])])]
+		,
+	),
+	bad_quote(
+		"InsecureUrl",
+		"is not a download URL",
+		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |_| File("http://example.test/tool"))])])]
+		,
+	),
+	bad_quote(
+		"InsecureMirror",
+		"is not a download URL",
+		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["http://mirror.example.test/tool"]))])])]
+		,
+	),
+	bad_quote(
+		"InsecureTemplate",
+		"is not a download URL",
+		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", Recipes.file("http://example.test/tool-{system}"))])])]
+		,
+	),
+	bad_quote(
+		"BadPlaceholder",
+		"has a placeholder other than",
+		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", Recipes.file("https://example.test/tool-{sytem}"))])])]
+		,
+	),
+	bad_quote(
+		"PlaceholderInHost",
+		"has a placeholder in its host",
+		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", Recipes.file("https://{os}.example.test/tool"))])])]
+		,
+	),
+	bad_quote(
+		"BadFetchName",
+		"is not a program name",
+		\\[Name("bad"), Environment("dev", [Programs([Fetch("bin/tool", |_| Unavailable)])])]
+		,
+	),
+	bad_quote(
+		"BadExpectName",
+		"is not a program name",
+		\\[Name("bad"), Environment("dev", [Expect(["/usr/bin/git"])])]
+		,
+	),
+	# A program is a value: its name alone is not one, and a binding that is
+	# misspelt is not in scope.
+	refused(
+		"NameForProgram",
+		"from_quote",
+		\\[Name("bad"), Environment("dev", [Programs(["roc-stable"])])]
+		,
+	),
+	refused(
+		"MisspeltBinding",
+		"Nothing is named roc_stabel in this scope",
+		"[Name(\"bad\"), Environment(\"dev\", [Programs([roc_stabel])])]${recipe_definition}",
+	),
+	# A recipe that cannot answer says so itself, and the compiler says where.
+	refused(
+		"CrashingRecipe",
+		"tool 2.0 has no build for x86_64-darwin",
+		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |system| if system == "x86_64-darwin" { crash "tool 2.0 has no build for x86_64-darwin" } else File("https://example.test/tool"))])])]
+		,
+	),
+	# The trap of this compiler: a System is not text, so it cannot stand in a
+	# URL as it is. `Recipes.file` and `system.to_str()` are the ways to write it.
+	refused(
+		"SystemInUrl",
+		"from_interpolation",
+		"[Name(\"bad\"), Environment(\"dev\", [Programs([Fetch(\"tool\", |system| File(\"https://example.test/tool-\${system}\"))])])]",
+	),
+]
