@@ -21,6 +21,7 @@ NixProvider :: [].{
 	provider = Provider.{
 		name: "nix",
 		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools", "programs", "expects"],
+		realises,
 		render: |spec| render(spec).map_ok(
 			|contents| [{ path: "flake.nix", contents }],
 		),
@@ -36,6 +37,15 @@ NixProvider :: [].{
 		},
 		compiler: |tag, _target, _layout| Ok(Printed(["nix", "build", "--no-link", "--print-out-paths", "${roc_overlay}#\"${tag}\""])),
 	}
+
+	## Nix supplies a Nix package set, and the one a source leaves to the
+	## consumer with Auto. A Guix channel is not its to realise.
+	realises : Spec.Provider -> Bool
+	realises = |source|
+		match source {
+			Auto | NixPackages(_) => True
+			GuixPackages(_) => False
+		}
 
 	## `nix flake update` resolves every input of the staged flake. Given
 	## names it resolves those and keeps the rest of the lock beside the flake,
@@ -3090,3 +3100,6 @@ expect
 	)
 		and NixProvider.preflight(fetching, Request.Run("check", []), "x86_64-linux", TestData.layout) == Err("environment builder has fetched programs or expected tools, which this blueprint reads but cannot yet run with")
 			and NixProvider.preflight(fetching, Request.Run("plain", []), "x86_64-linux", TestData.layout) == Ok({})
+
+expect NixProvider.realises(Auto) and NixProvider.realises(NixPackages("github:NixOS/nixpkgs/nixos-unstable")) and !NixProvider.realises(GuixPackages("https://git.savannah.gnu.org/git/guix.git"))
+expect (NixProvider.provider.realises)(Auto)

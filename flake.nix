@@ -147,6 +147,7 @@
                 ./blueprint-core/Sexpr.roc
                 ./blueprint-core/Value.roc
                 ./blueprint-core/Provider.roc
+                ./blueprint-core/Realise.roc
                 ./blueprint-core/Lock.roc
                 ./blueprint-core/Tree.roc
               ];

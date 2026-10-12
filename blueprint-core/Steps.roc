@@ -59,6 +59,15 @@ Steps := { steps : List(Step) }.{
 	## together, each by its `tool`, and run nothing further.
 	## Search: the step's argv runs with these directories ahead of the
 	## caller's PATH, first to last, and may name a program in one of them.
+	## Present: the step's command needs programs the machine must already
+	## have. Look each `program` up on the caller's PATH, without starting
+	## it. Do so for every step of the sequence before the first effect of
+	## any of them, and report all that are missing together, each with its
+	## `because`; then run nothing.
+	## Programs: the step's argv runs with these downloaded programs ahead of
+	## the caller's PATH, each under its `name`, and may name one of them; see
+	## `Program`. Fetch what every step needs after all `Present` checks and
+	## before the first step's command.
 	## Serialize workspace use; stop on any failed materialization operation.
 	Operation : [
 		VerifyTree({ path : Str, digest : Str }),
@@ -74,7 +83,20 @@ Steps := { steps : List(Step) }.{
 		Fetch(Archive),
 		Search(List(Str)),
 		Require(List(Probe)),
+		Present(List({ program : Str, because : Str })),
+		Programs(List(Program)),
 	]
+
+	## A download to have on PATH as `name`. Its bytes are those whose SHA-256
+	## is `sha256`, in hex, which the Lock recorded: bytes from a cache, a
+	## mirror or an earlier run are hashed again before every use and are
+	## never trusted. `urls` serve the same bytes; try them in order and take
+	## the first that yields that digest. For `File` the bytes are the
+	## program. Otherwise they are an archive to unpack whole, and the
+	## program is the file at `path` inside it: the tree stays together and
+	## `name` refers into it, because a program may find its own files beside
+	## its real path.
+	Program : { name : Str, urls : List(Str), sha256 : Str, unpack : [File, TarGz, TarXz, Zip], path : Str }
 
 	## `tool` is the declaration being checked, as its author wrote it. `Is`
 	## and `Starts` compare the first line the probe prints, trimmed.

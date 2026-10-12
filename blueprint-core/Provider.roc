@@ -14,6 +14,12 @@ Provider := {
 	## The Spec `requires` features this provider implements.
 	features : List(Str),
 
+	## Whether this provider supplies the tools of a package source with this
+	## intent. The Core asks a provider to realise an environment only when
+	## the environment has a tool from such a source; what an environment
+	## fetches or expects of the machine is the Core's own.
+	realises : Spec.Provider -> Bool,
+
 	## Inspect: the files this provider would generate for the whole Spec.
 	render : Spec -> Try(List(File), Str),
 

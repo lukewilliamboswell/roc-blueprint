@@ -874,6 +874,66 @@ Project :: [].{
 		}
 	}
 
+	## What one environment needs on one System, by who supplies it. `tools`
+	## are a package provider's: the environment's own, those it declares for
+	## this System, and the tools behind its commands and configured tools.
+	## `programs` are the selected programs that exist for the System, and
+	## `unavailable` the names of those that do not. `expects` are the
+	## programs the machine must have. `bundles` are its Roc packages, each
+	## with the URL its bundle is downloaded from.
+	Use : {
+		tools : List(Spec.Tool),
+		programs : List(Spec.Program),
+		unavailable : List(Str),
+		expects : List(Str),
+		bundles : List({ name : Str, url : Str }),
+	}
+
+	## Takes a validated Spec, whose inheritance is already flattened. It
+	## observes nothing: whether a tool or a URL exists is found out later.
+	environment_use : Spec, Str, Str -> Try(Use, Str)
+	environment_use = |project, name, system| {
+		environment = project.environments.find_first(|e| e.name == name).map_err(|_| "unknown environment: ${name}")?
+		tools = unique(
+			environment.tools
+				.concat(project.system_tools.keep_if(|entry| entry.environment == name and entry.system == system).fold([], |all, entry| all.concat(entry.tools)))
+				.concat(project.commands.keep_if(|entry| entry.environment == name).map(|entry| entry.tool))
+				.concat(project.configured_tools.keep_if(|entry| entry.environment == name).map(|entry| entry.tool)),
+		)
+		selected = project.environment_programs.find_first(|entry| entry.environment == name).map_ok(|entry| entry.programs) ?? []
+		var $programs = []
+		var $unavailable = []
+		for program in selected {
+			match project.programs.find_first(|entry| entry.name == program and entry.system == system) {
+				Ok(entry) => {
+					$programs = $programs.append(entry)
+				}
+				Err(_) => {
+					$unavailable = $unavailable.append(program)
+				}
+			}
+		}
+		var $bundles = []
+		for entry in project.roc_packages.keep_if(|declared| declared.environment == name) {
+			source = project.build_sources.find_first(|declared| declared.name == entry.source)
+				.map_err(|_| "unknown source of Roc package ${entry.name}: ${entry.source}")?
+			url = source.ref.drop_prefix("tarball+")
+			# The name is the hash of the bundle's bytes, which is what makes
+			# a download of it checkable.
+			if !valid_name(entry.name) or !source.ref.starts_with("tarball+https://") or !url.ends_with("/${entry.name}.tar.zst") {
+				return Err("Roc package ${entry.name} is not a bundle that can be downloaded: ${source.ref}")
+			}
+			$bundles = $bundles.append({ name: entry.name, url })
+		}
+		Ok({
+			tools,
+			programs: $programs,
+			unavailable: $unavailable,
+			expects: project.expects.find_first(|entry| entry.environment == name).map_ok(|entry| entry.programs) ?? [],
+			bundles: $bundles,
+		})
+	}
+
 	## Fetched programs and expected tools are the Core's to supply and check,
 	## not a provider's. A provider asked to realise a whole environment by
 	## itself refuses one that has either, rather than enter it without them.
@@ -1811,3 +1871,60 @@ expect {
 				and Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["https://example.test/tool", "http://mirror.example.test/tool", "https://other.example.test/tool"] }] }) == Err("program tool on x86_64-linux: \"http://mirror.example.test/tool\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
 					and Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["https://example.test/tool", ""] }] }) == Err("program tool on x86_64-linux: \"\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
 }
+
+# What an environment needs is split by who supplies it, for one System: a
+# provider's tools from every way of declaring one, the programs that exist
+# there, the names of those that do not, what the machine must have, and each
+# Roc bundle with its URL. Inherited selections come first.
+expect {
+	git = { source: "default", name: "git" }
+	zig = { source: "nix", name: "zigpkgs.\"0.16.0\"" }
+	spec = {
+		..fetching,
+		requires_: ["programs", "expects", "commands", "system-tools", "configured-tools", "roc-packages", "sources"],
+		environments: [{ ..base, tools: [git], overlays: [] }, { name: "dev", parents: ["base"], tools: [zig, git], overlays: [] }],
+		system_tools: [
+			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] },
+			{ environment: "dev", system: "aarch64-darwin", tools: [{ source: "default", name: "libiconv" }] },
+		],
+		commands: [{ environment: "base", name: "py", tool: { source: "default", name: "python3" } }],
+		configured_tools: [{ environment: "dev", tool: rust, options: rust_targets([]) }],
+		environment_programs: [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["tool"] }],
+		expects: [{ environment: "dev", programs: ["gh"] }],
+		build_sources: [{ name: "roc-abc", ref: "tarball+https://example.test/releases/1.0/abc.tar.zst" }],
+		roc_packages: [{ environment: "base", name: "abc", source: "roc-abc" }],
+	}
+	project = Project.validate(spec)?
+	darwin_tool = { ..linux_tool, system: "aarch64-darwin", urls: ["https://example.test/tool-aarch64-darwin", "https://mirror.example.test/tool-aarch64-darwin"] }
+	bundles = [{ name: "abc", url: "https://example.test/releases/1.0/abc.tar.zst" }]
+	Project.environment_use(project, "dev", "x86_64-linux") == Ok({
+		tools: [git, zig, { source: "default", name: "wayland" }, { source: "default", name: "python3" }, rust],
+		programs: [linux_roc, linux_tool],
+		unavailable: [],
+		expects: ["gh"],
+		bundles,
+	})
+		and Project.environment_use(project, "dev", "aarch64-darwin") == Ok({
+			tools: [git, zig, { source: "default", name: "libiconv" }, { source: "default", name: "python3" }, rust],
+			programs: [darwin_tool],
+			unavailable: ["roc-stable"],
+			expects: ["gh"],
+			bundles,
+		})
+			and Project.environment_use(project, "base", "x86_64-linux") == Ok({ tools: [git, { source: "default", name: "python3" }], programs: [linux_roc], unavailable: [], expects: [], bundles })
+				and Project.environment_use(project, "missing", "x86_64-linux") == Err("unknown environment: missing")
+}
+
+# An environment that declares nothing needs nothing, from anyone.
+expect Project.validate(fetching).map_ok(|project| Project.environment_use(project, "dev", "x86_64-linux")) == Ok(Ok({ tools: [], programs: [], unavailable: [], expects: [], bundles: [] }))
+
+# A Roc package is downloaded over HTTPS from a file of its own name, or the
+# environment cannot be planned at all.
+expect
+	["tarball+http://example.test/abc.tar.zst", "tarball+https://example.test/other.tar.zst", "https://example.test/abc.tar.zst", "github:example/abc.tar.zst"].all(
+		|ref|
+			match Project.validate({ ..fetching, requires_: ["programs", "roc-packages", "sources"], build_sources: [{ name: "roc-abc", ref }], roc_packages: [{ environment: "base", name: "abc", source: "roc-abc" }] }) {
+				Ok(project) => Project.environment_use(project, "dev", "x86_64-linux") == Err("Roc package abc is not a bundle that can be downloaded: ${ref}")
+				Err(_) => False
+			},
+	)

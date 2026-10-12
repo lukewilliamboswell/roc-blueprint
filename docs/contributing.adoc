@@ -14,6 +14,7 @@ blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
   targets/               linker inputs, none committed: libhost.a is built, the rest fetched (see its README)
 blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
   Project.roc            pure normalization, references and provider capability checks
+  Realise.roc            pure planning of a request: what the Core supplies, and what it asks of a provider
   fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip, lock-parse
 blueprint-nix/           importable pure Nix provider (depends only on blueprint-core)
   NixProvider.roc        shared pure request planning and flake rendering

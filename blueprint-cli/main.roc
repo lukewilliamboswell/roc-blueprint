@@ -1309,6 +1309,11 @@ execute_step! = |step, ctx| {
 			Fetch(archive) => {
 				_ = fetch!(archive, layout)?
 			}
+			# No provider this executor runs plans these; a step that held
+			# one would otherwise start without what it was promised.
+			Present(_) | Programs(_) => {
+				return Err(RenderFailed("this blueprint cannot yet check for expected programs or fetch declared ones"))
+			}
 			Search(directories) => {
 				$search = $search.concat(directories)
 			}

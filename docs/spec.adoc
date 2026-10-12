@@ -120,6 +120,18 @@ locks are not migrated: run `blueprint update`. `fuzz/lock-parse` fuzzes the par
 
 == What a provider does
 
+`Realise.plan(spec, request, system, layout, lock, providers)` is the Core's
+own pure plan of a request. An environment's fetched programs, the tools it
+expects of the machine and its Roc packages are planned from the Spec and
+the Lock alone, as `Present`, `Programs` and `RocBundles` operations. A
+provider is asked only for an environment that has a tool from a source it
+`realises`, and its steps then follow what the Core supplies. A task whose
+environment has no such tool is its own argv, and a shell with none has no
+argv: the executor starts the caller's shell. Every problem of every step is
+collected before one is reported, and a request with a problem yields no
+step. `Realise.requirements` answers, from the Spec alone, which providers a
+task needs and which programs it fetches and expects.
+
 `Request`, `Steps` and `Layout` are importable pure core types.
 `NixProvider.plan(project, request, target, layout, locks)` derives
 an ordered `Steps.steps` sequence, each holding action, files, exact argv, artifact
@@ -130,7 +142,8 @@ must succeed before effects.
 The caller owns all effects; no provider registry or serialized config recipes
 are involved. `blueprint-core/Provider.roc` is the Core/Provider contract: a
 `name`, the `features` the provider implements, `render`, `preflight`,
-`realise` (Steps from the Lock), `resolve` plus `lock_from_native` (what to
+`realises` (which package sources it supplies), `realise` (Steps from the
+Lock), `resolve` plus `lock_from_native` (what to
 stage and run to produce new pins) and `compiler` (the argv that fetches the
 pinned Roc). The CLI uses only that record; `scripts/test.roc` fails if it
 reaches into a provider's modules directly. Nix is the only implemented

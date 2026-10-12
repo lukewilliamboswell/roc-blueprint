@@ -18,6 +18,9 @@ HostProvider :: [].{
 		# What a Blueprint.roc may require and still load here. Loading is not
 		# realising: `preflight` refuses what this provider cannot do.
 		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools", "programs", "expects"],
+		# It installs no package of any source: what a tool names must
+		# already be on the machine.
+		realises: |_source| False,
 		render: |spec| {
 			_ = Project.validate(spec)?
 			Ok([])
