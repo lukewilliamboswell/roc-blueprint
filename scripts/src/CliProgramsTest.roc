@@ -375,7 +375,7 @@ cases! = |bench, idle| {
 	Path.copy!(Path.utf8("${bench.work}/stub-tool"), Path.utf8("${no_nix}/roc-record"))?
 	needing = run!(test, server, mixed, ["run", "say"], 1, [("PATH", no_nix), ("ROC", "${no_nix}/roc-record")])?
 	# That PATH holds nothing else either, and one refusal says all of it.
-	for line in ["this machine lacks what the task needs, and blueprint installs none of it:", "  tar: environment dev expects it on PATH (Expect)", "  nix: environment dev takes git from the Nix source default"] {
+	for line in ["this machine lacks what the task needs, and blueprint installs none of it:", "  tar: environment dev expects it on PATH (Expect)", "  nix: environment dev takes default#git from the Nix source default"] {
 		CliHarness.contains!(needing.stderr, line, "run say with a Nix tool and no Nix")?
 	}
 	CliHarness.check!(!needing.stderr.contains("fetching") and kept!(test)? == { artifacts: [], trees: [] }, "something was fetched before Nix was found missing:\n${needing.stderr}")?

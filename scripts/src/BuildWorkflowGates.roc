@@ -347,7 +347,6 @@ example_smoke! = |suite| {
 	authored = text(read!("${source}/Blueprint.roc")?)
 	replacements = [
 		("\"../../blueprint-platform/main.roc\"", "\"${BuildHarness.relative(project, "${suite.root}/blueprint-platform/main.roc")}\""),
-		("Name(\"artifacts\"),", "Name(\"artifacts\"),\n\tPackages(\"default\", From(NixPackages(\"${suite.pins.nixpkgs.ref}\"))),"),
 		("\"github:NixOS/nixpkgs/nixos-unstable\"", "\"${suite.pins.nixpkgs.ref}\""),
 		("\"github:roc-lang/roc-overlay\"", "\"${suite.pins.overlay.ref}\""),
 	]

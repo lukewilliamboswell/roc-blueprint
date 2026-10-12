@@ -142,8 +142,8 @@ Wire : {
 sample : Lock
 sample = Lock.{
 	format: Lock.current_format,
-	intent: { ..Lock.empty_intent, sources: [{ name: "default", provider: Auto }] },
-	sources: [{ name: "default", provider: "nix", ref: "github:NixOS/nixpkgs/nixos-unstable", rev: "4975466d324710c576dc11ad614684e6bd8cad8e", digest: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=" }],
+	intent: { ..Lock.empty_intent, sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] },
+	sources: [{ name: "nix", provider: "nix", ref: "github:NixOS/nixpkgs/nixos-unstable", rev: "4975466d324710c576dc11ad614684e6bd8cad8e", digest: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=" }],
 	hints: [{ provider: "nix", value: Value.Attrs([{ name: "version", value: Value.Int(7) }]) }],
 	fetched: [
 		{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc-linux.tar.gz"], sha256: "893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f", size: 69614310 },
@@ -183,7 +183,7 @@ expect sample.hint("nix").is_ok() and sample.hint("conda") == Err(MissingHint)
 
 # Only what Resolve consumes can make a Lock stale, and the error says what.
 expect {
-	spec = { ..Spec.empty("x"), sources: [{ name: "default", provider: Auto }] }
+	spec = { ..Spec.empty("x"), sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] }
 	lock = { ..sample, intent: Lock.intent_of(spec) }
 	with_task = { ..spec, tasks: [{ name: "t", environment: "e", run: ["true"] }] }
 	with_input = { ..spec, inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }
@@ -194,8 +194,8 @@ expect {
 
 # Declaration order is not intent; overlay order is.
 expect {
-	a = { name: "a", provider: Auto }
-	b = { name: "b", provider: Auto }
+	a = { name: "a", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }
+	b = { name: "b", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }
 	env = |overlays| { name: "dev", parents: [], tools: [], overlays }
 	one = { ..Spec.empty("x"), sources: [a, b], environments: [env(["p", "q"])] }
 	two = { ..Spec.empty("x"), sources: [b, a], environments: [env(["p", "q"])] }
@@ -227,7 +227,7 @@ expect {
 
 # Programs are not intent: declaring one leaves the pins of the Lock current.
 expect {
-	spec = { ..Spec.empty("x"), sources: [{ name: "default", provider: Auto }] }
+	spec = { ..Spec.empty("x"), sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] }
 	lock = { ..sample, intent: Lock.intent_of(spec) }
 	lock.stale({ ..spec, programs: [{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool"], unpack: File, path: "" }] }) == Ok({})
 }

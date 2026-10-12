@@ -296,12 +296,23 @@ evaluate! = |ctx| {
 		.cwd(path(root)).exec_output!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = Spec.parse(output.stdout_utf8).map_err(|err| BadSpec(err))?
+	current_platform(spec)?
 	missing = spec.unsupported_features(providers.fold(Realise.features, |all, provider| all.concat(provider.features)))
 	if !missing.is_empty() {
 		return Err(NeedsFeatures(missing))
 	}
 	Project.validate(spec).map_err(|message| InvalidProject(message))
 }
+
+## A Spec from a platform older than 0.6.0 does not say that its sources are
+## all declared: its tools may name a source that platform implied, which
+## nothing here supplies. It is refused as that, before anything in it is
+## read as if it were complete.
+current_platform : Spec -> Try({}, [OldPlatform])
+current_platform = |spec| if spec.requires_.contains("explicit-sources") Ok({}) else Err(OldPlatform)
+
+expect current_platform({ ..Spec.empty("x"), requires_: ["explicit-sources", "programs"] }) == Ok({})
+expect current_platform(Spec.empty("x")) == Err(OldPlatform) and current_platform({ ..Spec.empty("x"), requires_: ["sources", "builds"] }) == Err(OldPlatform)
 
 ## The files every provider would generate for the Spec.
 rendered : Spec -> Try(List(Provider.File), _)
@@ -369,6 +380,8 @@ print_files! : Spec => Try({}, _)
 print_files! = |spec| {
 	files = rendered(spec)?
 	match files {
+		# Stdout stays empty, so that what reads it reads no file.
+		[] => Stderr.line!("blueprint: nothing is generated for this project: it declares no source that ${provider_names} supplies")
 		[only] => Stdout.write!(only.contents)
 		_ => {
 			for file in files {
@@ -1666,6 +1679,7 @@ describe = |err, provider|
 		BadSpec(InvalidSexpr(msg)) => "could not read the Spec from Blueprint.roc: ${msg}"
 		BadSpec(UnsupportedFormat({ major, minor })) => "Spec format ${U64.to_str(major)}.${U64.to_str(minor)} is not supported by this blueprint (understands major ${Spec.current_format.major.to_str()}); upgrade blueprint or change the platform version"
 		NeedsFeatures(missing) => "Blueprint.roc needs features: ${Str.join_with(missing, ", ")}; upgrade blueprint"
+		OldPlatform => "Blueprint.roc uses a roc-blueprint platform older than 0.6.0; update the platform URL in its app header and see docs/releases/0.6.0"
 		InvalidProject(msg) => "invalid Spec project: ${msg}"
 		RenderFailed(msg) => "cannot generate the ${provider} files: ${msg}"
 		RocPackagesFailed(msg) => msg

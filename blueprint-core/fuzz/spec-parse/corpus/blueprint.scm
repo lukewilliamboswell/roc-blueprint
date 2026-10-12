@@ -1,7 +1,7 @@
 (
 	(format ((major 2) (minor 0)))
 	(name "roc-blueprint")
-	(sources (((name "default") (provider Auto))))
+	(sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
 	(inputs (((kind Overlay) (name "roc")
 		(url "github:roc-lang/roc-overlay"))))
 	(environments (((name "dev") (parents ())

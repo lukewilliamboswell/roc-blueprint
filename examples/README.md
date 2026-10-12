@@ -4,7 +4,7 @@ These examples use the platform in this repository and Spec 2.7, not the latest
 published platform. Each directory keeps its
 `Blueprint.roc` and related files together.
 
-- [all-settings](all-settings/Blueprint.roc): Auto and explicit Nix package
+- [all-settings](all-settings/Blueprint.roc): two Nix package
   sources, a named overlay scoped to `dev`, parent-first environment inheritance,
   shell aliases, argv tasks, a locked Roc package, two fetched programs, an expected tool and raw Nix settings. `ci` uses `base` without that
   overlay. `scripts/test_scenarios.roc` runs this app through the CLI and

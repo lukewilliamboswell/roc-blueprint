@@ -8,7 +8,7 @@ projects with that release's platform URL, as they were tested for it, and the
 Spec each one prints.
 
 all-settings::
-Auto and explicit Nix package sources, a named overlay scoped to `dev`,
+Two Nix package sources, a named overlay scoped to `dev`,
 parent-first environment inheritance, shell aliases, argument-list tasks, a
 locked Roc package, two fetched programs, an expected tool and raw Nix
 settings. `ci` uses `base` without the overlay.

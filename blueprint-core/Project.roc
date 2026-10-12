@@ -3,7 +3,8 @@ import Spec
 import Value
 
 ## Shared pure semantic boundary. Validation observes neither PATH nor the host.
-## It normalizes defaults and inheritance, and is safe to repeat on emitted Spec.
+## It normalizes inheritance, adds nothing that was not declared, and is safe
+## to repeat on emitted Spec.
 Project :: [].{
 	ProviderName : [Nix, Guix]
 
@@ -50,11 +51,12 @@ Project :: [].{
 	clean : Str -> Bool
 	clean = |text| !text.is_empty() and text.to_utf8().all(|b| b > 32 and b != 127)
 
-	## Generic syntax only. Provider grammar is checked once intent is known.
+	## A tool is written `<source>#<name>`: the package source it comes from
+	## is always named, and no source is implied. Generic syntax only; the
+	## source's own grammar for the name is checked once its kind is known.
 	tool : Str -> Try(Spec.Tool, Str)
 	tool = |text| {
 		(source, name) = match text.split_on("#") {
-			[suffix] => ("default", suffix)
 			[prefix, suffix] => (prefix, suffix)
 			_ => return Err("invalid tool reference: ${text}")
 		}
@@ -262,13 +264,15 @@ Project :: [].{
 		check_names(spec.environments.map(|e| e.name), "Environment")?
 		check_names(spec.shells.map(|s| s.name), "Shell")?
 		check_names(spec.tasks.map(|t| t.name), "Task")?
-		sources = if spec.sources.any(|s| s.name == "default") spec.sources else [{ name: "default", provider: Auto }].concat(spec.sources)
+		sources = spec.sources
 		for source in sources {
 			if spec.inputs.any(|i| i.name == source.name) {
 				return Err("DuplicateInput: ${source.name}")
 			}
 			match source.provider {
-				Auto => {}
+				# The tag is still read, so that a Spec or a Lock from before
+				# sources were explicit says this instead of failing to parse.
+				Auto => return Err("source ${source.name} is Auto, which names no package set; declare the set it takes its tools from")
 				NixPackages(url) => if !valid_ref(url) {
 					return Err("invalid Nix source: ${source.name}")
 				}
@@ -430,7 +434,7 @@ Project :: [].{
 			all_tools = plain_tools.concat(env_commands.map(|entry| entry.tool)).concat(env_configured.map(|entry| entry.tool))
 			for t in all_tools {
 				parsed = tool("${t.source}#${t.name}")?
-				source = sources.find_first(|s| s.name == parsed.source).map_err(|_| "unknown source: ${t.source}")?
+				source = sources.find_first(|s| s.name == parsed.source).map_err(|_| unknown_source(sources, t.source))?
 				match source.provider {
 					Auto => {}
 					NixPackages(_) => {
@@ -533,6 +537,17 @@ Project :: [].{
 		}
 		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: $environment_programs, expects: $expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
 	}
+
+	## A tool names a source the project does not declare. The sources it
+	## does declare are listed, so the mistake is seen at once: a misspelt
+	## name, or none declared at all.
+	unknown_source : List(Spec.Source), Str -> Str
+	unknown_source = |sources, name|
+		if sources.is_empty() {
+			"unknown source: ${name}; Blueprint.roc declares no package source"
+		} else {
+			"unknown source: ${name}; Blueprint.roc declares ${Str.join_with(sources.map(|source| source.name), ", ")}"
+		}
 
 	## Whole-project checks precede expansion, even for an empty request.
 	## Only atomic typed steps escape; repeated effects stay repeated.
@@ -945,15 +960,13 @@ Project :: [].{
 		if provider == Guix and !env.overlays.is_empty() {
 			return Err("Guix does not support overlays in environment ${name}")
 		}
-		# An empty environment still uses the default provider's environment builder.
 		configured = project.configured_tools.keep_if(|entry| entry.environment == name)
 		if provider == Guix and !configured.is_empty() {
 			return Err("Guix does not support configured tools in environment ${name}")
 		}
 		all_tools = env.tools.concat(project.system_tools.keep_if(|entry| entry.environment == name).fold([], |tools, entry| tools.concat(entry.tools))).concat(project.commands.keep_if(|entry| entry.environment == name).map(|entry| entry.tool)).concat(configured.map(|entry| entry.tool))
-		source_names = if all_tools.is_empty() ["default"] else unique(all_tools.map(|t| t.source))
-		for source_name in source_names {
-			source = project.sources.find_first(|s| s.name == source_name).map_err(|_| "unknown source: ${source_name}")?
+		for source_name in unique(all_tools.map(|t| t.source)) {
+			source = project.sources.find_first(|s| s.name == source_name).map_err(|_| unknown_source(project.sources, source_name))?
 			match (provider, source.provider) {
 				(Nix, GuixPackages(_)) => return Err("source ${source.name} requires Guix, not Nix")
 				(Guix, NixPackages(_)) => return Err("source ${source.name} requires Nix, not Guix")
@@ -970,7 +983,9 @@ Project :: [].{
 	unique = |items| items.fold([], |acc, item| if acc.contains(item) acc else acc.append(item))
 }
 
-expect Project.tool("git") == Ok({ source: "default", name: "git" })
+# A tool always names its source: a name alone is no tool.
+expect Project.tool("nix#git") == Ok({ source: "nix", name: "git" })
+expect Project.tool("git").is_err() and Project.tool("#git").is_err() and Project.tool("nix#").is_err()
 expect Project.tool("stable#python@3.12:out") == Ok({ source: "stable", name: "python@3.12:out" })
 expect Project.tool("bad##git").is_err()
 expect Project.tool("git\n").is_err()
@@ -1051,7 +1066,7 @@ expect match Project.validate(fixture([base, { ..child, tools: [], overlays: [] 
 
 # Validation can be repeated by frontend, loader, and provider without changes.
 expect match Project.validate(fixture([base, child])) {
-	Ok(spec) => Project.validate(spec) == Ok(spec) and Spec.parse(spec.to_str()) == Ok(spec) and spec.sources.first() == Ok({ name: "default", provider: Auto })
+	Ok(spec) => Project.validate(spec) == Ok(spec) and Spec.parse(spec.to_str()) == Ok(spec) and spec.sources == fixture([]).sources
 	Err(_) => False
 }
 
@@ -1060,19 +1075,36 @@ expect Project.validate(fixture([child])) == Err("unknown environment: base")
 expect Project.validate(fixture([{ ..base, parents: ["base"] }])).is_err()
 expect Project.validate(fixture([{ ..base, parents: ["dev"] }, child])).is_err()
 expect Project.validate(fixture([base, { ..child, parents: ["base", "base"] }])).is_err()
-expect Project.validate(fixture([{ ..base, tools: [{ source: "missing", name: "git" }] }])) == Err("unknown source: missing")
+expect Project.validate(fixture([{ ..base, tools: [{ source: "missing", name: "git" }] }])) == Err("unknown source: missing; Blueprint.roc declares nix, guix")
 expect Project.validate(fixture([{ ..base, overlays: ["missing"] }])) == Err("unknown overlay: missing")
 expect Project.validate(fixture([{ ..base, overlays: ["data"] }])) == Err("unknown overlay: data")
 expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "git#extra" }] }])).is_err()
 expect Project.validate(fixture([{ ..base, name: "bad/name" }])).is_err()
 
-# Explicit providers validate grammar statically; Auto waits for selection.
+# Every source says what it is, so a tool's name is held to its source's
+# grammar at once: what Guix writes is no Nix attribute, and the reverse.
 expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])).is_err()
 expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])).is_err()
 expect {
-	spec = fixture([{ ..base, overlays: [], tools: [{ source: "default", name: "python@3:out" }] }])
-	Project.validate(spec).is_ok() and Project.check_environment(spec, Guix, "base").is_ok() and Project.check_environment(spec, Nix, "base").is_err()
+	spec = fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@3:out" }] }])
+	Project.validate(spec).is_ok() and Project.check_environment(spec, Guix, "base").is_ok() and Project.check_environment(spec, Nix, "base") == Err("source guix requires Guix, not Nix")
 }
+
+# No source is implied. A project that declares none has none, a tool cannot
+# name one that is not declared, and the refusal lists those that are.
+expect {
+	bare = { ..fixture([{ ..base, tools: [], overlays: [] }]), sources: [], inputs: [] }
+	Project.validate(bare).map_ok(|spec| spec.sources) == Ok([])
+		and Project.validate({ ..bare, environments: [{ ..base, overlays: [] }] }) == Err("unknown source: nix; Blueprint.roc declares no package source")
+			and Project.validate(fixture([{ ..base, tools: [{ source: "default", name: "git" }] }])) == Err("unknown source: default; Blueprint.roc declares nix, guix")
+				# An environment with no tool asks nothing of any provider.
+				and Project.check_environment(bare, Nix, "base") == Ok({})
+					and Project.check_environment(bare, Guix, "base") == Ok({})
+}
+
+# A source that leaves its package set to the consumer is refused: the tag is
+# read, so that a Spec from before sources were explicit says so.
+expect Project.validate({ ..fixture([]), sources: [{ name: "default", provider: Auto }] }) == Err("source default is Auto, which names no package set; declare the set it takes its tools from")
 
 # An unused overlay/foreign source is not a global provider requirement.
 expect {
@@ -1114,7 +1146,7 @@ expect {
 	Project.validate(spec) == Err("system tools require feature: system-tools") and
 		Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [entry, entry] }) == Err("DuplicateToolsFor: environment base on x86_64-linux") and
 			Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [{ ..entry, system: "aarch64-darwin" }] }) == Err("undeclared system for system tools: aarch64-darwin") and
-				Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [{ ..entry, tools: [{ source: "missing", name: "wayland" }] }] }) == Err("unknown source: missing")
+				Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [{ ..entry, tools: [{ source: "missing", name: "wayland" }] }] }) == Err("unknown source: missing; Blueprint.roc declares nix, guix")
 }
 
 # Runtime callers must not bypass validation by constructing Spec directly.
@@ -1217,7 +1249,7 @@ expect {
 	Project.validate(spec) == Err("commands require feature: commands") and
 		Project.validate({ ..spec, requires_: ["commands"], commands: [entry, entry] }) == Err("DuplicateCommand: environment base: vcs") and
 			Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, environment: "missing" }] }) == Err("unknown environment for command: missing") and
-				Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing") and
+				Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing; Blueprint.roc declares nix, guix") and
 					Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, tool: { source: "nix", name: "python@3" } }] }).is_err()
 }
 
@@ -1267,7 +1299,6 @@ build_source_fixture = |build_sources, requires_| {
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["builds"])) == Err("build sources require feature: sources")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["sources"])) == Err("builds require feature: builds")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:../escape" }], ["sources", "builds"])).is_err()
-expect Project.validate(build_source_fixture([{ name: "default", ref: "path:./assets" }], ["sources", "builds"])) == Err("DuplicateInput: default")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }, { name: "assets", ref: "path:./other" }], ["sources", "builds"])) == Err("DuplicateBuildSource: assets")
 expect Project.validate(build_source_fixture([{ name: "bad/name", ref: "path:./assets" }], ["sources", "builds"])).is_err()
 
@@ -1572,7 +1603,7 @@ expect {
 	spec = fixture([base])
 	Project.validate({ ..spec, shells: [shell, shell] }) == Err("DuplicateShell: default") and
 		Project.validate({ ..spec, tasks: [task, task] }) == Err("DuplicateTask: check") and
-			Project.validate({ ..spec, sources: [{ name: "default", provider: Auto }, { name: "default", provider: Auto }] }) == Err("DuplicateSource: default") and
+			Project.validate({ ..spec, sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }, { name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }] }) == Err("DuplicateSource: nix") and
 				Project.validate({ ..spec, inputs: [{ name: "tools", url: "github:example/tools", kind: Flake }, { name: "tools", url: "github:example/overlay", kind: Overlay }] }) == Err("DuplicateInput: tools")
 }
 
@@ -1580,10 +1611,12 @@ expect {
 expect {
 	spec = fixture([base])
 	assets = { name: "assets", ref: "path:./assets" }
-	Project.validate({ ..spec, sources: [{ name: "data", provider: Auto }] }) == Err("DuplicateInput: data") and
+	Project.validate({ ..spec, sources: [{ name: "data", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] }) == Err("DuplicateInput: data") and
 		Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "data" }] }) == Err("DuplicateInput: data") and
 			Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "nix" }] }) == Err("DuplicateInput: nix") and
-				Project.validate({ ..spec, requires_: ["sources"], build_sources: [assets] }).is_ok()
+				Project.validate({ ..spec, requires_: ["sources"], build_sources: [assets] }).is_ok() and
+				# `default` is a name like any other: nothing declares it unasked.
+					Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "default" }] }).is_ok()
 }
 
 # A shell or task must use a declared environment, and a task a nonempty argv.
@@ -1610,14 +1643,8 @@ expect {
 	Project.validate(fixture([environment("one", "two"), environment("two", "three"), environment("three", "one")])) == Err("environment cycle: one -> two -> three -> one")
 }
 
-# Naming the default source explicitly changes nothing.
-expect {
-	spec = fixture([base])
-	Project.validate({ ..spec, sources: [{ name: "default", provider: Auto }].concat(spec.sources) }) == Project.validate(spec)
-}
-
 # A flake input is not a package source, and explicit providers name their grammar.
-expect Project.validate(fixture([{ ..base, tools: [{ source: "data", name: "git" }] }])) == Err("unknown source: data")
+expect Project.validate(fixture([{ ..base, tools: [{ source: "data", name: "git" }] }])) == Err("unknown source: data; Blueprint.roc declares nix, guix")
 expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])) == Err("invalid Nix tool: python@3")
 expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])) == Err("invalid Guix tool: python@")
 expect Project.validate({ ..fixture([base]), requires_: ["commands"], commands: [{ environment: "base", name: "bin/vcs", tool: { source: "nix", name: "git" } }] }) == Err("invalid command name: bin/vcs")
@@ -1659,7 +1686,7 @@ expect {
 	Project.validate(spec) == Err("configured tools require feature: configured-tools") and
 		Project.validate({ ..featured, configured_tools: [entry, entry] }) == Err("DuplicateToolWith: environment base: ${rust.name}") and
 			Project.validate({ ..featured, configured_tools: [{ ..entry, environment: "missing" }] }) == Err("unknown environment for configured tool: missing") and
-				Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing") and
+				Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing; Blueprint.roc declares nix, guix") and
 					Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "nix", name: "python@3" } }] }).is_err() and
 						Project.validate({ ..featured, configured_tools: [{ ..entry, options: Value.List([]) }] }) == Err("options of tool ${rust.name} must be Attrs") and
 							Project.validate({ ..featured, configured_tools: [{ ..entry, options: Value.Attrs([{ name: "targets", value: Value.Int(1) }, { name: "targets", value: Value.Int(2) }]) }] }) == Err("DuplicateOption: tool ${rust.name}: targets") and
@@ -1808,7 +1835,7 @@ expect
 # A program shares no name with a source, an input or a build source, so that
 # `blueprint update <name>` means one thing.
 expect
-	["nix", "default", "first", "data"].all(|name| Project.validate({ ..fetching, programs: [{ ..linux_tool, name }] }) == Err("program ${name} has the name of a source or input")) and
+	["nix", "guix", "first", "data"].all(|name| Project.validate({ ..fetching, programs: [{ ..linux_tool, name }] }) == Err("program ${name} has the name of a source or input")) and
 		Project.validate({ ..fetching, requires_: ["programs", "sources"], build_sources: [{ name: "assets", ref: "path:./assets" }], programs: [{ ..linux_tool, name: "assets" }] }) == Err("program assets has the name of a source or input")
 
 # A selection names its environment once, with names a file on PATH can have.

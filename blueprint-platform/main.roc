@@ -18,8 +18,8 @@
 ## ]
 ## ```
 ##
-## Unqualified tools use the "default" source, implicitly Auto; a consumer
-## chooses the provider. "source#name" selects another declared source.
+## A tool is "source#name" for a source declared with `Packages`; no source
+## is implied, and a project with no such tool declares none.
 ## Environments own tools and scoped overlays; shells and tasks use them.
 ## `Custom` and `Raw` take a `Val`, written with bare tags: `Str`, `Int`,
 ## `Bool`, `List` and `Attrs` (a list of (name, value) pairs).

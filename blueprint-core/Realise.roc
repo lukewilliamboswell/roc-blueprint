@@ -18,8 +18,10 @@ import Provider
 Realise :: [].{
 
 	## The Spec features planned here, whatever provider is at hand.
+	## `explicit-sources` is the Core's own: a Spec that requires it declares
+	## every source its tools name, and none is added to it.
 	features : List(Str)
-	features = ["programs", "expects"]
+	features = ["explicit-sources", "programs", "expects"]
 
 	## The ordered steps of one request on a System, or everything that
 	## stops it. Every task and build of a workflow is planned before a
@@ -177,7 +179,8 @@ Realise :: [].{
 	## A sandboxed build is a provider's whole. Its PATH is its environment's
 	## package tools and nothing of the machine, so an environment in its
 	## closure that fetches or expects is refused: the program would not be
-	## there. With no tool at all, the builder is that of the default source.
+	## there. With no tool at all, the sandbox is that of the first declared
+	## source a provider supplies; a project that declares none cannot build.
 	built : Spec, Str, Request, Str, Layout, Authority, List(Provider) -> Try(List(Steps.Step), List(Str))
 	built = |project, name, request, system, layout, authority, providers| {
 		closure = Project.build_closure(project, name).map_err(|message| [message])?
@@ -197,8 +200,21 @@ Realise :: [].{
 			}
 		}
 		environment = closure.last().map_ok(|build| build.environment) ?? ""
-		steps = match supplier(project, providers, environment, if $sources.is_empty() ["default"] else $sources) {
-			Ok(provider) => asked(provider, project, request, system, layout, authority)
+		chosen = if $sources.is_empty() {
+			match project.sources.find_first(|source| providers.any(|candidate| (candidate.realises)(source.provider))) {
+				Ok(source) => Ok([source.name])
+				Err(_) => Err("build ${name} runs in a provider's sandbox, and Blueprint.roc declares no package source for one; declare one with Packages${declared(project)}")
+			}
+		} else {
+			Ok($sources)
+		}
+		steps = match chosen {
+			Ok(names) =>
+				match supplier(project, providers, environment, names) {
+					Ok(provider) => asked(provider, project, request, system, layout, authority)
+					Err(problem) => Err([problem])
+				}
+
 			Err(problem) => Err([problem])
 		}
 		match steps {
@@ -232,7 +248,7 @@ Realise :: [].{
 	supplier = |project, providers, environment, source_names| {
 		var $found = []
 		for name in Project.unique(source_names) {
-			source = project.sources.find_first(|s| s.name == name).map_err(|_| "unknown source: ${name}")?
+			source = project.sources.find_first(|s| s.name == name).map_err(|_| Project.unknown_source(project.sources, name))?
 			match providers.find_first(|candidate| (candidate.realises)(source.provider)) {
 				Ok(provider) => {
 					if !$found.any(|known| known.name == provider.name) {
@@ -248,6 +264,11 @@ Realise :: [].{
 			_ => Err("environment ${environment} takes tools from sources of several providers: ${Str.join_with($found.map(|provider| provider.name), ", ")}")
 		}
 	}
+
+	## The sources a project declares, for the end of a message.
+	declared : Spec -> Str
+	declared = |project|
+		if project.sources.is_empty() "" else " (it declares ${Str.join_with(project.sources.map(|source| "${source.name}, ${source_kind(source.provider)}"), "; ")})"
 
 	source_kind : Spec.Provider -> Str
 	source_kind = |provider|
@@ -466,7 +487,7 @@ Realise :: [].{
 			task: task.name,
 			environment: task.environment,
 			providers: needed,
-			tools: use.tools.map(|tool| if tool.source == "default" tool.name else "${tool.source}#${tool.name}"),
+			tools: use.tools.map(|tool| "${tool.source}#${tool.name}"),
 			programs: use.programs.map(|program| program.name),
 			unavailable: use.unavailable,
 			expects: use.expects,
@@ -475,7 +496,7 @@ Realise :: [].{
 	}
 }
 
-## A provider that supplies Auto and Nix package sources and answers every
+## A provider that supplies Nix package sources and answers every
 ## request with one step naming it, so that a plan shows what it was asked.
 ## It refuses the task `broken`, as a provider refuses what it cannot render.
 stub : Provider
@@ -484,8 +505,8 @@ stub = Provider.{
 	features: [],
 	realises: |source|
 		match source {
-			GuixPackages(_) => False
-			_ => True
+			NixPackages(_) => True
+			_ => False
 		},
 	render: |_spec| Ok([]),
 	preflight: |_spec, _request, _system, _layout| Ok({}),
@@ -537,7 +558,7 @@ sample = {
 	..Spec.empty("sample"),
 	systems: ["x86_64-linux", "aarch64-darwin", "x86_64-windows"],
 	requires_: ["programs", "expects", "roc-packages", "sources", "builds", "workflows"],
-	sources: [{ name: "default", provider: Auto }, { name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }, { name: "guix", provider: GuixPackages("https://git.savannah.gnu.org/git/guix.git") }],
+	sources: [{ name: "guix", provider: GuixPackages("https://git.savannah.gnu.org/git/guix.git") }, { name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }],
 	programs: [
 		{ name: "roc-stable", system: "x86_64-linux", urls: roc_urls("x86_64-linux"), unpack: TarGz, path: "roc/roc" },
 		{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), unpack: TarGz, path: "roc/roc" },
@@ -549,7 +570,7 @@ sample = {
 		{ name: "scripts", parents: ["plain"], tools: [], overlays: [] },
 		{ name: "dev", parents: ["scripts"], tools: [], overlays: [] },
 		{ name: "host", parents: ["dev"], tools: [{ source: "nix", name: "zig" }], overlays: [] },
-		{ name: "builder", parents: [], tools: [{ source: "default", name: "coreutils" }], overlays: [] },
+		{ name: "builder", parents: [], tools: [{ source: "nix", name: "coreutils" }], overlays: [] },
 		{ name: "foreign", parents: [], tools: [{ source: "guix", name: "git" }], overlays: [] },
 	],
 	environment_programs: [{ environment: "scripts", programs: ["roc-stable"] }, { environment: "dev", programs: ["tool"] }],
@@ -688,9 +709,17 @@ expect planned(sample, Request.Shell("default"), "x86_64-linux", unix, locked) =
 expect planned(sample, Request.Shell("plain"), "x86_64-linux", unix, locked) == Ok([{ action: Shell("plain"), files: [], argv: [], artifacts: [], operations: [] }])
 expect planned(sample, Request.Shell("host"), "x86_64-linux", unix, locked).map_ok(|steps| steps.map(|step| (step.argv, step.operations))) == Ok([(["nix", "develop", "/project/.blueprint#x86_64-linux.host"], supplied_for("host"))])
 
-# A build is the provider's whole, even when its environment has no tool.
+# A build is the provider's whole, even when its environment has no tool:
+# its sandbox is then that of the first declared source a provider supplies,
+# here the second declared. A project with no such source cannot build, and
+# is told what to declare, with what it does declare.
 expect planned(sample, Request.Build("app"), "x86_64-linux", unix, locked) == Ok([{ action: Build("app"), files: [{ path: "/project/.blueprint/flake.nix", contents: "{ }" }], argv: ["nix", "build", "app"], artifacts: [], operations: [] }])
-expect planned({ ..sample, workflows: [], builds: [{ name: "bare", environment: "plain", inputs: [], needs: [], run: ["true"], output: "out" }] }, Request.Build("bare"), "x86_64-linux", unix, locked).map_ok(|steps| steps.map(|step| step.argv)) == Ok([["nix", "build", "bare"]])
+expect {
+	bare = { ..sample, workflows: [], tasks: [], shells: [], environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), builds: [{ name: "bare", environment: "plain", inputs: [], needs: [], run: ["true"], output: "out" }] }
+	planned(bare, Request.Build("bare"), "x86_64-linux", unix, locked).map_ok(|steps| steps.map(|step| step.argv)) == Ok([["nix", "build", "bare"]])
+		and planned({ ..bare, sources: [] }, Request.Build("bare"), "x86_64-linux", unix, locked) == Err(["build bare runs in a provider's sandbox, and Blueprint.roc declares no package source for one; declare one with Packages"])
+			and planned({ ..bare, sources: sample.sources.take_first(1) }, Request.Build("bare"), "x86_64-linux", unix, locked) == Err(["build bare runs in a provider's sandbox, and Blueprint.roc declares no package source for one; declare one with Packages (it declares guix, GuixPackages)"])
+}
 
 # A sandbox holds nothing of the machine, so a build whose own environment
 # fetches or expects is refused; one that only depends on such a build is too.
@@ -700,10 +729,17 @@ expect {
 	planned(needing, Request.Build("outer"), "x86_64-linux", unix, locked) == Err(["build outer: environment scripts has fetched programs or expected tools, and a sandboxed build has only the tools of its package sources"])
 }
 
-# Only a provider generates files, and only one that supplies a declared source.
+# Only a provider generates files, and only one that supplies a declared
+# source: a project that declares none, or only another provider's, has
+# nothing generated for it.
 expect planned(sample, Request.Generate, "x86_64-linux", unix, locked) == Ok([{ action: Generate, files: [{ path: "/project/.blueprint/flake.nix", contents: "{ }" }], argv: [], artifacts: [], operations: [] }])
 expect Realise.plan(sample, Request.Generate, "x86_64-linux", unix, locked, []).map_ok(|steps| steps.steps) == Ok([])
-expect Realise.plan({ ..sample, sources: [{ name: "default", provider: GuixPackages("https://example.test/guix.git") }], environments: [], environment_programs: [], expects: [], roc_packages: [], shells: [], tasks: [], builds: [], workflows: [] }, Request.Generate, "x86_64-linux", unix, locked, [stub]).map_ok(|steps| steps.steps) == Ok([])
+expect {
+	fetching = { ..sample, environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), shells: [], tasks: [], builds: [], workflows: [] }
+	planned({ ..fetching, sources: [] }, Request.Generate, "x86_64-linux", unix, locked) == Ok([])
+		and planned({ ..fetching, sources: [{ name: "channel", provider: GuixPackages("https://example.test/guix.git") }] }, Request.Generate, "x86_64-linux", unix, locked) == Ok([])
+			and planned(fetching, Request.Generate, "x86_64-linux", unix, locked).map_ok(|steps| steps.len()) == Ok(1)
+}
 
 # A workflow is its tasks and builds in order, each planned once and repeated
 # whole; a step is the same in a workflow as alone.
@@ -825,9 +861,9 @@ expect Realise.requirements({ ..sample, workflows: [], tasks: sample.tasks.keep_
 expect Realise.requirements(sample, "x86_64-linux", [], [stub]) == Err(["environment foreign takes tools from the source guix (GuixPackages), which no provider of this blueprint supplies"])
 expect Realise.requirements(sample, "x86_64-linux", ["absent", "hello", "gone"], [stub]) == Err(["unknown task: absent", "unknown task: gone"])
 expect Realise.requirements(sample, "riscv64-linux", [], [stub]) == Err(["target riscv64-linux is not declared by the project"])
-expect Realise.requirements(sample, "x86_64-linux", ["unpinned"], [stub]).map_ok(|needs| needs.tasks.map(|entry| entry.tools)) == Ok([["coreutils"]])
+expect Realise.requirements(sample, "x86_64-linux", ["unpinned"], [stub]).map_ok(|needs| needs.tasks.map(|entry| entry.tools)) == Ok([["nix#coreutils"]])
 
-expect Realise.features == ["programs", "expects"]
+expect Realise.features == ["explicit-sources", "programs", "expects"]
 
 # Before a Lock is read, a request is refused for whatever the Spec alone
 # shows, the provider's own refusal included, and for nothing the Lock says.

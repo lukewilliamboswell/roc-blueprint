@@ -31,7 +31,7 @@ CliIsolationTest := [].{
 	wire : Str
 	wire =
 		\\((format ((major 2) (minor 1))) (name "wire")
-		\\(requires ("builds"))
+		\\(requires ("explicit-sources" "builds"))
 		\\(systems ("x86_64-linux"))
 		\\(sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
 		\\(environments (((name "ci") (parents ()) (tools ()) (overlays ()))))
@@ -254,4 +254,4 @@ expect CliIsolationTest.staged({ mnt: "mnt:[1]", net: "net:[2]", runner: "/repo/
 	"throw \"snapshot refuses symlink: \${path}\"",
 	"throw \"snapshot refuses special file: \${path}\"",
 ]
-expect CliIsolationTest.wire.contains("(builds (((name \"app\")") and CliIsolationTest.wire.contains("(requires (\"builds\"))")
+expect CliIsolationTest.wire.contains("(builds (((name \"app\")") and CliIsolationTest.wire.contains("(requires (\"explicit-sources\" \"builds\"))")

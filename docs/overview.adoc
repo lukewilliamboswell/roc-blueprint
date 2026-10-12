@@ -24,10 +24,9 @@ Roc checks quoted values and whole-configuration rules during
 `roc check Blueprint.roc`: missing names, duplicate declarations, unknown
 references and inheritance cycles are compile-time errors. An editor shows
 them as you type. Checking needs a Roc nightly the platform release was built
-for; each release's notes name it. A source declared with an explicit provider
-also gets that provider's tool-name grammar checked; an `Auto` source defers
-that check until a provider is selected. Whether a package exists is decided
-by Nix, not by Roc.
+for; each release's notes name it. Every tool names the package source it
+comes from, and its name is checked against that source's grammar. Whether a
+package exists is decided by Nix, not by Roc.
 
 == How it works
 

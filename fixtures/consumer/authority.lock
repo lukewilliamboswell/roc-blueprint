@@ -10,14 +10,6 @@
 			(value (Attrs ((
 				(name "inputs")
 				(value (Attrs ((
-					(name "default")
-					(value (Attrs ((
-						(name "ref")
-						(value (Str "github:NixOS/nixpkgs/nixos-unstable"))) (
-						(name "kind")
-						(value (Str "auto"))) (
-						(name "flake")
-						(value (Bool true))))))) (
 					(name "nixpkgs")
 					(value (Attrs ((
 						(name "ref")
@@ -160,8 +152,6 @@
 					(value (Attrs ((
 						(name "inputs")
 						(value (Attrs ((
-							(name "default")
-							(value (Str "nixpkgs"))) (
 							(name "nixpkgs")
 							(value (Str "nixpkgs"))) (
 							(name "roc")
@@ -172,11 +162,6 @@
 		(overlays ())
 		(sources ())))
 	(sources ((
-		(digest "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5")
-		(name "default")
-		(provider "nix")
-		(ref "github:NixOS/nixpkgs/nixos-unstable")
-		(rev "4975466d324710c576dc11ad614684e6bd8cad8e")) (
 		(digest "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5")
 		(name "nixpkgs")
 		(provider "nix")

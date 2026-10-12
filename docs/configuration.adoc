@@ -31,11 +31,8 @@ complete file with the current URL.
 | `Systems(List(System))`
 | Declared targets, each `<arch>-<os>` of a known architecture (`x86_64`, `aarch64`, `riscv64`, `i686`, `armv7l`, `powerpc64le`) and operating system (`linux`, `darwin`, `windows`, `freebsd`). Defaults to x86_64 and aarch64 on Linux and macOS; an empty list is invalid.
 
-| `Packages(InputName, Auto)`
-| Named source using the consumer-selected provider's default. Omitting `Packages("default", Auto)` has the same meaning.
-
 | `Packages(InputName, From(Provider))`
-| Explicit source intent: `NixPackages(FlakeRef)` or `GuixPackages(Str)`.
+| A package source and the set it is: `NixPackages(FlakeRef)` or `GuixPackages(Str)`. Every source is declared; none is implied.
 
 | `Overlay(InputName, FlakeRef)`
 | Named overlay input; only environments selecting its name apply it.
@@ -135,7 +132,8 @@ With `${system}` alone the compiler reports a type mismatch of
 
 == Choose where tools come from
 
-Provider details stay in source declarations (a fragment inside `config`):
+A tool that a package source installs is written `"<source>#<name>"`, for a
+source declared with `Packages` (a fragment inside `config`):
 
 [source,roc]
 ----
@@ -144,9 +142,23 @@ Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
 Environment("dev", [Tools(["nix#git", "stable#jq"])]),
 ----
 
-The core does not inspect `PATH`, autodetect a provider or translate package
-names. The reference CLI explicitly selects Nix. Guix source intent and pure
-capability validation exist, but there is *no Guix renderer or executor*.
+The source is always written, in `Tools`, `ToolsFor`, `Command` and
+`ToolWith` alike. No source is implied: `"git"` alone is refused where it is
+written, with both ways out, which are to name a declared source or, if the
+machine already has the tool, to list it in `Expect`. A tool that names a
+source the project does not declare is refused with the sources it does
+declare. A project whose environments have no such tool declares no source,
+and Nix is not started for it.
+
+An environment that Nix must build although it has no tool of its own, such
+as the sandbox of a build whose environment is empty, is built with the first
+Nix source declared, in the order of `Blueprint.roc`. The bash `nix develop`
+runs comes from that source too.
+
+The core does not autodetect a provider or translate package names. Nix is
+asked only for an environment that has a tool from a Nix source. Guix source
+intent and pure capability validation exist, but there is *no Guix renderer
+or executor*.
 An incompatible requested environment fails; it never retries another provider.
 Missing native packages and unavailable target packages fail in Nix rather than
 being silently filtered out. Unsupported Nix target declarations fail before
@@ -260,7 +272,7 @@ How the source is written decides whether the version can move:
   the revision.
 * A source that names a *branch*, such as `github:NixOS/nixpkgs/nixos-25.05`,
   is moved by `blueprint update` and by `blueprint update py`, and takes
-  whatever version the branch then has. `blueprint update default` leaves it
+  whatever version the branch then has. `blueprint update nix` leaves it
   alone.
 
 Nothing in `Blueprint.roc` states the version, so nothing fails if it changes.

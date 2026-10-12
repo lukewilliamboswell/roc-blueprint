@@ -57,8 +57,12 @@ Lower :: [].{
 			_ => return Err("DuplicateSystems: declare Systems at most once")
 		}
 		programs = fetched(acc.recipes, Project.unique(systems))?
+		# `explicit-sources` is always there: a consumer from before sources
+		# were explicit would give this Spec a source it does not declare, and
+		# must refuse it by name instead.
 		requires_ =
-			(if acc.extensions.is_empty() [] else ["extensions"])
+			[explicit_sources]
+				.concat(if acc.extensions.is_empty() [] else ["extensions"])
 				.concat(if acc.raw.is_empty() [] else ["raw"])
 				.concat(if acc.build_sources.is_empty() [] else ["sources"])
 				.concat(if acc.builds.is_empty() [] else ["builds"])
@@ -101,7 +105,7 @@ Lower :: [].{
 		next = match setting {
 			Name(name) => { ..acc, names: acc.names.append(name) }
 			Systems(systems) => { ..acc, systems: acc.systems.append(systems) }
-			Packages(name, source) => { ..acc, sources: acc.sources.append({ name: name.to_str(), provider: provider(source) }) }
+			Packages(name, source) => { ..acc, sources: acc.sources.append({ name: name.to_str(), provider: provider(name.to_str(), source)? }) }
 			Input(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Flake }) }
 			Overlay(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Overlay }) }
 			Environment(name, inner) => {
@@ -198,13 +202,21 @@ Lower :: [].{
 			RunWorkflow(name) => RunWorkflow(name.to_str())
 		}
 
-	provider : Config.PackageSource -> Spec.Provider
-	provider = |source|
+	## A source says which package set it is. `Auto`, which left that to the
+	## consumer, is still a tag of the type for one release, so that a
+	## configuration from before 0.6 is told what to write.
+	provider : Str, Config.PackageSource -> Try(Spec.Provider, Str)
+	provider = |name, source|
 		match source {
-			Auto => Auto
-			From(NixPackages(ref)) => NixPackages(ref.to_str())
-			From(GuixPackages(channel)) => GuixPackages(channel)
+			Auto => Err("Packages(\"${name}\", Auto): the Auto source was removed in 0.6; name the package set, as in From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))")
+			From(NixPackages(ref)) => Ok(NixPackages(ref.to_str()))
+			From(GuixPackages(channel)) => Ok(GuixPackages(channel))
 		}
+
+	## The feature every Spec lowered here requires: its sources are all
+	## declared, and none is implied.
+	explicit_sources : Str
+	explicit_sources = "explicit-sources"
 
 	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command), configured_tools : List(Spec.ConfiguredTool), roc_packages : List(Spec.RocPackage), roc_sources : List(Spec.BuildSource), recipes : List(Recipe), environment_programs : List(Spec.EnvironmentPrograms), expects : List(Spec.Expects) }, Str)
 	environment = |name, inner| {
@@ -363,6 +375,18 @@ Lower :: [].{
 		}
 }
 
+# Every Spec says its sources are all declared: nothing is added to them, a
+# project that declares none has none, and a consumer from before that refuses
+# the Spec by the feature's name.
+expect Lower.lower([Name("plain"), Environment("dev", [])]).map_ok(|spec| (spec.requires_, spec.sources)) == Ok((["explicit-sources"], []))
+expect Lower.lower([Name("sourced"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [Tools(["nix#git"])])]).map_ok(|spec| (spec.requires_, spec.sources)) == Ok((["explicit-sources"], [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }]))
+
+# A source that leaves its package set to the consumer is told what to write,
+# and a tool cannot name a source that is not declared.
+expect Lower.lower([Name("invalid"), Packages("default", Auto)]) == Err("Packages(\"default\", Auto): the Auto source was removed in 0.6; name the package set, as in From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))")
+expect Lower.lower([Name("invalid"), Environment("dev", [Tools(["nix#git"])])]) == Err("unknown source: nix; Blueprint.roc declares no package source")
+expect Lower.lower([Name("invalid"), Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))), Environment("dev", [Command("vcs", "nix#git")])]) == Err("unknown source: nix; Blueprint.roc declares stable")
+
 bundle_url : Str -> Str
 bundle_url = |hash| "https://example.test/releases/download/1.0.0/${hash}.tar.zst"
 
@@ -379,7 +403,7 @@ expect match Lower.lower([
 	Environment("base", [RocPackages([bundle_url("abc123")])]),
 	Environment("dev", [Extend("base"), RocPackages([bundle_url("def456"), bundle_url("abc123"), bundle_url("def456")])]),
 ]) {
-	Ok(spec) => spec.requires_ == ["sources", "roc-packages"]
+	Ok(spec) => spec.requires_ == ["explicit-sources", "sources", "roc-packages"]
 		and spec.build_sources == [
 			{ name: "roc-abc123", ref: "tarball+${bundle_url("abc123")}" },
 			{ name: "roc-def456", ref: "tarball+${bundle_url("def456")}" },
@@ -401,7 +425,7 @@ expect match Lower.lower([
 	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 	Environment("dev", [ToolWith("nix#rust-bin.stable.\"1.95.0\".default", [("extensions", List([Str("rust-src")]))])]),
 ]) {
-	Ok(spec) => spec.requires_ == ["configured-tools"]
+	Ok(spec) => spec.requires_ == ["explicit-sources", "configured-tools"]
 		and spec.configured_tools == [
 			{
 				environment: "dev",
@@ -452,7 +476,7 @@ expect match Lower.lower([
 	),
 	Environment("plain", [Programs([]), Expect([])]),
 ]) {
-	Ok(spec) => spec.requires_ == ["programs", "expects"]
+	Ok(spec) => spec.requires_ == ["explicit-sources", "programs", "expects"]
 		and spec.programs == [
 			{ name: "roc-stable", system: "x86_64-linux", urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz"], unpack: TarGz, path: "roc_nightly-linux_x86_64-2026-10-04-130536d/roc" },
 			{ name: "roc-stable", system: "aarch64-linux", urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_arm64-2026-10-04-130536d.tar.gz"], unpack: TarGz, path: "roc_nightly-linux_arm64-2026-10-04-130536d/roc" },
@@ -479,8 +503,8 @@ expect Lower.lower([Name("fetching"), Environment("dev", [Programs([tool])])]).m
 expect Lower.lower([Name("fetching"), Systems(["x86_64-linux", "aarch64-darwin"]), Environment("dev", [Programs([Fetch("tool", Recipes.file("https://example.test/{os}/tool-{system}"))])])]).map_ok(|spec| spec.programs.map(|program| program.urls)) == Ok([["https://example.test/linux/tool-x86_64-linux"], ["https://example.test/darwin/tool-aarch64-darwin"]])
 
 # A project that fetches nothing and expects nothing requires neither feature.
-expect Lower.lower([Name("plain"), Environment("dev", [Programs([]), Expect([])])]).map_ok(|spec| (spec.requires_, spec.environment_programs, spec.expects)) == Ok(([], [], []))
-expect Lower.lower([Name("expecting"), Environment("dev", [Expect(["git"])])]).map_ok(|spec| spec.requires_) == Ok(["expects"])
+expect Lower.lower([Name("plain"), Environment("dev", [Programs([]), Expect([])])]).map_ok(|spec| (spec.requires_, spec.environment_programs, spec.expects)) == Ok((["explicit-sources"], [], []))
+expect Lower.lower([Name("expecting"), Environment("dev", [Expect(["git"])])]).map_ok(|spec| spec.requires_) == Ok(["explicit-sources", "expects"])
 
 # A program no declared System has could never run.
 expect Lower.lower([Name("invalid"), Systems(["aarch64-linux", "riscv64-linux"]), Environment("dev", [Programs([tool])])]) == Err("Fetch tool: its recipe answers Unavailable for every declared system (aarch64-linux, riscv64-linux)")

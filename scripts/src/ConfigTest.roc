@@ -41,22 +41,23 @@ ConfigTest := [].{
 	## A new optional field comes with a feature marker for older consumers.
 	markers : List((Str, List(Str)))
 	markers = [
-		("Builds", ["(minor 7)", "(requires (\"sources\" \"builds\"))", "(build_sources ", "(builds "]),
+		("Valid", ["(requires (\"explicit-sources\"))", "(provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\"))"]),
+		("Builds", ["(minor 7)", "(requires (\"explicit-sources\" \"sources\" \"builds\"))", "(build_sources ", "(builds "]),
 		(
 			"Workflows",
 			[
 				"(minor 7)",
-				"(requires (\"builds\" \"workflows\"))",
+				"(requires (\"explicit-sources\" \"builds\" \"workflows\"))",
 				"(workflows ",
 				"(RunTask \"check.all\" (\"\" \"two words\" \"\\\"quoted\\\"\" \"\$HOME\" \"line\\nbreak\" \"--flag\"))",
 			],
 		),
-		("SystemTools", ["(requires (\"system-tools\"))", "(system_tools ", "(system \"x86_64-linux\")"]),
-		("Commands", ["(requires (\"commands\"))", "(commands ", "(name \"roc-stable\")"]),
+		("SystemTools", ["(requires (\"explicit-sources\" \"system-tools\"))", "(system_tools ", "(system \"x86_64-linux\")"]),
+		("Commands", ["(requires (\"explicit-sources\" \"commands\"))", "(commands ", "(name \"roc-stable\")"]),
 		(
 			"ConfiguredTools",
 			[
-				"(requires (\"configured-tools\"))",
+				"(requires (\"explicit-sources\" \"configured-tools\"))",
 				"(configured_tools ",
 				"(name \"rust-bin.stable.latest.default\")",
 				"(Str \"rust-src\")",
@@ -65,7 +66,7 @@ ConfigTest := [].{
 		(
 			"RocPackages",
 			[
-				"(requires (\"sources\" \"roc-packages\"))",
+				"(requires (\"explicit-sources\" \"sources\" \"roc-packages\"))",
 				"(roc_packages ",
 				"(ref \"tarball+https://example.test/releases/download/1.0.0/abc123.tar.zst\")",
 			],
@@ -73,7 +74,7 @@ ConfigTest := [].{
 		(
 			"Programs",
 			[
-				"(requires (\"programs\" \"expects\"))",
+				"(requires (\"explicit-sources\" \"programs\" \"expects\"))",
 				"(programs ",
 				"(environment_programs ",
 				"(expects ",
@@ -546,6 +547,19 @@ quote_fixtures = [
 		\\[Name("bad"), Workflow("ci", [BuildArtifact("bad/name")])]
 		,
 	),
+	# A tool with no source is refused where it is written, with both fixes.
+	bad_quote(
+		"UnqualifiedTool",
+		"names no package source",
+		\\[Name("bad"), Environment("dev", [Tools(["git"])])]
+		,
+	),
+	bad_quote(
+		"UnqualifiedCommand",
+		"names no package source",
+		\\[Name("bad"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [Command("roc-stable", "rocpkgs.nightly")])]
+		,
+	),
 	bad_quote(
 		"BadTool",
 		"invalid tool reference",
@@ -576,6 +590,12 @@ quote_fixtures = [
 ## rule, one graph rule, one argv rule, and two bounds on generated graphs.
 core_fixtures : List(ConfigTest.Fixture)
 core_fixtures = [
+	rejected(
+		"AutoSource",
+		"Packages(\"default\", Auto): the Auto source",
+		\\[Name("invalid"), Packages("default", Auto), Environment("dev", [])]
+		,
+	),
 	rejected(
 		"UnknownSource",
 		"unknown source",
@@ -630,8 +650,8 @@ accepted = { code: 0, stdout: "No errors found", stderr: "" }
 crashed : Str -> Process.Outcome
 crashed = |text| { code: 1, stdout: "", stderr: text }
 
-expect ConfigTest.fixtures.len() == 73
-expect ConfigTest.selected(Full).len() == 76 and ConfigTest.selected(Smoke).map(|fixture| fixture.name) == ["Valid", "EquivalentComposition", "MissingName", "BadWorkflowName", "UnknownSource", "WorkflowExpansion", "Composed"]
+expect ConfigTest.fixtures.len() == 76
+expect ConfigTest.selected(Full).len() == 79 and ConfigTest.selected(Smoke).map(|fixture| fixture.name) == ["Valid", "EquivalentComposition", "MissingName", "BadWorkflowName", "UnknownSource", "WorkflowExpansion", "Composed"]
 
 # Every name is used once, and every name another table mentions exists.
 expect {

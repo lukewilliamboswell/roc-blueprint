@@ -14,8 +14,9 @@ import WorkflowName
 ## Pure settings that compose through ordinary Roc lists and functions.
 Config :: [].{
 
-	## Named sources describe provider intent, not host discovery. Omitting the
-	## "default" source is equivalent to `Packages("default", Auto)`.
+	## Named sources describe provider intent, not host discovery. Every
+	## source is declared with `Packages`: none is implied, and a project
+	## whose environments have no tool of a package source declares none.
 	## Overlay inputs apply only where an environment selects them.
 	## `Custom` and `Raw` retain consumer-specific extension data.
 	Setting : [
@@ -74,11 +75,15 @@ Config :: [].{
 		RunWorkflow(WorkflowName),
 	]
 
+	## Which package set a source is. `Auto`, which left that to the
+	## consumer, was removed in 0.6: the tag remains for one release so that
+	## lowering can say what to write instead.
 	PackageSource : [Auto, From(Provider)]
 	Provider : [NixPackages(FlakeRef), GuixPackages(Str)]
 
-	## Tools and Overlays occur at most once. ToolsFor occurs at most once per
-	## System. Extend inherits tools and overlays parent first; an omitted or
+	## A tool is written `<source>#<name>` for a declared source, in Tools,
+	## ToolsFor, Command and ToolWith alike. Tools and Overlays occur at most
+	## once. ToolsFor occurs at most once per System. Extend inherits tools and overlays parent first; an omitted or
 	## empty list does not clear inherited values. Command exposes one tool's
 	## main program under another name and may repeat with distinct names; the
 	## tool's own executables are not added. A child replaces an inherited

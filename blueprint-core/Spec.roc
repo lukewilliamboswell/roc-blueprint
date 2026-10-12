@@ -47,6 +47,10 @@ Spec := {
 	encoder_for : _
 
 	Format : { major : U64, minor : U64 }
+
+	## Which package set a source is. `Auto` is read and never written: a
+	## Spec or a Lock from before sources were explicit holds it, and
+	## `Project.validate` refuses a Spec that does.
 	Provider : [Auto, NixPackages(Str), GuixPackages(Str)]
 	Source : { name : Str, provider : Provider }
 	Input : { name : Str, url : Str, kind : [Overlay, Flake] }

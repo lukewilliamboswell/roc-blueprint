@@ -14,12 +14,15 @@ In outline:
 
 * `format` — `((major 2) (minor 7))`; see <<compatibility-of-the-formats>>.
 * `name`, `systems` (strings such as `"x86_64-linux"`).
-* `sources` — `{ name, provider }`, where provider is `Auto`,
-  `NixPackages(Str)` or `GuixPackages(Str)`. Validation supplies
-  `{ name: "default", provider: Auto }` if omitted; it does not select a provider.
+* `sources` — `{ name, provider }`, where provider is `NixPackages(Str)` or
+  `GuixPackages(Str)`. Every source a tool names is declared: validation adds
+  none, and a project whose environments have no tool of a package source has
+  no source. `Auto` is still read, so that a Spec written before 0.6 is
+  refused by name; no Spec is written with it.
 * `inputs` — `{ name, url, kind }`, where kind is `Overlay` or `Flake`.
 * `environments` — `{ name, parents, tools, overlays }`; tools are
-  `{ source, name }`, overlays are ordered input names. Validation resolves a
+  `{ source, name }`, where `source` is a declared source, and overlays are
+  ordered input names. Validation resolves a
   single parent, deduplicates parent-first selections and clears `parents`.
 * `system_tools` — optional `{ environment, system, tools }` selections. They
   inherit parent first and only enter the environment on their named System.
@@ -61,6 +64,10 @@ In outline:
 * `extensions` — `{ kind, name, value }`, blocks a provider may understand.
 * `requires` — features the config uses beyond the core (`"raw"`,
   `"extensions"`, `"sources"`, `"builds"`, `"workflows"`, `"system-tools"`, `"commands"`, `"roc-packages"`, `"configured-tools"`, `"programs"`, `"expects"`), so an older `blueprint` can say what's missing.
+  The platform always writes `"explicit-sources"`: a `blueprint` from before
+  0.6 would give the Spec a `default` source it does not declare, and refuses
+  it by that name instead. A `blueprint` given a Spec without it says the
+  platform is older than 0.6.0.
 
 `Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its S-expression encoder
 and parser are hand-written to avoid recursive-codec derivation problems.
@@ -80,8 +87,8 @@ parsing alone does not establish semantic validity.
 Static checks cover generic references, duplicates, inheritance cycles, argv,
 download URLs (`https://<host>/<path>` with no credentials, query or
 fragment; `http://127.0.0.1` is accepted so that a test can serve one)
-and provider-specific tool grammar when a source is explicit. `Auto` grammar is
-checked after explicit provider selection, before staging effects. Package
+and each source's own grammar for the names of its tools. A tool that names
+no declared source is refused with the sources that are declared. Package
 existence and target availability are Nix runtime checks. Core validation never
 probes the host or installs/fetches anything.
 
@@ -157,16 +164,20 @@ pinned Roc). The CLI uses only that record; `scripts/test.roc` fails if it
 reaches into a provider's modules directly. Nix is the only implemented
 provider. It:
 
-* resolves Auto to its default nixpkgs source, without provider autodetection;
+* supplies the sources declared as `NixPackages` and no other; a project
+  that declares none has no flake, and nothing is generated for it;
+* builds an environment that has no tool of its own, such as the sandbox of
+  a build whose environment is empty, with the first Nix source the project
+  declares, in the order of `Blueprint.roc`;
 * imports each selected environment's package sources per system with only
   that environment's ordered overlay stack; aliases and task entries share it;
 * checks provider compatibility for the requested environment/build closure, not
   unrelated valid source/environment declarations. `render` selects all
   shell/task/build environments; `render_environment` selects one. Whole-project
   structure, required features, declared targets and Nix Raw remain checked;
-* declares `nixpkgs` as an input that `follows` the `default` package source,
-  or the first Nix package source when there is no `default`, and nothing when
-  the project declares an input of that name. `nix develop` takes the bash it
+* declares `nixpkgs` as an input that `follows` the first Nix package source
+  the flake declares, whatever it is called, and nothing when the project
+  declares an input of that name. `nix develop` takes the bash it
   runs from the input called `nixpkgs` and otherwise from the registry's
   floating one, which no Lock pins. The alias is one name for the whole flake,
   so it cannot follow each environment's own source;
