@@ -22,6 +22,9 @@ blueprint-nix/           importable pure Nix provider (depends only on blueprint
   tests/                 Spec fixtures and golden flakes
 blueprint-cli/           the blueprint CLI (basic-cli + weaver); as `blueprint __build-runner`
                          it is also each build's in-derivation argv/output/isolation check
+  Store.roc, Download.roc  the per-user store of downloads and the HTTPS client that fills it
+  Bootstrap.roc          the recorded download of the compiler that reads a Blueprint.roc
+  Published.roc          what a release publishes as the digest of an asset, asked by update
 fixtures/consumer/       independent consumer of the Spec and Nix packages
 fixtures/overlays/       overlay flakes for scripts/test_scenarios.roc
 examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
@@ -33,7 +36,7 @@ scripts/                 Roc scripts, run from the repository root; their module
   link_inputs.roc        fetch or check the platform's linker inputs
   bundle.roc             bundle core and the platform into dist/ and smoke-test the pair
   build_release.roc      cross-build the CLI and its smoke-test program for each released system
-  smoke_binary.roc       run a built CLI with no Roc and no Python of its own
+  smoke_binary.roc       run a built CLI with no Roc and no Python of its own; with --no-nix, with no Nix either
   fuzz.roc               replay or fuzz the roc-fuzz targets
   release_notes.roc      render a release's notes from docs/releases/
   package_examples.roc   archive the examples with a release's platform URL
@@ -78,9 +81,6 @@ every CI job runs its scripts through `nix develop -c`, so what passes in the
 shell is what CI runs. `blueprint` is not in the shell, so entering it never
 compiles the CLI; build it as below, or use `nix run .`.
 
-`blueprint-cli/Store.roc` is the per-user store of downloads,
-`Download.roc` the HTTPS client that fills it and `Bootstrap.roc` the
-recorded download of the compiler that reads a `Blueprint.roc`.
 `blueprint-cli/main.roc` uses the released basic-cli platform by URL. Roc
 downloads it on first use outside Nix; the Nix blueprint package fetches the same
 archive by hash, so its sandboxed build needs no network.
@@ -120,7 +120,8 @@ the Provider contract; the compiler downloads `Bootstrap.roc` records, one
 for each system the CLI runs on; each workflow's
 permissions and checkouts; the release notes chapter against the notes files;
 the flake's list of core modules and its version), `unit` (the platform's, the scripts', the CLI's
-and the consumer's `expect`s and the configuration fixtures), `cli`,
+and the consumer's `expect`s, the configuration fixtures and the Roc the
+manual shows), `cli`,
 `scenarios` (`test_scenarios.roc`, `test_roc_packages.roc` and the golden
 flakes parsed by Nix), `builds` (`test_builds.roc` and `test_workflows.roc`),
 `package` (the flake's package and development shell, the packaged CLI building
@@ -144,6 +145,10 @@ surfaces at compile time, and that settings composed from an imported module
 emit the same Spec as inline ones. Every other rule of `Project.validate` has an
 `expect` in `blueprint-core/Project.roc`. The bundle gate repeats a few of the
 fixtures against the served platform, plus the all-settings example.
+It then compiles the manual's Roc (`scripts/src/DocSnippets.roc`): every
+`[source,roc]` block of `docs/` and `docs/releases/`, and the first program of
+the Get started chapter, against the platform in the working tree; see
+<<write-the-manual>>.
 `scripts/test_cli.roc` exercises the built CLI with and without a
 configuration, checks validation and help/version handling, and records Nix
 argv to verify shell selection and task arguments without entering a shell.
@@ -211,11 +216,17 @@ same task with one Nix tool added prints the same from the same store file,
 and only then starts Nix. Its last cases let `blueprint update` write the
 lock: with no `nix` on `PATH` for a project that only fetches, with nothing
 asked when nothing changed, for a named program alone, after a URL list
-changed, and for release assets, whose release is described by the same
-loopback server, so that a digest computed here is compared with a published
-one, another system's is recorded unfetched, and a question that is refused
-or answered with something else leaves every digest computed and says so
-once.
+changed, and for release assets. A download URL must be `+https://+`, with one
+exception made for these tests: `+http://127.0.0.1:<port>/+`, which no other
+machine can serve. A loopback URL of the shape
+`/<owner>/<repo>/releases/download/<tag>/<asset>` is a release asset, and the
+same server describes its release at `/repos/<owner>/<repo>/releases/tags/<tag>`,
+as GitHub's API does for a GitHub URL. That is the whole seam: no variable
+or flag redirects the question. Through it a digest computed here is compared
+with a published one, another system's is recorded unfetched, a published
+digest that differs stops the update, a question that is refused or answered
+with something else leaves every digest computed and says so once, and a
+download missing for one system says how to declare that.
 It ends with `blueprint requirements`, asked with no `nix`, no lock, an empty
 store and no server: the report is the same, a declared and unused Nix source
 requires no provider, and nothing is written.
@@ -242,6 +253,41 @@ Normal execution tests explicitly initialize authority with `update` first.
 The complete artifacts example is executed in a temporary copy by
 the workflow suite (`scripts/test_workflows.roc`).
 
+== The job with no Nix
+
+Every suite above runs where Nix is installed, and replaces it with a stub
+where it must not be started. One job of `.github/workflows/ci.yml` runs on
+machines that have no Nix at all: `no-nix`, on `ubuntu-latest`,
+`ubuntu-24.04-arm` and `macos-latest`, with the binaries and platform hosts
+the `build` job produced and no step that installs anything. It runs
+`dist/smoke-<system> --no-nix dist/blueprint-<system>`, the `NoNix` mode of
+`scripts/src/SmokeBinary.roc`, which:
+
+* refuses to start when `nix` is on `PATH`, and leaves no `roc` there;
+* writes a project whose compiler is
+  `Programs([Fetch("roc-stable", Recipes.roc_nightly(...))])` of the nightly
+  in `blueprint-cli/compiler-version`, with `Expect(["git"])` and the Roc
+  packages of a basic-cli script, against this checkout's platform;
+* gives the binary a store and a Roc package cache of its own, empty;
+* runs `blueprint update` and requires that the compiler was fetched exactly
+  once, for reading `Blueprint.roc` and as `roc-stable` together;
+* requires that `blueprint requirements --json` names no provider;
+* runs the script as a task, which the fetched compiler builds, links and
+  runs. On macOS that is the test that `roc` finds the `darwin` directory of
+  its archive through the link it is started by;
+* runs the task again and requires that nothing is downloaded, and that no
+  flake was generated.
+
+It reaches GitHub for the nightly and the Roc packages, and asks GitHub's API
+once for the nightly's published digests; a refusal there is a notice, not a
+failure. To run it on a machine that has Nix, hide Nix from `PATH`:
+
+[source,sh]
+----
+roc build scripts/smoke_binary.roc --output=/tmp/smoke
+env PATH=/usr/bin:/bin /tmp/smoke --no-nix ./blueprint
+----
+
 == Write the manual
 
 The manual is the AsciiDoc in `docs/`. `index.adoc` is a book that includes
@@ -263,6 +309,23 @@ python3 ../roc-automation/actions/build-docs/build_docs.py --workspace . --pdf-f
 
 The site is `.docs-out/site/` and the PDF `.docs-out/roc-blueprint.pdf`;
 neither is committed.
+
+The manual describes the tool as it is: one recommended way to do each thing,
+in the present tense. What changed between versions belongs in the release
+notes, and what is unfinished in an issue.
+
+The Roc in the manual is compiled by `scripts/test.roc unit`, so a block must
+be one of four things:
+
+* a whole `Blueprint.roc`, starting `app [`, whose platform is written as a
+  placeholder;
+* settings as they stand inside `config`, complete enough to check by
+  themselves: an environment a task uses is in the block. A tool of the
+  source `nix` may be written without the `Packages("nix", ...)` line;
+* `[source,roc,snippet=refused]`, settings the compiler must refuse, for a
+  mistake the text explains;
+* `[source,roc,snippet=unchecked]`, which is not compiled: use it only for a
+  line of some other program or for settings that cannot stand alone.
 
 * Each chapter opens with one `= Title` and is also rendered as a page of its
   own, so it cannot rely on attributes set in `index.adoc`.

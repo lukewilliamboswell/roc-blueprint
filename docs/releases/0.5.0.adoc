@@ -9,7 +9,7 @@ A `Blueprint.roc` written for 0.4 needs only the new platform URL.
 
 == Use this release
 
-[source,roc]
+[source,roc,snippet=unchecked]
 ----
 app [config] { pf: platform "{platform-url}" }
 ----
@@ -25,7 +25,7 @@ roc-blueprint-core, the package that defines the Spec and its S-expression
 format, used to have releases of its own under `core-X.Y.Z` tags. It is now an
 asset of each roc-blueprint release:
 
-[source,roc]
+[source,roc,snippet=unchecked]
 ----
 core: "{core-url}"
 ----
@@ -41,7 +41,7 @@ be no further `core-X.Y.Z` releases.
 that cross-compiles Rust can now declare its toolchain's targets and
 components:
 
-[source,roc]
+[source,roc,snippet=unchecked]
 ----
 Overlay("rust", "github:oxalica/rust-overlay"),
 Environment("host", [

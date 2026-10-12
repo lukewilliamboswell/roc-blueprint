@@ -73,7 +73,8 @@ produces), *stages* (the steps that turn one kind of data into another) and
 
 | *Host facts*
 | What is observed about the machine rather than provided by Blueprint, such
-  as the system C library version or an installed platform toolchain.
+  as the system C library version, an installed platform toolchain or a
+  program a Blueprint says it expects to find there.
 
 | *Environment*
 | The realised set of trees and host facts for one shell on one System.
@@ -113,12 +114,17 @@ availability from a provider or the host.
 === Roles
 
 Core::
-  Owns the data types, the invariants and the *effect executor*. The Core is
-  the only part that performs I/O.
+  Owns the data types, the invariants, the *plan* of every request and the
+  *effect executor*. The Core is the only part that performs I/O. What a
+  Blueprint declares as a download with a known digest needs no ecosystem at
+  all: the Core plans it, fetches it, keeps it in the Store and puts it in the
+  Environment itself, and it checks the host facts a Blueprint declares.
 
 Provider::
   A pure plug-in that implements one or more stages for one ecosystem. The
-  kinds are:
+  Core asks a provider only for what comes from that provider's Sources, one
+  Environment at a time; a request that needs nothing of an ecosystem involves
+  no provider. The kinds are:
   * _resolver provider_, which chooses pins from an ecosystem's Sources;
   * _realiser provider_, which builds trees locally or through remote
     execution;
@@ -218,14 +224,17 @@ ones.
 | Deterministic. No provider concepts outside namespaced hints.
 
 | Resolve | Spec, Sources, previous Lock | Lock | network reads, signature
-  checks | resolver provider, planned by the Core
+  checks | the Core for declared downloads; a resolver provider, planned by
+  the Core, for its Sources
 | The only stage that makes choices. Trust is recorded, never assumed.
 
 | Fetch | Lock | Artifacts | network, Store writes | Core, with mirrors and
   caches | Each artifact's digest equals the digest in the Lock.
 
 | Realise | Artifacts, System, host facts | Trees, Environment | Store writes,
-  possibly process execution | realiser provider, planned by the Core
+  possibly process execution | the Core for what it fetched; a realiser
+  provider, planned by the Core, for an Environment that takes components
+  from its Sources
 | A function of its inputs only. No network access and no new choices.
 
 | Activate | Environment | Activation | none | Core or realiser provider
@@ -307,6 +316,8 @@ show. Nothing about the host is assumed silently.
 * Providers return steps, and the Core executes them.
 * A provider can cause only the effects the Core grants it.
 * The Core knows providers only through the provider interface.
+* Which provider a request needs follows from the Spec alone. Nothing
+  ambient, such as a variable or what is installed, selects one.
 
 [[inv-8]]
 === 8. Activation is data, and rendering happens last
@@ -342,6 +353,8 @@ never change the Core or the committed data.
 | Editor or AI agent | presenter with machine-readable output | yes
 | Container or development container | presenter | yes
 | A new package ecosystem | resolver and realiser providers | yes
+| A machine with no package ecosystem installed | nothing: the Core fetches
+  declared downloads itself | yes
 | Remote execution | realiser provider | yes
 | Bill of materials or change review | inspector | yes
 |===

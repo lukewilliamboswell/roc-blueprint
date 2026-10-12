@@ -88,8 +88,8 @@ or graph rules. `Spec.parse` rejects other majors before decoding nested records
 parsing alone does not establish semantic validity.
 
 Static checks cover generic references, duplicates, inheritance cycles, argv,
-download URLs (`https://<host>/<path>` with no credentials, query or
-fragment; `http://127.0.0.1` is accepted so that a test can serve one)
+download URLs (`+https://<host>/<path>+` with no credentials, query or
+fragment; `+http://127.0.0.1+` is accepted so that a test can serve one)
 and each source's own grammar for the names of its tools. A tool that names
 no declared source is refused with the sources that are declared. Package
 existence and target availability are Nix runtime checks. Core validation never
@@ -183,8 +183,10 @@ provider. It:
 * imports each selected environment's package sources per system with only
   that environment's ordered overlay stack; aliases and task entries share it;
 * checks provider compatibility for the requested environment/build closure, not
-  unrelated valid source/environment declarations. `render` selects all
-  shell/task/build environments; `render_environment` selects one. Whole-project
+  unrelated valid source/environment declarations. `render` selects every
+  build's environment and every shell or task environment that has a tool of
+  a Nix source, and leaves out those the Core enters without Nix;
+  `render_environment` selects one. Whole-project
   structure, required features, declared targets and Nix Raw remain checked;
 * declares `nixpkgs` as an input that `follows` the first Nix package source
   the flake declares, whatever it is called, and nothing when the project
@@ -224,7 +226,9 @@ provider. It:
 `Project.check_environment(project, Nix | Guix, name)` is a pure compatibility
 check. Guix source intent, native tool grammar and overlay-capability rejection
 are modeled; no Guix renderer, task implementation or executor exists. The
-reference CLI explicitly selects Nix; selection policy belongs to consumers.
+reference CLI lists Nix as its one provider and selects nothing: `Realise.plan`
+asks a provider only for an environment that has a tool from a source it
+supplies, so which requests reach Nix is decided by the Spec.
 
 The source package exports `NixProvider` and `Locks`, without importing the CLI
 or an effectful platform. `Locks.decode` parses the Lock, checks that its Sources match the

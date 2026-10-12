@@ -12,8 +12,10 @@
 [.lead]
 roc-blueprint lets a project describe its development environments, the
 commands that run in them, its sandboxed builds and its ordered workflows in
-one typed file, `Blueprint.roc`. The `blueprint` command realises that file
-through Nix, from pins the project commits.
+one typed file, `Blueprint.roc`. The file says where every program comes
+from: a download checked against a digest the project commits, the machine
+itself, or a pinned Nix package source. The `blueprint` command carries it
+out, and starts Nix only for what a project takes from Nix.
 
 ifdef::backend-html5[]
 link:roc-blueprint.pdf[Download this manual as a PDF] ·
@@ -28,7 +30,7 @@ Using it for the first time:: Follow <<get-started>>.
 Writing a configuration:: <<write-blueprint-roc>> describes every setting, and
 <<build-artifacts-and-run-workflows>> the sandboxed builds.
 Looking up a command or variable:: See <<run-blueprint>>.
-Running a project's tasks on Windows:: Read <<run-tasks-on-windows>>.
+Running a project where Nix is not installed:: Read <<work-without-nix>>.
 Looking for a project to adapt:: Browse <<learn-from-the-examples>>.
 Writing a provider or judging a design change:: Read
 <<understand-the-architecture>> and <<the-spec-the-lock-and-providers>>.
@@ -47,7 +49,7 @@ include::builds.adoc[leveloffset=+1]
 
 include::commands.adoc[leveloffset=+1]
 
-include::windows.adoc[leveloffset=+1]
+include::without-nix.adoc[leveloffset=+1]
 
 include::examples.adoc[leveloffset=+1]
 

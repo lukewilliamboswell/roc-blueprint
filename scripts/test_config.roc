@@ -9,12 +9,14 @@ import cli.OsStr
 import cli.Path
 import cli.Stderr
 import src/ConfigTest
+import src/DocSnippets
 import src/Process
 
 ## Check that whole-config validation happens in `roc check`, against the
 ## local platform. Run from the repository root, after
 ## `scripts/link_inputs.roc fetch` and `zig build` in `blueprint-platform`.
 ## `scripts/bundle.roc` runs a few of the same fixtures against a served bundle.
+## Then compile the Roc the manual shows (see `scripts/src/DocSnippets.roc`).
 ##
 ##   scripts/test_config.roc
 main! : List(OsStr) => Try({}, [Exit(I32)])
@@ -37,7 +39,13 @@ run! = || {
 	root = Path.to_str(Path.canonicalize!(Env.cwd!()?)?)?
 	work = Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-config-")?)?
 	directory = Path.to_str(work)?
-	result = ConfigTest.run!(
+	result = checked!(root, directory)
+	_ = Path.delete_all!(work)
+	result
+}
+
+checked! = |root, directory| {
+	ConfigTest.run!(
 		{
 			roc: Process.roc!(),
 			# `roc check` accepts an absolute platform path; running an app does not.
@@ -48,9 +56,9 @@ run! = || {
 			arguments: [],
 		},
 		in_batches!,
-	)
-	_ = Path.delete_all!(work)
-	result
+	)?
+	snippets = "${directory}/manual"
+	DocSnippets.run!({ roc: Process.roc!(), platform_ref: Process.relative(snippets, "${root}/blueprint-platform/main.roc"), root, work: snippets }, in_batches!)
 }
 
 ## Eight compilers at a time.

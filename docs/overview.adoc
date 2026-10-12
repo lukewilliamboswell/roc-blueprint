@@ -4,15 +4,40 @@ image::blueprint-gemini-gen.jpeg[Blueprint illustration of robotic arms,560,alig
 
 A project's `Blueprint.roc` is a Roc program that describes:
 
-* *environments*: named sets of tools, which may extend one another;
+* *environments*: named sets of programs and tools, which may extend one
+  another;
 * *shells* and *tasks*: an environment to enter, or an exact command to run
   in one;
 * *builds*: sandboxed commands that produce an artifact from declared inputs;
 * *workflows*: ordered sequences of tasks and builds.
 
-The `blueprint` command reads that file and carries it out. Every tool comes
-from a pinned source recorded in `Blueprint.lock`, which the project commits,
-so a contributor's machine and a CI runner get the same environment.
+The `blueprint` command reads that file and carries it out. Everything an
+environment has comes from a place the file names:
+
+[cols="2,3,3",options="header"]
+|===
+| Written as
+| Where it comes from
+| What fixes it
+
+| `Programs([Fetch(name, recipe)])`
+| A download, from the URL the recipe gives for each system.
+| The SHA-256 of the download, in `Blueprint.lock`.
+
+| `Expect([name])`
+| The machine. `blueprint` checks that it is on `PATH` and installs nothing.
+| Nothing: its version is the machine's.
+
+| `Tools(["<source>#<name>"])`
+| A Nix package source the project declares with `Packages`.
+| The source's revision and digest, in `Blueprint.lock`.
+|===
+
+The project commits `Blueprint.lock`, so a contributor's machine and a CI
+runner get the same downloads and the same packages. Nix is started only for
+an environment that has a tool from a Nix source, and for a build. A project
+that fetches its programs and expects the rest runs with no Nix installed;
+see xref:without-nix.adoc#a-project-that-never-starts-nix[Work without Nix].
 
 == What you write and what checks it
 
@@ -24,61 +49,82 @@ Roc checks quoted values and whole-configuration rules during
 `roc check Blueprint.roc`: missing names, duplicate declarations, unknown
 references and inheritance cycles are compile-time errors. An editor shows
 them as you type. Checking needs a Roc nightly the platform release was built
-for; each release's notes name it. Every tool names the package source it
-comes from, and its name is checked against that source's grammar. Whether a
-package exists is decided by Nix, not by Roc.
+for; each release's notes name it. A download's URL, the path of a program
+inside an archive and the name of a system are each checked where they are
+written. Every tool names the package source it comes from, and its name is
+checked against that source's grammar. Whether a package exists is decided
+by Nix, and whether a URL serves anything by `blueprint update`, not by Roc.
 
 == How it works
 
 The platform lowers and validates the whole configuration, then prints it as
 a *Spec*, a provider-neutral S-expression (format 2.7). The `blueprint`
 command runs Roc to get that Spec, validates it again through the same shared
-rules, selects the Nix provider, and owns every file write, the lock and
-execution. The core package and the Nix renderer are pure: they discover
-nothing about the host and perform no effects.
+rules, plans the request, and owns every download, file write, the lock and
+execution. It fetches programs into a per-user store itself, and asks the Nix
+provider only for the environments that have a tool from a Nix source. The
+core package and the Nix renderer are pure: they discover nothing about the
+host and perform no effects.
 xref:architecture.adoc#purpose[The architecture chapter] explains the model
 and the rules that keep it independent of any one package ecosystem.
 
 == Where it runs
 
-[cols="2,3",options="header"]
+[cols="3,3,3,3",options="header"]
 |===
 | System
-| Support
+| Fetched programs, expected tools, tasks and shells
+| Tools from a Nix source
+| Sandboxed builds
 
 | x86_64 Linux
-| Everything, including sandboxed builds.
+| Yes
+| Yes
+| Yes
 
 | arm64 Linux
-| Shells, tasks and workflows of tasks. No sandboxed builds.
+| Yes
+| Yes
+| No
 
 | Apple Silicon macOS
-| Shells, tasks and workflows of tasks. No sandboxed builds.
+| Yes
+| Yes
+| No
 
 | x86_64 Windows
-| Tasks and workflows of tasks only, without Nix. No binary is released yet;
-  see xref:windows.adoc#run-tasks-on-windows[Run tasks on Windows].
+| No binary is released
+| No
+| No
 
 | Intel macOS
-| Not supported. `blueprint` stops with a message naming the supported
-  systems. Current nixpkgs has dropped the system, so an environment could
-  not be entered there.
+| Not supported
+| Not supported
+| Not supported
 |===
 
-A `blueprint` binary is released for each supported system except Windows. It needs
-https://nixos.org/download[Nix] with flakes enabled, and nothing else: no Roc
-and no Python.
+A `blueprint` binary is released for x86_64 Linux, arm64 Linux and Apple
+Silicon macOS. It needs no Roc and no Python: it downloads the Roc compiler
+that reads `Blueprint.roc`. It needs https://nixos.org/download[Nix] with
+flakes enabled where the table's last two columns apply, and `tar`, `ln` and
+`chmod` to unpack and link what it fetches.
 
-`Systems` in a configuration declares which targets the generated Nix outputs
-have. It does not install anything and is not evidence that a target runs:
+On Intel macOS `blueprint` stops with a message naming the supported systems.
+On Windows the code that runs a task without Nix is present, and nothing of
+it can be used; see xref:without-nix.adoc#windows[Windows].
+
+`Systems` in a configuration declares the systems a project is for: a
+fetched program gets a digest for each, and the generated Nix outputs have
+each. It installs nothing and is not evidence that a target runs:
 `x86_64-darwin` may still be listed there.
 
 == What it does not do
 
-* Nix is the only provider that builds an environment. A source may state Guix
-  intent, and its compatibility is validated, but there is no Guix renderer or
-  executor. On Windows a second provider runs tasks with what the machine
-  already has and installs nothing.
+* Nix is the only package provider. A source may state Guix intent, and its
+  compatibility is validated, but there is no Guix renderer or executor.
+* An expected tool is looked for by name. No version is asked of it.
+* A fetched program is one file, or one file inside an archive that is
+  unpacked whole. An archive gives one command name.
 * There is no parallel workflow scheduler: steps run in order.
 * Tasks and the evaluation of `Blueprint.roc` are not sandboxed; only builds
-  are.
+  are, and a build cannot use fetched programs or expected tools.

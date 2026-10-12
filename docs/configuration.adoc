@@ -7,13 +7,23 @@ provides `config`, a list of settings:
 ----
 app [config] { pf: platform "<the platform URL of a release>" }
 
+import pf.Recipes
+
 config = [
 	Name("my-project"),
-	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
-	Environment("dev", [Tools(["nix#git"])]),
+	Environment("dev", [
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))]),
+		Expect(["git"]),
+	]),
 	Shell("default", [Use("dev")]),
+	Task("check", [Use("dev"), Run(["roc-stable", "check", "main.roc"])]),
 ]
 ----
+
+An environment gets what it has from three places, and each is written
+differently: a program that is downloaded (<<fetch-a-program>>), a tool the
+machine already has (<<expect-a-tool-on-the-machine>>), and a tool a package
+source installs (<<choose-where-tools-come-from>>).
 
 xref:getting-started.adoc#write-a-first-blueprint-roc[Get started] has a
 complete file with the current URL.
@@ -29,10 +39,10 @@ complete file with the current URL.
 | Project name. Required, once.
 
 | `Systems(List(System))`
-| Declared targets, each `<arch>-<os>` of a known architecture (`x86_64`, `aarch64`, `riscv64`, `i686`, `armv7l`, `powerpc64le`) and operating system (`linux`, `darwin`, `windows`, `freebsd`). Defaults to x86_64 and aarch64 on Linux and macOS; an empty list is invalid.
+| The systems the project is for, each `<arch>-<os>` of a known architecture (`x86_64`, `aarch64`, `riscv64`, `i686`, `armv7l`, `powerpc64le`) and operating system (`linux`, `darwin`, `windows`, `freebsd`). Defaults to x86_64 and aarch64 on Linux and macOS; an empty list is invalid. Every fetched program is resolved for each of them.
 
 | `Packages(InputName, From(Provider))`
-| A package source and the set it is: `NixPackages(FlakeRef)` or `GuixPackages(Str)`. Every source is declared; none is implied.
+| A package source and the set it is: `NixPackages(FlakeRef)` or `GuixPackages(Str)`. Every source is declared; none is implied, and a project that takes no tool from a package source declares none.
 
 | `Overlay(InputName, FlakeRef)`
 | Named overlay input; only environments selecting its name apply it.
@@ -78,7 +88,7 @@ and `Expect` occur at most once each:
 | Meaning
 
 | `Tools(List(Tool))`
-| Native package names. `"git"` uses source `default`; `"stable#jq"` uses source `stable`. A Nix name is an attribute path; quote a segment that contains dots, as in `"zigpkgs.\"0.16.0\""`.
+| Tools a package source installs, each written `"<source>#<name>"`: `"nix#git"` is `git` from the source declared as `nix`. A Nix name is an attribute path; quote a segment that contains dots, as in `"nix#zigpkgs.\"0.16.0\""`.
 
 | `ToolsFor(System, List(Tool))`
 | Add tools only for a declared target System. Each System occurs at most once per Environment.
@@ -90,13 +100,13 @@ and `Expect` occur at most once each:
 | A tool built with options its package takes; see <<configure-a-tool>>.
 
 | `RocPackages(List(Str))`
-| Released Roc bundle URLs to lock, so Roc programs in the environment resolve them without downloading.
+| Released Roc bundle URLs to have in place before anything runs, so Roc programs in the environment resolve them without downloading; see <<roc-packages>>.
 
 | `Programs(List(Program))`
-| The programs the environment has on `PATH` that are downloaded: each is `Fetch(ProgramName, recipe)`, a command name and a function from the System to `File(url)`, `Archive(url, format, member)` or `Unavailable`. `Mirrored(download, urls)` adds alternate URLs for the same bytes to a `File` or an `Archive`. `Recipes.roc_nightly(tag)` and `Recipes.file(template)` are such functions.
+| The programs the environment has on `PATH` that are downloaded, each a `Fetch(ProgramName, recipe)`; see <<fetch-a-program>>.
 
 | `Expect(List(ProgramName))`
-| Programs the machine must already have on `PATH`. They are checked for, never installed, and no version is asked of them.
+| Programs the machine must already have on `PATH`; see <<expect-a-tool-on-the-machine>>.
 
 | `Overlays(List(InputName))`
 | Ordered selection of declared overlay names.
@@ -113,27 +123,226 @@ There is no `In` setting or implicit task environment. One name is only one
 of a program, an expected tool and a `Command` in an environment, including
 what it inherits.
 
-A program that several environments list is bound once, as in
-`roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))`,
-or inherited with `Extend`: one name always means the same downloads. Every
-text of a recipe is checked as what it is where it is written. A `System` is
-`<arch>-<os>` of an architecture and an operating system Blueprint knows, also
-in a `match` pattern and beside `==`; a `Url` is `https://<host>/<path>` with
-no credentials, query or fragment; a `Member` is a relative path inside an
-archive; a tag is `nightly-YYYY-MM-DD-<commit>`. Give a recipe of more than a
-line its type, `System -> Config.Download`, so that a mistake in it is
-reported on its own line.
+== Fetch a program
 
-A `System` is not text. To write it into a URL, use
-`Recipes.file("https://example.org/1.0/tool-{system}")`, whose template also
-takes `{arch}` and `{os}`, or `"https://example.org/1.0/tool-${system.to_str()}"`.
+A program that is published as a file or an archive is *fetched*: downloaded
+from a URL `Blueprint.roc` gives, checked against a digest in
+`Blueprint.lock`, and put on the `PATH` of the environments that list it. No
+package source is involved and Nix is not started.
+
+[source,roc]
+----
+Environment("dev", [
+	Programs([
+		Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")),
+		Fetch("blueprint", Recipes.file("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-{system}")),
+	]),
+]),
+----
+
+`Fetch(name, recipe)` is a command name and a *recipe*: a function from a
+system to where the program is downloaded from on that system. The
+environment gains the command `name`. A recipe downloads nothing. It is
+asked once for each of the project's `Systems` while `Blueprint.roc` is
+checked, and its answers are what `blueprint` works from. The `Recipes`
+module is the platform's; import it with `import pf.Recipes`.
+
+=== What a recipe answers
+
+[cols="3,5",options="header"]
+|===
+| Answer
+| Meaning
+
+| `File(url)`
+| The program is that one file. It is made executable.
+
+| `Archive(url, format, member)`
+| An archive in the format `TarGz`, `TarXz` or `Zip`, with the program at the path `member` inside it. The archive is unpacked whole, and the command is a link to the program where it lies, so it finds what the archive put beside it.
+
+| `Mirrored(download, urls)`
+| A `File` or an `Archive` with alternate URLs for the same bytes, tried in order after its own. `Blueprint.lock` holds one digest for all of them, so an alternate need not be trusted.
+
+| `Unavailable`
+| The program does not exist for that system. This is an error only where a task on that system needs it; a program unavailable on every declared system is refused when `Blueprint.roc` is checked.
+|===
+
+A recipe that cannot answer at all, for a version it does not know, stops
+with `crash` and a message; the compiler reports it with the recipe's file
+and line.
+
+=== The recipes the platform provides
+
+`Recipes.file(template)`::
+A program that is one file at a URL which names the system. `{system}` in the
+template stands for the system asked about, such as `x86_64-linux`, and
+`{arch}` and `{os}` for its two parts. No other placeholder is accepted, and
+none may stand in the host name. The program is taken to exist for every
+declared system: when its publisher has no file for one of them,
+`blueprint update` fails on that file and says so. State it by listing the
+systems the project supports in `Systems`, or write a recipe that answers
+`Unavailable`.
+
+`Recipes.roc_nightly(tag)`::
+The Roc compiler of one release of
+https://github.com/roc-lang/nightlies/releases[roc-lang/nightlies], by its
+tag, `nightly-YYYY-MM-DD-<commit>`. It answers for x86_64 and arm64 Linux,
+Apple Silicon and Intel macOS and x86_64 Windows, and `Unavailable` for any
+other system. Fetched as `roc-stable`, it is the compiler a script that
+starts `#!/usr/bin/env roc-stable` runs on.
+
+=== Write a recipe
+
+A recipe is an ordinary function, so a project writes its own for a program
+whose downloads do not follow one pattern:
+
+[source,roc]
+----
+app [config] { pf: platform "<the platform URL of a release>" }
+
+import pf.Config
+import pf.Recipes
+import pf.System
+
+config = [
+	Name("my-project"),
+	Systems(["x86_64-linux", "aarch64-linux", "aarch64-darwin"]),
+	Environment("dev", [
+		Programs([
+			Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")),
+			Fetch("wasm-tools", wasm_tools),
+		]),
+	]),
+	Task("validate", [Use("dev"), Run(["wasm-tools", "validate", "app.wasm"])]),
+]
+
+wasm_tools : System -> Config.Download
+wasm_tools = |system| {
+	base = "https://github.com/bytecodealliance/wasm-tools/releases/download/v1.240.0"
+	match system {
+		"x86_64-linux" => Archive("${base}/wasm-tools-1.240.0-x86_64-linux.tar.gz", TarGz, "wasm-tools-1.240.0-x86_64-linux/wasm-tools")
+		"aarch64-linux" => Archive("${base}/wasm-tools-1.240.0-aarch64-linux.tar.gz", TarGz, "wasm-tools-1.240.0-aarch64-linux/wasm-tools")
+		"aarch64-darwin" =>
+			Mirrored(
+				Archive("${base}/wasm-tools-1.240.0-aarch64-macos.tar.gz", TarGz, "wasm-tools-1.240.0-aarch64-macos/wasm-tools"),
+				["https://mirror.example.net/wasm-tools-1.240.0-aarch64-macos.tar.gz"],
+			)
+
+		_ => Unavailable
+	}
+}
+----
+
+Give a recipe of more than a line its type, `System -> Config.Download`, as
+here: a mistake in it is then reported on its own line. A recipe written
+inline, as `Fetch("tool", |system| ...)`, is checked just the same, and the
+compiler may report a mistake in it against the platform's file with the
+line and column of the literal in words.
+
+A `System` is not text. To write it into a URL, convert it:
+
+[source,roc]
+----
+Environment("dev", [
+	Programs([Fetch("tool", |system| File("https://example.org/releases/1.0/tool-${system.to_str()}"))]),
+]),
+----
+
 With `${system}` alone the compiler reports a type mismatch of
-`from_interpolation` on `Url`, at the first line of the file.
+`from_interpolation` on `Url`, at the first line of the file and not at the
+recipe. `Recipes.file` avoids the interpolation altogether:
+
+[source,roc,snippet=refused]
+----
+Environment("dev", [
+	Programs([Fetch("tool", |system| File("https://example.org/releases/1.0/tool-${system}"))]),
+]),
+----
+
+=== Share a program between environments
+
+`Fetch` is written inside `Programs`, so a program cannot be listed without
+being declared. An environment that extends another inherits its programs.
+Two environments that do not extend one another share a program through an
+ordinary binding:
+
+[source,roc]
+----
+app [config] { pf: platform "<the platform URL of a release>" }
+
+import pf.Recipes
+
+roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))
+
+config = [
+	Name("my-project"),
+	Environment("scripts", [Programs([roc_stable]), Expect(["git"])]),
+	Environment("release", [Programs([roc_stable]), Expect(["gh"])]),
+	Environment("ci", [Extend("scripts")]),
+]
+----
+
+One name always means the same downloads. Two `Fetch` values with one name
+whose recipes answer differently for a declared system are refused as `two
+different programs are named roc-stable`.
+
+=== What is checked, and when
+
+[cols="2,5",options="header"]
+|===
+| When
+| What
+
+| `roc check`, in an editor or on the command line
+| Each text, as what it is where it is written: a system is `<arch>-<os>` of a known architecture and operating system, in a `match` pattern and beside `==` too; a URL is `+https://<host>/<path>+` with no credentials, query or fragment; the path of a program in an archive is relative and not a URL, so the two cannot change places; a nightly tag has its form; a template has only its three placeholders. Then the whole configuration: a program name is a plain file name, one name is only one of a program, an expected tool and a `Command` in an environment, no URL is listed twice for one download, and every program exists for at least one declared system.
+
+| `blueprint update`
+| That every download exists, by downloading it or by taking the digest its release publishes; and, where both are to be had, that they agree. See xref:commands.adoc#what-update-needs-and-records[What update needs and records].
+
+| `blueprint run`, `shell` and `workflow`
+| That `Blueprint.lock` holds the program for this system under the URLs `Blueprint.roc` now gives; that every expected tool is on `PATH`; then that the download has the recorded length and SHA-256, on every use; that an archive holds nothing that leaves the directory it is unpacked in; and that the program is in it.
+|===
+
+A program whose URLs changed since the lock was written is stale by itself:
+the message names it, and `blueprint update <name>` resolves it alone.
+
+== Expect a tool on the machine
+
+Some tools are better taken from the machine than installed: `git`, which
+every developer and CI runner has, or `gh`, which must be the one that is
+logged in. `Expect` declares them:
+
+[source,roc]
+----
+Environment("dev", [
+	Expect(["git", "gh"]),
+]),
+----
+
+Before a task or shell of that environment starts, and before anything is
+downloaded for it, `blueprint` looks for each name on `PATH`. One message
+names everything that is missing:
+
+[source]
+----
+blueprint: this machine lacks what the task needs, and blueprint installs none of it:
+  gh: environment dev expects it on PATH (Expect)
+----
+
+An expected tool is not installed, not put on `PATH` and not pinned, and no
+version is asked of it: the environment runs with whichever one the machine
+has. Where a version matters, fetch the program or take it from a package
+source instead, or have a task check `tool --version`. `blueprint
+requirements` lists what a project's tasks expect, so a CI job can install
+it first.
+
+A sandboxed build has nothing of the machine, so an environment a build uses
+may not have `Expect` or `Programs`.
 
 == Choose where tools come from
 
 A tool that a package source installs is written `"<source>#<name>"`, for a
-source declared with `Packages` (a fragment inside `config`):
+source declared with `Packages`:
 
 [source,roc]
 ----
@@ -142,23 +351,32 @@ Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
 Environment("dev", [Tools(["nix#git", "stable#jq"])]),
 ----
 
-The source is always written, in `Tools`, `ToolsFor`, `Command` and
-`ToolWith` alike. No source is implied: `"git"` alone is refused where it is
-written, with both ways out, which are to name a declared source or, if the
-machine already has the tool, to list it in `Expect`. A tool that names a
-source the project does not declare is refused with the sources it does
-declare. A project whose environments have no such tool declares no source,
+The source's name is the project's choice; `nix` and `stable` mean nothing to
+`blueprint`. The source is always written, in `Tools`, `ToolsFor`, `Command`
+and `ToolWith` alike, and there is no default. `"git"` alone is refused
+where it is written:
+
+[source]
+----
+"git" names no package source. Write "<source>#git" for a declared source, as
+in Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable")))
+and "nix#git"; or, if git is already on the machine, list it in Expect.
+----
+
+A tool that names a source the project does not declare is refused with the
+sources it does declare, as `unknown source: nix; Blueprint.roc declares
+stable`. A project whose environments have no such tool declares no source,
 and Nix is not started for it.
 
-An environment that Nix must build although it has no tool of its own, such
-as the sandbox of a build whose environment is empty, is built with the first
-Nix source declared, in the order of `Blueprint.roc`. The bash `nix develop`
-runs comes from that source too.
+Nix is started only for an environment that has a tool from a Nix source.
+An environment Nix must build although it has no tool of its own, such as
+the sandbox of a build whose environment is empty, is built with the first
+Nix source declared, in the order of `Blueprint.roc`. The bash that
+`nix develop` runs a shell or task with comes from that first source too.
 
-The core does not autodetect a provider or translate package names. Nix is
-asked only for an environment that has a tool from a Nix source. Guix source
-intent and pure capability validation exist, but there is *no Guix renderer
-or executor*.
+The core does not autodetect a provider or translate package names. Guix
+source intent and pure capability validation exist, but there is *no Guix
+renderer or executor*.
 An incompatible requested environment fails; it never retries another provider.
 Missing native packages and unavailable target packages fail in Nix rather than
 being silently filtered out. Unsupported Nix target declarations fail before
@@ -183,24 +401,33 @@ declarations are rejected during evaluation.
 
 == Give a tool another command name
 
-`Command` keeps a pinned tool beside another tool of the same name. For example,
-repository scripts can run on one fixed Roc release while the project is built
-with whichever `roc` is already on `PATH`:
+`Command` exposes one tool of a package source under another command name,
+without adding the tool's own executables. It keeps a pinned tool beside
+another of the same name: a second Python, say, for scripts that must not
+follow the project's own:
 
 [source,roc]
 ----
-Overlay("roc", "github:roc-lang/roc-overlay"),
+Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
+Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
 Environment("dev", [
-	Overlays(["roc"]),
-	Command("roc-stable", "nix#rocpkgs.nightly-2026-09-10-a670e34"),
+	Tools(["nix#python3"]),
+	Command("python-stable", "stable#python3"),
 ]),
 ----
 
-The environment gains `roc-stable` and no `roc`, so a script can start with
-`#!/usr/bin/env roc-stable`. The command runs the tool's main program as its
-package declares it; a package that declares none fails in Nix. Command names
-are plain file names. An extending environment inherits commands and replaces
-one by declaring the same name.
+The environment gains `python-stable` beside the `python3` of `nix`. The
+command runs the tool's main program as its package declares it; a package
+that declares none fails in Nix. Command names are plain file names. An
+extending environment inherits commands and replaces one by declaring the
+same name.
+
+A `Command` is a tool of a package source, so its environment starts Nix. A
+program that is published as a download needs neither: `Fetch` names its
+command itself. A Roc compiler for scripts is written
+`Fetch("roc-stable", Recipes.roc_nightly(tag))`, as in <<fetch-a-program>>;
+`Command("roc-stable", "nix#rocpkgs.<tag>")` with the roc-overlay selects
+the same compiler through Nix, for an environment a sandboxed build uses.
 
 [#configure-a-tool]
 == Configure a tool
@@ -298,28 +525,18 @@ run at all in a sandboxed build, which has no network:
 
 [source,roc]
 ----
-Overlay("roc", "github:roc-lang/roc-overlay"),
 Environment("scripts", [
-	Overlays(["roc"]),
-	Command("roc-stable", "nix#rocpkgs.nightly-2026-10-04-130536d"),
+	Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))]),
 	RocPackages([
 		"https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
 		"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	]),
 ]),
-Task("release", [Use("scripts"), Run(["roc-stable", "scripts/release.roc"])]),
-Build("notes", [Use("scripts"), Run(["roc-stable", "scripts/notes.roc"]), Output("notes.txt")]),
+Task("release", [Use("scripts"), Run(["scripts/release.roc"])]),
 ----
 
 Each URL must be `https://` and end in `<hash>.tar.zst`. The hash is that of
-the bundle's bytes, so the URL itself says what the download must be: for a
-shell or a task, Blueprint downloads a missing bundle and has the compiler
-unpack it, which fails unless the bytes are those the name is the hash of.
-Nothing is recorded in `Blueprint.lock` for that, and no Nix is needed. A
-sandboxed build cannot download, so the bundles of an environment a build
-runs in are also fetched by Nix: `blueprint update` records those in
-`Blueprint.lock` like any other source, and Nix checks the bytes against that
-pin. An extending environment inherits its parent's bundles.
+the bundle's bytes, so the URL itself says what the download must be.
 
 *List every bundle, including dependencies of dependencies.* basic-cli above
 depends on `http`, so both are listed. `roc deps <file>` prints the URLs a
@@ -327,7 +544,38 @@ program depends on. Blueprint does not read package headers, so it cannot add a
 missing one for you. A bundle that is not listed is downloaded by Roc as usual
 in a shell or task, and fails to resolve in a sandboxed build.
 
-What Blueprint writes, and where:
+=== What the lock pins
+
+For a shell or a task, nothing: `blueprint` downloads a missing bundle itself
+and has the compiler unpack it with `roc unbundle`, which fails unless the
+bytes are those the name is the hash of. That check is the pin, and it needs
+no Nix and no entry in `Blueprint.lock`. A project whose Roc packages are
+used by tasks and shells alone has none of them in its lock.
+
+A sandboxed build cannot download. The bundles of an environment that a build
+runs in, or that it extends, are therefore fetched by Nix as well:
+`blueprint update` records those in `Blueprint.lock` like any other source,
+and Nix checks the bytes against that pin. An environment a build uses takes
+its compiler from a Nix source, since a build cannot use a fetched program:
+
+[source,roc]
+----
+Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
+Overlay("roc", "github:roc-lang/roc-overlay"),
+Environment("build-scripts", [
+	Overlays(["roc"]),
+	Command("roc-stable", "nix#rocpkgs.nightly-2026-10-04-130536d"),
+	RocPackages([
+		"https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+		"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
+	]),
+]),
+Build("notes", [Use("build-scripts"), Run(["roc-stable", "scripts/notes.roc"]), Output("notes.txt")]),
+----
+
+An extending environment inherits its parent's bundles.
+
+=== What is written, and where
 
 * *`blueprint shell` and `blueprint run`* publish the environment's bundles
   into Roc's own package cache before entering it: the directory

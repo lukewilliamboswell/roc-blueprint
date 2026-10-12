@@ -1,19 +1,20 @@
 = Build artifacts and run workflows
 
 A `Build` runs one command in a sandbox and keeps one declared output. A
-`Workflow` runs tasks and builds in order. Sandboxed builds run on x86_64
-Linux only.
+`Workflow` runs tasks and builds in order. Sandboxed builds run in Nix, on
+x86_64 Linux only.
 
 == Declare a build
 
-Inside `config`, with `scripts/build.roc` in the project and the `scripts`
-environment of xref:configuration.adoc#roc-packages[Lock the Roc packages scripts use]:
+Inside `config`, with `scripts/build.roc` in the project and the
+`build-scripts` environment of
+xref:configuration.adoc#what-the-lock-pins[Lock the Roc packages scripts use]:
 
-[source,roc]
+[source,roc,snippet=unchecked]
 ----
 Source("assets", "path:./assets"),
 Build("app", [
-	Use("scripts"),
+	Use("build-scripts"),
 	Inputs(["assets"]),
 	Run(["roc-stable", "scripts/build.roc"]),
 	Output("dist/app"),
@@ -40,14 +41,16 @@ executable in a build only when its owner may execute it. Changing a locked
 local source requires explicit update. Initial
 source/output policy rejects symlinks and special files. Only local x86_64 Linux
 sandboxed execution is verified; tasks/config compilation are not sandboxed.
-A build's `PATH` holds exactly the tools its environment declares. Earlier
-versions also put `python3`, coreutils and `bash` there, so a build that ran
-`sh`, `cp`, `mkdir` or `python3` without declaring it now fails with `build
-command not found`, or inside its own script when that script calls one: add
-the tool (`bash`, `coreutils`, `python3`) to the environment's `Tools`. A build
-also no longer sees the variables Nix's `stdenv` used to export. A tool may
-give what it runs more than the build was given: the Roc compiler's package
-puts coreutils and a C compiler on the `PATH` of a script it runs.
+A build's `PATH` holds exactly the tools its environment takes from its
+package sources, and nothing of the machine: no `sh`, `cp`, `mkdir` or
+`python3` unless the environment's `Tools` name `bash`, `coreutils` or
+`python3`. A command that is not there fails with `build command not found`,
+or inside the build's own script when that script calls one. A build does not
+see the variables Nix's `stdenv` exports either. A tool may give what it runs
+more than the build was given: the Roc compiler's package puts coreutils and
+a C compiler on the `PATH` of a script it runs. An environment with fetched
+programs or expected tools cannot be a build's: a sandbox holds only what its
+package sources supply, and the build is refused when it is planned.
 The `blueprint` executable is itself each build's builder inside the sandbox,
 so `blueprint build` refuses to run unless that executable is an x86_64 Linux
 one.
@@ -58,7 +61,7 @@ https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/builds/RE
 
 Inside `config`, referring to existing tasks and builds:
 
-[source,roc]
+[source,roc,snippet=unchecked]
 ----
 Workflow("ci", [RunTask("check", ["--verbose"]), BuildArtifact("app"), RunWorkflow("verify")]),
 Workflow("verify", [RunTask("version", [])]),

@@ -8,25 +8,65 @@ request, with whatever the new compiler breaks fixed in the same request.
 To move the product compiler:
 
 . Put the nightly's tag in `blueprint-cli/compiler-version`.
-. Record the nightly's archive for every system `blueprint` runs on in
-   `blueprint-cli/Bootstrap.roc`, with the digest and size its release
-   publishes; `scripts/test.roc static` names the systems that are missing.
+. Replace the entries of `compilers` in `blueprint-cli/Bootstrap.roc` (see
+   <<the-bootstrap-table>>) with the nightly's.
 . If the locked roc-overlay predates that nightly, run
    `nix flake update roc-overlay`.
 . Set the compiler and overlay in `fixtures/roc-inputs.lock.json` to match.
 . Move the basic-cli release in `blueprint-cli/main.roc`, the fixtures, the
-   examples and `rocPackages` in `flake.nix` if the nightly needs a newer one.
-. Replace the entries of `compilers` in `blueprint-cli/Bootstrap.roc` with
-   the nightly's tag and, for each System, the URL, the SHA-256 and the size
-   of its compiler archive, which
-   `gh release view <tag> --repo roc-lang/nightlies --json assets` reports.
-   `scripts/test.roc static` fails until every System `blueprint` runs on has
-   an entry. A `blueprint` with no compatible compiler at hand downloads that
-   archive into its store and checks it against the entry.
+   examples, `scripts/src/SmokeBinary.roc` and `rocPackages` in `flake.nix`
+   if the nightly needs a newer one.
+. Move the nightly the manual's examples and `Published.snippet` fetch as
+   `roc-stable`, so that a reader's first project downloads one archive for
+   both the compiler `blueprint` uses and the one its scripts run on.
 . Set the hash of `rocGlueSpec` in `flake.nix` to that of the nightly's
    source archive, which `nix build .#roc-glue-spec` reports, and run
    `scripts/check_glue.roc --update`. Commit the bindings it changes together
    with whatever the host needs to build against them.
+
+[#the-bootstrap-table]
+=== The bootstrap table
+
+A project has no lock until its `Blueprint.roc` has been read, so the digest
+of the compiler that reads it cannot come from one. `blueprint` carries it:
+`compilers` in `blueprint-cli/Bootstrap.roc` holds, for the nightly in
+`blueprint-cli/compiler-version` and each system `blueprint` runs on, the
+URL of the compiler archive in roc-lang/nightlies, its SHA-256, its size, its
+format and the path of `roc` inside it.
+
+[cols="2,3",options="header"]
+|===
+| System
+| Archive of the nightly
+
+| `x86_64-linux`
+| `roc_nightly-linux_x86_64-<date>-<commit>.tar.gz`
+
+| `aarch64-linux`
+| `roc_nightly-linux_arm64-<date>-<commit>.tar.gz`
+
+| `aarch64-darwin`
+| `roc_nightly-macos_apple_silicon-<date>-<commit>.tar.gz`
+
+| `x86_64-darwin`
+| `roc_nightly-macos_x86_64-<date>-<commit>.tar.gz`
+
+| `x86_64-windows`
+| `roc_nightly-windows_x86_64-<date>-<commit>.zip`
+|===
+
+`gh release view <tag> --repo roc-lang/nightlies --json assets` reports each
+asset's `digest` and `size`. The entries are data and nothing else: no rule
+derives a URL. `scripts/test.roc static` fails until every system `blueprint`
+runs on has an entry of the nightly in `compiler-version`.
+
+With `ROC` unset and no matching `roc` on `PATH`, `blueprint` downloads its
+system's archive into the per-user store and checks it against the entry
+before using it; it starts no provider to read a `Blueprint.roc`. The entry
+names the same download as `Recipes.roc_nightly` of that tag, so a project
+that fetches that nightly as `roc-stable` holds it once, and
+`blueprint update` records its digest from the store without a second
+download.
 
 To move the scripts' compiler, change `rocStableTag` in `flake.nix` and the
 `roc: "<tag>"` field in the header of each `scripts/*.roc` to the same tag;
@@ -117,8 +157,12 @@ roc-overlay revision in `flake.lock` and the compiler at the nightly in
 `blueprint-cli/compiler-version`, all compiled into the smoke program. A
 release therefore does not depend on what moved upstream that day.
 `.github/workflows/floating.yml` runs the same test weekly with `--floating`,
-which resolves what a new user's project would: Blueprint's default package
-source, the overlay's default branch and its newest nightly.
+which resolves what a new user's project would: a branch of nixpkgs, the
+overlay's default branch and its newest nightly.
+With `--no-nix` the same program writes a project that takes nothing from
+Nix and requires a machine that has none; the `no-nix` job of `ci.yml` runs
+it on all three systems (see
+xref:contributing.adoc#the-job-with-no-nix[The job with no Nix]).
 
 `build_release.roc` takes its compiler from the flake: `nix build .#roc-cross`
 is the x86_64 Linux compiler archive of the nightly in
@@ -130,10 +174,7 @@ release build downloads the macOS archive. The three CLI binaries are compiled
 at the same time, each about 2.3 GB at its peak.
 
 A binary downloads the compiler named in `blueprint-cli/compiler-version`
-from roc-lang/nightlies, by the digest in `blueprint-cli/Bootstrap.roc`, and
-keeps it in the per-user store; it starts no provider to read a
-`Blueprint.roc`. `scripts/test.roc` fails when that table has no entry of the
-nightly for a system the CLI runs on.
+by the digest it records; see <<the-bootstrap-table>>.
 
 === Write the release notes
 
@@ -251,12 +292,14 @@ If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
 == What remains for Windows
 
 https://github.com/lukewilliamboswell/roc-blueprint/issues/40[Issue #40] asks
-for `blueprint run` on Windows. The part that needs nothing from upstream is
-merged: a task whose environment has no Nix tool runs with no provider, from
-fetched programs and what the machine has. It is tested on Linux only. No Windows binary is built or released, and the platform
-has no Windows target, so a Windows user cannot run any of it yet.
+for `blueprint run` on Windows. What needs nothing from upstream is in place:
+a task whose environment has no Nix tool runs with no provider, from fetched
+programs, expected tools and Roc packages, and the planner, the store's
+location and `Recipes.roc_nightly` have their Windows forms. All of it is
+tested on Linux and macOS only. No Windows binary is built or released, and
+the platform has no Windows target, so a Windows user cannot run any of it.
 
-TODO(#40): the rest waits on three things upstream.
+TODO(#40): a binary and a platform target wait on three things upstream.
 
 * roc-overlay must package a nightly at or after `nightly-2026-10-11-7d256b9`,
   the first that links a Windows program from the inputs a platform lists and
@@ -276,18 +319,22 @@ When they exist, in one pull request:
   artifact globs, which must learn `host.lib`.
 . Cross-build `blueprint-x86_64-windows.exe` in `scripts/src/Release.roc`.
 . Add a `.gitattributes` that keeps line endings as they are committed.
-. Add a `windows-latest` job that runs the cross-built binary on a committed
-  `Blueprint.roc` and `Blueprint.lock`, the lock written on Linux.
+. Add a `windows-latest` leg to the `no-nix` job, which runs the cross-built
+  binary on a project that fetches its compiler.
 . Attach the binary to the release and add its line to `blueprint.sha256`.
   The existing asset names do not change.
-. Check each claim in the Windows chapter on that runner, and remove the
-  notice at its head.
+. Check each claim of
+  xref:without-nix.adoc#windows[the Windows section of Work without Nix] on
+  that runner, and rewrite it as what works.
 
-Known limits of what is merged, to settle then:
+Known limits of what is in place, to settle then:
 
-* A link to a fetched program is made with `ln -s`, and an archive is listed
-  and unpacked with the `tar` on `PATH`: Windows needs a hard link and its own
-  bsdtar, which reads a zip.
+* A fetched program is exposed with `ln -s` and made executable with `chmod`,
+  and an archive is listed and unpacked with the `tar` on `PATH`. Windows
+  needs a hard link or a copy in place of the symbolic link, nothing in place
+  of `chmod`, and its own bsdtar, which reads a zip.
+* The archive check reads `tar -tvf` in the form GNU tar and bsdtar print on
+  Linux and macOS; the form on Windows is unverified.
 
 == Upstream workarounds still in place
 
