@@ -75,6 +75,15 @@ StaticChecks := [].{
 			}
 		}
 
+	## Where there is no Nix, the host provider fetches that compiler from its
+	## release, by a digest recorded for each nightly. There must be one for
+	## the nightly the CLI evaluates with.
+	host_compiler_problem : Str, Str -> Str
+	host_compiler_problem = |compiler_version, provider_source| {
+		tag = compiler_version.trim()
+		if provider_source.contains("{ tag: \"${tag}\", system: \"x86_64-windows\", sha256: \"") "" else "record the SHA-256 of each ${tag} compiler archive in compilers in blueprint-host/HostProvider.roc"
+	}
+
 	## The scripts run on `roc-stable`, which the flake names as `rocStableTag`.
 	## Each script it runs says so twice: its first line starts it under that
 	## command, and its header's `roc` field names that same nightly, so
@@ -275,6 +284,9 @@ expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-l
 expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-lang/roc-overlay/00000000?narHash=sha256-R4Zj%2B8w%2FE1L%3D\"\n") == "update roc_overlay in NixProvider.roc to github:roc-lang/roc-overlay/fb02fef7?narHash=sha256-R4Zj%2B8w%2FE1L%3D"
 expect StaticChecks.overlay_problem(lock_sample, "nothing here") != ""
 expect StaticChecks.overlay_problem("{}", "roc_overlay = \"x\"") == "flake.lock has no GitHub pin for roc-overlay"
+
+expect StaticChecks.host_compiler_problem("nightly-2026-10-04-130536d\n", "\t\t{ tag: \"nightly-2026-10-04-130536d\", system: \"x86_64-windows\", sha256: \"1f5a\" },\n") == ""
+expect StaticChecks.host_compiler_problem("nightly-2026-10-11-7d256b9\n", "\t\t{ tag: \"nightly-2026-10-04-130536d\", system: \"x86_64-windows\", sha256: \"1f5a\" },\n") == "record the SHA-256 of each nightly-2026-10-11-7d256b9 compiler archive in compilers in blueprint-host/HostProvider.roc"
 
 pin_sample = "scripts/test.roc:\troc: \"nightly-1\",\n"
 

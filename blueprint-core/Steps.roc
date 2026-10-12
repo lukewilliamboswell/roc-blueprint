@@ -41,11 +41,57 @@ Steps := { steps : List(Step) }.{
 	## `{ "name": ..., "path": ... }`, each path an unpacked bundle the provider
 	## has already verified against the Lock. Skip `locate` when nothing is
 	## missing.
+	## Fetch: the step's command needs a released archive unpacked; see
+	## `Archive`.
 	## Serialize workspace use; stop on any failed materialization operation.
 	Operation : [
 		VerifyTree({ path : Str, digest : Str }),
 		Isolation({ mnt : Str, net : Str }),
 		Runner({ executable : Str, system : Str }),
 		RocPackages({ names : List(Str), locate : List(Str) }),
+		Fetch(Archive),
+	]
+
+	## A released archive to keep unpacked at `directory`. It is there when
+	## `<directory>/<program>` is a file; then do nothing, not even learn the
+	## digest. Otherwise make a fresh directory beside `directory` and, in
+	## every argv here, replace the text `archive` with a new file's path in it
+	## and the text `tree` with a new directory's. Then, in order: learn the
+	## digest; run `download`; refuse the archive unless its SHA-256 is the
+	## digest; run `unpack`; rename each of `moves` within the tree, creating
+	## the directory it moves to; rename the tree to `directory`. Losing that
+	## rename to another process is success. Delete the fresh directory
+	## whatever happened.
+	Archive : {
+		directory : Str,
+		program : Str,
+		archive : Str,
+		tree : Str,
+		download : List(Str),
+		unpack : List(Str),
+		moves : List({ from : Str, to : Str }),
+		digest : Digest,
+	}
+
+	## `Recorded` is the SHA-256, in hex, that the provider holds for the
+	## archive. `Published` is what the release says when the step runs: `ask`
+	## prints JSON holding `assets`, a list of `{ "name": ..., "digest":
+	## "sha256:<hex>" }`, and the digest is that of the asset called `asset`.
+	## When the caller's environment sets one of `token.variables`, run
+	## `authorized` instead and write `token.input` to its standard input,
+	## with the text `token.text` replaced by the first such value. The value
+	## is a secret: it goes nowhere else, not into an argv, where every process
+	## on the host could read it. Refuse one holding `"`, `\` or a control
+	## character, which `input` could not carry.
+	Digest : [
+		Recorded(Str),
+		Published(
+			{
+				asset : Str,
+				ask : List(Str),
+				authorized : List(Str),
+				token : { text : Str, input : Str, variables : List(Str) },
+			},
+		),
 	]
 }

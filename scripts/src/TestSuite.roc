@@ -214,6 +214,7 @@ static! = |context| {
 
 	step!("The fetched compiler comes from the locked roc-overlay revision")?
 	problem!(StaticChecks.overlay_problem(read!(context, "flake.lock")?, read!(context, "blueprint-nix/NixProvider.roc")?))?
+	problem!(StaticChecks.host_compiler_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-host/HostProvider.roc")?))?
 
 	step!("The scripts run on roc-stable, pin its nightly, and nothing else selects a compiler")?
 	flake = read!(context, "flake.nix")?

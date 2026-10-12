@@ -2,6 +2,7 @@ import cli.Env
 import cli.OsStr
 import cli.Path
 import CliHarness
+import Integrity
 import RocPackagesTest
 import Script
 
@@ -15,7 +16,7 @@ CliHostTest := [].{
 	## removed afterwards.
 	run! : Path => Try({}, _)
 	run! = |repository| {
-		bench = CliHarness.open!(repository, "blueprint-host-", ["roc-record", "nix"])?
+		bench = CliHarness.open!(repository, "blueprint-host-", ["roc-record", "nix", "curl", "tar"])?
 		result = cases!(bench)
 		CliHarness.close!(bench)
 		result
@@ -34,6 +35,66 @@ CliHostTest := [].{
 		"Task(\"say\", [Use(\"plain\"), Run([\"printf\", \"%s\\n\", \"configured argument\"])]),",
 		"Build(\"app\", [Use(\"plain\"), Run([\"true\"]), Output(\"out\")]),",
 	]
+
+	## A nightly no compiler here is, so nothing but the stubs can supply it.
+	tag : Str
+	tag = "nightly-2026-01-02-abcdef0"
+
+	## An environment whose `roc-stable` is that nightly, and a task that
+	## starts it.
+	stable : List(Str)
+	stable = [
+		"Name(\"host-test\"),",
+		"Overlay(\"roc\", \"github:example/unused-overlay\"),",
+		"Environment(\"dev\", [Overlays([\"roc\"]), Command(\"roc-stable\", \"rocpkgs.${tag}\")]),",
+		"Task(\"version\", [Use(\"dev\"), Run([\"roc-stable\", \"version\"])]),",
+	]
+
+	## How roc-lang/nightlies names the compiler archive for this machine.
+	build : { arch : [X86, X64, ARM, AARCH64, OTHER(Str)], os : [LINUX, MACOS, WINDOWS, OTHER(Str)] } -> Try(Str, [NoBuild])
+	build = |machine|
+		match machine {
+			{ arch: X64, os: LINUX } => Ok("linux_x86_64")
+			{ arch: AARCH64, os: LINUX } => Ok("linux_arm64")
+			{ arch: AARCH64, os: MACOS } => Ok("macos_apple_silicon")
+			{ arch: X64, os: MACOS } => Ok("macos_x86_64")
+			_ => Err(NoBuild)
+		}
+
+	## What every transfer is asked for, before its own arguments.
+	transfer : List(Str)
+	transfer = ["--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--retry", "3"]
+
+	## The request for a release's assets and their digests.
+	ask : Str -> List(Str)
+	ask = |release| transfer.concat(["--header", "Accept: application/vnd.github+json", "https://api.github.com/repos/roc-lang/nightlies/releases/tags/${release}"])
+
+	## Whether a recorded `curl` call downloads `url` into a fresh directory
+	## beside `directory`.
+	downloads : List(Str), Str, Str -> Bool
+	downloads = |call, directory, url|
+		match call.drop_first(transfer.len()) {
+			["--output", file, asked] => call.take_first(transfer.len()) == transfer and asked == url and fresh(file, directory, "archive")
+			_ => False
+		}
+
+	## Whether a recorded `tar` call unpacks such a download beside itself.
+	unpacks : List(Str), Str -> Bool
+	unpacks = |call, directory|
+		match call {
+			["-xf", file, "-C", tree] => fresh(file, directory, "archive") and fresh(tree, directory, "tree") and file.drop_suffix("archive") == tree.drop_suffix("tree")
+			_ => False
+		}
+
+	## `<parent of directory>/.blueprint-fetch-<random>/<name>`.
+	fresh : Str, Str, Str -> Bool
+	fresh = |file, directory, name| {
+		parent = Str.join_with(directory.split_on("/").drop_last(1), "/")
+		match file.drop_prefix("${parent}/").split_on("/") {
+			[temporary, last] => file.starts_with("${parent}/") and temporary.starts_with(".blueprint-fetch-") and last == name
+			_ => False
+		}
+	}
 }
 
 Test : { bench : CliHarness.Bench, env : List((OsStr, OsStr)) }
@@ -133,6 +194,128 @@ cases! = |bench| {
 	without_nix!(running)?
 	Script.pass!("host provider: a task runs from the lock the Nix provider wrote, without Nix; gen generates nothing")?
 
+	# A roc-stable command is the nightly's compiler, fetched once into the
+	# workspace and checked against the digest its release reports.
+	build = match CliHostTest.build(Env.platform!()) {
+		Ok(name) => name
+		Err(NoBuild) => return Script.fail!("roc-lang/nightlies has no compiler for this machine")
+	}
+	top = "roc_nightly-${build}-${CliHostTest.tag.drop_prefix("nightly-")}"
+	asset = "${top}.tar.gz"
+	url = "https://github.com/roc-lang/nightlies/releases/download/${CliHostTest.tag}/${asset}"
+	archive = "${bench.work}/archive"
+	Path.write_utf8!(Path.utf8(archive), "the bytes of a release archive\n")?
+	digest = Integrity.digest(Path.read_bytes!(Path.utf8(archive))?)
+	tree = "${bench.work}/unpacked"
+	Path.create_all!(Path.utf8("${tree}/${top}"))?
+	Path.copy!(Path.utf8("${bench.work}/stub-tool"), Path.utf8("${tree}/${top}/roc"))?
+	Path.write_utf8!(Path.utf8("${tree}/${top}/LICENSE"), "")?
+	release = "${bench.work}/release.json"
+	Path.write_utf8!(Path.utf8(release), "{\"assets\":[{\"name\":\"other\",\"digest\":\"sha256:${Integrity.digest([])}\"},{\"name\":\"${asset}\",\"digest\":\"sha256:${digest}\"}]}")?
+	fetching = { ..test, env: CliHarness.unsetting(CliHarness.setting(test.env, [("STUB_CURL_ARCHIVE", archive), ("STUB_CURL_RELEASE", release), ("STUB_TAR_TREE", tree)]), ["GH_TOKEN", "GITHUB_TOKEN"]) }
+
+	stable = project!(fetching, "stable", CliHostTest.stable)?
+	lock!(fetching, stable)?
+	store = "${stable}/.blueprint/host/commands/roc-stable/${CliHostTest.tag}"
+	CliHarness.contains!(run!(fetching, stable, ["run", "version"], 0, [host])?, "stub roc-stable: version\n", "run version")?
+	transfers = CliHarness.calls!("${stable}/curl-calls")?
+	CliHarness.check!(
+		match transfers {
+			[asked, downloaded] => asked == CliHostTest.ask(CliHostTest.tag) and CliHostTest.downloads(downloaded, store, url)
+			_ => False
+		},
+		"run version did not ask for the release's digests and then download ${url}: ${Str.inspect(transfers)}",
+	)?
+	unpacked = CliHarness.calls!("${stable}/tar-calls")?
+	CliHarness.check!(unpacked.len() == 1 and unpacked.all(|call| CliHostTest.unpacks(call, store)), "run version did not unpack the download once: ${Str.inspect(unpacked)}")?
+	CliHarness.same_calls!(CliHarness.calls!("${stable}/roc-stable-calls")?, [["version"]], "run version did not start the fetched roc-stable")?
+	CliHarness.check!(CliHarness.names!("${store}/bin")? == ["roc-stable"], "the command's directory holds more than roc-stable: ${Str.inspect(CliHarness.names!("${store}/bin")?)}")?
+	CliHarness.check!(CliHarness.names!("${stable}/.blueprint/host/commands/roc-stable")? == [CliHostTest.tag], "the fetch left something beside the command: ${Str.inspect(CliHarness.names!("${stable}/.blueprint/host/commands/roc-stable")?)}")?
+	without_nix!(stable)?
+
+	# What was fetched is generated state: the generated root ignores itself,
+	# though this provider generates no file there.
+	ignore = "${stable}/.blueprint/.gitignore"
+	CliHarness.check!(Path.read_utf8!(Path.utf8(ignore)).map_ok(|text| text == "*\n") ?? False, "fetching into ${stable}/.blueprint did not write ${ignore}")?
+	ignored = CliHarness.identity!(ignore)?
+
+	# A command that is there is not fetched, and nothing is asked of anyone.
+	for directory in ["curl-calls", "tar-calls", "roc-stable-calls"] {
+		CliHarness.forget!("${stable}/${directory}")?
+	}
+	CliHarness.contains!(run!(fetching, stable, ["run", "version", "--", "again"], 0, [host, ("STUB_CURL_STATUS", "22")])?, "stub roc-stable: version again\n", "a second run version")?
+	CliHarness.same_calls!(CliHarness.calls!("${stable}/curl-calls")?.concat(CliHarness.calls!("${stable}/tar-calls")?), [], "a second run fetched again")?
+	CliHarness.check!(CliHarness.identity!(ignore)? == ignored, "a second run wrote ${ignore} again")?
+	Script.pass!("host provider: roc-stable is fetched once, by the digest its release reports, and started by its own path")?
+
+	# A token, when the caller has one, goes with the question on its standard
+	# input: it is not an argument, where the host's other processes could read
+	# it, and it is not printed.
+	for case in [
+		{ name: "gh", variables: [("GH_TOKEN", "first-secret"), ("GITHUB_TOKEN", "second-secret")], secret: "first-secret" },
+		{ name: "github", variables: [("GITHUB_TOKEN", "second-secret")], secret: "second-secret" },
+		{ name: "empty", variables: [("GH_TOKEN", ""), ("GITHUB_TOKEN", "second-secret")], secret: "second-secret" },
+	] {
+		cwd = project!(fetching, "token-${case.name}", CliHostTest.stable)?
+		lock!(fetching, cwd)?
+		output = run!(fetching, cwd, ["run", "version"], 0, [host].concat(case.variables))?
+		CliHarness.check!(!output.contains("secret"), "run version printed the token:\n${output}")?
+		CliHarness.check!(CliHarness.calls!("${cwd}/curl-calls")?.first() == Ok(CliHostTest.ask(CliHostTest.tag).concat(["--config", "-", "stdin:header = \"Authorization: Bearer ${case.secret}\"\n"])), "the question did not carry the token of ${case.name}")?
+		refused = project!(fetching, "token-${case.name}-refused", CliHostTest.stable)?
+		lock!(fetching, refused)?
+		failure = run!(fetching, refused, ["run", "version"], 1, [host, ("STUB_CURL_STATUS", "22")].concat(case.variables))?
+		CliHarness.contains!(failure, "could not learn the digest of ${asset}", "a failed question")?
+		CliHarness.check!(!failure.contains("secret"), "a failed question printed the token:\n${failure}")?
+	}
+	quoted = project!(fetching, "token-quoted", CliHostTest.stable)?
+	lock!(fetching, quoted)?
+	unusable = run!(fetching, quoted, ["run", "version"], 1, [host, ("GH_TOKEN", "first\"secret")])?
+	CliHarness.contains!(unusable, "the token in GH_TOKEN or GITHUB_TOKEN holds a character a request cannot carry", "a token with a quote")?
+	CliHarness.check!(!unusable.contains("secret"), "a refused token was printed:\n${unusable}")?
+	CliHarness.same_calls!(CliHarness.calls!("${quoted}/curl-calls")?, [], "a request was made with a token it could not carry")?
+	Script.pass!("host provider: GH_TOKEN, else GITHUB_TOKEN, authorizes the question on standard input, never as an argument, and is never printed")?
+
+	# Nothing is unpacked or run unless the download has the reported digest.
+	mismatched = "${bench.work}/mismatched.json"
+	Path.write_utf8!(Path.utf8(mismatched), "{\"assets\":[{\"name\":\"${asset}\",\"digest\":\"sha256:${Integrity.digest([])}\"}]}")?
+	unlisted = "${bench.work}/unlisted.json"
+	Path.write_utf8!(Path.utf8(unlisted), "{\"assets\":[{\"name\":\"other\",\"digest\":\"sha256:${digest}\"}]}")?
+	limited = "${bench.work}/limited.json"
+	Path.write_utf8!(Path.utf8(limited), "{\"message\":\"API rate limit exceeded\"}")?
+	for case in [
+		{ name: "mismatched", release: mismatched, diagnostic: "has SHA-256 ${digest}, not ${Integrity.digest([])}; nothing was unpacked", transfers: 2 },
+		{ name: "unlisted", release: unlisted, diagnostic: "the release has no asset of that name", transfers: 1 },
+		{ name: "limited", release: limited, diagnostic: "the release does not list its assets with digests", transfers: 1 },
+	] {
+		cwd = project!(fetching, "digest-${case.name}", CliHostTest.stable)?
+		lock!(fetching, cwd)?
+		CliHarness.contains!(run!(fetching, cwd, ["run", "version"], 1, [host, ("STUB_CURL_RELEASE", case.release)])?, case.diagnostic, "run version with a ${case.name} digest")?
+		CliHarness.check!(CliHarness.calls!("${cwd}/curl-calls")?.len() == case.transfers, "a ${case.name} digest did not stop the fetch where it should")?
+		CliHarness.same_calls!(CliHarness.calls!("${cwd}/tar-calls")?.concat(CliHarness.calls!("${cwd}/roc-stable-calls")?), [], "a ${case.name} digest was unpacked or run")?
+		CliHarness.check!(CliHarness.names!("${cwd}/.blueprint/host/commands/roc-stable")? == [], "a ${case.name} digest left something in the workspace")?
+	}
+	Script.pass!("host provider: a download whose digest is wrong, unlisted or unreported is neither unpacked nor run")?
+
+	# Without ROC or a compatible roc on PATH, the compiler that evaluates
+	# Blueprint.roc is fetched by the digest the provider records for the pin.
+	# The stub's bytes are not that archive, so it must be refused.
+	pin = Path.read_utf8!(Path.utf8("${bench.root}/blueprint-cli/compiler-version"))?.trim()
+	pinned = "roc_nightly-${build}-${pin.drop_prefix("nightly-")}"
+	evaluating = project!(fetching, "compiler", CliHostTest.plain)?
+	absent = CliHarness.setting(CliHarness.unsetting(fetching.env, ["ROC"]), [("PATH", "${bench.bin}:/usr/bin:/bin"), host])
+	outcome = CliHarness.blueprint!(bench, evaluating, ["tasks"], absent)?
+	CliHarness.exited!(outcome, 1, "tasks without a compiler")?
+	CliHarness.contains!(outcome.stderr, "could not fetch Roc ${pin}: the archive for ${evaluating}/.blueprint/host/roc/${pin} has SHA-256 ${digest}, not ", "tasks without a compiler")?
+	CliHarness.contains!(outcome.stderr, "set ROC", "tasks without a compiler")?
+	compiler_transfers = CliHarness.calls!("${evaluating}/curl-calls")?
+	CliHarness.check!(
+		compiler_transfers.len() == 1 and compiler_transfers.all(|call| CliHostTest.downloads(call, "${evaluating}/.blueprint/host/roc/${pin}", "https://github.com/roc-lang/nightlies/releases/download/${pin}/${pinned}.tar.gz")),
+		"the compiler was not downloaded once, without a question: ${Str.inspect(compiler_transfers)}",
+	)?
+	CliHarness.same_calls!(CliHarness.calls!("${evaluating}/tar-calls")?, [], "a compiler archive with the wrong digest was unpacked")?
+	CliHarness.check!(CliHarness.names!("${evaluating}/.blueprint/host/roc")? == [], "a refused compiler left something in the workspace")?
+	Script.pass!("host provider: the evaluating compiler is fetched by its recorded digest, and other bytes are refused")?
+
 	# An environment's declarations are not ignored: a task that needs one is refused.
 	tooled = project!(test, "tooled", CliHostTest.plain.concat(["Environment(\"dev\", [Extend(\"plain\"), Tools([\"git\"])]),", "Task(\"status\", [Use(\"dev\"), Run([\"git\", \"status\"])]),"]))?
 	lock!(test, tooled)?
@@ -142,3 +325,16 @@ cases! = |bench| {
 }
 
 expect CliHostTest.blueprint_roc("../pf/main.roc", ["Name(\"a\"),"]) == "app [config] { pf: platform \"../pf/main.roc\" }\nconfig = [\n\tName(\"a\"),\n]\n"
+
+expect CliHostTest.build({ arch: X64, os: LINUX }) == Ok("linux_x86_64") and CliHostTest.build({ arch: X64, os: WINDOWS }) == Err(NoBuild)
+
+expect CliHostTest.fresh("/p/.blueprint/host/commands/roc-stable/.blueprint-fetch-a1B2/archive", "/p/.blueprint/host/commands/roc-stable/nightly-2026-01-02-abcdef0", "archive")
+expect
+	["/p/.blueprint/host/commands/roc-stable/archive", "/p/.blueprint/host/commands/roc-stable/nightly-2026-01-02-abcdef0/archive", "/tmp/.blueprint-fetch-a1B2/archive", "/p/.blueprint/host/commands/roc-stable/.blueprint-fetch-a1B2/tree"].all(
+		|file| !CliHostTest.fresh(file, "/p/.blueprint/host/commands/roc-stable/nightly-2026-01-02-abcdef0", "archive"),
+	)
+
+expect CliHostTest.downloads(CliHostTest.transfer.concat(["--output", "/p/w/.blueprint-fetch-x/archive", "https://example.invalid/a"]), "/p/w/tag", "https://example.invalid/a")
+expect !CliHostTest.downloads(CliHostTest.transfer.concat(["--output", "/p/w/.blueprint-fetch-x/archive", "https://example.invalid/b"]), "/p/w/tag", "https://example.invalid/a")
+expect CliHostTest.unpacks(["-xf", "/p/w/.blueprint-fetch-x/archive", "-C", "/p/w/.blueprint-fetch-x/tree"], "/p/w/tag")
+expect !CliHostTest.unpacks(["-xf", "/p/w/.blueprint-fetch-x/archive", "-C", "/p/w/.blueprint-fetch-y/tree"], "/p/w/tag")

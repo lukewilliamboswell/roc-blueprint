@@ -34,7 +34,7 @@ NixProvider :: [].{
 			locks = Locks.from_nix(spec, layout, text)?
 			Ok(Locks.to_lock(locks.with_trees(layout, trees)?))
 		},
-		compiler: |tag| ["nix", "build", "--no-link", "--print-out-paths", "${roc_overlay}#\"${tag}\""],
+		compiler: |tag, _target, _layout| Ok(Printed(["nix", "build", "--no-link", "--print-out-paths", "${roc_overlay}#\"${tag}\""])),
 	}
 
 	## `nix flake update` resolves every input of the staged flake. Given
@@ -1390,7 +1390,7 @@ expect {
 expect NixProvider.render({ ..mk(simple), commands: [{ environment: "dev", name: "vcs", tool: { source: "default", name: "git" } }] }).is_err()
 
 # The evaluating compiler is fetched by tag from the pinned overlay revision.
-expect (NixProvider.provider.compiler)("nightly-2026-10-04-130536d") == ["nix", "build", "--no-link", "--print-out-paths", "${NixProvider.roc_overlay}#\"nightly-2026-10-04-130536d\""]
+expect (NixProvider.provider.compiler)("nightly-2026-10-04-130536d", "x86_64-linux", Layout.{ project_root: "/project", workspace: "/project/.blueprint", generated_root: "/project/.blueprint", lock_path: "/project/Blueprint.lock" }) == Ok(Printed(["nix", "build", "--no-link", "--print-out-paths", "${NixProvider.roc_overlay}#\"nightly-2026-10-04-130536d\""]))
 expect NixProvider.roc_overlay.starts_with("github:roc-lang/roc-overlay/") and NixProvider.roc_overlay.contains("?narHash=sha256-")
 
 # Auto tool syntax is checked for the selected provider before any effects.

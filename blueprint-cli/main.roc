@@ -293,7 +293,7 @@ run! = |command, loaded, context| {
 check! : Try(Spec, _), Context => Try({}, _)
 check! = |loaded, ctx| {
 	check_host!()?
-	Cmd.new_str(roc!(ctx.provider)?).args_str(["check", "Blueprint.roc"])
+	Cmd.new_str(roc!(ctx)?).args_str(["check", "Blueprint.roc"])
 		.cwd(path(ctx.layout.project_root)).exec_cmd!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	_ = render(ctx.provider, loaded?)?
@@ -308,7 +308,7 @@ evaluate! = |ctx| {
 		return Err(NoBlueprint)
 	}
 	check_host!()?
-	output = Cmd.new_str(roc!(ctx.provider)?).args_str(["Blueprint.roc"])
+	output = Cmd.new_str(roc!(ctx)?).args_str(["Blueprint.roc"])
 		.cwd(path(root)).exec_output!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = Spec.parse(output.stdout_utf8).map_err(|err| BadSpec(err))?
@@ -359,9 +359,10 @@ print_files! = |provider, spec| {
 ## Probe identity before evaluating config with the selected compiler.
 ## A relative ROC executable belongs to the invocation directory, not root.
 ## An explicit ROC must be the compatible compiler. Otherwise a compatible
-## `roc` on PATH is used, and failing that the provider fetches the release.
-roc! : Provider => Try(Str, _)
-roc! = |provider| {
+## `roc` on PATH is used, and failing that the provider says how to obtain the
+## release.
+roc! : Context => Try(Str, _)
+roc! = |ctx| {
 	expected = "Roc compiler version ${compiler_version.trim()}"
 	match Env.var_str!("ROC") {
 		Ok(override) => {
@@ -391,7 +392,19 @@ roc! = |provider| {
 			if on_path {
 				return Ok("roc")
 			}
-			fetch_roc!((provider.compiler)(compiler_version.trim()))
+			obtained = (ctx.provider.compiler)(compiler_version.trim(), ctx.target, ctx.layout)
+				.map_err(|message| CompilerFailed("the ${ctx.provider.name} provider cannot fetch Roc ${compiler_version.trim()}: ${message}"))?
+			match obtained {
+				Printed(argv) => fetch_roc!(argv)
+				Fetched(archive) =>
+					fetch!(archive, ctx.layout).map_err(
+						|err|
+							match err {
+								FetchFailed(message) => CompilerFailed("could not fetch Roc ${compiler_version.trim()}: ${message}")
+								other => other
+							},
+					)
+			}
 		}
 	}
 }
@@ -412,6 +425,158 @@ fetch_roc! = |argv|
 		}
 		[] => Err(CompilerFailed("the provider cannot fetch a compiler"))
 	}
+
+## Keep a released archive unpacked where a provider says, and answer with
+## its program (see `Steps.Archive`). Every argv is the provider's and runs
+## from the project root. The fresh directory is beside the destination, so
+## the last rename stays on one filesystem and is atomic. An archive kept in
+## the generated root is generated state, ignored like the rest of it.
+fetch! : Steps.Archive, Layout => Try(Str, _)
+fetch! = |archive, layout| {
+	root = layout.project_root
+	program = "${archive.directory}/${archive.program}"
+	safe_path!(archive.directory)?
+	if !relative_parts(archive.program) or archive.moves.any(|move| !relative_parts(move.from) or !relative_parts(move.to)) {
+		return Err(FetchFailed("the archive for ${archive.directory} names a path outside it"))
+	}
+	if path(program).is_file!() ?? False {
+		return Ok(program)
+	}
+	beside = path(Paths.parent(archive.directory))
+	beside.create_all!()?
+	if archive.directory.starts_with("${layout.generated_root}/") {
+		ignore_generated!(layout)?
+	}
+	fresh = Env.create_temp_dir_in!(beside, ".blueprint-fetch-")?
+	unpack! = || {
+		base = Paths.portable(fresh.to_str()?)
+		file = "${base}/archive"
+		tree = "${base}/tree"
+		place = |argv| argv.map(|arg| arg.replace_each(archive.archive, file).replace_each(archive.tree, tree))
+		expected = archive_digest!(archive.digest, root)?
+		Stderr.line!("blueprint: fetching ${archive.directory}")?
+		fetch_exec!(place(archive.download), root)?
+		if !(path(file).is_file!() ?? False) {
+			return Err(FetchFailed("`${Str.join_with(archive.download, " ")}` downloaded nothing"))
+		}
+		actual = file_digest!(file)?.to_hex()
+		if actual != expected {
+			return Err(FetchFailed("the archive for ${archive.directory} has SHA-256 ${actual}, not ${expected}; nothing was unpacked"))
+		}
+		path(tree).create_dir!()?
+		fetch_exec!(place(archive.unpack), root)?
+		for move in archive.moves {
+			destination = "${tree}/${move.to}"
+			path(Paths.parent(destination)).create_all!()?
+			path("${tree}/${move.from}").rename!(path(destination))
+				.map_err(|_| FetchFailed("the archive for ${archive.directory} holds no ${move.from}"))?
+		}
+		if !(path("${tree}/${archive.program}").is_file!() ?? False) {
+			return Err(FetchFailed("the archive for ${archive.directory} holds no ${archive.program}"))
+		}
+		placed = path(tree).rename!(path(archive.directory))
+		# Losing the rename to another process costs nothing: its bytes are ours.
+		if placed.is_ok() or (path(program).is_file!() ?? False) {
+			Ok({})
+		} else {
+			Err(FetchFailed("cannot place the unpacked archive at ${archive.directory}; delete what is there"))
+		}
+	}
+	result = unpack!()
+	_ = fresh.delete_all!()
+	result?
+	Ok(program)
+}
+
+## A relative path of plain names, as `Steps.Archive` places things in a tree.
+relative_parts : Str -> Bool
+relative_parts = |value| !value.split_on("/").any(|part| part == "" or part == "." or part == ".." or part.contains("\\") or part.contains(":"))
+
+expect relative_parts("bin/roc-stable.exe") and relative_parts("roc_nightly-windows_x86_64-2026-10-04-130536d/roc.exe")
+expect ["", "/bin/roc", "bin//roc", "../roc", "bin/../../roc", "bin/", "D:/roc", "bin\\roc"].all(|value| !relative_parts(value))
+
+## Run one argv of a fetch. Its own diagnostics are the user's to read.
+fetch_exec! : List(Str), Str => Try({}, _)
+fetch_exec! = |argv, root|
+	exec!(argv, root).map_err(
+		|err|
+			match err {
+				CommandFailed(_, code) => FetchFailed("`${Str.join_with(argv, " ")}` exited with code ${code.to_str()}")
+				_ => FetchFailed("could not run `${Str.join_with(argv, " ")}`")
+			},
+	)
+
+## The SHA-256 an archive must have. A recorded digest is the provider's. A
+## published one is whatever the release reports now, over HTTPS: nothing in
+## Blueprint.lock pins it, which docs/architecture.adoc, invariant 3, asks of
+## every input. It guards the transfer, not the release.
+archive_digest! : Steps.Digest, Str => Try(Str, _)
+archive_digest! = |digest, root|
+	match digest {
+		Recorded(hex) => Ok(hex)
+		Published({ asset, ask, authorized, token }) => {
+			var $secrets = []
+			for variable in token.variables {
+				match Env.var_str!(OsStr.from_str(variable)) {
+					Ok(value) if !value.is_empty() => {
+						$secrets = $secrets.append(value)
+					}
+					_ => {}
+				}
+			}
+			# The token is never printed and never an argument, which any
+			# process on the host could read: the request takes it on standard
+			# input, and a failure names the request without it.
+			(argv, input) = match $secrets.first() {
+				Ok(value) => {
+					if value.to_utf8().any(|byte| byte < 32 or byte == 127 or byte == '"' or byte == '\\') {
+						return Err(FetchFailed("the token in ${Str.join_with(token.variables, " or ")} holds a character a request cannot carry"))
+					}
+					(authorized, Bytes(token.input.replace_each(token.text, value).to_utf8()))
+				}
+				Err(_) => (ask, Null)
+			}
+			asked = "`${Str.join_with(ask, " ")}`"
+			match argv {
+				[program, .. as args] => {
+					output = Cmd.new_str(program).args_str(args).cwd(path(root)).stdin(input).stderr(Inherit).exec_output!()
+						.map_err(|_| FetchFailed("could not learn the digest of ${asset}: ${asked} failed"))?
+					published_digest(output.stdout_utf8, asset)
+						.map_err(|reason| FetchFailed("could not learn the digest of ${asset} from ${asked}: ${reason}"))
+				}
+				[] => Err(FetchFailed("the provider cannot learn the digest of ${asset}"))
+			}
+		}
+	}
+
+## The SHA-256 a release reports for one of its assets, in hex.
+published_digest : Str, Str -> Try(Str, Str)
+published_digest = |text, asset| {
+	parsed : Try({ assets : List({ name : Str, digest : Str }) }, _)
+	parsed = Json.parse(text)
+	release = parsed.map_err(|_| "the release does not list its assets with digests")?
+	found = release.assets.find_first(|entry| entry.name == asset)
+		.map_err(|_| "the release has no asset of that name")?
+	hex = found.digest.drop_prefix("sha256:")
+	if found.digest.starts_with("sha256:") and hex.to_utf8().len() == 64 and hex.to_utf8().all(|b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f')) {
+		Ok(hex)
+	} else {
+		Err("its digest is not a SHA-256: ${found.digest}")
+	}
+}
+
+release_sample : Str
+release_sample =
+	\\{"tag_name":"nightly-2026-10-04-130536d","assets":[
+	\\ {"name":"roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz","size":69614310,"digest":"sha256:893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f"},
+	\\ {"name":"roc_nightly-windows_x86_64-2026-10-04-130536d.zip","size":67310620,"digest":"sha256:1f5ac14286ebea19f884176c6ab1eabe29f1ad58c10d8f490a9c282e0411033f"},
+	\\ {"name":"short","digest":"sha256:1f5a"},
+	\\ {"name":"other","digest":"sha512:1f5ac14286ebea19f884176c6ab1eabe29f1ad58c10d8f490a9c282e0411033f"}]}
+
+expect published_digest(release_sample, "roc_nightly-windows_x86_64-2026-10-04-130536d.zip") == Ok("1f5ac14286ebea19f884176c6ab1eabe29f1ad58c10d8f490a9c282e0411033f")
+expect published_digest(release_sample, "roc_nightly-macos_x86_64-2026-10-04-130536d.tar.gz") == Err("the release has no asset of that name")
+expect published_digest(release_sample, "short").is_err() and published_digest(release_sample, "other").is_err()
+expect published_digest("{\"message\":\"API rate limit exceeded\"}", "short") == Err("the release does not list its assets with digests")
 
 Context : { layout : Layout, target : Str, provider : Provider }
 
@@ -1056,6 +1221,9 @@ execute_step! = |step, ctx| {
 					|file| { ..file, contents: file.contents.replace_each(executable, own) },
 				)
 			}
+			Fetch(archive) => {
+				_ = fetch!(archive, layout)?
+			}
 			# Locating the bundles reads the files staged below.
 			RocPackages(request) => {
 				$roc_packages = $roc_packages.append(request)
@@ -1426,6 +1594,7 @@ describe = |err, provider|
 		InvalidProject(msg) => "invalid Spec project: ${msg}"
 		RenderFailed(msg) => "cannot generate the ${provider} files: ${msg}"
 		RocPackagesFailed(msg) => msg
+		FetchFailed(msg) => msg
 		BadSpec(MissingRequiredField("format")) => "Blueprint.roc uses an older roc-blueprint platform that this blueprint can't read; update the platform URL in its app header to a current release"
 		BadSpec(MissingRequiredField(field)) => "the Spec from Blueprint.roc is missing ${field}"
 		NonZeroExitCode({ command, exit_code, stderr_utf8_lossy, .. }) =>
