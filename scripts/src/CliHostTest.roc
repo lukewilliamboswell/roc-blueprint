@@ -406,12 +406,45 @@ cases! = |bench| {
 	CliHarness.check!(CliHarness.names!("${other_cache}/roc/packages")? == [], "a refused bundle left something in Roc's package cache: ${Str.inspect(CliHarness.names!("${other_cache}/roc/packages")?)}")?
 	Script.pass!("host provider: a Roc package is downloaded and unbundled into Roc's cache once; other bytes are not published")?
 
-	# An environment's declarations are not ignored: a task that needs one is refused.
-	tooled = project!(test, "tooled", CliHostTest.plain.concat(["Environment(\"dev\", [Extend(\"plain\"), Tools([\"git\"])]),", "Task(\"status\", [Use(\"dev\"), Run([\"git\", \"status\"])]),"]))?
+	# A tool is a program this host must already have. The only programs on
+	# PATH here are the stubs, so `zig` is there and `git` and `cargo` are not.
+	tooled = project!(
+		test,
+		"tooled",
+		CliHostTest.plain.concat([
+			"Environment(\"zig\", [Extend(\"plain\"), Tools([\"zig\"])]),",
+			"Environment(\"pinned\", [Extend(\"plain\"), Tools([\"zigpkgs.\\\"0.16.0\\\"\"])]),",
+			"Environment(\"host\", [Extend(\"pinned\"), Tools([\"git\", \"cargo\"])]),",
+			"Environment(\"other\", [Extend(\"zig\"), Tools([\"python3\", \"ripgrep\"])]),",
+			"Task(\"any\", [Use(\"zig\"), Run([\"zig\", \"build\"])]),",
+			"Task(\"exact\", [Use(\"pinned\"), Run([\"zig\", \"build\"])]),",
+			"Task(\"lacking\", [Use(\"host\"), Run([\"zig\", \"build\"])]),",
+			"Task(\"unknown\", [Use(\"other\"), Run([\"zig\", \"build\"])]),",
+		]),
+	)?
 	lock!(test, tooled)?
-	CliHarness.contains!(run!(test, tooled, ["run", "status"], 1, [host])?, "environment dev declares tools, which this host cannot supply: git", "run with a declared tool")?
+	Path.create_dir!(Path.utf8("${bench.work}/only"))?
+	for name in ["zig", "nix"] {
+		Path.copy!(Path.utf8("${bench.work}/stub-tool"), Path.utf8("${bench.work}/only/${name}"))?
+	}
+	present = [host, ("PATH", "${bench.work}/only"), ("STUB_ZIG_VERSION", "0.15.2")]
+	_ = run!(test, tooled, ["run", "any"], 0, present)?
+	CliHarness.same_calls!(CliHarness.calls!("${tooled}/zig-calls")?, [["version"], ["build"]], "run any did not check for zig and then run the task")?
+	CliHarness.forget!("${tooled}/zig-calls")?
+	CliHarness.contains!(run!(test, tooled, ["run", "exact"], 1, present)?, "  zigpkgs.\"0.16.0\": `zig version` printed 0.15.2, not 0.16.0", "run exact with another zig")?
+	CliHarness.same_calls!(CliHarness.calls!("${tooled}/zig-calls")?, [["version"]], "a task ran with the wrong zig")?
+	CliHarness.forget!("${tooled}/zig-calls")?
+	_ = run!(test, tooled, ["run", "exact"], 0, [host, ("PATH", "${bench.work}/only"), ("STUB_ZIG_VERSION", "0.16.0")])?
+	CliHarness.same_calls!(CliHarness.calls!("${tooled}/zig-calls")?, [["version"], ["build"]], "run exact did not run the task with the zig it names")?
+	CliHarness.forget!("${tooled}/zig-calls")?
+	lacking = run!(test, tooled, ["run", "lacking"], 1, present)?
+	for line in ["this host does not have what the task's environment declares, and nothing is installed here:", "  zigpkgs.\"0.16.0\": `zig version` printed 0.15.2, not 0.16.0", "  git: `git --version` could not be run", "  cargo: `cargo --version` could not be run"] {
+		CliHarness.contains!(lacking, line, "run lacking")?
+	}
+	CliHarness.same_calls!(CliHarness.calls!("${tooled}/zig-calls")?, [["version"]], "a task ran without its tools")?
+	CliHarness.contains!(run!(test, tooled, ["run", "unknown"], 1, present)?, "environment other declares tools this host cannot check for: python3, ripgrep; it knows git, gh, gnutar, zip, unzip, go, zig, zigpkgs.\"<version>\", cargo, rustc and rust-bin.stable.\"<version>\".default", "run unknown")?
 	without_nix!(tooled)?
-	Script.pass!("host provider: a task whose environment declares a tool is refused, naming it")
+	Script.pass!("host provider: a tool is checked for, by version when its name carries one; every missing or unknown tool is named at once")
 }
 
 expect CliHostTest.blueprint_roc("../pf/main.roc", ["Name(\"a\"),"]) == "app [config] { pf: platform \"../pf/main.roc\" }\nconfig = [\n\tName(\"a\"),\n]\n"

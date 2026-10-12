@@ -34,6 +34,7 @@ import StubTool
 ##   curl        record, in the directory `STUB_CURL_LOG` if set; exit
 ##               `STUB_CURL_STATUS` if set; with `--output FILE` copy
 ##               `STUB_CURL_ARCHIVE` there, otherwise print the file `STUB_CURL_RELEASE`
+##   zig         record; `version` prints `STUB_ZIG_VERSION`
 ##   tar         record; `-xf ARCHIVE -C DIRECTORY` copies the tree `STUB_TAR_TREE`
 ##               into the directory
 ##
@@ -161,6 +162,13 @@ act! = |role, args| {
 							written!(Path.read_utf8!(Path.utf8(release)).map_err(|_| "cannot read ${release}")?)
 						}
 					}
+			}
+		}
+		Zig => {
+			record!("zig-calls", argv)?
+			match argv {
+				["version"] => written!("${variable!("STUB_ZIG_VERSION")?}\n")
+				_ => Ok(0)
 			}
 		}
 		Tar => {

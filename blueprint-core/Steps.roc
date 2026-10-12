@@ -52,6 +52,11 @@ Steps := { steps : List(Step) }.{
 	## RocPackages does, and delete the fresh directory whatever happened.
 	## Fetch: the step's command needs a released archive unpacked; see
 	## `Archive`.
+	## Require: the step's command needs programs the host must already have.
+	## Run each `probe` with the caller's PATH. One that cannot be started or
+	## fails is missing; one that prints something other than `version` asks
+	## for, on its first line, is the wrong version. Report every failure
+	## together, each by its `tool`, and run nothing further.
 	## Search: the step's argv runs with these directories ahead of the
 	## caller's PATH, first to last, and may name a program in one of them.
 	## Serialize workspace use; stop on any failed materialization operation.
@@ -68,7 +73,12 @@ Steps := { steps : List(Step) }.{
 		),
 		Fetch(Archive),
 		Search(List(Str)),
+		Require(List(Probe)),
 	]
+
+	## `tool` is the declaration being checked, as its author wrote it. `Is`
+	## and `Starts` compare the first line the probe prints, trimmed.
+	Probe : { tool : Str, probe : List(Str), version : [Any, Is(Str), Starts(Str)] }
 
 	## A released archive to keep unpacked at `directory`. It is there when
 	## `<directory>/<program>` is a file; then do nothing, not even learn the

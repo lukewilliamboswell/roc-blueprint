@@ -6,11 +6,11 @@ import nix.LockJson
 StubTool := [].{
 
 	## The program a copy stands in for.
-	Role : [RocRecord, RocWire, RocProbe, RocStable, Nix, Guix, Python, Readlink, Curl, Tar]
+	Role : [RocRecord, RocWire, RocProbe, RocStable, Nix, Guix, Python, Readlink, Curl, Tar, Zig]
 
 	## The file names a copy may be installed under.
 	names : List(Str)
-	names = ["roc-record", "roc-wire", "roc-probe", "roc-stable", "nix", "guix", "python3", "readlink", "curl", "tar"]
+	names = ["roc-record", "roc-wire", "roc-probe", "roc-stable", "nix", "guix", "python3", "readlink", "curl", "tar", "zig"]
 
 	## The role of an executable, from the last part of its resolved path. A
 	## symbolic link called `roc` therefore takes the role of its target.
@@ -28,6 +28,7 @@ StubTool := [].{
 			"readlink" => Ok(Readlink)
 			"curl" => Ok(Curl)
 			"tar" => Ok(Tar)
+			"zig" => Ok(Zig)
 			_ => Err(UnknownRole(name))
 		}
 	}

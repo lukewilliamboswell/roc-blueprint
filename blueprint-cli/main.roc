@@ -342,6 +342,54 @@ exec! = |argv, root|
 		[] => Ok({})
 	}
 
+## Refuse a step whose environment declares programs this host lacks (see
+## `Require` in `Steps.Operation`). Every probe runs, so one refusal names
+## everything that is missing or of the wrong version.
+require! : List(Steps.Probe), Str => Try({}, _)
+require! = |probes, root| {
+	var $failures = []
+	for probe in probes {
+		command = "`${Str.join_with(probe.probe, " ")}`"
+		problem = match probe.probe {
+			[program, .. as args] =>
+				match Cmd.new_str(program).args_str(args).cwd(path(root)).exec_output!() {
+					Ok(output) => probe_problem(probe.version, output.stdout_utf8).map_ok(|reason| "${command} ${reason}")
+					Err(NonZeroExitCode({ exit_code, .. })) => Ok("${command} exited with code ${exit_code.to_str()}")
+					Err(_) => Ok("${command} could not be run")
+				}
+
+			[] => Ok("the provider has no way to check for it")
+		}
+		match problem {
+			Ok(reason) => {
+				$failures = $failures.append("  ${probe.tool}: ${reason}")
+			}
+			Err(Satisfied) => {}
+		}
+	}
+	if $failures.is_empty() {
+		Ok({})
+	} else {
+		Err(Refused("this host does not have what the task's environment declares, and nothing is installed here:\n${Str.join_with($failures, "\n")}"))
+	}
+}
+
+## What is wrong with the version a probe printed, if anything.
+probe_problem : [Any, Is(Str), Starts(Str)], Str -> Try(Str, [Satisfied])
+probe_problem = |expected, output| {
+	line = (output.split_on("\n").first() ?? "").trim()
+	match expected {
+		Any => Err(Satisfied)
+		Is(wanted) => if line == wanted Err(Satisfied) else Ok("printed ${line}, not ${wanted}")
+		Starts(wanted) => if line.starts_with(wanted) Err(Satisfied) else Ok("printed ${line}, which does not start with ${wanted.trim()}")
+	}
+}
+
+expect probe_problem(Any, "") == Err(Satisfied) and probe_problem(Is("0.16.0"), "0.16.0\r\n") == Err(Satisfied)
+expect probe_problem(Is("0.16.0"), "0.15.2\n") == Ok("printed 0.15.2, not 0.16.0") and probe_problem(Is("0.16.0"), "0.16.0-dev.1\n").is_ok()
+expect probe_problem(Starts("rustc 1.95.0 "), "rustc 1.95.0 (abc 2026-01-01)\nmore\n") == Err(Satisfied)
+expect probe_problem(Starts("rustc 1.95.0 "), "rustc 1.95.01 (abc)\n") == Ok("printed rustc 1.95.01 (abc), which does not start with rustc 1.95.0")
+
 ## Run a step's argv with its directories ahead of the caller's PATH, so that
 ## the argv and whatever it starts find the programs there first.
 exec_within! : List(Str), Str, List(Str) => Try({}, _)
@@ -1264,6 +1312,7 @@ execute_step! = |step, ctx| {
 			Search(directories) => {
 				$search = $search.concat(directories)
 			}
+			Require(probes) => require!(probes, layout.project_root)?
 			# Locating the bundles reads the files staged below.
 			RocPackages(request) => {
 				$roc_packages = $roc_packages.append(request)

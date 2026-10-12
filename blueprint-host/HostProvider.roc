@@ -241,10 +241,12 @@ HostProvider :: [].{
 			.map_err(|_| "unknown task: ${name}")?
 		argv = task.run.concat(extra)
 		Project.check_argv(argv, name)?
-		check_environment(project, task.environment)?
+		probes = environment_probes(project, task.environment, target)?
 		commands = environment_commands(project, task.environment, target, layout)?
 		bundles = environment_bundles(project, task.environment, target)?
-		fetches = commands.map(|command| Fetch(command.archive))
+		# What the host lacks is said before anything is downloaded.
+		fetches = (if probes.is_empty() [] else [Require(probes)])
+			.concat(commands.map(|command| Fetch(command.archive)))
 			.concat(if bundles.is_empty() [] else [RocBundles({ compiler: compiler_text, bundles })])
 		Ok({
 			action: Run(name),
@@ -367,20 +369,74 @@ HostProvider :: [].{
 		}
 	}
 
-	## What an environment declares that this provider cannot supply.
-	check_environment : Spec, Str -> Try({}, Str)
-	check_environment = |project, name| {
+	## An environment's tools, and those it declares for this System, as
+	## programs the host must already have. Nothing is installed: a tool is
+	## known here by what proves it present, and one that is not known is
+	## refused, all of them in one message. A tool's source says which Nix
+	## package set it comes from and means nothing here.
+	environment_probes : Spec, Str, Str -> Try(List(Steps.Probe), Str)
+	environment_probes = |project, name, target| {
 		environment = project.environments.find_first(|e| e.name == name)
 			.map_err(|_| "unknown environment: ${name}")?
 		tools = environment.tools.concat(
-			project.system_tools.keep_if(|entry| entry.environment == name)
+			project.system_tools.keep_if(|entry| entry.environment == name and entry.system == target)
 				.fold([], |all, entry| all.concat(entry.tools)),
 		)
-		if !tools.is_empty() {
-			Err("environment ${name} declares tools, which this host cannot supply: ${Str.join_with(tools.map(tool_text), ", ")}")
-		} else {
-			Ok({})
+		var $probes = []
+		var $unknown = []
+		for tool in tools {
+			match tool_probes(tool) {
+				Ok(known) => {
+					$probes = $probes.concat(known)
+				}
+				Err(UnknownTool) => {
+					$unknown = $unknown.append(tool_text(tool))
+				}
+			}
 		}
+		if $unknown.is_empty() {
+			Ok($probes)
+		} else {
+			Err("environment ${name} declares tools this host cannot check for: ${Str.join_with($unknown, ", ")}; it knows ${known_tools}")
+		}
+	}
+
+	known_tools : Str
+	known_tools = "git, gh, gnutar, zip, unzip, go, zig, zigpkgs.\"<version>\", cargo, rustc and rust-bin.stable.\"<version>\".default"
+
+	## How a tool is shown to be on the host. A name that carries a version,
+	## as zig-overlay's and rust-overlay's attributes do, asks for that
+	## version; any other is satisfied by whichever the host has.
+	tool_probes : Spec.Tool -> Try(List(Steps.Probe), [UnknownTool])
+	tool_probes = |tool| {
+		text = tool_text(tool)
+		any = |program, arguments| Ok([{ tool: text, probe: [program].concat(arguments), version: Any }])
+		match Project.nix_path(tool.name) {
+			Ok(["git"]) => any("git", ["--version"])
+			Ok(["gh"]) => any("gh", ["--version"])
+			Ok(["gnutar"]) => any("tar", ["--version"])
+			Ok(["zip"]) => any("zip", ["-v"])
+			Ok(["unzip"]) => any("unzip", ["-v"])
+			Ok(["go"]) => any("go", ["version"])
+			Ok(["zig"]) => any("zig", ["version"])
+			Ok(["cargo"]) => any("cargo", ["--version"])
+			Ok(["rustc"]) => any("rustc", ["--version"])
+			Ok(["zigpkgs", version]) if release_version(version) => Ok([{ tool: text, probe: ["zig", "version"], version: Is(version) }])
+			Ok(["rust-bin", "stable", version, "default"]) if release_version(version) =>
+				Ok([
+					{ tool: text, probe: ["rustc", "--version"], version: Starts("rustc ${version} ") },
+					{ tool: text, probe: ["cargo", "--version"], version: Starts("cargo ${version} ") },
+				])
+
+			_ => Err(UnknownTool)
+		}
+	}
+
+	## `1.95.0`: numbers between dots, as a release is numbered.
+	release_version : Str -> Bool
+	release_version = |version| {
+		parts = version.split_on(".")
+		parts.len() == 3 and parts.all(|part| !part.is_empty() and part.to_utf8().all(|b| b >= '0' and b <= '9'))
 	}
 
 	## A tool as Blueprint.roc writes it.
@@ -424,16 +480,24 @@ windows = Layout.{
 sample : Spec
 sample = {
 	..Spec.empty("sample"),
-	systems: ["x86_64-linux"],
-	sources: [{ name: "default", provider: Auto }, { name: "py", provider: Auto }],
+	systems: ["x86_64-linux", "x86_64-windows"],
+	requires_: ["system-tools"],
+	sources: [{ name: "default", provider: Auto }, { name: "py", provider: Auto }, { name: "rust", provider: Auto }],
+	system_tools: [
+		{ environment: "ci", system: "x86_64-windows", tools: [{ source: "default", name: "unzip" }] },
+		{ environment: "ci", system: "x86_64-linux", tools: [{ source: "default", name: "go" }] },
+	],
 	environments: [
 		{ name: "plain", parents: [], tools: [], overlays: [] },
-		{ name: "dev", parents: ["plain"], tools: [{ source: "default", name: "git" }, { source: "py", name: "python314" }], overlays: [] },
+		{ name: "dev", parents: ["plain"], tools: [{ source: "default", name: "git" }, { source: "py", name: "python314" }, { source: "default", name: "ripgrep" }], overlays: [] },
+		{ name: "host", parents: [], tools: [{ source: "default", name: "git" }, { source: "default", name: "zigpkgs.\"0.16.0\"" }, { source: "rust", name: "rust-bin.stable.\"1.95.0\".default" }], overlays: [] },
+		{ name: "ci", parents: ["host"], tools: [{ source: "default", name: "gnutar" }], overlays: [] },
 	],
 	shells: [{ name: "default", environment: "plain" }],
 	tasks: [
 		{ name: "hello", environment: "plain", run: ["hello.exe", "configured"] },
 		{ name: "tooled", environment: "dev", run: ["git", "status"] },
+		{ name: "release", environment: "ci", run: ["zig", "build"] },
 	],
 }
 
@@ -448,7 +512,7 @@ expect planned(sample, Request.Build("app"), "x86_64-windows", windows) == Err(H
 expect (HostProvider.provider.resolve)(sample, "x86_64-windows", windows, All) == Err(HostProvider.no_pins)
 expect (HostProvider.provider.lock_from_native)(sample, windows, "{}", []) == Err(HostProvider.no_pins)
 
-expect planned(sample, Request.Run("tooled", []), "x86_64-windows", windows) == Err("environment dev declares tools, which this host cannot supply: git, py#python314")
+expect planned(sample, Request.Run("tooled", []), "x86_64-windows", windows) == Err("environment dev declares tools this host cannot check for: py#python314, ripgrep; it knows ${HostProvider.known_tools}")
 
 expect planned(sample, Request.Run("hello", []), "riscv64-linux", windows) == Err("unsupported host target: riscv64-linux")
 expect planned(sample, Request.Run("hello", []), "x86_64-linux", { ..windows, project_root: "/home/me/project" }).is_ok()
@@ -463,6 +527,7 @@ stable : Spec
 stable = {
 	..sample,
 	requires_: ["commands"],
+	system_tools: [],
 	inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }],
 	environments: [
 		{ name: "base", parents: [], tools: [], overlays: ["roc"] },
@@ -634,4 +699,31 @@ expect
 expect
 	["tarball+http://example.test/AEjfyaMFFbh8.tar.zst", "tarball+https://example.test/other.tar.zst", "https://example.test/AEjfyaMFFbh8.tar.zst", "github:example/AEjfyaMFFbh8.tar.zst"].all(
 		|ref| planned({ ..packaged, build_sources: [{ name: "roc-AEjfyaMFFbh8", ref }, { name: "roc-6ZUwqYhCS8PU", ref: "tarball+https://example.test/6ZUwqYhCS8PU.tar.zst" }] }, Request.Run("version", []), "x86_64-windows", windows) == Err("Roc package AEjfyaMFFbh8 is not a bundle this host can download: ${ref}"),
+	)
+
+# A tool is a program the host must have, proved before anything else; a name
+# that carries a version asks for it. Only this System's tools are asked for.
+expect planned(sample, Request.Run("release", []), "x86_64-windows", windows) == Ok([
+	{
+		action: Run("release"),
+		files: [],
+		argv: ["zig", "build"],
+		artifacts: [],
+		operations: [
+			Require([
+				{ tool: "git", probe: ["git", "--version"], version: Any },
+				{ tool: "zigpkgs.\"0.16.0\"", probe: ["zig", "version"], version: Is("0.16.0") },
+				{ tool: "rust#rust-bin.stable.\"1.95.0\".default", probe: ["rustc", "--version"], version: Starts("rustc 1.95.0 ") },
+				{ tool: "rust#rust-bin.stable.\"1.95.0\".default", probe: ["cargo", "--version"], version: Starts("cargo 1.95.0 ") },
+				{ tool: "gnutar", probe: ["tar", "--version"], version: Any },
+				{ tool: "unzip", probe: ["unzip", "-v"], version: Any },
+			]),
+		],
+	},
+])
+
+expect ["zip", "gh", "go", "zig", "cargo", "rustc"].all(|name| HostProvider.tool_probes({ source: "default", name }).is_ok())
+expect
+	["python3", "zigpkgs.master", "zigpkgs.\"0.16\"", "rust-bin.nightly.\"2026-10-01\".default", "rust-bin.stable.\"1.95.0\".minimal", "git.doc", "nodejs"].all(
+		|name| HostProvider.tool_probes({ source: "default", name }) == Err(UnknownTool),
 	)
