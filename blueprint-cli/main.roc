@@ -28,6 +28,7 @@ import core.Layout
 import core.Provider
 import core.Lock
 import core.Tree
+import Paths
 import nix.NixProvider
 import "compiler-version" as compiler_version : Str
 
@@ -389,23 +390,26 @@ Context : { layout : Layout, target : Str }
 ## Caller paths are observations, resolved once against the selected root.
 context! : () => Try(Context, _)
 context! = || {
-	cwd = Env.cwd!()?.to_str()?
-	root = path(resolve(cwd, Env.var_str!("BLUEPRINT_ROOT") ?? cwd))
-		.canonicalize!()?.to_str()?
-	workspace = normalize(
-		resolve(
+	# Windows reports `\\?\D:\project`; hold `D:/project` (see Paths).
+	cwd = Paths.portable(Env.cwd!()?.to_str()?)
+	root = Paths.portable(
+		path(Paths.resolve(cwd, Env.var_str!("BLUEPRINT_ROOT") ?? cwd))
+			.canonicalize!()?.to_str()?,
+	)
+	workspace = Paths.normalize(
+		Paths.resolve(
 			root,
 			Env.var_str!("BLUEPRINT_WORKSPACE") ?? ".blueprint",
 		),
 	)
-	generated = normalize(
-		resolve(
+	generated = Paths.normalize(
+		Paths.resolve(
 			root,
 			Env.var_str!("BLUEPRINT_GENERATED_ROOT") ?? workspace,
 		),
 	)
-	lock = normalize(
-		resolve(
+	lock = Paths.normalize(
+		Paths.resolve(
 			root,
 			Env.var_str!("BLUEPRINT_LOCK") ?? "Blueprint.lock",
 		),
@@ -481,7 +485,7 @@ expect
 plain_path : Str -> Bool
 plain_path = |value|
 	value.starts_with("/")
-		and normalize(value) == value
+		and Paths.normalize(value) == value
 			and !value.to_utf8().any(
 				|byte| byte < 32 or byte == 127 or byte == '"' or byte == '\\' or byte == '$',
 			)
@@ -507,51 +511,17 @@ runner_executable! = |system| {
 	Ok(text)
 }
 
-resolve : Str, Str -> Str
-resolve = |root, value| if value.starts_with("/") value else "${root}/${value}"
-
-## Lexical normalization is separate from the runtime no-symlink check.
-normalize : Str -> Str
-normalize = |value| {
-	parts = value.split_on("/").fold(
-		[],
-		|acc, part|
-			match part {
-				"" | "." => acc
-				".." => acc.drop_last(1)
-				_ => acc.append(part)
-			},
-	)
-	"/${Str.join_with(parts, "/")}"
-}
-
-## Relative caller locations use the project root, not generated nesting.
-expect resolve("/project", "cache/nix") == "/project/cache/nix"
-
-## An out-of-tree caller location remains independent of the project root.
-expect resolve("/project", "/tmp/cache") == "/tmp/cache"
-
-## Equivalent lexical locations normalize before filesystem safety checks.
-expect normalize("/project/a/.././.blueprint/") == "/project/.blueprint"
-
-parent : Str -> Str
-parent = |value| {
-	parts = value.split_on("/").drop_last(1)
-	result = Str.join_with(parts, "/")
-	if result.is_empty() "/" else result
-}
-
 ## Refuse destination/source aliases before touching caller-owned files.
 safe_path! : Str => Try({}, _)
 safe_path! = |value| {
-	if !value.starts_with("/") or normalize(value) != value {
+	if !Paths.absolute(value) or Paths.normalize(value) != value {
 		return Err(UnsafePath(value))
 	}
 	if path(value).is_sym_link!()? {
 		return Err(UnsafePath(value))
 	}
-	if value != "/" {
-		safe_path!(parent(value))?
+	if Paths.parent(value) != value {
+		safe_path!(Paths.parent(value))?
 	}
 	Ok({})
 }
@@ -1265,7 +1235,7 @@ stage! = |files, layout| {
 		safe_path!(file.path)?
 	}
 	for file in files {
-		path(parent(file.path)).create_all!()?
+		path(Paths.parent(file.path)).create_all!()?
 		atomic_write!(file.path, file.contents)?
 	}
 	if files.is_empty() {
@@ -1342,7 +1312,7 @@ resolve! = |spec, names, ctx| {
 	resolved = (provider.lock_from_native)(spec, layout, path(native_lock).read_utf8!()?, $trees)
 		.map_err(|message| LockFailed(message))?
 	lock = { ..resolved, intent: Lock.intent_of(spec) }
-	path(parent(layout.lock_path)).create_all!()?
+	path(Paths.parent(layout.lock_path)).create_all!()?
 	publish_authority!(layout.lock_path, prior, lock.to_str())
 }
 
@@ -1353,7 +1323,7 @@ resolve! = |spec, names, ctx| {
 publish_authority! : Str, Str, Str => Try({}, _)
 publish_authority! = |destination, prior, contents| {
 	temporary = Env.create_temp_dir_in!(
-		path(parent(destination)),
+		path(Paths.parent(destination)),
 		".blueprint-write-",
 	)?
 	publish! = || {
@@ -1377,7 +1347,7 @@ publish_authority! = |destination, prior, contents| {
 atomic_write! : Str, Str => Try({}, _)
 atomic_write! = |destination, contents| {
 	temporary = Env.create_temp_dir_in!(
-		path(parent(destination)),
+		path(Paths.parent(destination)),
 		".blueprint-write-",
 	)?
 	publish! = || {
