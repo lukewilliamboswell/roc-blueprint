@@ -29,7 +29,9 @@ scripts/                 Roc scripts, run from the repository root; their module
   build_release.roc      cross-build the CLI and its smoke-test program for each released system
   smoke_binary.roc       run a built CLI with no Roc and no Python of its own
   fuzz.roc               replay or fuzz the roc-fuzz targets
-  release_notes.roc      write a release's notes for the release workflows
+  release_notes.roc      render a release's notes from docs/releases/
+  package_examples.roc   archive the examples with a release's platform URL
+  test_release.roc       test that archive against the bundles, served from localhost
   test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
 link-inputs.lock.json    the linker-input release the platform links, pinned by content
 flake.nix                builds blueprint with the pinned Roc; the development shell; the release cross-compiler

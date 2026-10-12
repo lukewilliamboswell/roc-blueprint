@@ -358,7 +358,11 @@ packaged! = |context| {
 	result?
 
 	step!("Bundle core and the platform against it, as one release holds them")?
-	script!(context, "bundle", [])
+	script!(context, "bundle", [])?
+
+	step!("Archive the examples against those bundles and test the archive")?
+	script!(context, "package_examples", [])?
+	script!(context, "test_release", [Bundle.dry_run_version, "${package_path}/bin/blueprint"])
 }
 
 ## A build observes its namespaces with `readlink`. The Nix package appends
