@@ -137,6 +137,7 @@
               fileset = lib.fileset.unions [
                 ./blueprint-cli
                 ./blueprint-nix
+                ./blueprint-host
                 ./blueprint-core/main.roc
                 ./blueprint-core/Spec.roc
                 ./blueprint-core/Project.roc

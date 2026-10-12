@@ -5,6 +5,7 @@
 ## update publishes the authority; ordinary operations use its resolved pins.
 app [main!] {
 	core: "../blueprint-core/main.roc",
+	host: "../blueprint-host/main.roc",
 	nix: "../blueprint-nix/main.roc",
 	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
 	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
@@ -28,6 +29,7 @@ import core.Layout
 import core.Provider
 import core.Lock
 import core.Tree
+import host.HostProvider
 import Paths
 import nix.NixProvider
 import "compiler-version" as compiler_version : Str
@@ -35,11 +37,35 @@ import "compiler-version" as compiler_version : Str
 version : Str
 version = "0.4.1"
 
-## The provider every command goes through. This is the only reference to a
-## concrete provider: everything else uses the Provider contract
-## (docs/architecture.adoc, invariant 7; checked by scripts/test.roc).
-provider : Provider
-provider = NixProvider.provider
+## The provider every command of a run goes through. These are the only
+## references to a concrete provider: everything else uses the Provider
+## contract (docs/architecture.adoc, invariant 7; checked by scripts/test.roc).
+provider_for : [Host, Nix] -> Provider
+provider_for = |choice|
+	match choice {
+		Host => HostProvider.provider
+		Nix => NixProvider.provider
+	}
+
+## Windows has no Nix, so the host provider serves it. `BLUEPRINT_PROVIDER=host`
+## selects that provider on any host; the tests use it to run its plans on
+## Linux. No other value is accepted.
+choose : Try(Str, _), [LINUX, MACOS, WINDOWS, OTHER(Str)] -> Try([Host, Nix], [UnknownProvider(Str)])
+choose = |override, os|
+	match (override, os) {
+		(Ok("host"), _) => Ok(Host)
+		(Ok(other), _) => Err(UnknownProvider(other))
+		(Err(_), WINDOWS) => Ok(Host)
+		(Err(_), _) => Ok(Nix)
+	}
+
+expect choose(Err(Unset), WINDOWS) == Ok(Host)
+expect [LINUX, MACOS, OTHER("freebsd")].all(|os| choose(Err(Unset), os) == Ok(Nix) and choose(Ok("host"), os) == Ok(Host))
+expect ["", "Host", "guix"].all(|name| choose(Ok(name), LINUX) == Err(UnknownProvider(name)))
+
+# Each provider answers to its own name, and a Blueprint.roc loads under both.
+expect provider_for(Host).name == "host" and provider_for(Nix).name != "host"
+expect provider_for(Host).features == provider_for(Nix).features
 
 Command : [
 	Gen,
@@ -217,7 +243,7 @@ main! = |raw_args| {
 	}
 	context = context!()
 	loaded = match context {
-		Ok(ctx) => evaluate!(ctx.layout.project_root)
+		Ok(ctx) => evaluate!(ctx)
 		Err(err) => Err(err)
 	}
 	# basic-cli supplies arguments without the executable name.
@@ -231,7 +257,8 @@ main! = |raw_args| {
 			match run!(command ?? Gen, loaded, context) {
 				Ok({}) => Ok({})
 				Err(err) => {
-					_ = Stderr.line!("blueprint: ${describe(err)}")
+					name = context.map_ok(|ctx| ctx.provider.name) ?? "provider"
+					_ = Stderr.line!("blueprint: ${describe(err, name)}")
 					Err(Exit(1))
 				}
 			}
@@ -241,7 +268,7 @@ main! = |raw_args| {
 run! = |command, loaded, context| {
 	ctx = context?
 	match command {
-		Check => check!(loaded, ctx.layout.project_root)
+		Check => check!(loaded, ctx)
 		_ => {
 			spec = loaded?
 			match command {
@@ -253,8 +280,8 @@ run! = |command, loaded, context| {
 				Tasks => list_tasks!(spec)
 				Update(names) => resolve!(spec, names, ctx)
 				PrintSpec => Stdout.write!(spec.to_str())
-				PrintFlake => print_files!(spec)
-				Check => check!(loaded, ctx.layout.project_root)
+				PrintFlake => print_files!(ctx.provider, spec)
+				Check => check!(loaded, ctx)
 			}
 		}
 	}
@@ -263,36 +290,37 @@ run! = |command, loaded, context| {
 ## Type-check Blueprint.roc (including whole-config validation), then reuse
 ## the Spec loaded for CLI parsing to check provider compatibility. This also
 ## preserves validation for older platforms that only lower at run time.
-check! : Try(Spec, _), Str => Try({}, _)
-check! = |loaded, root| {
+check! : Try(Spec, _), Context => Try({}, _)
+check! = |loaded, ctx| {
 	check_host!()?
-	Cmd.new_str(roc!()?).args_str(["check", "Blueprint.roc"])
-		.cwd(path(root)).exec_cmd!()
+	Cmd.new_str(roc!(ctx.provider)?).args_str(["check", "Blueprint.roc"])
+		.cwd(path(ctx.layout.project_root)).exec_cmd!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
-	_ = render(loaded?)?
+	_ = render(ctx.provider, loaded?)?
 	Stdout.line!("Blueprint.roc is valid")
 }
 
 ## Compile and run Blueprint.roc, then parse the Spec it prints.
-evaluate! : Str => Try(Spec, _)
-evaluate! = |root| {
+evaluate! : Context => Try(Spec, _)
+evaluate! = |ctx| {
+	root = ctx.layout.project_root
 	if !(path("${root}/Blueprint.roc").exists!() ?? False) {
 		return Err(NoBlueprint)
 	}
 	check_host!()?
-	output = Cmd.new_str(roc!()?).args_str(["Blueprint.roc"])
+	output = Cmd.new_str(roc!(ctx.provider)?).args_str(["Blueprint.roc"])
 		.cwd(path(root)).exec_output!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = Spec.parse(output.stdout_utf8).map_err(|err| BadSpec(err))?
-	missing = spec.unsupported_features(provider.features)
+	missing = spec.unsupported_features(ctx.provider.features)
 	if !missing.is_empty() {
 		return Err(NeedsFeatures(missing))
 	}
 	Project.validate(spec).map_err(|message| InvalidProject(message))
 }
 
-render : Spec -> Try(List(Provider.File), _)
-render = |spec| (provider.render)(spec).map_err(|msg| RenderFailed(msg))
+render : Provider, Spec -> Try(List(Provider.File), _)
+render = |provider, spec| (provider.render)(spec).map_err(|msg| RenderFailed(msg))
 
 ## Run an argv from the provider.
 exec! : List(Str), Str => Try({}, _)
@@ -314,9 +342,9 @@ exec! = |argv, root|
 		[] => Ok({})
 	}
 
-print_files! : Spec => Try({}, _)
-print_files! = |spec| {
-	files = render(spec)?
+print_files! : Provider, Spec => Try({}, _)
+print_files! = |provider, spec| {
+	files = render(provider, spec)?
 	match files {
 		[only] => Stdout.write!(only.contents)
 		_ => {
@@ -332,8 +360,8 @@ print_files! = |spec| {
 ## A relative ROC executable belongs to the invocation directory, not root.
 ## An explicit ROC must be the compatible compiler. Otherwise a compatible
 ## `roc` on PATH is used, and failing that the provider fetches the release.
-roc! : () => Try(Str, _)
-roc! = || {
+roc! : Provider => Try(Str, _)
+roc! = |provider| {
 	expected = "Roc compiler version ${compiler_version.trim()}"
 	match Env.var_str!("ROC") {
 		Ok(override) => {
@@ -385,11 +413,12 @@ fetch_roc! = |argv|
 		[] => Err(CompilerFailed("the provider cannot fetch a compiler"))
 	}
 
-Context : { layout : Layout, target : Str }
+Context : { layout : Layout, target : Str, provider : Provider }
 
 ## Caller paths are observations, resolved once against the selected root.
 context! : () => Try(Context, _)
 context! = || {
+	provider = provider_for(choose(Env.var_str!("BLUEPRINT_PROVIDER"), Env.platform!().os)?)
 	# Windows reports `\\?\D:\project`; hold `D:/project` (see Paths).
 	cwd = Paths.portable(Env.cwd!()?.to_str()?)
 	root = Paths.portable(
@@ -422,11 +451,13 @@ context! = || {
 			lock_path: lock,
 		},
 		target: Env.var_str!("BLUEPRINT_TARGET") ?? host_target!(),
+		provider,
 	})
 }
 
 ## The System a machine is, when `blueprint` runs on it: the three a binary is
-## released for. Intel macOS is not one: current nixpkgs has dropped that
+## released for, and x86_64 Windows, where the host provider runs tasks.
+## Intel macOS is not one: current nixpkgs has dropped that
 ## system, so no environment could be entered there. `x86_64-darwin` remains
 ## a System a configuration may declare.
 supported_host : _ -> Try(Str, [UnsupportedHost])
@@ -435,6 +466,7 @@ supported_host = |machine|
 		{ arch: X64, os: LINUX } => Ok("x86_64-linux")
 		{ arch: AARCH64, os: LINUX } => Ok("aarch64-linux")
 		{ arch: AARCH64, os: MACOS } => Ok("aarch64-darwin")
+		{ arch: X64, os: WINDOWS } => Ok("x86_64-windows")
 		_ => Err(UnsupportedHost)
 	}
 
@@ -442,7 +474,8 @@ expect supported_host({ arch: X64, os: LINUX }) == Ok("x86_64-linux")
 expect supported_host({ arch: AARCH64, os: LINUX }) == Ok("aarch64-linux")
 expect supported_host({ arch: AARCH64, os: MACOS }) == Ok("aarch64-darwin")
 expect supported_host({ arch: X64, os: MACOS }) == Err(UnsupportedHost)
-expect supported_host({ arch: X64, os: WINDOWS }) == Err(UnsupportedHost)
+expect supported_host({ arch: X64, os: WINDOWS }) == Ok("x86_64-windows")
+expect supported_host({ arch: AARCH64, os: WINDOWS }) == Err(UnsupportedHost)
 
 check_host! : () => Try({}, [UnsupportedHost])
 check_host! = || {
@@ -951,6 +984,7 @@ copy_tree! = |source, target| {
 realise! : Spec, Request, Context => Try({}, _)
 realise! = |spec, request, ctx| {
 	layout = ctx.layout
+	provider = ctx.provider
 	_ = (provider.preflight)(spec, request, ctx.target, layout)
 		.map_err(|message| RenderFailed(message))?
 	if !(path(layout.lock_path).exists!()?) {
@@ -981,15 +1015,16 @@ realise! = |spec, request, ctx| {
 		}
 	}
 	for step in steps.steps {
-		execute_step!(step, layout)?
+		execute_step!(step, ctx)?
 	}
 	Ok({})
 }
 
 ## One consumer-owned executor for standalone requests and workflow steps.
 ## All planning has succeeded before the first materialization or task effect.
-execute_step! : Steps.Step, Layout => Try({}, _)
-execute_step! = |step, layout| {
+execute_step! : Steps.Step, Context => Try({}, _)
+execute_step! = |step, ctx| {
+	layout = ctx.layout
 	var $files = step.files
 	var $roc_packages = []
 	for operation in step.operations {
@@ -1029,7 +1064,7 @@ execute_step! = |step, layout| {
 	}
 	stage!($files, layout)?
 	for request in $roc_packages {
-		publish_roc_packages!(request.names, request.locate, layout.project_root)?
+		publish_roc_packages!(request.names, request.locate, layout.project_root, ctx.provider.name)?
 	}
 	match step.action {
 		Build(name) => report_build!(step, name, layout.project_root)
@@ -1076,8 +1111,8 @@ roc_package_present! = |cache, name| child(child(cache, name), "main.roc").is_fi
 ## whether Roc downloaded it or an earlier run published it, is left alone, and
 ## when none is missing the provider is not asked anything. Roc may lose its
 ## cache at any time; the next run publishes again.
-publish_roc_packages! : List(Str), List(Str), Str => Try({}, _)
-publish_roc_packages! = |names, locate, root| {
+publish_roc_packages! : List(Str), List(Str), Str, Str => Try({}, _)
+publish_roc_packages! = |names, locate, root, provider| {
 	xdg_cache_home = Env.var!(OsStr.from_str("XDG_CACHE_HOME")).map_ok(|value| value.to_bytes())
 	home = Env.var!(OsStr.from_str("HOME")).map_ok(|value| value.to_bytes())
 	cache = Path.unix_bytes(
@@ -1096,28 +1131,28 @@ publish_roc_packages! = |names, locate, root| {
 	if $missing.is_empty() {
 		return Ok({})
 	}
-	located = locate_roc_packages!(locate, root)?
+	located = locate_roc_packages!(locate, root, provider)?
 	cache.create_all!().map_err(|_| RocPackagesFailed("cannot create Roc's package cache ${cache.display()}"))?
 	for name in $missing {
 		bundle = located.find_first(|entry| entry.name == name)
-			.map_err(|_| RocPackagesFailed("the ${provider.name} provider did not locate Roc package ${name}"))?
+			.map_err(|_| RocPackagesFailed("the ${provider} provider did not locate Roc package ${name}"))?
 		publish_roc_package!(cache, name, path(bundle.path))?
 	}
 	Ok({})
 }
 
 ## Run the provider's argv; it prints where each locked bundle is unpacked.
-locate_roc_packages! : List(Str), Str => Try(List(RocPackage), _)
-locate_roc_packages! = |argv, root|
+locate_roc_packages! : List(Str), Str, Str => Try(List(RocPackage), _)
+locate_roc_packages! = |argv, root, provider|
 	match argv {
 		[program, .. as args] => {
 			output = Cmd.new_str(program).args_str(args).cwd(path(root)).stderr(Inherit).exec_output!()
 				.map_err(|_| RocPackagesFailed("could not locate the locked Roc packages with `${Str.join_with(argv, " ")}`"))?
 			located : Try(List(RocPackage), _)
 			located = Json.parse(output.stdout_utf8)
-			located.map_err(|_| RocPackagesFailed("the ${provider.name} provider did not say where the locked Roc packages are"))
+			located.map_err(|_| RocPackagesFailed("the ${provider} provider did not say where the locked Roc packages are"))
 		}
-		[] => Err(RocPackagesFailed("the ${provider.name} provider cannot locate Roc packages"))
+		[] => Err(RocPackagesFailed("the ${provider} provider cannot locate Roc packages"))
 	}
 
 ## Publish one bundle as `<cache>/<name>`. The provider has already verified
@@ -1271,6 +1306,7 @@ list_tasks! = |spec| {
 resolve! : Spec, List(Str), Context => Try({}, _)
 resolve! = |spec, names, ctx| {
 	layout = ctx.layout
+	provider = ctx.provider
 	safe_path!(layout.lock_path)?
 	prior = authority_token!(layout.lock_path)?
 	update = if names.is_empty() {
@@ -1364,12 +1400,14 @@ atomic_write! = |destination, contents| {
 path : Str -> Path
 path = |p| Path.from_os_str(OsStr.from_str(p))
 
-describe : _ -> Str
-describe = |err|
+## `provider` names the provider the run selected.
+describe : _, Str -> Str
+describe = |err, provider|
 	match err {
 		NoBlueprint => "there is no Blueprint.roc in the selected project root"
 		UnsupportedHost =>
-			"blueprint runs on x86_64 Linux, arm64 Linux and Apple Silicon macOS; "
+			"blueprint runs on x86_64 Linux, arm64 Linux and Apple Silicon macOS, "
+				.concat("and on x86_64 Windows to run tasks only; ")
 				.concat("Intel macOS is not supported. ")
 				.concat("Systems/BLUEPRINT_TARGET describe outputs, ")
 				.concat("not compiler host support")
@@ -1379,13 +1417,14 @@ describe = |err|
 				.concat("or set ROC to its executable:\n${message}")
 		LockFailed(message) => "${message}; use `blueprint update` to initialize "
 			.concat("or deliberately refresh pins")
+		UnknownProvider(name) => "BLUEPRINT_PROVIDER selects the host provider with `host` and takes no other value, not ${Str.inspect(name)}"
 		UnsafePath(value) => "refusing unsafe or symlinked runtime path: ${value}"
 		Refused(message) => message
 		BadSpec(InvalidSexpr(msg)) => "could not read the Spec from Blueprint.roc: ${msg}"
 		BadSpec(UnsupportedFormat({ major, minor })) => "Spec format ${U64.to_str(major)}.${U64.to_str(minor)} is not supported by this blueprint (understands major ${Spec.current_format.major.to_str()}); upgrade blueprint or change the platform version"
 		NeedsFeatures(missing) => "Blueprint.roc needs features: ${Str.join_with(missing, ", ")}; upgrade blueprint"
 		InvalidProject(msg) => "invalid Spec project: ${msg}"
-		RenderFailed(msg) => "cannot generate the ${provider.name} files: ${msg}"
+		RenderFailed(msg) => "cannot generate the ${provider} files: ${msg}"
 		RocPackagesFailed(msg) => msg
 		BadSpec(MissingRequiredField("format")) => "Blueprint.roc uses an older roc-blueprint platform that this blueprint can't read; update the platform URL in its app header to a current release"
 		BadSpec(MissingRequiredField(field)) => "the Spec from Blueprint.roc is missing ${field}"

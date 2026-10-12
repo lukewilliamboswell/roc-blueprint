@@ -5,7 +5,7 @@ import FlakeLock
 StaticChecks := [].{
 
 	## The Roc source directories `roc fmt --check` covers.
-	formatted = ["blueprint-core", "blueprint-platform", "blueprint-nix", "blueprint-cli", "fixtures", "examples"]
+	formatted = ["blueprint-core", "blueprint-platform", "blueprint-nix", "blueprint-host", "blueprint-cli", "fixtures", "examples"]
 
 	## The directories `roc-stable fmt --check` covers instead. `roc fmt`
 	## rewrites a header's `roc` field to the nightly that runs it, so the
@@ -23,14 +23,14 @@ StaticChecks := [].{
 	}
 
 	## docs/architecture.adoc invariant 7: the CLI reaches a provider through
-	## the Provider contract alone. Its source imports one provider module,
-	## names it once, where the provider is selected, and never runs a
-	## provider's tool itself.
+	## the Provider contract alone. Its source imports one module of each
+	## provider, names each once, where the provider is selected, and never
+	## runs a provider's tool itself.
 	provider_contract_problem : Str -> Str
 	provider_contract_problem = |cli_source| {
-		imported = cli_source.split_on("\n").keep_if(|line| line.starts_with("import nix."))
+		imported = cli_source.split_on("\n").keep_if(|line| line.starts_with("import nix.") or line.starts_with("import host."))
 		references = provider_references(cli_source)
-		if imported != ["import nix.NixProvider"] or references != ["NixProvider"] {
+		if imported != ["import host.HostProvider", "import nix.NixProvider"] or references != ["HostProvider", "NixProvider"] {
 			"blueprint-cli/main.roc must use only provider.* (found: ${Str.join_with(imported, ", ")} / ${Str.join_with(references, ", ")})"
 		} else if cli_source.contains("\"nix\"") {
 			"blueprint-cli/main.roc must not run provider tools itself"
@@ -39,8 +39,9 @@ StaticChecks := [].{
 		}
 	}
 
-	## Every use of a member of a provider module: an identifier `Locks`, or
-	## one starting `Nix` and made of letters, followed by a dot.
+	## Every use of a member of a provider module: an identifier `Locks` or
+	## `HostProvider`, or one starting `Nix` and made of letters, followed by a
+	## dot.
 	provider_references : Str -> List(Str)
 	provider_references = |source| {
 		bytes = source.to_utf8()
@@ -203,16 +204,21 @@ letter : U8 -> Bool
 letter = |byte| (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z')
 
 provider_module : Str -> Bool
-provider_module = |name| name == "Locks" or (name.starts_with("Nix") and name.to_utf8().all(letter))
+provider_module = |name| name == "Locks" or name == "HostProvider" or (name.starts_with("Nix") and name.to_utf8().all(letter))
 
 cli_sample =
 	\\import core.Provider
+	\\import host.HostProvider
 	\\import nix.NixProvider
 	\\
-	\\provider : Provider
-	\\provider = NixProvider.provider
+	\\provider_for : [Host, Nix] -> Provider
+	\\provider_for = |choice|
+	\\	match choice {
+	\\		Host => HostProvider.provider
+	\\		Nix => NixProvider.provider
+	\\	}
 	\\
-	\\main! = |_| provider.plan("nix develop")
+	\\main! = |_| provider_for(Nix).plan("nix develop")
 	\\
 
 lock_sample =
@@ -247,19 +253,22 @@ expect StaticChecks.tracked_binaries_problem("") == "" and StaticChecks.tracked_
 expect StaticChecks.tracked_binaries_problem("targets/x64musl/libc.a\ntargets/x64musl/crt1.o\n") == "object files, archives and import libraries must not be committed:\ntargets/x64musl/libc.a\ntargets/x64musl/crt1.o"
 
 expect StaticChecks.provider_contract_problem(cli_sample) == ""
-expect StaticChecks.provider_references(cli_sample) == ["NixProvider"]
+expect StaticChecks.provider_references(cli_sample) == ["HostProvider", "NixProvider"]
 
 # A second use of the provider module, or any use of its internals, is refused.
-expect StaticChecks.provider_contract_problem("${cli_sample}other = NixProvider.render\n") == "blueprint-cli/main.roc must use only provider.* (found: import nix.NixProvider / NixProvider, NixProvider)"
+expect StaticChecks.provider_contract_problem("${cli_sample}other = NixProvider.render\n") == "blueprint-cli/main.roc must use only provider.* (found: import host.HostProvider, import nix.NixProvider / HostProvider, NixProvider, NixProvider)"
+expect StaticChecks.provider_contract_problem("${cli_sample}other = HostProvider.plan\n") != ""
+expect StaticChecks.provider_contract_problem(cli_sample.replace_each("import host.HostProvider\n", "")) != ""
 expect StaticChecks.provider_contract_problem("${cli_sample}import nix.Locks\n") != ""
 expect StaticChecks.provider_contract_problem("${cli_sample}decoded = Locks.decode(text)\n") != ""
 expect StaticChecks.provider_contract_problem(cli_sample.replace_each("import nix.NixProvider\n", "")) != ""
 expect StaticChecks.provider_contract_problem(cli_sample.replace_each("NixProvider.provider", "provider_from_elsewhere")) != ""
+expect StaticChecks.provider_contract_problem(cli_sample.replace_each("HostProvider.provider", "provider_from_elsewhere")) != ""
 expect StaticChecks.provider_contract_problem("${cli_sample}run = Cmd.new(\"nix\")\n") == "blueprint-cli/main.roc must not run provider tools itself"
 
 # Only an identifier of its own followed by a dot is a reference.
 expect StaticChecks.provider_references("x = MyNixProvider.y\nz = NixProvider\nw = Nix2.v\nu = unLocks.t\n") == []
-expect StaticChecks.provider_references("a = Locks.decode\nb = NixProvider.plan(Nix.x)") == ["Locks", "NixProvider", "Nix"]
+expect StaticChecks.provider_references("a = Locks.decode\nb = NixProvider.plan(Nix.x)\nc = HostProvider.plan\nd = Host.x") == ["Locks", "NixProvider", "Nix", "HostProvider"]
 expect StaticChecks.provider_references("Locks.") == ["Locks"]
 
 expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-lang/roc-overlay/fb02fef7?narHash=sha256-R4Zj%2B8w%2FE1L%3D\"\n") == ""

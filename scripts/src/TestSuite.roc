@@ -297,7 +297,10 @@ cli! = |context| {
 	script!(context, "test_update", [])?
 
 	step!("Staged isolation witness, build runner path and refusals")?
-	script!(context, "test_isolation", [])
+	script!(context, "test_isolation", [])?
+
+	step!("The host provider: what it refuses, and tasks from a lock the Nix provider wrote")?
+	script!(context, "test_host", [])
 }
 
 ## The real-Nix suites are two groups of about the same length, so that CI
