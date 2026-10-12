@@ -14,8 +14,9 @@ on:
 
 permissions: {}
 
+# The release workflow's call is a run of its own, not a newer docs run.
 concurrency:
-  group: docs-${{ github.ref }}
+  group: docs-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

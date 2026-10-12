@@ -1,5 +1,3 @@
-import cli.Env
-import cli.OsStr
 import cli.Path
 import Bundle
 import FlakeLock
@@ -103,10 +101,6 @@ ReleaseNotes := [].{
 	## The program whose packages a release records.
 	cli_source = "blueprint-cli/main.roc"
 
-	## What a workflow step reads back through `$GITHUB_OUTPUT`.
-	outputs : Str, Str, Str -> Str
-	outputs = |tag, archive, core_archive| "bundle=${archive}\ncore_bundle=${core_archive}\ntitle=${title(tag)}\nprerelease=${if prerelease(tag) "true" else "false"}\n"
-
 	## Write the notes of the release of `tag` to `output`, from the
 	## repository root, after the bundles were built into `dist/` for it.
 	write! : Str, Str, Str => Try({}, _)
@@ -159,14 +153,7 @@ ReleaseNotes := [].{
 			Err(UnclosedBlock) => return Script.fail!("${authored} has a source block that is never closed")
 		}
 		Path.write_utf8!(Path.utf8(output), "${rendered}\n${built_from(built)}")?
-		Script.pass!("wrote the notes of ${title(tag)} to ${output}")?
-		match Env.var_str!(OsStr.from_str("GITHUB_OUTPUT")) {
-			Ok(file) => {
-				earlier = if Path.exists!(Path.utf8(file))? Path.read_utf8!(Path.utf8(file))? else ""
-				Path.write_utf8!(Path.utf8(file), "${earlier}${outputs(tag, archive, core_archive)}")
-			}
-			Err(_) => Ok({})
-		}
+		Script.pass!("wrote the notes of ${title(tag)} to ${output}")
 	}
 }
 
@@ -190,8 +177,6 @@ bundled! = |list, name|
 
 expect ReleaseNotes.prerelease("0.4.0-rc2") and !ReleaseNotes.prerelease("0.4.0")
 expect ReleaseNotes.title("0.4.0-rc2") == "roc-blueprint 0.4.0-rc2"
-
-expect ReleaseNotes.outputs("0.4.0-rc2", "def.tar.zst", "roc-blueprint-core-abc.tar.zst") == "bundle=def.tar.zst\ncore_bundle=roc-blueprint-core-abc.tar.zst\ntitle=roc-blueprint 0.4.0-rc2\nprerelease=true\n"
 
 deps_sample =
 	\\blueprint-cli/main.roc (/repo/blueprint-cli/main.roc) [app]

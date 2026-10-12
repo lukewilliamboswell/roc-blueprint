@@ -17,8 +17,6 @@ import src/ReleaseNotes
 ## release, in the repository `GITHUB_REPOSITORY` names, and what the release
 ## was built from is added. A release candidate uses the notes of its version.
 ## With no VERSION this is a dry run, which renders the newest notes there are.
-## When `GITHUB_OUTPUT` is set, the two bundles' file names, the release title
-## and whether it is a pre-release are added to it.
 ##
 ##   scripts/release_notes.roc [VERSION] OUTPUT_FILE
 main! : List(OsStr) => Try({}, [Exit(I32)])

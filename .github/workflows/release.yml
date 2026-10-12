@@ -1,84 +1,176 @@
-name: Release roc-blueprint
+name: Release
 
-# Push a tag like 0.1.0 to publish the roc-blueprint platform bundle, the
-# roc-blueprint-core bundle it depends on, and prebuilt `blueprint` CLIs for
-# x86_64 Linux, arm64 Linux and Apple Silicon macOS. All are built on Linux;
-# each binary is run on its own kind of machine before anything is published.
+# Run by hand from main with a version to publish a release. A pull request
+# runs the same build and tests as a dry run, under a version that is never
+# published.
+#
+# One release holds the roc-blueprint platform bundle, the roc-blueprint-core
+# bundle it depends on, the `blueprint` binaries for x86_64 Linux, arm64 Linux
+# and Apple Silicon macOS with their checksums, the examples, the
+# documentation and the manual. Everything is built once, tested as those
+# exact files on each kind of machine, and only then published, in one step.
 on:
-  push:
-    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.5.0, or 0.5.0-rc1 for a release candidate"
+        required: true
+        type: string
+  pull_request:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && format('release-{0}', github.repository) || format('release-dry-run-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+# Every script runs through `nix develop -c`: the flake's dev shell is the one
+# definition of the toolchain (see .github/actions/toolchain).
 jobs:
-  build:
+  # Refuses a release that cannot be made from this commit before anything is
+  # built: off the default branch, a version that is malformed, already a tag
+  # or a release, without notes, or not the one the CLI reports.
+  validate:
+    name: Validate the request
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
-    runs-on: ubuntu-latest
     outputs:
-      bundle: ${{ steps.notes.outputs.bundle }}
-      core_bundle: ${{ steps.notes.outputs.core_bundle }}
-      title: ${{ steps.notes.outputs.title }}
-      prerelease: ${{ steps.notes.outputs.prerelease }}
+      version: ${{ steps.request.outputs.version }}
+      title: ${{ steps.request.outputs.title }}
+      prerelease: ${{ steps.request.outputs.prerelease }}
+    steps:
+      - name: Require the default branch for publication
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: test "$GITHUB_REF_TYPE" = branch && test "$GITHUB_REF_NAME" = "$DEFAULT_BRANCH" || { echo "Releases must run from the default branch" >&2; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/toolchain
+
+      - name: Check the version, its notes and that it is not yet published
+        id: request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '0.0.1-dry-run' }}
+        run: nix develop -c scripts/check_version.roc request "$VERSION"
+
+  build:
+    name: Build the release
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
       - uses: ./.github/actions/toolchain
-
-      - name: The CLI reports the version being released
-        run: grep -qF "version = \"${GITHUB_REF_NAME}\"" blueprint-cli/main.roc
 
       - name: Fetch and verify the platform's linker inputs
         run: nix develop -c scripts/link_inputs.roc fetch
 
-      # Built once: the tests below run the binary that is published.
+      # Built once: the tests below run the binaries that are published.
       - name: Cross-build the CLI binaries and their smoke-test programs
         run: nix develop -c scripts/build_release.roc
 
       - name: Use the built binary
         run: install -m 755 dist/blueprint-x86_64-linux blueprint
 
-      - name: Test (including a localhost bundle smoke test)
+      # A pull request already runs every group in ci.yml.
+      - name: Test
+        if: github.event_name == 'workflow_dispatch'
         run: nix develop -c scripts/test.roc
         env:
           BLUEPRINT_PREBUILT: 1
 
       # The platform bundle names the core bundle by the URL this release
-      # gives it, so both are bundled again for the tag.
-      - name: Bundle core and the platform for this release
-        run: nix develop -c scripts/bundle.roc "$GITHUB_REF_NAME"
+      # gives it, and both are smoke-tested from localhost.
+      - name: Bundle core and the platform for this version
+        run: nix develop -c scripts/bundle.roc "$VERSION"
+
+      - name: The version bumps as far as the public API changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: nix develop -c scripts/check_version.roc bump "$VERSION"
 
       # Outside the dev shell: the binary must work with no Roc on PATH.
       - name: Smoke test the Linux binary
         run: dist/smoke-x86_64-linux dist/blueprint-x86_64-linux
 
-      - name: Write the release notes
-        id: notes
-        run: nix develop -c scripts/release_notes.roc "$GITHUB_REF_NAME" dist/notes.md
+      - name: Archive the examples with this release's platform
+        run: nix develop -c scripts/package_examples.roc "$VERSION"
 
+      # The manual attached to a release names that release's bundle.
+      - name: Write the part of the manual that names the release
+        run: nix develop -c scripts/docs_snippet.roc "$VERSION"
+
+      # build-docs runs outside the development shell and needs the compiler's path.
+      - id: roc
+        name: Find the product compiler
+        run: echo "command=$(nix develop -c sh -c 'command -v roc')" >> "$GITHUB_OUTPUT"
+
+      - id: docs
+        name: Render the manual as a site and a PDF
+        uses: lukewilliamboswell/roc-automation/actions/build-docs@7fdb8be46b12da9b119023c3a5aac28a9fdaa72b
+        with:
+          pdf-filename: roc-blueprint.pdf
+          docs-version: ${{ needs.validate.outputs.version }}
+          api-entrypoint: blueprint-platform/main.roc
+          roc-command: ${{ steps.roc.outputs.command }}
+
+      - name: Archive the documentation
+        env:
+          SITE: ${{ steps.docs.outputs.site-directory }}
+        run: nix develop -c scripts/package_docs.roc "$VERSION" "$SITE"
+
+      - name: Render the release notes
+        run: nix develop -c scripts/release_notes.roc "$VERSION" dist/notes.md
+
+      # Fails unless the binaries and blueprint.sha256 carry the names
+      # roc-automation's setup-blueprint action downloads.
+      - name: Gather the assets and check the names callers depend on
+        env:
+          MANUAL: ${{ steps.docs.outputs.pdf-path }}
+        run: nix develop -c scripts/release_assets.roc "$VERSION" "$MANUAL"
+
+      # The smoke test evaluates a Blueprint.roc against this checkout's
+      # platform, so the test jobs take the built hosts and the verified
+      # linker inputs from here too.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release
+          name: release-candidate
           path: |
             dist/
             blueprint-platform/targets/*/*.a
             blueprint-platform/targets/*/crt1.o
           if-no-files-found: error
 
-  binaries:
-    permissions:
-      contents: read
-    needs: build
+  # Each binary runs where it must work, and the examples archive is tested
+  # as a user will get it. These runners have Nix and no Roc of their own.
+  test:
+    needs: [validate, build]
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-24.04-arm, system: aarch64-linux }
-          - { runner: macos-latest, system: aarch64-darwin }
+          - { runner: ubuntu-latest, system: x86_64-linux, archive: true }
+          - { runner: ubuntu-24.04-arm, system: aarch64-linux, archive: true }
+          - { runner: macos-latest, system: aarch64-darwin, archive: true }
+    name: Test on ${{ matrix.system }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -89,7 +181,7 @@ jobs:
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release
+          name: release-candidate
 
       # No Roc here: the smoke test is a program the build job cross-built.
       - name: Smoke test the binary
@@ -97,30 +189,92 @@ jobs:
           chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
           dist/smoke-${{ matrix.system }} dist/blueprint-${{ matrix.system }}
 
+      # The compiler and then this binary load each archived example from the
+      # two bundles, served from localhost with an empty package cache.
+      - name: Test the examples archive against the bundles
+        if: matrix.archive
+        run: nix develop -c scripts/test_release.roc "$VERSION" dist/blueprint-${{ matrix.system }}
+
+  # Holds the permission to publish, checks out nothing and runs no script of
+  # the repository: it uploads what the jobs above built and tested.
   publish:
-    needs: [build, binaries]
+    name: Publish
+    if: github.event_name == 'workflow_dispatch'
+    needs: [validate, build, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
+    environment:
+      name: release
     steps:
-      # No checkout: this job only uploads what the tested jobs produced.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release
+          name: release-candidate
 
-      - name: The binaries are the ones that were built
-        working-directory: dist
-        run: sha256sum -c blueprint.sha256
+      # setup-blueprint downloads these names from the release, as published.
+      - name: The binaries and their checksums carry the names callers depend on
+        working-directory: dist/release
+        run: |
+          set -euo pipefail
+          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint.sha256; do
+            test -f "$name"
+          done
+          test "$(find . -type f -name 'blueprint*' | wc -l)" = 4
+          sha256sum -c blueprint.sha256
+          test "$(LC_ALL=C ls)" = "$(cat ../release-assets.txt)"
 
-      - name: Publish
+      # A published release is never completed or corrected afterwards. So
+      # every asset goes onto a draft, is downloaded back and compared with
+      # the tested file, and only then is the release published.
+      - name: Publish the tested assets
         env:
           GH_TOKEN: ${{ github.token }}
-          BUNDLE: ${{ needs.build.outputs.bundle }}
-          CORE_BUNDLE: ${{ needs.build.outputs.core_bundle }}
-          TITLE: ${{ needs.build.outputs.title }}
-          PRERELEASE: ${{ needs.build.outputs.prerelease }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
-          --prerelease="$PRERELEASE" --title "$TITLE" --notes-file dist/notes.md
-          "dist/$BUNDLE" "dist/$CORE_BUNDLE" dist/blueprint-x86_64-linux dist/blueprint-aarch64-linux
-          dist/blueprint-aarch64-darwin dist/blueprint.sha256
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          TITLE: ${{ needs.validate.outputs.title }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          assets=(dist/release/*)
+
+          # gh release create refuses an existing release; refuse an existing tag too.
+          tags=$(gh api "repos/$GH_REPO/git/matching-refs/tags/$VERSION" --jq "[.[] | select(.ref == \"refs/tags/$VERSION\")] | length")
+          test "$tags" = 0
+
+          gh release create "$VERSION" --draft --target "$GITHUB_SHA" \
+            --title "$TITLE" --prerelease="$PRERELEASE" \
+            --notes-file dist/notes.md "${assets[@]}"
+
+          mkdir published
+          gh release download "$VERSION" --dir published
+          for asset in "${assets[@]}"; do
+            cmp "$asset" "published/$(basename "$asset")"
+          done
+          test "$(find published -type f | wc -l)" = "${#assets[@]}"
+
+          gh release edit "$VERSION" --draft=false
+
+  # A final release changes which release is the latest, so the site is
+  # rebuilt and deployed. A release candidate does not change the site.
+  site:
+    name: Site
+    if: needs.validate.outputs.prerelease != 'true'
+    needs: [validate, publish]
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/docs.yml
+
+  # The required check of the dry run: green only when every job above it
+  # succeeded.
+  required:
+    name: Release dry run
+    if: always() && github.event_name == 'pull_request'
+    needs: [validate, build, test]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Every job succeeded
+        run: test "${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}" = true

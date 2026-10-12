@@ -38,6 +38,9 @@ scripts/                 Roc scripts, run from the repository root; their module
   package_examples.roc   archive the examples with a release's platform URL
   test_release.roc       test that archive against the bundles, served from localhost
   docs_snippet.roc       write the part of the manual that names the latest release
+  check_version.roc      check a release's version before building and against the public API after
+  package_docs.roc       archive the rendered site
+  release_assets.roc     gather a release's assets and check the names other repositories depend on
   test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
 docs/                    the manual: index.adoc includes one chapter per top-level .adoc file
   releases/              each release's notes, included by releases.adoc
@@ -62,7 +65,7 @@ nix develop
 
 gives two Roc compilers from
 https://github.com/roc-lang/roc-overlay[roc-overlay], Zig 0.16 and the
-programs the scripts start: coreutils, git, curl, tar and gzip. It has no
+programs the scripts start: coreutils, git, curl, tar, gzip, zip, unzip and gh. It has no
 Python. `roc` is the product compiler, the nightly in
 `blueprint-cli/compiler-version`: it builds and tests the CLI, the packages and
 the platform, and a released `blueprint` fetches it. `roc-stable` is the
@@ -109,14 +112,17 @@ https://github.com/lukewilliamboswell/roc-blueprint/blob/main/blueprint-platform
 
 `scripts/test.roc` is the full CI entry point. Its groups are `static`
 (formatting; no tracked object file, archive or import library; the CLI's use of
-the Provider contract; `roc_overlay` against `flake.lock`; the flake's list of
-core modules and its version), `unit` (the platform's, the scripts', the CLI's
+the Provider contract; `roc_overlay` against `flake.lock`; each workflow's
+permissions and checkouts; the release notes chapter against the notes files;
+the flake's list of core modules and its version), `unit` (the platform's, the scripts', the CLI's
 and the consumer's `expect`s and the configuration fixtures), `cli`,
 `scenarios` (`test_scenarios.roc`, `test_roc_packages.roc` and the golden
 flakes parsed by Nix), `builds` (`test_builds.roc` and `test_workflows.roc`),
 `package` (the flake's package and development shell, the packaged CLI building
-an artifact with only Nix on `PATH`, and the platform bundled against the local
-core, see below), `glue` (`scripts/check_glue.roc`: the host's committed
+an artifact with only Nix on `PATH`, and a dry run of what a release ships:
+core and the platform bundled and smoke-tested, the examples archived and the
+archive tested; see xref:maintaining.adoc#the-two-bundles[The two bundles]),
+`glue` (`scripts/check_glue.roc`: the host's committed
 `roc_platform_abi.zig` is what `roc glue` writes for the platform with the
 product compiler; `scripts/check_glue.roc --update` rewrites it)
 and `fuzz` (each target's committed corpus, replayed, which
