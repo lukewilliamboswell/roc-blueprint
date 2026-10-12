@@ -235,6 +235,28 @@ Store := [].{
 		if regular!(file) Ok({}) else keep!(Paths.parent(file), file, bytes)
 	}
 
+	## The digest and length of a download the store already holds, hashed
+	## now: for an update that records a program whose download is one this
+	## executable fetched for itself. `NotHeld`: there is no such artifact, or
+	## its bytes are not the ones its name says, and the caller downloads.
+	held! : Str, Str => Try({ sha256 : Str, size : U64 }, [NotHeld])
+	held! = |store, sha256| {
+		file = artifact_path(store, sha256)
+		if !regular!(file) {
+			return Err(NotHeld)
+		}
+		reader = File.open_reader_with_capacity!(Path.utf8(file), 65536).map_err(|_| NotHeld)?
+		var $hasher = Crypto.SHA256.Hasher.empty()
+		var $size = 0
+		var $chunk = reader.read_up_to!(65536).map_err(|_| NotHeld)?
+		while !$chunk.is_empty() {
+			$hasher = $hasher.write($chunk)
+			$size = $size + $chunk.len()
+			$chunk = reader.read_up_to!(65536).map_err(|_| NotHeld)?
+		}
+		if $hasher.finish().to_hex() == sha256 Ok({ sha256, size: $size }) else Err(NotHeld)
+	}
+
 	## Put `target` on a run's PATH as `name`: a symbolic link in `bin`, so
 	## that a program finds what is beside its real path.
 	expose! : Str, Str, Str => Try({}, Str)

@@ -81,6 +81,21 @@ Bootstrap := [].{
 		compilers.find_first(|entry| entry.tag == tag and entry.system == system)
 			.map_ok(|entry| entry.program)
 			.map_err(|_| NotRecorded)
+
+	## The compiler download that is served from the first of `urls`: what a
+	## project's program is when it is the same download as a compiler here.
+	## An update that finds its bytes in the store, with the digest recorded
+	## here, hashes those and does not fetch them a second time.
+	serving : List(Str) -> Try(Steps.Program, [NotRecorded])
+	serving = |urls|
+		match urls.first() {
+			Ok(url) =>
+				compilers.find_first(|entry| entry.program.urls.first() == Ok(url))
+					.map_ok(|entry| entry.program)
+					.map_err(|_| NotRecorded)
+
+			Err(_) => Err(NotRecorded)
+		}
 }
 
 # One entry for each System of a release, each a whole digest and a length.
@@ -90,3 +105,13 @@ expect Bootstrap.compilers.all(|entry| entry.program.urls.all(|url| url.starts_w
 
 expect Bootstrap.compiler("nightly-2026-10-04-130536d", "aarch64-darwin").map_ok(|program| program.path) == Ok("roc_nightly-macos_apple_silicon-2026-10-04-130536d/roc")
 expect Bootstrap.compiler("nightly-2026-10-04-130536d", "riscv64-linux") == Err(NotRecorded) and Bootstrap.compiler("nightly-2026-10-03-c507926", "x86_64-linux") == Err(NotRecorded)
+
+# A program whose first URL is a compiler's download is that download; a
+# mirror first, another URL or no URL is not.
+expect {
+	url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_arm64-2026-10-04-130536d.tar.gz"
+	Bootstrap.serving([url, "https://mirror.example.org/roc.tar.gz"]).map_ok(|program| program.sha256) == Ok("f4532d290c83920d23f191da4650b19aa8302743ed35cab4e9adc83beaf0c1db")
+		and Bootstrap.serving(["https://mirror.example.org/roc.tar.gz", url]) == Err(NotRecorded)
+			and Bootstrap.serving(["${url}.sig"]) == Err(NotRecorded)
+				and Bootstrap.serving([]) == Err(NotRecorded)
+}

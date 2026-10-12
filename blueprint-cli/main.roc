@@ -1762,21 +1762,29 @@ record! = |step, host, asked|
 ## The digest of one program on one System, obtained now. The download of
 ## the System this machine is, is fetched and hashed here, compared with what
 ## its release publishes when it publishes one, and kept in the store for the
-## run that follows. Another System's is recorded by the published digest
-## without being fetched, and fetched and hashed only when nothing is
+## run that follows. When that download is the compiler this executable has
+## already fetched for itself, the store's bytes are hashed and nothing is
+## fetched a second time. Another System's is recorded by the published
+## digest without being fetched, and fetched and hashed only when nothing is
 ## published for it. Two digests that differ record nothing.
 obtain! : Spec.Program, Str, List(Asked) => Try({ entry : Lock.Fetched, asked : List(Asked) }, _)
 obtain! = |program, host, asked| {
 	looked = published!(program, asked)
 	what = "${program.name} for ${program.system}"
 	here = program.system == host
+	held = if here compiler_held!(what, program) else Err(NotHeld)
 	downloaded : Try({ sha256 : Str, size : U64, bytes : List(U8) }, [NotDownloaded])
-	downloaded = if here or looked.published.is_err() {
+	downloaded = if held.is_err() and (here or looked.published.is_err()) {
 		Ok(Store.hashed!(what, program.urls).map_err(|message| FetchFailed(message))?)
 	} else {
 		Err(NotDownloaded)
 	}
-	entry = Lock.record(program, downloaded.map_ok(|found| { sha256: found.sha256, size: found.size }), looked.published)
+	computed : Try(Lock.Digest, [NotDownloaded])
+	computed = match held {
+		Ok(found) => Ok(found)
+		Err(_) => downloaded.map_ok(|found| { sha256: found.sha256, size: found.size })
+	}
+	entry = Lock.record(program, computed, looked.published)
 		.map_err(|message| FetchFailed(message))?
 	match downloaded {
 		Ok(found) if here => {
@@ -1786,6 +1794,18 @@ obtain! = |program, host, asked| {
 		_ => {}
 	}
 	Ok({ entry, asked: looked.asked })
+}
+
+## The digest of a program whose download is a compiler this executable
+## records, when the store holds that download: the bytes it fetched to read
+## Blueprint.roc, hashed again now.
+compiler_held! : Str, Spec.Program => Try(Lock.Digest, [NotHeld])
+compiler_held! = |what, program| {
+	compiler = Bootstrap.serving(program.urls).map_err(|_| NotHeld)?
+	store = Store.root!().map_err(|_| NotHeld)?
+	found = Store.held!(store, compiler.sha256)?
+	_ = Stderr.line!("blueprint: ${what} is the download of Roc this blueprint already holds; its digest is recorded from the store")
+	Ok(found)
 }
 
 ## What a program's release publishes for its download, when its first URL is

@@ -160,7 +160,10 @@ the digest was obtained:
 
 An entry whose URLs are unchanged is kept, and nothing is asked or downloaded
 for it. Otherwise the download for the system the update runs on is fetched
-and hashed, and is kept in the store for the run that follows. When the first
+and hashed, and is kept in the store for the run that follows. A program that
+is the very download `blueprint` fetched as its own compiler, as a
+`Recipes.roc_nightly` of that nightly is, is hashed from the store and not
+fetched a second time. When the first
 URL is a GitHub release asset,
 `https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>`, the
 release is asked once what it publishes. A digest computed here that differs
