@@ -147,6 +147,22 @@ StaticChecks := [].{
 		}
 	}
 
+	## A workflow's token can do nothing unless a job says otherwise, and no
+	## checkout leaves that token in the repository's git configuration.
+	workflow_problem : Str, Str -> Str
+	workflow_problem = |name, text| {
+		lines = text.split_on("\n")
+		checkouts = lines.keep_if(|line| line.contains("uses: actions/checkout@"))
+		without_token = lines.keep_if(|line| line.trim() == "persist-credentials: false")
+		if !lines.contains("permissions: {}") {
+			"${name} must set top-level permissions: {} and state permissions per job"
+		} else if checkouts.len() != without_token.len() {
+			"${name}: every actions/checkout step must set persist-credentials: false"
+		} else {
+			""
+		}
+	}
+
 	## The string a source file binds a name to, as in `name = "value"`.
 	constant : Str, Str -> Try(Str, [NoConstant])
 	constant = |source, name| {
@@ -214,6 +230,19 @@ lock_sample =
 	\\  }
 	\\}
 
+workflow_sample =
+	\\permissions: {}
+	\\
+	\\jobs:
+	\\  build:
+	\\    permissions:
+	\\      contents: read
+	\\    steps:
+	\\      - uses: actions/checkout@3d3c42e5 # v7.0.1
+	\\        with:
+	\\          persist-credentials: false
+	\\
+
 expect StaticChecks.tracked_binaries_problem("") == "" and StaticChecks.tracked_binaries_problem("\n") == ""
 expect StaticChecks.tracked_binaries_problem("targets/x64musl/libc.a\ntargets/x64musl/crt1.o\n") == "object files, archives and import libraries must not be committed:\ntargets/x64musl/libc.a\ntargets/x64musl/crt1.o"
 
@@ -260,6 +289,13 @@ expect StaticChecks.fuzz_matrix_problem("      matrix:\n        target: [lock-pa
 expect StaticChecks.fuzz_matrix_problem("        target: [lock-parse]\n", ["lock-parse", "spec-parse"]) == "the target matrix of .github/workflows/fuzz.yml must list the fuzz targets (missing: spec-parse; not a target: )"
 expect StaticChecks.fuzz_matrix_problem("        target: [lock-parse, gone]\n", ["lock-parse"]) != ""
 expect StaticChecks.fuzz_matrix_problem("jobs:\n", ["lock-parse"]) != ""
+
+expect StaticChecks.workflow_problem("ci.yml", workflow_sample) == ""
+expect StaticChecks.workflow_problem("ci.yml", workflow_sample.replace_each("permissions: {}", "permissions:\n  contents: read")) == "ci.yml must set top-level permissions: {} and state permissions per job"
+expect StaticChecks.workflow_problem("ci.yml", workflow_sample.replace_each("          persist-credentials: false\n", "")) == "ci.yml: every actions/checkout step must set persist-credentials: false"
+
+# A job's own empty permissions are indented, so they are not the top-level setting.
+expect StaticChecks.workflow_problem("ci.yml", "jobs:\n  test:\n    permissions: {}\n") != ""
 
 expect StaticChecks.constant("  roc_overlay : Str\n  roc_overlay = \"abc\"\n", "roc_overlay") == Ok("abc")
 expect StaticChecks.constant("            version = \"0.4.0-rc2\";\n", "version") == Ok("0.4.0-rc2")

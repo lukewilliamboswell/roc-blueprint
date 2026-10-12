@@ -10,8 +10,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+permissions: {}
 
 # Every script runs through `nix develop -c`: the flake's dev shell is the one
 # definition of the toolchain (see .github/actions/toolchain).
@@ -20,10 +19,14 @@ jobs:
   # test the x86_64 Linux one, so the binary that is tested is the binary that
   # ships.
   build:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/toolchain
 
       - run: nix develop -c scripts/test.roc static
@@ -56,6 +59,8 @@ jobs:
 
   # Groups of scripts/test.roc that need no CLI binary start at once.
   checks:
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -65,6 +70,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/toolchain
 
       - run: nix develop -c scripts/test.roc ${{ matrix.group }}
@@ -81,6 +88,8 @@ jobs:
   # real-Nix suites are two groups, scenarios and builds, of about the same
   # length: these jobs are the longest after build, so they run side by side.
   cli:
+    permissions:
+      contents: read
     needs: build
     strategy:
       fail-fast: false
@@ -91,6 +100,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/toolchain
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -110,6 +121,8 @@ jobs:
   # run each where it must work. These runners have Nix and deliberately no
   # Roc: the smoke test is itself a program the build job cross-built.
   binaries:
+    permissions:
+      contents: read
     needs: build
     strategy:
       fail-fast: false
@@ -121,6 +134,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
@@ -144,6 +159,7 @@ jobs:
 
   # The one required check: green only when every job above succeeded.
   test:
+    permissions: {}
     if: always()
     needs: [build, checks, cli, binaries]
     runs-on: ubuntu-latest

@@ -12,11 +12,12 @@ on:
   push:
     tags: ["[0-9]+.[0-9]+.[0-9]+*"]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   build:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     outputs:
       bundle: ${{ steps.notes.outputs.bundle }}
@@ -24,6 +25,8 @@ jobs:
       prerelease: ${{ steps.notes.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: ./.github/actions/toolchain
 
@@ -66,6 +69,8 @@ jobs:
           if-no-files-found: error
 
   binaries:
+    permissions:
+      contents: read
     needs: build
     strategy:
       fail-fast: false
@@ -77,6 +82,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1

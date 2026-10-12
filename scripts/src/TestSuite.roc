@@ -236,6 +236,12 @@ static! = |context| {
 	}
 	problem!(StaticChecks.fuzz_matrix_problem(read!(context, ".github/workflows/fuzz.yml")?, $targets))?
 
+	step!("Workflows hold no permissions by default and no checkout keeps the token")?
+	workflows = file_names!("${context.root}/.github/workflows")?.keep_if(|name| name.ends_with(".yml"))
+	for workflow in workflows {
+		problem!(StaticChecks.workflow_problem(workflow, read!(context, ".github/workflows/${workflow}")?))?
+	}
+
 	step!("The flake lists the core package's modules and the CLI's version")?
 	in_directory = Bundle.modules(file_names!("${context.root}/${Bundle.core_dir}")?)
 	problem!(StaticChecks.core_modules_problem(in_directory, Bundle.flake_core_modules(flake)))?

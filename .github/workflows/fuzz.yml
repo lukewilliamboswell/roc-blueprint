@@ -12,11 +12,12 @@ on:
         type: number
         default: 300
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   fuzz:
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -28,6 +29,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/toolchain
 
       # What earlier runs found, so this one starts where they stopped. The
