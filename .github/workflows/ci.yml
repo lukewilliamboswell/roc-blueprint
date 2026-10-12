@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [unit, package, fuzz]
+        group: [unit, package, glue, fuzz]
     name: ${{ matrix.group }}
     runs-on: ubuntu-latest
     timeout-minutes: 30

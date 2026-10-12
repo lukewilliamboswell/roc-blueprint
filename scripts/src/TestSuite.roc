@@ -17,7 +17,7 @@ import StaticChecks
 ## `targets/<target>/libhost.a` is present, they are used as they are, and
 ## when any is missing all are built.
 TestSuite := [].{
-	groups = ["static", "unit", "cli", "scenarios", "builds", "package", "fuzz"]
+	groups = ["static", "unit", "cli", "scenarios", "builds", "package", "glue", "fuzz"]
 
 	## The groups a command line asks for: all of them, in order, when it names none.
 	requested : List(Str) -> Try(List(Str), [UnknownGroup(Str)])
@@ -130,6 +130,10 @@ group! = |context, name, done|
 		prepared = prepare!(context, done)?
 		packaged!(context)?
 		Ok(prepared)
+	} else if name == "glue" {
+		step!("The host's bindings are what roc glue writes for the platform")?
+		script!(context, "check_glue", [])?
+		Ok(done)
 	} else if name == "fuzz" {
 		step!("Fuzz targets: replay each committed corpus")?
 		script!(context, "fuzz", [])?
@@ -385,7 +389,7 @@ packaged_build! = |context, package_path, work| {
 	)
 }
 
-expect TestSuite.requested([]) == Ok(["static", "unit", "cli", "scenarios", "builds", "package", "fuzz"])
+expect TestSuite.requested([]) == Ok(["static", "unit", "cli", "scenarios", "builds", "package", "glue", "fuzz"])
 expect TestSuite.requested(["scenarios", "builds"]) == Ok(["scenarios", "builds"])
 
 # The real-Nix suites were one group, `nix`; it is not kept as a second name.

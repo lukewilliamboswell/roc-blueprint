@@ -72,6 +72,24 @@
             cp -r sysroot/darwin "$out/darwin"
           '';
 
+          # The specification `roc glue` writes the platform host's Zig
+          # bindings from. The compiler archives do not ship it, so it comes
+          # from the same nightly's source archive, of which this is the one
+          # file needed. The hash is that archive's: it must change with
+          # blueprint-cli/compiler-version, and the fetch fails until it does.
+          rocGlueSpec =
+            pkgs.runCommand "roc-glue-spec-${rocTag}"
+              {
+                src = pkgs.fetchurl {
+                  url = "https://github.com/roc-lang/nightlies/releases/download/${rocTag}/roc_nightly-source-${lib.removePrefix "nightly-" rocTag}.tar.gz";
+                  hash = "sha256-Vd0k9zRAgzt5uD5Z9ER1xqCJ9k2tPa6F50k24ASHvkI=";
+                };
+              }
+              ''
+                mkdir -p "$out"
+                tar -xzf "$src" --wildcards --strip-components=4 -C "$out" '*/src/glue/src/ZigGlue.roc'
+              '';
+
           # Roc packages blueprint-cli/main.roc downloads. Fetched here and unpacked into
           # Roc's package cache so the sandboxed build needs no network.
           # These are the `pf:` and `weaver:` URLs in blueprint-cli/main.roc plus
@@ -168,6 +186,7 @@
           packages = {
             inherit blueprint roc;
             default = blueprint;
+            roc-glue-spec = rocGlueSpec;
           }
           # Not in the development shell: only a release build needs it, and
           # with it the macOS archive.

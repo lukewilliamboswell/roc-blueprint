@@ -79,7 +79,7 @@ roc build blueprint-cli/main.roc --output=./blueprint
 (cd examples/all-settings && ../../blueprint run --help) # try the CLI
 scripts/test.roc                            # everything CI runs
 scripts/test.roc unit cli                   # or only some groups: static, unit,
-                                            # cli, scenarios, builds, package, fuzz
+                                            # cli, scenarios, builds, package, glue, fuzz
 scripts/fuzz.roc 300                        # fuzz each target for 5 minutes
 ```
 
@@ -104,7 +104,10 @@ and the consumer's `expect`s and the configuration fixtures), `cli`,
 flakes parsed by Nix), `builds` (`test_builds.roc` and `test_workflows.roc`),
 `package` (the flake's package and development shell, the packaged CLI building
 an artifact with only Nix on `PATH`, and the platform bundled against the local
-core, see below) and `fuzz` (each target's committed corpus, replayed, which
+core, see below), `glue` (`scripts/check_glue.roc`: the host's committed
+`roc_platform_abi.zig` is what `roc glue` writes for the platform with the
+product compiler; `scripts/check_glue.roc --update` rewrites it) and `fuzz`
+(each target's committed corpus, replayed, which
 takes seconds; `.github/workflows/fuzz.yml` fuzzes each target for five minutes
 every week and uploads any crashing input). `scenarios` and `builds` are the
 real-Nix suites, split into two groups of about the same length so that CI runs
@@ -198,6 +201,10 @@ To move the product compiler:
 3. Set the compiler and overlay in `fixtures/roc-inputs.lock.json` to match.
 4. Move the basic-cli release in `blueprint-cli/main.roc`, the fixtures, the
    examples and `rocPackages` in `flake.nix` if the nightly needs a newer one.
+5. Set the hash of `rocGlueSpec` in `flake.nix` to that of the nightly's
+   source archive, which `nix build .#roc-glue-spec` reports, and run
+   `scripts/check_glue.roc --update`. Commit the bindings it changes together
+   with whatever the host needs to build against them.
 
 To move the scripts' compiler, change `rocStableTag` in `flake.nix` and the
 `roc: "<tag>"` field in the header of each `scripts/*.roc` to the same tag;
