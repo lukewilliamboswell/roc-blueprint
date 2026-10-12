@@ -134,6 +134,14 @@ jobs:
           chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
           dist/smoke-${{ matrix.system }} dist/blueprint-${{ matrix.system }}
 
+      # The flake names this system too. Evaluating it elsewhere does not show
+      # that the package builds here.
+      - name: The flake package builds and runs
+        if: matrix.system == 'aarch64-linux'
+        run: |
+          nix build .#blueprint
+          result/bin/blueprint --version
+
   # The one required check: green only when every job above succeeded.
   test:
     if: always()
