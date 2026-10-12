@@ -41,14 +41,21 @@ Config :: [].{
 
 	## What a recipe answers for one System. `File(url)` is the program
 	## itself. `Archive(url, format, path)` is an archive that is unpacked
-	## whole, with the program at `path` inside it. `Unavailable` says the
-	## program does not exist for that System, which is an error only where a
-	## task needs it. `Invalid(message)` says the recipe was given something
-	## it cannot use, such as a malformed version: `roc check` reports the
-	## message, so a recipe never crashes. A URL is `https://<host>/<path>`
-	## with no credentials, query or fragment; `Blueprint.lock` records the
-	## SHA-256 of what it serves.
-	Download : [File(Str), Archive(Str, ArchiveFormat, Str), Unavailable, Invalid(Str)]
+	## whole, with the program at `path` inside it. `Mirrored(download, urls)`
+	## is one of those two with alternate URLs for the same bytes, tried in
+	## order after its own, as in
+	## `Mirrored(File("https://example.org/tool"), ["https://mirror.example.net/tool"])`.
+	## `Unavailable` says the program does not exist for that System, which is
+	## an error only where a task needs it. `Invalid(message)` says the recipe
+	## was given something it cannot use, such as a malformed version:
+	## `roc check` reports the message, so a recipe never crashes. A URL is
+	## `https://<host>/<path>` with no credentials, query or fragment, and is
+	## given once; `Blueprint.lock` records the one SHA-256 of what they serve,
+	## so an alternate need not be trusted.
+	Download : [File(Str), Archive(Str, ArchiveFormat, Str), Mirrored(Primary, List(Str)), Unavailable, Invalid(Str)]
+
+	## A download that has a URL, and so can have alternates.
+	Primary : [File(Str), Archive(Str, ArchiveFormat, Str)]
 
 	ArchiveFormat : [TarGz, TarXz, Zip]
 

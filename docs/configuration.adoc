@@ -43,7 +43,7 @@ complete file with the current URL.
 | Other flake input; not a tool source or overlay.
 
 | `Fetch(ProgramName, recipe)`
-| A program that is downloaded: its command name and a function from the System to `File(url)`, `Archive(url, format, path)`, `Unavailable` or `Invalid(message)`. Each name once. `Recipes.roc_nightly(tag)` is such a function.
+| A program that is downloaded: its command name and a function from the System to `File(url)`, `Archive(url, format, path)`, `Unavailable` or `Invalid(message)`. `Mirrored(download, urls)` adds alternate URLs for the same bytes to a `File` or an `Archive`. Each name once. `Recipes.roc_nightly(tag)` is such a function.
 
 | `Environment(EnvName, List(EnvironmentSetting))`
 | Named tools and scoped overlays, optionally inherited.

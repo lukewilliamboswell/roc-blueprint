@@ -21,7 +21,7 @@ Spec := {
 	commands : List({ environment : Str, name : Str, tool : { source : Str, name : Str } }),
 	configured_tools : List({ environment : Str, tool : { source : Str, name : Str }, options : Value }),
 	roc_packages : List({ environment : Str, name : Str, source : Str }),
-	programs : List({ name : Str, system : Str, url : Str, unpack : [File, TarGz, TarXz, Zip], path : Str }),
+	programs : List({ name : Str, system : Str, urls : List(Str), unpack : [File, TarGz, TarXz, Zip], path : Str }),
 	environment_programs : List({ environment : Str, programs : List(Str) }),
 	expects : List({ environment : Str, programs : List(Str) }),
 	shells : List({ name : Str, environment : Str }),
@@ -73,13 +73,15 @@ Spec := {
 	## archive to unpack whole, of which the program is one file.
 	Unpack : [File, TarGz, TarXz, Zip]
 
-	## A program downloaded from `url` for one System, under the command name
-	## `name`. There is one entry per System it exists for: a program with no
-	## entry for a System is unavailable there. `path` is the program inside
-	## the unpacked archive, and empty for a `File`. The Lock holds the
-	## SHA-256 of what `url` serves; the Spec never does. A Spec that declares
-	## or selects a program requires the feature `programs`.
-	Program : { name : Str, system : Str, url : Str, unpack : Unpack, path : Str }
+	## A program downloaded for one System, under the command name `name`.
+	## There is one entry per System it exists for: a program with no entry
+	## for a System is unavailable there. `urls` is where the download is, the
+	## primary first and then alternates for the same bytes, each once; it is
+	## never empty. `path` is the program inside the unpacked archive, and
+	## empty for a `File`. The Lock holds the one SHA-256 of what every URL
+	## serves; the Spec never does. A Spec that declares or selects a program
+	## requires the feature `programs`.
+	Program : { name : Str, system : Str, urls : List(Str), unpack : Unpack, path : Str }
 
 	## The declared programs an environment has on PATH, by name.
 	EnvironmentPrograms : { environment : Str, programs : List(Str) }
@@ -236,10 +238,10 @@ expect {
 		..Spec.empty("x"),
 		requires_: ["programs", "expects"],
 		programs: [
-			{ name: "roc-stable", system: "x86_64-linux", url: "https://example.test/roc-linux.tar.gz", unpack: TarGz, path: "roc/roc" },
-			{ name: "roc-stable", system: "x86_64-windows", url: "https://example.test/roc-windows.zip", unpack: Zip, path: "roc/roc.exe" },
-			{ name: "notes", system: "x86_64-linux", url: "https://example.test/notes.tar.xz", unpack: TarXz, path: "bin/notes" },
-			{ name: "tool", system: "x86_64-linux", url: "https://example.test/tool-x86_64-linux", unpack: File, path: "" },
+			{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc-linux.tar.gz"], unpack: TarGz, path: "roc/roc" },
+			{ name: "roc-stable", system: "x86_64-windows", urls: ["https://example.test/roc-windows.zip"], unpack: Zip, path: "roc/roc.exe" },
+			{ name: "notes", system: "x86_64-linux", urls: ["https://example.test/notes.tar.xz", "https://mirror.example.test/notes.tar.xz"], unpack: TarXz, path: "bin/notes" },
+			{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux"], unpack: File, path: "" },
 		],
 		environment_programs: [{ environment: "dev", programs: ["roc-stable", "tool"] }],
 		expects: [{ environment: "dev", programs: ["gh", "git"] }],
@@ -260,7 +262,7 @@ expect match Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (requires 
 }
 
 # An unpacking the consumer does not know is not dropped as optional data.
-expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (url \"https://example.test/a.7z\") (unpack SevenZip) (path \"a\")))))").is_err()
+expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a.7z\")) (unpack SevenZip) (path \"a\")))))").is_err()
 expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (unpack File) (path \"\")))))").is_err()
 expect Spec.parse("((format ((major 1) (minor 0))) (shells 42))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
 expect Spec.parse("((format ((major 3) (minor 0))))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))
@@ -324,3 +326,7 @@ expect Spec.parse(
 	\\ (workflows (((name "ci")))))
 	,
 ).is_err()
+
+# A 2.7 program entry names its URLs as a list; one bare `url` is not it.
+expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (url \"https://example.test/a\") (unpack File) (path \"\")))))").is_err()
+expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a\" \"https://mirror.example.test/a\")) (unpack File) (path \"\")))))").map_ok(|spec| spec.programs.map(|program| program.urls)) == Ok([["https://example.test/a", "https://mirror.example.test/a"]])

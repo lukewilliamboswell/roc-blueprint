@@ -2,7 +2,7 @@
  (name "expects")
  (requires ("expects" "programs"))
  (systems ("x86_64-linux"))
- (programs (((name "tool") (system "x86_64-linux") (url "https://example.test/tool") (unpack File) (path ""))))
+ (programs (((name "tool") (system "x86_64-linux") (urls ("https://example.test/tool")) (unpack File) (path ""))))
  (environments (((name "base") (parents ()) (tools ()) (overlays ()))
                 ((name "dev") (parents ("base")) (tools ()) (overlays ()))
                 ((name "release") (parents ("dev")) (tools ()) (overlays ()))))

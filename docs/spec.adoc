@@ -34,9 +34,10 @@ In outline:
   derives both from the bundle URL (`roc-<hash>`, `tarball+<url>`);
   environments sharing a bundle share one source. Validation flattens
   inheritance, parent first.
-* `programs` — optional `{ name, system, url, unpack, path }`: a program
-  downloaded from `url` for one System, under the command name `name`.
-  `unpack` is `File`, `TarGz`, `TarXz` or `Zip`; `path` is the program inside
+* `programs` — optional `{ name, system, urls, unpack, path }`: a program
+  downloaded for one System, under the command name `name`. `urls` is a
+  nonempty list, the primary first and then alternates for the same bytes,
+  each once. `unpack` is `File`, `TarGz`, `TarXz` or `Zip`; `path` is the program inside
   the unpacked archive and empty for a `File`. A program with no entry for a
   System is unavailable there. The Lock records the digest; the Spec never
   does.
@@ -93,10 +94,11 @@ with what changed; `sources` (one provider-neutral `{ name, provider, ref,
 rev, digest }` per declared input; `digest` is `sha256:<hex>`: the Nix
 provider converts its NAR hashes for remote inputs, and local inputs carry
 Blueprint's own tree digest from core `Tree`), provider-namespaced
-`hints`, and `fetched` (one `{ name, system, url, sha256, size }` per declared
-program and System: the SHA-256, in hex, and the length of what `url` served
-when it was resolved. Programs are not part of `intent`; each entry carries
-its URL, so a program whose URL changed is stale alone). The Nix provider's hint carries its declared input identity and the
+`hints`, and `fetched` (one `{ name, system, urls, sha256, size }` per declared
+program and System: the SHA-256, in hex, and the length of the download when
+it was resolved, with the URLs it was declared with. Programs are not part of
+`intent`; each entry carries its URLs, so a program whose URLs changed is
+stale alone). The Nix provider's hint carries its declared input identity and the
 complete native lock graph; decoding rejects a lock whose Sources disagree with
 those pins, so hand edits to either side fail. The graph's root holds one edge
 that is no declared input: `nixpkgs`, following the package source

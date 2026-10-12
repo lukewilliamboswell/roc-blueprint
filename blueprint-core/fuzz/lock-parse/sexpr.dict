@@ -24,6 +24,7 @@
 "(inputs "
 "(kind "
 "(url "
+"(urls ("
 "(packages "
 "(source "
 "(path "

@@ -144,16 +144,15 @@ Lower :: [].{
 				match (entry.recipe)(system) {
 					File(url) => {
 						$available = True
-						$programs = $programs.append({ name: entry.name, system, url, unpack: File, path: "" })
+						$programs = $programs.append(program_entry(entry.name, system, File(url), []))
 					}
 					Archive(url, format, path) => {
 						$available = True
-						unpack = match format {
-							TarGz => TarGz
-							TarXz => TarXz
-							Zip => Zip
-						}
-						$programs = $programs.append({ name: entry.name, system, url, unpack, path })
+						$programs = $programs.append(program_entry(entry.name, system, Archive(url, format, path), []))
+					}
+					Mirrored(primary, alternates) => {
+						$available = True
+						$programs = $programs.append(program_entry(entry.name, system, primary, alternates))
 					}
 					Unavailable => {}
 					Invalid(message) => return Err("Fetch ${entry.name}: ${message}")
@@ -165,6 +164,22 @@ Lower :: [].{
 		}
 		Ok($programs)
 	}
+
+	## One System's entry: the download's own URL first, then its alternates
+	## in the order they were given.
+	program_entry : Str, Str, Config.Primary, List(Str) -> Spec.Program
+	program_entry = |name, system, primary, alternates|
+		match primary {
+			File(url) => { name, system, urls: [url].concat(alternates), unpack: File, path: "" }
+			Archive(url, format, path) => {
+				unpack = match format {
+					TarGz => TarGz
+					TarXz => TarXz
+					Zip => Zip
+				}
+				{ name, system, urls: [url].concat(alternates), unpack, path }
+			}
+		}
 
 	workflow_step : Config.WorkflowStep -> Spec.WorkflowStep
 	workflow_step = |step|
@@ -407,14 +422,14 @@ expect match Lower.lower([
 ]) {
 	Ok(spec) => spec.requires_ == ["programs", "expects"]
 		and spec.programs == [
-			{ name: "roc-stable", system: "x86_64-linux", url: "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz", unpack: TarGz, path: "roc_nightly-linux_x86_64-2026-10-04-130536d/roc" },
-			{ name: "roc-stable", system: "aarch64-linux", url: "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_arm64-2026-10-04-130536d.tar.gz", unpack: TarGz, path: "roc_nightly-linux_arm64-2026-10-04-130536d/roc" },
-			{ name: "roc-stable", system: "x86_64-windows", url: "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-windows_x86_64-2026-10-04-130536d.zip", unpack: Zip, path: "roc_nightly-windows_x86_64-2026-10-04-130536d/roc.exe" },
-			{ name: "tool", system: "x86_64-linux", url: "https://example.test/releases/1.2.0/tool-x86_64-linux", unpack: File, path: "" },
-			{ name: "tool", system: "x86_64-windows", url: "https://example.test/releases/1.2.0/tool-windows.zip", unpack: Zip, path: "tool/tool.exe" },
-			{ name: "notes", system: "x86_64-linux", url: "https://example.test/notes-x86_64-linux.tar.xz", unpack: TarXz, path: "notes/bin/notes" },
-			{ name: "notes", system: "aarch64-linux", url: "https://example.test/notes-aarch64-linux.tar.xz", unpack: TarXz, path: "notes/bin/notes" },
-			{ name: "notes", system: "x86_64-windows", url: "https://example.test/notes-x86_64-windows.tar.xz", unpack: TarXz, path: "notes/bin/notes" },
+			{ name: "roc-stable", system: "x86_64-linux", urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz"], unpack: TarGz, path: "roc_nightly-linux_x86_64-2026-10-04-130536d/roc" },
+			{ name: "roc-stable", system: "aarch64-linux", urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_arm64-2026-10-04-130536d.tar.gz"], unpack: TarGz, path: "roc_nightly-linux_arm64-2026-10-04-130536d/roc" },
+			{ name: "roc-stable", system: "x86_64-windows", urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-windows_x86_64-2026-10-04-130536d.zip"], unpack: Zip, path: "roc_nightly-windows_x86_64-2026-10-04-130536d/roc.exe" },
+			{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/releases/1.2.0/tool-x86_64-linux"], unpack: File, path: "" },
+			{ name: "tool", system: "x86_64-windows", urls: ["https://example.test/releases/1.2.0/tool-windows.zip"], unpack: Zip, path: "tool/tool.exe" },
+			{ name: "notes", system: "x86_64-linux", urls: ["https://example.test/notes-x86_64-linux.tar.xz"], unpack: TarXz, path: "notes/bin/notes" },
+			{ name: "notes", system: "aarch64-linux", urls: ["https://example.test/notes-aarch64-linux.tar.xz"], unpack: TarXz, path: "notes/bin/notes" },
+			{ name: "notes", system: "x86_64-windows", urls: ["https://example.test/notes-x86_64-windows.tar.xz"], unpack: TarXz, path: "notes/bin/notes" },
 		]
 			# Validation gives the child its parent's selections first.
 			and spec.environment_programs == [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["roc-stable", "tool"] }]
@@ -454,3 +469,22 @@ expect Lower.lower([Name("invalid"), Environment("dev", [Programs(["tool"])])]) 
 expect Lower.lower([Name("invalid"), Fetch("tool", tool_release("1.2.0")), Environment("dev", [Programs(["tool"]), Expect(["tool"])])]) == Err("environment dev has tool as both a program and an expected tool")
 expect Lower.lower([Name("invalid"), Fetch("tool", tool_release("1.2.0")), Environment("base", [Command("tool", "hello")]), Environment("dev", [Extend("base"), Programs(["tool"])])]) == Err("environment dev has tool as both a program and a Command")
 expect Lower.lower([Name("invalid"), Environment("dev", [Command("git", "git"), Expect(["git"])])]) == Err("environment dev has git as both an expected tool and a Command")
+
+# Alternates for the same bytes follow the download's own URL, in order, for a
+# file and for an archive; with none given the download is as it was.
+expect Lower.lower([
+	Name("mirrored"),
+	Systems(["x86_64-linux"]),
+	Fetch("tool", |system| Mirrored(File("https://example.test/tool-${system}"), ["https://mirror.example.test/tool-${system}", "https://other.example.test/tool"])),
+	Fetch("notes", |_| Mirrored(Archive("https://example.test/notes.tar.gz", TarGz, "notes/bin/notes"), ["https://mirror.example.test/notes.tar.gz"])),
+	Fetch("plain", |_| Mirrored(File("https://example.test/plain"), [])),
+]).map_ok(|spec| spec.programs) == Ok([
+	{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux", "https://mirror.example.test/tool-x86_64-linux", "https://other.example.test/tool"], unpack: File, path: "" },
+	{ name: "notes", system: "x86_64-linux", urls: ["https://example.test/notes.tar.gz", "https://mirror.example.test/notes.tar.gz"], unpack: TarGz, path: "notes/bin/notes" },
+	{ name: "plain", system: "x86_64-linux", urls: ["https://example.test/plain"], unpack: File, path: "" },
+])
+
+# An alternate is held to the rule of every URL, and is given once.
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://mirror.example.test/tool", "http://mirror.example.test/tool"]))]) == Err("program tool on x86_64-linux: \"http://mirror.example.test/tool\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://example.test/tool"]))]) == Err("program tool on x86_64-linux names \"https://example.test/tool\" twice")
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Mirrored(Archive("https://example.test/tool.zip", Zip, "tool.exe"), ["https://mirror.example.test/tool.zip", "https://mirror.example.test/tool.zip"]))]) == Err("program tool on x86_64-linux names \"https://mirror.example.test/tool.zip\" twice")

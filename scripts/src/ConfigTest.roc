@@ -76,11 +76,11 @@ ConfigTest := [].{
 				"(programs ",
 				"(environment_programs ",
 				"(expects ",
-				"(url \"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz\")",
+				"(urls (\"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz\"))",
 				"(unpack TarGz)",
 				"(path \"roc_nightly-windows_x86_64-2026-10-04-130536d/roc.exe\")",
 				"(unpack Zip)",
-				"(url \"https://example.test/releases/1.0/tool-x86_64-linux\")",
+				"(urls (\"https://example.test/releases/1.0/tool-x86_64-linux\" \"https://mirror.example.test/releases/1.0/tool-x86_64-linux\"))",
 				"(unpack File)",
 				"(programs (\"roc-stable\" \"tool\"))",
 				"(programs (\"git\" \"gh\"))",
@@ -334,7 +334,7 @@ valid_fixtures = [
 	# declared system; selections and expectations inherit parent first.
 	valid(
 		"Programs",
-		\\[Name("programs"), Systems(["x86_64-linux", "x86_64-windows"]), Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")), Fetch("tool", |system| if system == "x86_64-linux" File(Str.concat("https://example.test/releases/1.0/tool-", system)) else Unavailable), Environment("base", [Programs(["roc-stable"]), Expect(["git"])]), Environment("dev", [Extend("base"), Programs(["tool", "roc-stable"]), Expect(["gh"])]), Task("check", [Use("dev"), Run(["scripts/check_all.roc"])])]
+		\\[Name("programs"), Systems(["x86_64-linux", "x86_64-windows"]), Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")), Fetch("tool", |system| if system == "x86_64-linux" Mirrored(File(Str.concat("https://example.test/releases/1.0/tool-", system)), [Str.concat("https://mirror.example.test/releases/1.0/tool-", system)]) else Unavailable), Environment("base", [Programs(["roc-stable"]), Expect(["git"])]), Environment("dev", [Extend("base"), Programs(["tool", "roc-stable"]), Expect(["gh"])]), Task("check", [Use("dev"), Run(["scripts/check_all.roc"])])]
 		,
 	),
 	# Builds use ordinary typed settings, including forward dependencies.
@@ -633,6 +633,18 @@ core_fixtures = [
 		,
 	),
 	rejected(
+		"DuplicateMirror",
+		"program tool on x86_64-linux names",
+		\\[Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://example.test/tool"]))]
+		,
+	),
+	rejected(
+		"InsecureMirror",
+		"is not a download URL",
+		\\[Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Mirrored(Archive("https://example.test/tool.tar.gz", TarGz, "tool"), ["http://mirror.example.test/tool.tar.gz"]))]
+		,
+	),
+	rejected(
 		"UndeclaredProgram",
 		"selects program roc-stable",
 		\\[Name("invalid"), Environment("dev", [Programs(["roc-stable"])])]
@@ -692,8 +704,8 @@ accepted = { code: 0, stdout: "No errors found", stderr: "" }
 crashed : Str -> Process.Outcome
 crashed = |text| { code: 1, stdout: "", stderr: text }
 
-expect ConfigTest.fixtures.len() == 60
-expect ConfigTest.selected(Full).len() == 63 and ConfigTest.selected(Smoke).map(|fixture| fixture.name) == ["Valid", "EquivalentComposition", "MissingName", "BadWorkflowName", "UnknownSource", "WorkflowExpansion", "Composed"]
+expect ConfigTest.fixtures.len() == 62
+expect ConfigTest.selected(Full).len() == 65 and ConfigTest.selected(Smoke).map(|fixture| fixture.name) == ["Valid", "EquivalentComposition", "MissingName", "BadWorkflowName", "UnknownSource", "WorkflowExpansion", "Composed"]
 
 # Every name is used once, and every name another table mentions exists.
 expect {

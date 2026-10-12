@@ -379,8 +379,19 @@ Project :: [].{
 			if sources.any(|s| s.name == program.name) or spec.inputs.any(|i| i.name == program.name) or spec.build_sources.any(|s| s.name == program.name) {
 				return Err("program ${program.name} has the name of a source or input")
 			}
-			if !valid_download_url(program.url) {
-				return Err("program ${program.name} on ${program.system}: \"${program.url}\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
+			if program.urls.is_empty() {
+				return Err("program ${program.name} on ${program.system} has no URL")
+			}
+			# Alternates serve the same bytes, so each is held to the same rule.
+			var $urls = []
+			for url in program.urls {
+				if !valid_download_url(url) {
+					return Err("program ${program.name} on ${program.system}: \"${url}\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
+				}
+				if $urls.contains(url) {
+					return Err("program ${program.name} on ${program.system} names \"${url}\" twice")
+				}
+				$urls = $urls.append(url)
 			}
 			match program.unpack {
 				File => if !program.path.is_empty() {
@@ -1679,10 +1690,10 @@ expect
 	].all(|url| !Project.valid_download_url(url))
 
 linux_tool : Spec.Program
-linux_tool = { name: "tool", system: "x86_64-linux", url: "https://example.test/tool-x86_64-linux", unpack: File, path: "" }
+linux_tool = { name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux"], unpack: File, path: "" }
 
 linux_roc : Spec.Program
-linux_roc = { name: "roc-stable", system: "x86_64-linux", url: "https://example.test/roc.tar.gz", unpack: TarGz, path: "roc_nightly/roc" }
+linux_roc = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc.tar.gz"], unpack: TarGz, path: "roc_nightly/roc" }
 
 # Two environments without tools or overlays, the second extending the first.
 fetching : Spec
@@ -1690,7 +1701,7 @@ fetching = {
 	..fixture([{ ..base, tools: [], overlays: [] }, { name: "dev", parents: ["base"], tools: [], overlays: [] }]),
 	requires_: ["programs", "expects", "commands"],
 	systems: ["x86_64-linux", "aarch64-darwin"],
-	programs: [linux_tool, { ..linux_tool, system: "aarch64-darwin", url: "https://example.test/tool-aarch64-darwin" }, linux_roc],
+	programs: [linux_tool, { ..linux_tool, system: "aarch64-darwin", urls: ["https://example.test/tool-aarch64-darwin", "https://mirror.example.test/tool-aarch64-darwin"] }, linux_roc],
 }
 
 # Selected programs and expected tools inherit parent first, each name once,
@@ -1732,9 +1743,9 @@ expect
 
 # The URL rule names the program, the System and the URL it refuses.
 expect
-	Project.validate({ ..fetching, programs: [{ ..linux_roc, system: "aarch64-darwin", url: "http://x/roc.tar.gz" }] }) == Err("program roc-stable on aarch64-darwin: \"http://x/roc.tar.gz\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment") and
-		Project.validate({ ..fetching, programs: [{ ..linux_tool, url: "https://token@example.test/tool" }] }).is_err() and
-			Project.validate({ ..fetching, programs: [{ ..linux_tool, url: "http://127.0.0.1:4000/tool" }] }).is_ok()
+	Project.validate({ ..fetching, programs: [{ ..linux_roc, system: "aarch64-darwin", urls: ["http://x/roc.tar.gz"] }] }) == Err("program roc-stable on aarch64-darwin: \"http://x/roc.tar.gz\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment") and
+		Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["https://token@example.test/tool"] }] }).is_err() and
+			Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["http://127.0.0.1:4000/tool"] }] }).is_ok()
 
 # An archive names the program inside it; a File is the program.
 expect
@@ -1788,4 +1799,15 @@ expect {
 expect {
 	project = Project.validate({ ..fetching, expects: [{ environment: "dev", programs: ["git"] }] })?
 	Project.provider_alone(project, "base") == Ok({}) and Project.provider_alone(project, "dev").is_err()
+}
+
+# A download has at least one URL, and alternates for the same bytes after it:
+# every one is a download URL, and none is given twice.
+expect {
+	mirrored = { ..linux_tool, urls: ["https://example.test/tool", "https://mirror.example.test/tool", "http://127.0.0.1:4000/tool"] }
+	Project.validate({ ..fetching, programs: [mirrored] }).map_ok(|project| project.programs) == Ok([mirrored])
+		and Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: [] }] }) == Err("program tool on x86_64-linux has no URL")
+			and Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["https://example.test/tool", "https://mirror.example.test/tool", "https://example.test/tool"] }] }) == Err("program tool on x86_64-linux names \"https://example.test/tool\" twice")
+				and Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["https://example.test/tool", "http://mirror.example.test/tool", "https://other.example.test/tool"] }] }) == Err("program tool on x86_64-linux: \"http://mirror.example.test/tool\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
+					and Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["https://example.test/tool", ""] }] }) == Err("program tool on x86_64-linux: \"\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
 }

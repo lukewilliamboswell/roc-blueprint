@@ -3061,7 +3061,7 @@ fetching = {
 	{
 		..whole,
 		requires_: whole.requires_.concat(["programs", "expects"]),
-		programs: [{ name: "tool", system: "x86_64-linux", url: "https://example.test/tool", unpack: File, path: "" }],
+		programs: [{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool"], unpack: File, path: "" }],
 		environment_programs: [{ environment: "builder", programs: ["tool"] }],
 		environments: whole.environments.append({ name: "plain", parents: [], tools: [], overlays: [] }).append({ name: "expecting", parents: ["plain"], tools: [], overlays: [] }),
 		expects: [{ environment: "expecting", programs: ["git"] }],

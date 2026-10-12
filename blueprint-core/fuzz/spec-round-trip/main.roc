@@ -124,14 +124,14 @@ raw = {
 	value: value(4),
 }.Fuzz
 
-# Every way a download is unpacked, with arbitrary names, URLs and paths.
+# Every way a download is unpacked, with arbitrary names, paths and URL lists.
 program : Fuzz.Generator(Spec.Program)
 program = Fuzz.map(
-	{ kind: Fuzz.u8_in(0, 3), name: Fuzz.str, system: Fuzz.str, url: Fuzz.str, path: Fuzz.str }.Fuzz,
+	{ kind: Fuzz.u8_in(0, 3), name: Fuzz.str, system: Fuzz.str, urls: Fuzz.list(Fuzz.str, 3), path: Fuzz.str }.Fuzz,
 	|r| {
 		name: r.name,
 		system: r.system,
-		url: r.url,
+		urls: r.urls,
 		unpack: match r.kind {
 			0 => File
 			1 => TarGz

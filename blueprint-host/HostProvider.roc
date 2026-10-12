@@ -746,7 +746,7 @@ expect {
 	fetching = {
 		..sample,
 		requires_: sample.requires_.concat(["programs", "expects"]),
-		programs: [{ name: "tool", system: "x86_64-windows", url: "https://example.test/tool.exe", unpack: File, path: "" }],
+		programs: [{ name: "tool", system: "x86_64-windows", urls: ["https://example.test/tool.exe"], unpack: File, path: "" }],
 		environments: sample.environments.append({ name: "fetching", parents: ["plain"], tools: [], overlays: [] }).append({ name: "expecting", parents: ["plain"], tools: [], overlays: [] }),
 		environment_programs: [{ environment: "fetching", programs: ["tool"] }],
 		expects: [{ environment: "expecting", programs: ["git"] }],
