@@ -213,6 +213,11 @@
               pkgs.curl
               pkgs.gnutar
               pkgs.gzip
+              # The release scripts: archives of the examples and the
+              # documentation, and the releases already published.
+              pkgs.zip
+              pkgs.unzip
+              pkgs.gh
             ];
           };
         };
