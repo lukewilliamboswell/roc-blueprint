@@ -1775,7 +1775,7 @@ obtain! = |program, host, asked| {
 	held = if here compiler_held!(what, program) else Err(NotHeld)
 	downloaded : Try({ sha256 : Str, size : U64, bytes : List(U8) }, [NotDownloaded])
 	downloaded = if held.is_err() and (here or looked.published.is_err()) {
-		Ok(Store.hashed!(what, program.urls).map_err(|message| FetchFailed(message))?)
+		Ok(Store.hashed!(what, program.urls).map_err(|message| FetchFailed(absent_advice(program, message)))?)
 	} else {
 		Err(NotDownloaded)
 	}
@@ -1794,6 +1794,25 @@ obtain! = |program, host, asked| {
 		_ => {}
 	}
 	Ok({ entry, asked: looked.asked })
+}
+
+## What to add to a download's failure during an update. A recipe answers
+## for every declared System unless it says `Unavailable`, as `Recipes.file`
+## never does; a publisher that has no download for one of them answers 404,
+## and the reader is told the two ways to say so in Blueprint.roc.
+absent_advice : Spec.Program, Str -> Str
+absent_advice = |program, message|
+	if message.contains("HTTP 404 ") {
+		"${message}\nIf ${program.name} is not published for ${program.system}, say so in Blueprint.roc: list the systems the project supports in Systems, or give ${program.name} a recipe that answers Unavailable for ${program.system}"
+	} else {
+		message
+	}
+
+expect {
+	program = { name: "tool", system: "aarch64-darwin", urls: ["https://example.org/tool-aarch64-darwin"], unpack: File, path: "" }
+	absent_advice(program, "could not download tool for aarch64-darwin from https://example.org/tool-aarch64-darwin: HTTP 404 from https://example.org/tool-aarch64-darwin (1 attempt)")
+		== "could not download tool for aarch64-darwin from https://example.org/tool-aarch64-darwin: HTTP 404 from https://example.org/tool-aarch64-darwin (1 attempt)\nIf tool is not published for aarch64-darwin, say so in Blueprint.roc: list the systems the project supports in Systems, or give tool a recipe that answers Unavailable for aarch64-darwin"
+		and absent_advice(program, "could not download tool: HTTP 503 from https://example.org/tool (3 attempts)") == "could not download tool: HTTP 503 from https://example.org/tool (3 attempts)"
 }
 
 ## The digest of a program whose download is a compiler this executable
@@ -1900,8 +1919,8 @@ describe = |err, provider|
 			"could not execute the configuration compiler; "
 				.concat("Roc ${compiler_version.trim()} is fetched automatically, ")
 				.concat("or set ROC to its executable:\n${message}")
-		LockFailed(message) => "${message}; use `blueprint update` to initialize "
-			.concat("or deliberately refresh pins")
+		# A message that already names the command is not told it twice.
+		LockFailed(message) => if message.contains("blueprint update") message else "${message}; use `blueprint update` to initialize or deliberately refresh pins"
 		OldLock => "Blueprint.lock was written by blueprint 0.5 or older, which gave every project a package source it did not declare; run `blueprint update` to resolve it again with this blueprint, and review what changes"
 		PlanFailed([problem]) => problem
 		PlanFailed(problems) => "this cannot be carried out:\n  ${Str.join_with(problems, "\n  ")}"

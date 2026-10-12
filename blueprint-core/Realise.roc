@@ -366,7 +366,7 @@ Realise :: [].{
 					if use.programs.any(|fetched| fetched.name == script_command) {
 						Ok([script_command].concat(entry.argv))
 					} else {
-						Err("${entry.subject} runs the Roc script ${program}, which ${script_command} starts; give environment ${entry.environment} Programs([\"${script_command}\"]) and a Fetch that declares it")
+						Err("${entry.subject} runs the Roc script ${program}, which ${script_command} starts; give environment ${entry.environment} that program, as in Programs([Fetch(\"${script_command}\", Recipes.roc_nightly(\"<tag>\"))])")
 					}
 				} else {
 					Ok([in_project(program, system, layout)].concat(rest))
@@ -671,7 +671,7 @@ expect planned(sample, Request.Run("script", ["extra"]), "x86_64-windows", windo
 ])
 
 # Without the program there is nothing to start the script with, there alone.
-expect planned(sample, Request.Run("bare", []), "x86_64-windows", windows, locked) == Err(["task bare runs the Roc script scripts/check_all.roc, which roc-stable starts; give environment plain Programs([\"roc-stable\"]) and a Fetch that declares it"])
+expect planned(sample, Request.Run("bare", []), "x86_64-windows", windows, locked) == Err(["task bare runs the Roc script scripts/check_all.roc, which roc-stable starts; give environment plain that program, as in Programs([Fetch(\"roc-stable\", Recipes.roc_nightly(\"<tag>\"))])"])
 expect planned(sample, Request.Run("bare", []), "x86_64-linux", unix, locked).map_ok(|steps| steps.map(|step| step.argv)) == Ok([["/project/scripts/check_all.roc"]])
 
 # A program in the project is named in full, in either Windows spelling; only

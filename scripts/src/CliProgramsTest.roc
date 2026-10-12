@@ -574,7 +574,7 @@ updating! = |test, idle, given| {
 	CliHarness.check!(unknown.code == 1 and unknown.stderr.contains("no input or program named nope; Blueprint.roc declares no input and the programs roc-stable, tool") and locked!(solo)?.text == named_lock.text, "update of an undeclared name did not say what is declared, or changed the lock:\n${unknown.stderr}")?
 	lockless = project!(test, "lockless", CliProgramsTest.fetching({ roc: [roc_url], tool: tool_url, expects: [], extra: "" }))?
 	early = command!(test, server, lockless, ["update", "tool"], bare)?
-	CliHarness.check!(early.code == 1 and early.stderr.contains("no lock to keep the other pins from") and !CliHarness.present!("${lockless}/Blueprint.lock"), "a named update with no lock did not refuse (code ${early.code.to_str()}):\n${early.stderr}")?
+	CliHarness.check!(early.code == 1 and early.stderr.contains("no lock to keep the other pins from; run `blueprint update` without input names first\n") and !CliHarness.present!("${lockless}/Blueprint.lock"), "a named update with no lock did not refuse (code ${early.code.to_str()}):\n${early.stderr}")?
 	Script.pass!("update PROGRAM: that program is fetched again on every system and nothing else; an undeclared name, a missing server and a missing lock change nothing")?
 
 	# A program declared with other URLs is the one an update resolves again.
@@ -673,7 +673,17 @@ updating! = |test, idle, given| {
 		unlisted.code == 0 and !unlisted.stderr.contains("could not ask") and how(locked!(differing)?) == computed,
 		"with no release to ask about, the downloads were not all hashed (code ${unlisted.code.to_str()}):\n${unlisted.stderr}",
 	)?
-	Script.pass!("a published digest that differs stops the update with nothing written; a refused question and an unreadable answer are each said once and leave every digest computed, as a release that is not there does")?
+	# A system the publisher has no download for: the failure says how
+	# Blueprint.roc states that, and nothing is written.
+	empty_store!(test)?
+	partial = project!(test, "partial", release)?
+	absent = command!(test, assets, partial, ["update"], bare)?
+	CliHarness.check!(
+		absent.code == 1 and absent.stderr.contains("(1 attempt)\nIf tool is not published for ${far}, say so in Blueprint.roc: list the systems the project supports in Systems, or give tool a recipe that answers Unavailable for ${far}\n")
+			and !CliHarness.present!("${partial}/Blueprint.lock"),
+		"a download that is not there for one system did not stop the update with what to write (code ${absent.code.to_str()}):\n${absent.stderr}",
+	)?
+	Script.pass!("a published digest that differs stops the update with nothing written; a refused question and an unreadable answer are each said once and leave every digest computed, as a release that is not there does; a download missing for one system says how to declare that")?
 
 	# A project that also declares a Nix source: update needs Nix, and says so
 	# before anything is fetched. With it, one lock holds the pins and the
