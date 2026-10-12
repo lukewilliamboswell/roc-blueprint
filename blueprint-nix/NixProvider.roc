@@ -792,7 +792,7 @@ NixProvider :: [].{
 	command_package : Spec.Command -> Str
 	command_package = |command| {
 		set = "sets.${quote(command.tool.source)}"
-		target = "${set}.${attr_path(command.tool.name.split_on("."))}"
+		target = "${set}.${attr_path(tool_path(command.tool.name))}"
 		"(${set}.writeShellScriptBin ${quote(command.name)} ''exec \${${set}.lib.getExe ${target}} \"$@\"'')"
 	}
 
@@ -811,7 +811,7 @@ NixProvider :: [].{
 		tools = environment.tools.map(
 			|tool|
 				"            sets.${quote(tool.source)}."
-					.concat(attr_path(tool.name.split_on("."))),
+					.concat(attr_path(tool_path(tool.name))),
 		).concat(
 			commands.keep_if(|entry| entry.environment == environment.name).map(
 				|entry| "            ${command_package(entry)}",
@@ -819,7 +819,7 @@ NixProvider :: [].{
 		)
 		scoped = system_tools.keep_if(|entry| entry.environment == environment.name).map(
 			|entry| {
-				selected = entry.tools.map(|tool| "sets.${quote(tool.source)}.${attr_path(tool.name.split_on("."))}")
+				selected = entry.tools.map(|tool| "sets.${quote(tool.source)}.${attr_path(tool_path(tool.name))}")
 				"          ++ (if system == ${quote(entry.system)} then [ ${Str.join_with(selected, " ")} ] else [])"
 			},
 		)
@@ -915,7 +915,7 @@ NixProvider :: [].{
 		selected_tools = environment.tools.concat(system_tools.keep_if(|entry| entry.environment == environment.name and entry.system == system).fold([], |tools, entry| tools.concat(entry.tools)))
 		tools = selected_tools.map(
 			|tool|
-				"sets.${quote(tool.source)}.${attr_path(tool.name.split_on("."))}",
+				"sets.${quote(tool.source)}.${attr_path(tool_path(tool.name))}",
 		).concat(commands.keep_if(|entry| entry.environment == environment.name).map(command_package))
 		inputs = build.inputs.map(
 			|name|
@@ -1022,6 +1022,11 @@ NixProvider :: [].{
 			"{ ${Str.join_with(fields, " ")} }"
 		}
 	}
+
+	## A validated Spec's tool names always parse; an unparsed name stays one
+	## attribute, so Nix reports it rather than a different package.
+	tool_path : Str -> List(Str)
+	tool_path = |name| Project.nix_path(name) ?? [name]
 
 	attr_path : List(Str) -> Str
 	attr_path = |path| Str.join_with(path.map(quote), ".")
@@ -1363,6 +1368,20 @@ expect {
 	match NixProvider.render(project) {
 		Ok(text) => text.contains("(sets.\"stable\".writeShellScriptBin \"roc-stable\" ''exec \${sets.\"stable\".lib.getExe sets.\"stable\".\"rocpkgs\".\"nightly-2026-09-10-a670e34\"} \"$@\"'')") and
 			text.contains("\"stable\" = import inputs.\"stable\"")
+		Err(_) => False
+	}
+}
+
+# A quoted segment is one attribute, however many dots it holds.
+expect {
+	project = {
+		..mk(simple),
+		sources: [{ name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		requires_: ["commands"],
+		commands: [{ environment: "dev", name: "zig", tool: { source: "stable", name: "zigpkgs.\"0.16.0\"" } }],
+	}
+	match NixProvider.render(project) {
+		Ok(text) => text.contains("sets.\"stable\".lib.getExe sets.\"stable\".\"zigpkgs\".\"0.16.0\"}")
 		Err(_) => False
 	}
 }

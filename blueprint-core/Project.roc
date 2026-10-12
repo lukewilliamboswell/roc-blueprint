@@ -63,17 +63,72 @@ Project :: [].{
 		Ok({ source, name })
 	}
 
-	## Deliberately conservative native grammars: Nix dotted identifiers;
-	## Guix package[@version][:output] specifications. No translation or probing.
+	## The attributes a Nix tool name selects, in order. Segments are separated
+	## by dots; a segment in double quotes is one attribute whose name may
+	## itself contain dots, as in `zigpkgs."0.16.0"`.
+	nix_path : Str -> Try(List(Str), [BadNixPath])
+	nix_path = |name| {
+		parts = name.split_on("\"")
+		if parts.len() % 2 == 0 {
+			return Err(BadNixPath)
+		}
+		last = parts.len() - 1
+		var $segments = []
+		var $index = 0
+		for part in parts {
+			after = $index > 0
+			before = $index < last
+			if $index % 2 == 1 {
+				if !nix_quoted(part) {
+					return Err(BadNixPath)
+				}
+				$segments = $segments.append(part)
+			} else if part == "" {
+				# Nothing may be missing between two quoted segments, and a
+				# name is never empty.
+				if after == before {
+					return Err(BadNixPath)
+				}
+			} else if part == "." {
+				if !(after and before) {
+					return Err(BadNixPath)
+				}
+			} else {
+				if (after and !part.starts_with(".")) or (before and !part.ends_with(".")) {
+					return Err(BadNixPath)
+				}
+				leading = if after part.drop_prefix(".") else part
+				inner = if before leading.drop_suffix(".") else leading
+				plain = inner.split_on(".")
+				if !plain.all(nix_identifier) {
+					return Err(BadNixPath)
+				}
+				$segments = $segments.concat(plain)
+			}
+			$index = $index + 1
+		}
+		Ok($segments)
+	}
+
+	nix_identifier : Str -> Bool
+	nix_identifier = |part| {
+		bytes = part.to_utf8()
+		!bytes.is_empty() and bytes.all(|b| letter(b) or (b >= '0' and b <= '9') or b == '_' or b == '-' or b == '\'')
+	}
+
+	nix_quoted : Str -> Bool
+	nix_quoted = |part| {
+		bytes = part.to_utf8()
+		!bytes.is_empty() and bytes.all(|b| letter(b) or (b >= '0' and b <= '9') or b == '_' or b == '-' or b == '.' or b == '+')
+	}
+
+	## Deliberately conservative native grammars: Nix attribute paths of
+	## identifiers and quoted segments; Guix package[@version][:output]
+	## specifications. No translation or probing.
 	check_tool : ProviderName, Str -> Try({}, Str)
 	check_tool = |provider, name| {
 		valid = match provider {
-			Nix => name.split_on(".").all(
-				|part| {
-					bytes = part.to_utf8()
-					!bytes.is_empty() and bytes.all(|b| letter(b) or (b >= '0' and b <= '9') or b == '_' or b == '-' or b == '\'')
-				},
-			)
+			Nix => nix_path(name).is_ok()
 			Guix => {
 				parts = name.split_on(":")
 				spec = parts.first() ?? ""
@@ -625,6 +680,21 @@ expect Project.tool("git\n").is_err()
 expect Project.check_tool(Nix, "python3Packages.requests").is_ok()
 expect Project.check_tool(Nix, "7zip").is_ok() and Project.check_tool(Nix, "2bwm").is_ok()
 expect Project.check_tool(Nix, "python@3").is_err()
+expect Project.nix_path("python3Packages.requests") == Ok(["python3Packages", "requests"])
+expect Project.nix_path("zigpkgs.\"0.16.0\"") == Ok(["zigpkgs", "0.16.0"])
+expect Project.nix_path("zigpkgs.brew.\"0.16.0\".out") == Ok(["zigpkgs", "brew", "0.16.0", "out"])
+expect Project.nix_path("\"0.16.0\"") == Ok(["0.16.0"])
+expect Project.nix_path("a.\"1.0\".\"2.0\"") == Ok(["a", "1.0", "2.0"])
+expect Project.check_tool(Nix, "zigpkgs.\"0.16.0\"").is_ok()
+expect Project.check_tool(Nix, "zigpkgs.0.16.0").is_ok()
+expect Project.check_tool(Nix, "zigpkgs\"0.16.0\"").is_err()
+expect Project.check_tool(Nix, "zigpkgs.\"0.16.0").is_err()
+expect Project.check_tool(Nix, "zigpkgs.\"\"").is_err()
+expect Project.check_tool(Nix, "\"a\"\"b\"").is_err()
+expect Project.check_tool(Nix, "\"a\"..\"b\"").is_err()
+expect Project.check_tool(Nix, "a.\"b\".").is_err()
+expect Project.check_tool(Nix, "a.\"b c\"").is_err()
+expect Project.check_tool(Nix, "").is_err()
 expect Project.check_tool(Guix, "python@3.12:out").is_ok()
 expect Project.check_tool(Guix, "git::out").is_err()
 expect Project.check_tool(Guix, "g++@12.3:lib").is_ok()
