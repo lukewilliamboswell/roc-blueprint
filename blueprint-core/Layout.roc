@@ -39,6 +39,11 @@ Layout := {
 		Ok({})
 	}
 
+	## The file that keeps generated state out of version control: it ignores
+	## everything in the generated root, itself included.
+	ignore_file : Layout -> Str
+	ignore_file = |layout| "${layout.generated_root}/.gitignore"
+
 	## Lexical containment; the executor additionally checks symlinks.
 	contains : Str, Str -> Bool
 	contains = |parent, child| child == parent or child.starts_with("${parent}/")
@@ -53,6 +58,15 @@ expect Layout.validate(
 		lock_path: "/work/inputs.lock",
 	},
 ).is_ok()
+
+expect Layout.ignore_file(
+	Layout.{
+		project_root: "/project",
+		workspace: "/work",
+		generated_root: "/work/nix",
+		lock_path: "/work/inputs.lock",
+	},
+) == "/work/nix/.gitignore"
 
 # Traversal, URI delimiters and an authority ancestor cannot become effects.
 expect [

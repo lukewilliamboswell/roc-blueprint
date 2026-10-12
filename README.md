@@ -341,8 +341,10 @@ structural validation and required-feature checks still apply. Full rendering
 
 - **Commit** `Blueprint.roc` and the authority (default `Blueprint.lock`, a
   versioned S-expression listing each pinned source and its digest);
-  **ignore** generated state (default `.blueprint/`). A lock written by an
-  older `blueprint` is refused; run `blueprint update`.
+  generated state (default `.blueprint/`) ignores itself: `blueprint` writes a
+  `.gitignore` there once, which you may edit. That does not untrack a
+  directory already committed; run `git rm -r --cached .blueprint` for that.
+  A lock written by an older `blueprint` is refused; run `blueprint update`.
 - Normal `gen`, `shell`, `run`, `build` and `workflow` require matching pins and never
   rewrite authority or independently update derived locks.
 - `nix develop` takes the bash it runs a shell or task with from a flake input

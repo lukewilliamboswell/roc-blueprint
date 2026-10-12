@@ -456,6 +456,7 @@ NixProvider :: [].{
 		# must never become its ancestor: the workspace is a directory.
 		files = staged_files(layout, "").map(|file| file.path)
 			.append("${layout.generated_root}/flake.lock")
+			.append(Layout.ignore_file(layout))
 		for file in files {
 			if Layout.contains(file, layout.workspace)
 				or Layout.contains(file, layout.lock_path)

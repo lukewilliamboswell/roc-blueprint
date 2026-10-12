@@ -1268,7 +1268,25 @@ stage! = |files, layout| {
 		path(parent(file.path)).create_all!()?
 		atomic_write!(file.path, file.contents)?
 	}
-	Ok({})
+	if files.is_empty() {
+		Ok({})
+	} else {
+		ignore_generated!(layout)
+	}
+}
+
+## Generated state is not for version control, so the generated root ignores
+## its own contents. The file is written once and never again: what a caller
+## put there stays, and an unchanged project stages nothing new.
+ignore_generated! : Layout => Try({}, _)
+ignore_generated! = |layout| {
+	ignore = Layout.ignore_file(layout)
+	safe_path!(ignore)?
+	if path(ignore).exists!()? {
+		Ok({})
+	} else {
+		atomic_write!(ignore, "*\n")
+	}
 }
 
 list_tasks! : Spec => Try({}, _)

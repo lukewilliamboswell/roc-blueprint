@@ -279,6 +279,17 @@ cases! = |bench| {
 	update!(test, work)?
 	_ = run!(test, work, ["gen"], 0, [])?
 	CliHarness.same_calls!(CliHarness.calls!("${work}/nix-calls")?, [], "gen ran the provider")?
+	# Generated state ignores itself. The file is written once: a later run
+	# leaves it alone, whatever it then holds.
+	ignore = "${work}/.blueprint/.gitignore"
+	CliHarness.check!(Path.read_utf8!(Path.utf8(ignore))? == "*\n", "gen did not write .blueprint/.gitignore ignoring everything")?
+	written = CliHarness.identity!(ignore)?
+	_ = run!(test, work, ["gen"], 0, [])?
+	CliHarness.check!(CliHarness.identity!(ignore)? == written, "a second gen rewrote .blueprint/.gitignore")?
+	Path.write_utf8!(Path.utf8(ignore), "*\n!flake.nix\n")?
+	_ = run!(test, work, ["gen"], 0, [])?
+	CliHarness.check!(Path.read_utf8!(Path.utf8(ignore))? == "*\n!flake.nix\n", "gen replaced an edited .blueprint/.gitignore")?
+	Script.pass!("gen: .blueprint/.gitignore ignores everything, is written once and an edit to it survives")?
 	_ = run!(test, work, ["shell", "ci"], 0, [])?
 	CliHarness.same_calls!(CliHarness.calls!("${work}/nix-calls")?, [CliTest.develop(work, "ci", [])], "shell ci")?
 	CliHarness.forget!("${work}/nix-calls")?
@@ -388,6 +399,7 @@ cases! = |bench| {
 		{ name: "gen", command: ["gen"], workspace: "flake.nix" },
 		{ name: "build", command: ["build", "app"], workspace: "flake.lock/child" },
 		{ name: "update", command: ["update"], workspace: "flake.nix/child" },
+		{ name: "gen-ignore", command: ["gen"], workspace: ".gitignore" },
 	]
 	for case in collisions {
 		cwd = isolated!(test, "collision-${case.name}")?
