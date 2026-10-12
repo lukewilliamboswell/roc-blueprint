@@ -78,6 +78,9 @@ every CI job runs its scripts through `nix develop -c`, so what passes in the
 shell is what CI runs. `blueprint` is not in the shell, so entering it never
 compiles the CLI; build it as below, or use `nix run .`.
 
+`blueprint-cli/Store.roc` is the per-user store of downloads,
+`Download.roc` the HTTPS client that fills it and `Bootstrap.roc` the
+recorded download of the compiler that reads a `Blueprint.roc`.
 `blueprint-cli/main.roc` uses the released basic-cli platform by URL. Roc
 downloads it on first use outside Nix; the Nix blueprint package fetches the same
 archive by hash, so its sandboxed build needs no network.
@@ -191,12 +194,19 @@ concurrent publication. `scripts/test_isolation.roc` checks what a build stages
 about its caller: the namespace identities, the CLI's own path as the runner,
 and the refusals when either cannot be used. Both put a failing
 `python3` on `PATH`: the CLI itself must not use a host Python.
-`scripts/test_host.roc` runs the provider Windows uses, on this machine:
-`BLUEPRINT_PROVIDER=host` selects it in place of Nix, and takes no other
-value. curl, tar, `roc-stable` and zig are stubs, so it shows the order of
-effects, each argv, what is refused and that a token is never an argument or
-printed. It shows nothing about Windows itself; see
-xref:maintaining.adoc#what-remains-for-windows[What remains for Windows].
+`scripts/test_programs.roc` runs projects whose environments fetch programs
+and expect tools of the machine. Nothing selects how they run but their own
+`Blueprint.roc`: one with no Nix tool must never start the `nix` stub. The
+downloads come from a server the script runs on the loopback address, the
+store is a directory of the test's own, and the lock entries are written by
+the test. It checks what is kept in the store and under which names, that a
+second run makes no request, that a stored artifact with other bytes is
+removed with its tree and fetched again, two runs at once from an empty store,
+every refusal (a missing expected program, a program the lock does not hold or
+holds under other URLs, another length or digest, each URL's failure, an
+archive with a link out of its tree), the caller's own shell, and parity: the
+same task with one Nix tool added prints the same from the same store file,
+and only then starts Nix.
 These are Roc scripts, run from the repository root with `./blueprint`
 built; `ROC` names the compiler. They replace every tool the CLI runs with one
 program, `scripts/stubs/tool.roc`, which each test builds once and installs

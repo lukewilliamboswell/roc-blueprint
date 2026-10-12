@@ -29,7 +29,22 @@ Realise :: [].{
 	## refuses. A request with a problem yields no step at all.
 	## The caller has parsed the Lock and found its intent current.
 	plan : Spec, Request, Str, Layout, Lock, List(Provider) -> Try(Steps, List(Str))
-	plan = |spec, request, system, layout, lock, providers| plan_within(spec, request, system, layout, lock, providers, workflow_budget)
+	plan = |spec, request, system, layout, lock, providers| plan_within(spec, request, system, layout, Read(lock), providers, workflow_budget)
+
+	## Everything that stops a request and can be known without the Lock, so
+	## that a caller can say it before reading one: the project, the layout
+	## and the System, the names the request uses, the sources no provider
+	## supplies, the programs the System has none of, and what each provider
+	## asked refuses in its own `preflight`. A request that passes may still
+	## fail to plan, for what only the Lock says.
+	preflight : Spec, Request, Str, Layout, List(Provider) -> Try({}, List(Str))
+	preflight = |spec, request, system, layout, providers| {
+		_ = plan_within(spec, request, system, layout, Unread, providers, workflow_budget)?
+		Ok({})
+	}
+
+	## The Lock a plan is made from, or that none has been read yet.
+	Authority : [Read(Lock), Unread]
 
 	## The most text a workflow's distinct requests may hold together, files
 	## and argv: 16 MiB.
@@ -38,8 +53,8 @@ Realise :: [].{
 
 	## `plan` with the workflow allowance as a parameter, so that the
 	## accounting is tested with small numbers. Callers use `plan`.
-	plan_within : Spec, Request, Str, Layout, Lock, List(Provider), U64 -> Try(Steps, List(Str))
-	plan_within = |spec, request, system, layout, lock, providers, allowance| {
+	plan_within : Spec, Request, Str, Layout, Authority, List(Provider), U64 -> Try(Steps, List(Str))
+	plan_within = |spec, request, system, layout, authority, providers, allowance| {
 		project = Project.validate(spec).map_err(|message| [message])?
 		check_layout(layout).map_err(|message| [message])?
 		if !project.systems.contains(system) {
@@ -71,7 +86,7 @@ Realise :: [].{
 			outcome = match $planned.find_first(|entry| entry.request == atomic) {
 				Ok(entry) => entry.outcome
 				Err(_) => {
-					fresh = plan_atomic(project, atomic, system, layout, lock, providers)
+					fresh = plan_atomic(project, atomic, system, layout, authority, providers)
 					$bytes = $bytes + (fresh.map_ok(|steps| steps.fold(0, |size, step| size + step_bytes(step))) ?? 0)
 					$planned = $planned.append({ request: atomic, outcome: fresh })
 					fresh
@@ -98,15 +113,15 @@ Realise :: [].{
 		step.files.fold(0, |size, file| size + file.contents.to_utf8().len())
 			+ step.argv.fold(0, |size, arg| size + arg.to_utf8().len())
 
-	plan_atomic : Spec, Request, Str, Layout, Lock, List(Provider) -> Try(List(Steps.Step), List(Str))
-	plan_atomic = |project, request, system, layout, lock, providers|
+	plan_atomic : Spec, Request, Str, Layout, Authority, List(Provider) -> Try(List(Steps.Step), List(Str))
+	plan_atomic = |project, request, system, layout, authority, providers|
 		match request {
 			# Only a provider generates files. One that supplies no declared
 			# source has nothing to say about the project.
 			Request.Generate => {
 				var $steps = []
 				for provider in providers.keep_if(|candidate| project.sources.any(|source| (candidate.realises)(source.provider))) {
-					$steps = $steps.concat(asked(provider, project, request, system, layout, lock)?)
+					$steps = $steps.concat(asked(provider, project, request, system, layout, authority)?)
 				}
 				Ok($steps)
 			}
@@ -114,15 +129,15 @@ Realise :: [].{
 				task = project.tasks.find_first(|t| t.name == name).map_err(|_| ["unknown task: ${name}"])?
 				argv = task.run.concat(extra)
 				Project.check_argv(argv, name).map_err(|message| [message])?
-				entered(project, { subject: "task ${name}", environment: task.environment, action: Run(name), argv }, request, system, layout, lock, providers)
+				entered(project, { subject: "task ${name}", environment: task.environment, action: Run(name), argv }, request, system, layout, authority, providers)
 			}
 			Request.Shell(name) => {
 				shell = project.shells.find_first(|s| s.name == name).map_err(|_| ["unknown shell: ${name}"])?
 				# With no provider the executor starts the caller's own shell:
 				# which program that is belongs to presentation, not the plan.
-				entered(project, { subject: "shell ${name}", environment: shell.environment, action: Shell(name), argv: [] }, request, system, layout, lock, providers)
+				entered(project, { subject: "shell ${name}", environment: shell.environment, action: Shell(name), argv: [] }, request, system, layout, authority, providers)
 			}
-			Request.Build(name) => built(project, name, request, system, layout, lock, providers)
+			Request.Build(name) => built(project, name, request, system, layout, authority, providers)
 			Request.Workflow(_) => Err(["workflow must expand into atomic requests"])
 		}
 
@@ -132,10 +147,10 @@ Realise :: [].{
 	## Enter an environment for a task or a shell. One with no package tool is
 	## the Core's alone: the step is the task's own argv, after what the Core
 	## supplies. Any other is the provider's step, with the same added first.
-	entered : Spec, Entry, Request, Str, Layout, Lock, List(Provider) -> Try(List(Steps.Step), List(Str))
-	entered = |project, entry, request, system, layout, lock, providers| {
+	entered : Spec, Entry, Request, Str, Layout, Authority, List(Provider) -> Try(List(Steps.Step), List(Str))
+	entered = |project, entry, request, system, layout, authority, providers| {
 		use = Project.environment_use(project, entry.environment, system).map_err(|message| [message])?
-		supplied = supply(entry.subject, entry.environment, use, system, lock)
+		supplied = supply(entry.subject, entry.environment, use, system, authority)
 		if use.tools.is_empty() {
 			match started(entry, use, system, layout) {
 				Ok(argv) =>
@@ -149,7 +164,7 @@ Realise :: [].{
 			}
 		} else {
 			steps = match supplier(project, providers, entry.environment, use.tools.map(|tool| tool.source)) {
-				Ok(provider) => asked(provider, project, request, system, layout, lock)
+				Ok(provider) => asked(provider, project, request, system, layout, authority)
 				Err(problem) => Err([problem])
 			}
 			match steps {
@@ -163,8 +178,8 @@ Realise :: [].{
 	## package tools and nothing of the machine, so an environment in its
 	## closure that fetches or expects is refused: the program would not be
 	## there. With no tool at all, the builder is that of the default source.
-	built : Spec, Str, Request, Str, Layout, Lock, List(Provider) -> Try(List(Steps.Step), List(Str))
-	built = |project, name, request, system, layout, lock, providers| {
+	built : Spec, Str, Request, Str, Layout, Authority, List(Provider) -> Try(List(Steps.Step), List(Str))
+	built = |project, name, request, system, layout, authority, providers| {
 		closure = Project.build_closure(project, name).map_err(|message| [message])?
 		var $problems = []
 		var $sources = []
@@ -183,7 +198,7 @@ Realise :: [].{
 		}
 		environment = closure.last().map_ok(|build| build.environment) ?? ""
 		steps = match supplier(project, providers, environment, if $sources.is_empty() ["default"] else $sources) {
-			Ok(provider) => asked(provider, project, request, system, layout, lock)
+			Ok(provider) => asked(provider, project, request, system, layout, authority)
 			Err(problem) => Err([problem])
 		}
 		match steps {
@@ -193,12 +208,20 @@ Realise :: [].{
 	}
 
 	## A provider's steps for one atomic request, or what it says against it.
-	asked : Provider, Spec, Request, Str, Layout, Lock -> Try(List(Steps.Step), List(Str))
-	asked = |provider, project, request, system, layout, lock|
-		match (provider.realise)(project, request, system, layout, lock) {
-			Ok(steps) => Ok(steps.steps)
-			Err(InvalidLock(message)) => Err([message])
-			Err(Unrealisable(message)) => Err([message])
+	## Before a Lock is read it is asked only whether it would refuse.
+	asked : Provider, Spec, Request, Str, Layout, Authority -> Try(List(Steps.Step), List(Str))
+	asked = |provider, project, request, system, layout, authority|
+		match authority {
+			Unread => {
+				(provider.preflight)(project, request, system, layout).map_err(|message| [message])?
+				Ok([])
+			}
+			Read(lock) =>
+				match (provider.realise)(project, request, system, layout, lock) {
+					Ok(steps) => Ok(steps.steps)
+					Err(InvalidLock(message)) => Err([message])
+					Err(Unrealisable(message)) => Err([message])
+				}
 		}
 
 	## The one provider that supplies every one of these sources. Tools of an
@@ -238,12 +261,17 @@ Realise :: [].{
 	## an executor needs them: what the machine lacks is known before
 	## anything is downloaded. A program that cannot be supplied is a
 	## problem, never a missing operation.
-	supply : Str, Str, Project.Use, Str, Lock -> { operations : List(Steps.Operation), problems : List(Str) }
-	supply = |subject, environment, use, system, lock| {
+	supply : Str, Str, Project.Use, Str, Authority -> { operations : List(Steps.Operation), problems : List(Str) }
+	supply = |subject, environment, use, system, authority| {
 		var $problems = use.unavailable.map(|name| "${subject}: program ${name} is not available for ${system} (its recipe answers Unavailable)")
 		var $programs = []
-		for program in use.programs {
-			match lock.fetched_for(program) {
+		# Without a Lock there is no digest to give, and nothing to say yet.
+		resolved = match authority {
+			Read(lock) => use.programs.map(|program| (program, lock.fetched_for(program)))
+			Unread => []
+		}
+		for (program, recorded) in resolved {
+			match recorded {
 				Ok(entry) =>
 					if digest(entry.sha256) {
 						$programs = $programs.append({ name: program.name, urls: program.urls, sha256: entry.sha256, size: entry.size, unpack: program.unpack, path: program.path })
@@ -260,16 +288,10 @@ Realise :: [].{
 			}
 		}
 		present = use.expects.map(|program| { program, because: "environment ${environment} expects it on PATH (Expect)" })
-		bundles = use.bundles.map(
-			|bundle| {
-				file = "${bundle.name}.tar.zst"
-				{ name: bundle.name, download: [curl(system)].concat(transfer).concat(["--output", file, bundle.url]), unbundle: [compiler_text, "unbundle", file] }
-			},
-		)
 		{
 			operations: (if present.is_empty() [] else [Present(present)])
 				.concat(if $programs.is_empty() [] else [Programs($programs)])
-				.concat(if bundles.is_empty() [] else [RocBundles({ compiler: compiler_text, bundles })]),
+				.concat(if use.bundles.is_empty() [] else [RocBundles(use.bundles)]),
 			problems: $problems,
 		}
 	}
@@ -299,19 +321,6 @@ Realise :: [].{
 		)
 		{ ..step, operations: added.concat(step.operations) }
 	}
-
-	## The text the executor replaces with its compiler (see `Steps.Operation`).
-	compiler_text : Str
-	compiler_text = "@blueprint-compiler@"
-
-	## Only HTTPS, and a failed transfer is a failed command.
-	transfer : List(Str)
-	transfer = ["--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--retry", "3"]
-
-	## Windows has shipped curl in System32 since 1803. It is named in full
-	## there, so that no other curl on PATH is taken for it.
-	curl : Str -> Str
-	curl = |system| if system.ends_with("-windows") "C:/Windows/System32/curl.exe" else "curl"
 
 	## The command every Roc script names on its first line,
 	## `#!/usr/bin/env roc-stable`.
@@ -593,8 +602,8 @@ planned = |spec, request, system, layout, lock| Realise.plan(spec, request, syst
 linux_roc : Steps.Program
 linux_roc = { name: "roc-stable", urls: roc_urls("x86_64-linux"), sha256: roc_sha, size: 69614310, unpack: TarGz, path: "roc/roc" }
 
-bundle : Str -> Steps.Operation
-bundle = |curl| RocBundles({ compiler: "@blueprint-compiler@", bundles: [{ name: "abc", download: [curl, "--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--retry", "3", "--output", "abc.tar.zst", "https://example.test/releases/1.0/abc.tar.zst"], unbundle: ["@blueprint-compiler@", "unbundle", "abc.tar.zst"] }] })
+bundle : Steps.Operation
+bundle = RocBundles([{ name: "abc", url: "https://example.test/releases/1.0/abc.tar.zst" }])
 
 ## What the Core supplies on Linux for `dev`, or for `host`, which inherits
 ## it all: an inherited expectation is the inheriting environment's own.
@@ -602,7 +611,7 @@ supplied_for : Str -> List(Steps.Operation)
 supplied_for = |environment| [
 	Present([{ program: "gh", because: "environment ${environment} expects it on PATH (Expect)" }, { program: "git", because: "environment ${environment} expects it on PATH (Expect)" }]),
 	Programs([linux_roc, { name: "tool", urls: ["https://example.test/tool-x86_64-linux"], sha256: tool_sha, size: 5900520, unpack: File, path: "" }]),
-	bundle("curl"),
+	bundle,
 ]
 
 # A task with nothing to supply is its argv, with the caller's arguments last,
@@ -624,7 +633,7 @@ expect planned(sample, Request.Run("script", ["extra"]), "aarch64-darwin", unix,
 		files: [],
 		argv: ["/project/scripts/check_all.roc", "--quick", "extra"],
 		artifacts: [],
-		operations: [Programs([{ name: "roc-stable", urls: roc_urls("aarch64-darwin"), sha256: roc_sha, size: 66810227, unpack: TarGz, path: "roc/roc" }]), bundle("curl")],
+		operations: [Programs([{ name: "roc-stable", urls: roc_urls("aarch64-darwin"), sha256: roc_sha, size: 66810227, unpack: TarGz, path: "roc/roc" }]), bundle],
 	},
 ])
 
@@ -636,7 +645,7 @@ expect planned(sample, Request.Run("script", ["extra"]), "x86_64-windows", windo
 		files: [],
 		argv: ["roc-stable", "scripts/check_all.roc", "--quick", "extra"],
 		artifacts: [],
-		operations: [Programs([{ name: "roc-stable", urls: ["https://example.test/roc-windows.zip"], sha256: roc_sha, size: 67310620, unpack: Zip, path: "roc/roc.exe" }]), bundle("C:/Windows/System32/curl.exe")],
+		operations: [Programs([{ name: "roc-stable", urls: ["https://example.test/roc-windows.zip"], sha256: roc_sha, size: 67310620, unpack: Zip, path: "roc/roc.exe" }]), bundle],
 	},
 ])
 
@@ -778,10 +787,10 @@ expect
 # A workflow's distinct requests share one allowance of text; a repeated
 # request is counted once, and a request on its own is not limited.
 expect {
-	once = Realise.plan_within(sample, Request.Workflow("ci"), "x86_64-linux", unix, locked, [stub], 200).map_ok(|steps| steps.steps.len())
+	once = Realise.plan_within(sample, Request.Workflow("ci"), "x86_64-linux", unix, Read(locked), [stub], 200).map_ok(|steps| steps.steps.len())
 	once == Ok(5)
-		and Realise.plan_within(sample, Request.Workflow("ci"), "x86_64-linux", unix, locked, [stub], 100).map_ok(|steps| steps.steps.len()) == Err(["workflow plan exceeds 16 MiB of distinct rendered requests"])
-			and Realise.plan_within(sample, Request.Run("host", []), "x86_64-linux", unix, locked, [stub], 1).is_ok()
+		and Realise.plan_within(sample, Request.Workflow("ci"), "x86_64-linux", unix, Read(locked), [stub], 100).map_ok(|steps| steps.steps.len()) == Err(["workflow plan exceeds 16 MiB of distinct rendered requests"])
+			and Realise.plan_within(sample, Request.Run("host", []), "x86_64-linux", unix, Read(locked), [stub], 1).is_ok()
 }
 
 # What tasks need is read from the Spec alone, per System and per task: the
@@ -819,3 +828,18 @@ expect Realise.requirements(sample, "riscv64-linux", [], [stub]) == Err(["target
 expect Realise.requirements(sample, "x86_64-linux", ["unpinned"], [stub]).map_ok(|needs| needs.tasks.map(|entry| entry.tools)) == Ok([["coreutils"]])
 
 expect Realise.features == ["programs", "expects"]
+
+# Before a Lock is read, a request is refused for whatever the Spec alone
+# shows, the provider's own refusal included, and for nothing the Lock says.
+expect Realise.preflight(sample, Request.Run("check", []), "x86_64-linux", unix, [stub]) == Ok({})
+expect Realise.preflight(sample, Request.Workflow("ci"), "x86_64-linux", unix, [stub]) == Ok({})
+expect Realise.preflight(sample, Request.Run("unpinned", []), "x86_64-linux", unix, [stub]) == Ok({})
+expect Realise.preflight(sample, Request.Run("absent", []), "x86_64-linux", unix, [stub]) == Err(["unknown task: absent"])
+expect Realise.preflight(sample, Request.Run("foreign", []), "x86_64-linux", unix, [stub]) == Err(["environment foreign takes tools from the source guix (GuixPackages), which no provider of this blueprint supplies"])
+expect Realise.preflight(sample, Request.Run("check", []), "aarch64-darwin", unix, [stub]) == Err(["task check: program tool is not available for aarch64-darwin (its recipe answers Unavailable)"])
+expect {
+	refusing = { ..stub, preflight: |_spec, _request, _system, _layout| Err("unsupported Nix target riscv64-linux") }
+	Realise.preflight(sample, Request.Run("host", []), "x86_64-linux", unix, [refusing]) == Err(["unsupported Nix target riscv64-linux"])
+		# A provider is not asked about a request it has no part in.
+		and Realise.preflight(sample, Request.Run("check", []), "x86_64-linux", unix, [refusing]) == Ok({})
+}

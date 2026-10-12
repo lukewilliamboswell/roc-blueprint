@@ -6,6 +6,7 @@ import core.Request
 import core.Layout
 import core.Steps
 import core.Provider
+import core.Realise
 import Locks
 import LockJson
 
@@ -20,7 +21,7 @@ NixProvider :: [].{
 	provider : Provider
 	provider = Provider.{
 		name: "nix",
-		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools", "programs", "expects"],
+		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools"],
 		realises,
 		render: |spec| render(spec).map_ok(
 			|contents| [{ path: "flake.nix", contents }],
@@ -121,6 +122,7 @@ NixProvider :: [].{
 		contents : Str,
 		action : [Generate, Shell(Str), Run(Str), Build(Str)],
 		roc_packages : List(Spec.RocPackage),
+		needs_nix : Str,
 	}
 
 	## The most text a workflow's distinct requests may render together, flakes
@@ -259,16 +261,6 @@ NixProvider :: [].{
 			}
 			Request.Workflow(_) => return Err("workflow must expand into atomic requests")
 		}
-		# Inspection renders what Nix supplies. Entering an environment is
-		# refused where the Core would have to add to it.
-		match $action {
-			Generate => {}
-			_ => {
-				for name in $names {
-					Project.provider_alone(project, name)?
-				}
-			}
-		}
 		inputs = Locks.inputs(project)?
 		remaining = charge_rendered(
 			budget,
@@ -306,7 +298,20 @@ NixProvider :: [].{
 			_ => []
 		}
 		roc_packages = project.roc_packages.keep_if(|entry| entered.contains(entry.environment))
-		Ok({ project, inputs, builds: $builds, argv: $argv, contents, action: $action, roc_packages })
+		# Why this step starts Nix, for whoever finds it missing. Generating
+		# files starts nothing.
+		needs_nix = match $action {
+			Generate => ""
+			Build(name) => "build ${name} runs in the Nix sandbox"
+			Shell(_) | Run(_) => {
+				environment = $names.first() ?? ""
+				match Project.environment_use(project, environment, target).map_ok(|use| use.tools.first()) {
+					Ok(Ok(tool)) => "environment ${environment} takes ${if tool.source == "default" tool.name else "${tool.source}#${tool.name}"} from the Nix source ${tool.source}"
+					_ => "environment ${environment} is entered through Nix"
+				}
+			}
+		}
+		Ok({ project, inputs, builds: $builds, argv: $argv, contents, action: $action, roc_packages, needs_nix })
 	}
 
 	## Derive executable data only after complete structure, selected capability,
@@ -340,7 +345,7 @@ NixProvider :: [].{
 	## An isolation observation belongs to one explicit build, never an artifact name.
 	## Recheck supplied local pins on every step, including after source-editing tasks.
 	materialize_plan = |selected, target, layout, derived| {
-		{ builds, argv, contents, action, roc_packages, .. } = selected
+		{ builds, argv, contents, action, roc_packages, needs_nix, .. } = selected
 		base_ref = "path:${layout.generated_root}"
 		var $operations = derived.operations
 		match roc_packages.first() {
@@ -366,6 +371,10 @@ NixProvider :: [].{
 				path: "${layout.generated_root}/flake.lock",
 				contents: derived.contents,
 			})
+		# The machine must have Nix itself: nothing installs it.
+		if !needs_nix.is_empty() {
+			$operations = $operations.append(Present([{ program: "nix", because: needs_nix }]))
+		}
 		{
 			action,
 			files,
@@ -564,7 +573,8 @@ NixProvider :: [].{
 	],
 	RenderBudget -> Try(Str, Str)
 	render_selected = |input_spec, names, builds, copied, staging, budget| {
-		missing = input_spec.unsupported_features(provider.features)
+		# What the Core plans itself is not this provider's to refuse.
+		missing = input_spec.unsupported_features(provider.features.concat(Realise.features))
 		if !missing.is_empty() {
 			return Err("unsupported features: ${Str.join_with(missing, ", ")}")
 		}
@@ -1713,6 +1723,7 @@ expect match plan_fixture(Request.Build("app")) {
 			net: "@blueprint-caller-net-namespace@",
 		}),
 		Runner({ executable: "@blueprint-caller-executable@", system: "x86_64-linux" }),
+		Present([{ program: "nix", because: "build app runs in the Nix sandbox" }]),
 	] and plan.files.map(|file| file.path) == [
 		"/generated/flake.nix",
 		"/generated/flake.lock",
@@ -1852,7 +1863,7 @@ expect match plan_fixture(
 		"--flag",
 		"a\nb",
 	] and plan.artifacts.is_empty()
-		and plan.operations.len() == 1 and plan.files.len() == 2
+		and plan.operations == [VerifyTree({ path: "/project/assets", digest: assets_tree }), Present([{ program: "nix", because: "environment builder takes python3 from the Nix source default" }])] and plan.files.len() == 2
 	_ => False
 }
 
@@ -1959,7 +1970,7 @@ expect {
 	verify = VerifyTree({ path: "/project/assets", digest: assets_tree })
 	match (roc_plan(Request.Run("script", ["extra"])), roc_plan(Request.Shell("scripts"))) {
 		(Ok({ steps: [task] }), Ok({ steps: [shell] })) =>
-			task.operations == [verify, publish] and shell.operations == [verify, publish]
+			task.operations.take_first(2) == [verify, publish] and shell.operations.take_first(2) == [verify, publish]
 				and task.argv.take_last(3) == ["roc", "main.roc", "extra"]
 					and task.files.first().map_ok(|file| file.contents.contains(roc_packages_output)) == Ok(True)
 						and shell.files.first().map_ok(|file| file.contents.contains(roc_packages_output)) == Ok(True)
@@ -1972,7 +1983,7 @@ expect {
 expect [Request.Run("check", []), Request.Shell("default")].all(
 	|request|
 		match roc_plan(request) {
-			Ok({ steps: [plan] }) => plan.operations == [VerifyTree({ path: "/project/assets", digest: assets_tree })]
+			Ok({ steps: [plan] }) => plan.operations.take_first(1) == [VerifyTree({ path: "/project/assets", digest: assets_tree })] and plan.operations.len() == 2
 				and plan.files.first().map_ok(|file| file.contents.contains("blueprintRocPackages") or file.contents.contains("roc_packages")) == Ok(False)
 			_ => False
 		},
@@ -3063,8 +3074,7 @@ expect {
 	)
 }
 
-# The project of TestData, whose one environment also fetches a program, and a
-# second environment that only expects a tool the machine has.
+# The project of TestData, whose one environment also fetches a program.
 fetching : Spec
 fetching = {
 	whole = TestData.project(TestData.data)
@@ -3073,33 +3083,41 @@ fetching = {
 		requires_: whole.requires_.concat(["programs", "expects"]),
 		programs: [{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool"], unpack: File, path: "" }],
 		environment_programs: [{ environment: "builder", programs: ["tool"] }],
-		environments: whole.environments.append({ name: "plain", parents: [], tools: [], overlays: [] }).append({ name: "expecting", parents: ["plain"], tools: [], overlays: [] }),
-		expects: [{ environment: "expecting", programs: ["git"] }],
-		tasks: whole.tasks.append({ name: "plain", environment: "plain", run: ["true"] }).append({ name: "expecting", environment: "expecting", run: ["git", "status"] }),
+		expects: [{ environment: "builder", programs: ["git"] }],
 	}
 }
 
-# Nix renders its own part of every environment: what an environment fetches
-# or expects adds nothing to the flake.
+# Nix renders and plans its own part of an environment: what the environment
+# fetches or expects is the Core's, and adds nothing to the flake or the plan.
 expect {
 	whole = TestData.project(TestData.data)
-	without = { ..fetching, requires_: whole.requires_, programs: [], environment_programs: [], expects: [] }
-	NixProvider.render(fetching).is_ok() and NixProvider.render(fetching) == NixProvider.render(without)
-		and NixProvider.preflight(fetching, Request.Generate, "x86_64-linux", TestData.layout) == Ok({})
+	locks = plan_locks?
+	NixProvider.render(fetching).is_ok() and NixProvider.render(fetching) == NixProvider.render(whole)
+		and [Request.Shell("default"), Request.Run("check", []), Request.Generate].all(
+			|request| NixProvider.plan(fetching, request, "x86_64-linux", TestData.layout, locks).map_ok(|steps| steps.steps) == NixProvider.plan(whole, request, "x86_64-linux", TestData.layout, locks).map_ok(|steps| steps.steps),
+		)
 }
 
-# Entering such an environment through Nix alone would leave the program out,
-# so a shell, a task and a build of it are refused, whole and before any step.
-expect
-	[Request.Shell("default"), Request.Run("check", []), Request.Build("app"), Request.Run("expecting", [])].all(
-		|request|
-			match NixProvider.preflight(fetching, request, "x86_64-linux", TestData.layout) {
-				Err(message) => message.ends_with("has fetched programs or expected tools, which this blueprint reads but cannot yet run with")
-				Ok(_) => False
-			},
-	)
-		and NixProvider.preflight(fetching, Request.Run("check", []), "x86_64-linux", TestData.layout) == Err("environment builder has fetched programs or expected tools, which this blueprint reads but cannot yet run with")
-			and NixProvider.preflight(fetching, Request.Run("plain", []), "x86_64-linux", TestData.layout) == Ok({})
+# A step that starts Nix says that the machine must have it, and why, so that
+# one without it is told before anything happens. Generating files starts
+# nothing.
+expect {
+	locks = plan_locks?
+	last = |request| NixProvider.plan(TestData.project(TestData.data), request, "x86_64-linux", TestData.layout, locks).map_ok(|steps| steps.steps.map(|step| step.operations.last()))
+	last(Request.Run("check", [])) == Ok([Ok(Present([{ program: "nix", because: "environment builder takes python3 from the Nix source default" }]))])
+		and last(Request.Build("app")).map_ok(|steps| steps.last()) == Ok(Ok(Ok(Present([{ program: "nix", because: "build app runs in the Nix sandbox" }]))))
+			and NixProvider.plan(TestData.project(TestData.data), Request.Generate, "x86_64-linux", TestData.layout, locks).map_ok(
+				|steps| steps.steps.any(
+					|step| step.operations.any(
+						|operation|
+							match operation {
+								Present(_) => True
+								_ => False
+							},
+					),
+				),
+			) == Ok(False)
+}
 
 expect NixProvider.realises(Auto) and NixProvider.realises(NixPackages("github:NixOS/nixpkgs/nixos-unstable")) and !NixProvider.realises(GuixPackages("https://git.savannah.gnu.org/git/guix.git"))
 expect (NixProvider.provider.realises)(Auto)

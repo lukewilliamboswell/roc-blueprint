@@ -74,7 +74,7 @@ structural validation and required-feature checks still apply. Full rendering
   root, not the invocation directory. Out-of-tree generated roots are supported.
 * *`BLUEPRINT_TARGET`* selects a declared target (default: this machine's
   System). *`ROC`* selects the compatible compiler; unset, it is found on
-  `PATH` or fetched.
-* *`GH_TOKEN`* or *`GITHUB_TOKEN`*, on Windows only, authorizes the request for
-  a compiler's digest; see
-  xref:windows.adoc#the-compiler-roc-stable[Run tasks on Windows].
+  `PATH` or downloaded into the store.
+* *`XDG_CACHE_HOME`* names the directory that holds the store of downloads,
+  `blueprint/` (default: `.cache` in `HOME`). No request `blueprint` makes
+  carries a token or any other credential.

@@ -132,6 +132,12 @@ collected before one is reported, and a request with a problem yields no
 step. `Realise.requirements` answers, from the Spec alone, which providers a
 task needs and which programs it fetches and expects.
 
+The executor checks every `Present` program of every step on `PATH` and
+reports all that are missing together; then makes every `Programs` entry
+ready in its store, where a download is kept by its SHA-256 and hashed again
+on each use; then runs the steps, each with a directory of links to its
+programs first on `PATH`, removed when the step ends.
+
 `Request`, `Steps` and `Layout` are importable pure core types.
 `NixProvider.plan(project, request, target, layout, locks)` derives
 an ordered `Steps.steps` sequence, each holding action, files, exact argv, artifact
@@ -168,6 +174,8 @@ provider. It:
   `commands` entry becomes a package holding one launcher that execs the
   tool's main program. Each `configured_tools` entry is the tool's `override`
   applied to its options, rendered as data like `raw`, in shells and builds;
+* appends `Present` for `nix` to every step that starts it, with the reason,
+  and none to a step that only generates files;
 * makes `roc_packages` available without a download. A shell or task step
   carries a `RocPackages` operation naming the environment's bundles and a
   `locate` argv (`nix eval --json` of the generated flake's

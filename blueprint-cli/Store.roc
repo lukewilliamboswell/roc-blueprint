@@ -194,12 +194,8 @@ Store := [].{
 		if !digest(program.sha256) {
 			return Err("${program.name}: ${recorded(origin)} holds no SHA-256 for it")
 		}
-		kept = artifact!(store, program, origin)?
+		artifact!(store, program, origin)?
 		file = program_path(store, program)
-		if kept == Replaced {
-			# The tree stood beside bytes that were not the recorded ones.
-			discard!(tree_path(store, program.sha256, program.unpack))
-		}
 		if regular!(file) {
 			return Ok(file)
 		}
@@ -243,7 +239,7 @@ regular! = |file|
 ## Remove a file or tree. One that is not there is already removed.
 discard! : Str => {}
 discard! = |target| {
-	_ = Path.utf8(target).delete_all!()
+	_ = if regular!(target) Path.utf8(target).delete!() else Path.utf8(target).delete_all!()
 	{}
 }
 
@@ -256,20 +252,21 @@ fresh! = |directory| {
 }
 
 ## The verified artifact of a program: the one in the store when its digest
-## is its name, otherwise the first URL whose bytes have that digest. `Kept`
-## says the store already held it, and `Replaced` that what it held was not
-## the recorded bytes.
-artifact! : Str, Steps.Program, Store.Origin => Try([Kept, Fetched, Replaced], Str)
+## is its name, otherwise the first URL whose bytes have that digest. Bytes
+## under the name that are not the recorded ones are removed, and so is every
+## tree that stood beside them, before anything is fetched.
+artifact! : Str, Steps.Program, Store.Origin => Try({}, Str)
 artifact! = |store, program, origin| {
 	file = Store.artifact_path(store, program.sha256)
-	var $outcome = Fetched
 	if regular!(file) {
 		match Store.file_digest!(file) {
-			Ok(found) if found.to_hex() == program.sha256 => return Ok(Kept)
+			Ok(found) if found.to_hex() == program.sha256 => return Ok({})
 			_ => {
 				_ = Stderr.line!("blueprint: the stored download of ${program.name} is not what its name says; fetching it again")
 				discard!(file)
-				$outcome = Replaced
+				for kind in [File, TarGz, TarXz, Zip] {
+					discard!(Store.tree_path(store, program.sha256, kind))
+				}
 			}
 		}
 	}
@@ -279,7 +276,7 @@ artifact! = |store, program, origin| {
 		match fetched!(url, program, origin) {
 			Ok(bytes) => {
 				keep!(Paths.parent(file), file, bytes)?
-				return Ok($outcome)
+				return Ok({})
 			}
 			Err(reason) => {
 				$failures = $failures.append(reason)

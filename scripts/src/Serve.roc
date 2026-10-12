@@ -8,8 +8,10 @@ import Script
 ## polls while the caller waits for the child processes that make them.
 Serve := { listener : Tcp.Listener, port : U16, routes : List(Route) }.{
 
-	## A request path without its leading `/`, and the bytes served there.
-	Route : { path : Str, bytes : List(U8) }
+	## A request path without its leading `/`, and what is served there: the
+	## bytes with `200 OK`, or another status, with a `Location` when it has
+	## one to give.
+	Route : { path : Str, bytes : List(U8), status : Str, location : Str }
 
 	## Listen on 127.0.0.1 with nothing to serve yet.
 	open! : () => Try(Serve, _)
@@ -21,7 +23,19 @@ Serve := { listener : Tcp.Listener, port : U16, routes : List(Route) }.{
 
 	## The same server, also serving `bytes` at `path`.
 	with_route : Serve, Str, List(U8) -> Serve
-	with_route = |self, path, bytes| Serve.{ listener: self.listener, port: self.port, routes: self.routes.append({ path, bytes }) }
+	with_route = |self, path, bytes| Serve.{ listener: self.listener, port: self.port, routes: self.routes.append({ path, bytes, status: "200 OK", location: "" }) }
+
+	## The same server, also redirecting `path` to `location`.
+	with_redirect : Serve, Str, Str -> Serve
+	with_redirect = |self, path, location| Serve.{ listener: self.listener, port: self.port, routes: self.routes.append({ path, bytes: [], status: "302 Found", location }) }
+
+	## The same server, also answering `path` with `status` and no body.
+	with_status : Serve, Str, Str -> Serve
+	with_status = |self, path, status| Serve.{ listener: self.listener, port: self.port, routes: self.routes.append({ path, bytes: [], status, location: "" }) }
+
+	## The same server with nothing to serve: every request is refused.
+	emptied : Serve -> Serve
+	emptied = |self| Serve.{ listener: self.listener, port: self.port, routes: [] }
 
 	url : Serve, Str -> Str
 	url = |self, path| "http://127.0.0.1:${self.port.to_str()}/${path}"
@@ -62,16 +76,19 @@ Serve := { listener : Tcp.Listener, port : U16, routes : List(Route) }.{
 	## The status line and headers of a response with `length` body bytes.
 	## HTTP separates lines with CRLF.
 	head : Str, U64 -> Str
-	head = |status, length|
+	head = |status, length| headed(status, length, "")
+
+	## `head`, with a `Location` when there is one.
+	headed : Str, U64, Str -> Str
+	headed = |status, length, location|
 		Str.join_with(
 			[
 				"HTTP/1.1 ${status}",
 				"Content-Type: application/octet-stream",
 				"Content-Length: ${length.to_str()}",
-				"Connection: close",
-				"",
-				"",
-			],
+			]
+				.concat(if location.is_empty() [] else ["Location: ${location}"])
+				.concat(["Connection: close", "", ""]),
 			"\r\n",
 		)
 }
@@ -111,7 +128,7 @@ respond! : Tcp.Stream, Try(Serve.Route, [NotServed]) => Try({}, _)
 respond! = |stream, found|
 	match found {
 		Ok(route) => {
-			stream.write_utf8!(Serve.head("200 OK", route.bytes.len()), io_timeout_ms)?
+			stream.write_utf8!(Serve.headed(route.status, route.bytes.len(), route.location), io_timeout_ms)?
 			stream.write!(route.bytes, body_timeout_ms)
 		}
 		Err(NotServed) => stream.write_utf8!(Serve.head("404 Not Found", 0), io_timeout_ms)
@@ -134,3 +151,4 @@ expect Serve.requested("POST /abc HTTP/1.1\r\n") == Err(BadRequest)
 expect Serve.requested("GET abc HTTP/1.1\r\n") == Err(BadRequest)
 expect Serve.requested("") == Err(BadRequest)
 expect Serve.head("200 OK", 12) == "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 12\r\nConnection: close\r\n\r\n"
+expect Serve.headed("302 Found", 0, "http://127.0.0.1:1/b") == "HTTP/1.1 302 Found\r\nContent-Type: application/octet-stream\r\nContent-Length: 0\r\nLocation: http://127.0.0.1:1/b\r\nConnection: close\r\n\r\n"

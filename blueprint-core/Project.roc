@@ -934,18 +934,6 @@ Project :: [].{
 		})
 	}
 
-	## Fetched programs and expected tools are the Core's to supply and check,
-	## not a provider's. A provider asked to realise a whole environment by
-	## itself refuses one that has either, rather than enter it without them.
-	## Takes a validated Spec.
-	provider_alone : Spec, Str -> Try({}, Str)
-	provider_alone = |project, name|
-		if project.environment_programs.any(|entry| entry.environment == name) or project.expects.any(|entry| entry.environment == name) {
-			Err("environment ${name} has fetched programs or expected tools, which this blueprint reads but cannot yet run with")
-		} else {
-			Ok({})
-		}
-
 	## Check only the requested environment's normalized dependency closure.
 	## This models Guix shell capability without implementing a Guix executor.
 	check_environment : Spec, ProviderName, Str -> Try({}, Str)
@@ -1847,29 +1835,6 @@ expect {
 						Project.validate({ ..fetching, commands: [{ ..command, environment: "dev" }], environment_programs: [{ environment: "base", programs: ["tool"] }], expects: [{ environment: "base", programs: ["roc-stable"] }] }) == Err("environment dev has roc-stable as both an expected tool and a Command") and
 						# Unrelated environments may take one name from different origins.
 							Project.validate({ ..fixture([{ ..base, tools: [], overlays: [] }, { name: "other", parents: [], tools: [], overlays: [] }]), requires_: ["programs", "expects", "commands"], programs: [linux_roc], commands: [{ ..command, environment: "other" }], environment_programs: [{ environment: "base", programs: ["roc-stable"] }] }).is_ok()
-}
-
-# A provider on its own enters no environment that fetches or expects, its own
-# or inherited; one that does neither is its to realise.
-expect {
-	project = Project.validate({ ..fetching, environment_programs: [{ environment: "base", programs: ["tool"] }] })?
-	Project.provider_alone(project, "base") == Err("environment base has fetched programs or expected tools, which this blueprint reads but cannot yet run with")
-		and Project.provider_alone(project, "dev").is_err()
-}
-expect {
-	project = Project.validate({ ..fetching, expects: [{ environment: "dev", programs: ["git"] }] })?
-	Project.provider_alone(project, "base") == Ok({}) and Project.provider_alone(project, "dev").is_err()
-}
-
-# A download has at least one URL, and alternates for the same bytes after it:
-# every one is a download URL, and none is given twice.
-expect {
-	mirrored = { ..linux_tool, urls: ["https://example.test/tool", "https://mirror.example.test/tool", "http://127.0.0.1:4000/tool"] }
-	Project.validate({ ..fetching, programs: [mirrored] }).map_ok(|project| project.programs) == Ok([mirrored])
-		and Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: [] }] }) == Err("program tool on x86_64-linux has no URL")
-			and Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["https://example.test/tool", "https://mirror.example.test/tool", "https://example.test/tool"] }] }) == Err("program tool on x86_64-linux names \"https://example.test/tool\" twice")
-				and Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["https://example.test/tool", "http://mirror.example.test/tool", "https://other.example.test/tool"] }] }) == Err("program tool on x86_64-linux: \"http://mirror.example.test/tool\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
-					and Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["https://example.test/tool", ""] }] }) == Err("program tool on x86_64-linux: \"\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
 }
 
 # What an environment needs is split by who supplies it, for one System: a

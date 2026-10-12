@@ -40,16 +40,15 @@ Provider := {
 	## records the Spec's intent in the result before publishing.
 	lock_from_native : Spec, Layout, Str, List({ path : Str, digest : Str }) -> Try(Lock, Str),
 
-	## How to obtain the Roc release with this tag on a System, under a
-	## Layout. The Core does so when no compatible compiler is at hand to
-	## evaluate the configuration.
+	## How this provider would obtain the Roc release with this tag on a
+	## System, under a Layout. The Core does not ask: it keeps the compiler
+	## that evaluates the configuration in its own store of downloads.
 	compiler : Str, Str, Layout -> Try(Compiler, Str),
 }.{
 
 	## `Printed`: run the argv; it prints a directory whose `bin/roc` is the
-	## compiler. `Fetched`: keep the archive as `Steps.Archive` says; the
-	## compiler is its `<directory>/<program>`.
-	Compiler : [Printed(List(Str)), Fetched(Steps.Archive)]
+	## compiler.
+	Compiler : [Printed(List(Str))]
 
 	## Inspection returns relative names; executable Steps files are absolute.
 	File : { path : Str, contents : Str }

@@ -300,8 +300,8 @@ cli! = |context| {
 	step!("Staged isolation witness, build runner path and refusals")?
 	script!(context, "test_isolation", [])?
 
-	step!("The host provider: what it refuses, and tasks from a lock the Nix provider wrote")?
-	script!(context, "test_host", [])
+	step!("Fetched programs and expected tools: the store, the links, and Nix only where a tool needs it")?
+	script!(context, "test_programs", [])
 }
 
 ## The real-Nix suites are two groups of about the same length, so that CI

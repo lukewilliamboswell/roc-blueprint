@@ -251,9 +251,8 @@ If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
 
 https://github.com/lukewilliamboswell/roc-blueprint/issues/40[Issue #40] asks
 for `blueprint run` on Windows. The part that needs nothing from upstream is
-merged: the host provider in `blueprint-host/`, which
-xref:windows.adoc#run-tasks-on-windows[Run tasks on Windows] describes. It is
-tested on Linux only. No Windows binary is built or released, and the platform
+merged: a task whose environment has no Nix tool runs with no provider, from
+fetched programs and what the machine has. It is tested on Linux only. No Windows binary is built or released, and the platform
 has no Windows target, so a Windows user cannot run any of it yet.
 
 TODO(#40): the rest waits on three things upstream.
@@ -285,13 +284,9 @@ When they exist, in one pull request:
 
 Known limits of what is merged, to settle then:
 
-* `roc-stable` is checked against a digest asked of GitHub at run time, not
-  one recorded in `Blueprint.lock` (xref:architecture.adoc#inv-3[invariant 3]).
-  `blueprint update` could record it.
-* curl and tar are run from `C:/Windows/System32`. A provider cannot ask where
-  Windows is installed.
-* A project whose evaluating compiler and `roc-stable` are the same nightly
-  downloads it twice.
+* A link to a fetched program is made with `ln -s`, and an archive is listed
+  and unpacked with the `tar` on `PATH`: Windows needs a hard link and its own
+  bsdtar, which reads a zip.
 
 == Upstream workarounds still in place
 

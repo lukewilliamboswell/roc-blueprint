@@ -5,7 +5,6 @@
 ## update publishes the authority; ordinary operations use its resolved pins.
 app [main!] {
 	core: "../blueprint-core/main.roc",
-	host: "../blueprint-host/main.roc",
 	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	nix: "../blueprint-nix/main.roc",
 	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
@@ -27,10 +26,11 @@ import core.Request
 import core.Steps
 import core.Layout
 import core.Provider
+import core.Realise
 import core.Lock
 import core.Tree
-import host.HostProvider
 import Bootstrap
+import Download
 import Paths
 import Store
 import nix.NixProvider
@@ -39,35 +39,18 @@ import "compiler-version" as compiler_version : Str
 version : Str
 version = "0.5.0"
 
-## The provider every command of a run goes through. These are the only
-## references to a concrete provider: everything else uses the Provider
-## contract (docs/architecture.adoc, invariant 7; checked by scripts/test.roc).
-provider_for : [Host, Nix] -> Provider
-provider_for = |choice|
-	match choice {
-		Host => HostProvider.provider
-		Nix => NixProvider.provider
-	}
+## The providers a request may be planned with. This is the only reference to
+## a concrete provider: everything else uses the Provider contract
+## (docs/architecture.adoc, invariant 7; checked by scripts/test.roc). Which
+## of them a request needs is not chosen here or by the caller's environment:
+## `Realise.plan` asks one only for an environment that has a tool from a
+## source it supplies.
+providers : List(Provider)
+providers = [NixProvider.provider]
 
-## Windows has no Nix, so the host provider serves it. `BLUEPRINT_PROVIDER=host`
-## selects that provider on any host; the tests use it to run its plans on
-## Linux. No other value is accepted.
-choose : Try(Str, _), [LINUX, MACOS, WINDOWS, OTHER(Str)] -> Try([Host, Nix], [UnknownProvider(Str)])
-choose = |override, os|
-	match (override, os) {
-		(Ok("host"), _) => Ok(Host)
-		(Ok(other), _) => Err(UnknownProvider(other))
-		(Err(_), WINDOWS) => Ok(Host)
-		(Err(_), _) => Ok(Nix)
-	}
-
-expect choose(Err(Unset), WINDOWS) == Ok(Host)
-expect [LINUX, MACOS, OTHER("freebsd")].all(|os| choose(Err(Unset), os) == Ok(Nix) and choose(Ok("host"), os) == Ok(Host))
-expect ["", "Host", "guix"].all(|name| choose(Ok(name), LINUX) == Err(UnknownProvider(name)))
-
-# Each provider answers to its own name, and a Blueprint.roc loads under both.
-expect provider_for(Host).name == "host" and provider_for(Nix).name != "host"
-expect provider_for(Host).features == provider_for(Nix).features
+## The providers by name, for a message.
+provider_names : Str
+provider_names = Str.join_with(providers.map(|provider| provider.name), ", ")
 
 Command : [
 	Gen,
@@ -259,8 +242,7 @@ main! = |raw_args| {
 			match run!(command ?? Gen, loaded, context) {
 				Ok({}) => Ok({})
 				Err(err) => {
-					name = context.map_ok(|ctx| ctx.provider.name) ?? "provider"
-					_ = Stderr.line!("blueprint: ${describe(err, name)}")
+					_ = Stderr.line!("blueprint: ${describe(err, provider_names)}")
 					Err(Exit(1))
 				}
 			}
@@ -282,7 +264,7 @@ run! = |command, loaded, context| {
 				Tasks => list_tasks!(spec)
 				Update(names) => resolve!(spec, names, ctx)
 				PrintSpec => Stdout.write!(spec.to_str())
-				PrintFlake => print_files!(ctx.provider, spec)
+				PrintFlake => print_files!(spec)
 				Check => check!(loaded, ctx)
 			}
 		}
@@ -298,7 +280,7 @@ check! = |loaded, ctx| {
 	Cmd.new_str(roc!(ctx)?).args_str(["check", "Blueprint.roc"])
 		.cwd(path(ctx.layout.project_root)).exec_cmd!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
-	_ = render(ctx.provider, loaded?)?
+	_ = rendered(loaded?)?
 	Stdout.line!("Blueprint.roc is valid")
 }
 
@@ -314,15 +296,22 @@ evaluate! = |ctx| {
 		.cwd(path(root)).exec_output!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = Spec.parse(output.stdout_utf8).map_err(|err| BadSpec(err))?
-	missing = spec.unsupported_features(ctx.provider.features)
+	missing = spec.unsupported_features(providers.fold(Realise.features, |all, provider| all.concat(provider.features)))
 	if !missing.is_empty() {
 		return Err(NeedsFeatures(missing))
 	}
 	Project.validate(spec).map_err(|message| InvalidProject(message))
 }
 
-render : Provider, Spec -> Try(List(Provider.File), _)
-render = |provider, spec| (provider.render)(spec).map_err(|msg| RenderFailed(msg))
+## The files every provider would generate for the Spec.
+rendered : Spec -> Try(List(Provider.File), _)
+rendered = |spec| {
+	var $files = []
+	for provider in providers {
+		$files = $files.concat((provider.render)(spec).map_err(|msg| RenderFailed(msg))?)
+	}
+	Ok($files)
+}
 
 ## Run an argv from the provider.
 exec! : List(Str), Str => Try({}, _)
@@ -343,54 +332,6 @@ exec! = |argv, root|
 
 		[] => Ok({})
 	}
-
-## Refuse a step whose environment declares programs this host lacks (see
-## `Require` in `Steps.Operation`). Every probe runs, so one refusal names
-## everything that is missing or of the wrong version.
-require! : List(Steps.Probe), Str => Try({}, _)
-require! = |probes, root| {
-	var $failures = []
-	for probe in probes {
-		command = "`${Str.join_with(probe.probe, " ")}`"
-		problem = match probe.probe {
-			[program, .. as args] =>
-				match Cmd.new_str(program).args_str(args).cwd(path(root)).exec_output!() {
-					Ok(output) => probe_problem(probe.version, output.stdout_utf8).map_ok(|reason| "${command} ${reason}")
-					Err(NonZeroExitCode({ exit_code, .. })) => Ok("${command} exited with code ${exit_code.to_str()}")
-					Err(_) => Ok("${command} could not be run")
-				}
-
-			[] => Ok("the provider has no way to check for it")
-		}
-		match problem {
-			Ok(reason) => {
-				$failures = $failures.append("  ${probe.tool}: ${reason}")
-			}
-			Err(Satisfied) => {}
-		}
-	}
-	if $failures.is_empty() {
-		Ok({})
-	} else {
-		Err(Refused("this host does not have what the task's environment declares, and nothing is installed here:\n${Str.join_with($failures, "\n")}"))
-	}
-}
-
-## What is wrong with the version a probe printed, if anything.
-probe_problem : [Any, Is(Str), Starts(Str)], Str -> Try(Str, [Satisfied])
-probe_problem = |expected, output| {
-	line = (output.split_on("\n").first() ?? "").trim()
-	match expected {
-		Any => Err(Satisfied)
-		Is(wanted) => if line == wanted Err(Satisfied) else Ok("printed ${line}, not ${wanted}")
-		Starts(wanted) => if line.starts_with(wanted) Err(Satisfied) else Ok("printed ${line}, which does not start with ${wanted.trim()}")
-	}
-}
-
-expect probe_problem(Any, "") == Err(Satisfied) and probe_problem(Is("0.16.0"), "0.16.0\r\n") == Err(Satisfied)
-expect probe_problem(Is("0.16.0"), "0.15.2\n") == Ok("printed 0.15.2, not 0.16.0") and probe_problem(Is("0.16.0"), "0.16.0-dev.1\n").is_ok()
-expect probe_problem(Starts("rustc 1.95.0 "), "rustc 1.95.0 (abc 2026-01-01)\nmore\n") == Err(Satisfied)
-expect probe_problem(Starts("rustc 1.95.0 "), "rustc 1.95.01 (abc)\n") == Ok("printed rustc 1.95.01 (abc), which does not start with rustc 1.95.0")
 
 ## Run a step's argv with its directories ahead of the caller's PATH, so that
 ## the argv and whatever it starts find the programs there first.
@@ -424,9 +365,9 @@ exec_within! = |argv, root, directories| {
 	}
 }
 
-print_files! : Provider, Spec => Try({}, _)
-print_files! = |provider, spec| {
-	files = render(provider, spec)?
+print_files! : Spec => Try({}, _)
+print_files! = |spec| {
+	files = rendered(spec)?
 	match files {
 		[only] => Stdout.write!(only.contents)
 		_ => {
@@ -485,164 +426,11 @@ roc! = |_ctx| {
 	}
 }
 
-## Keep a released archive unpacked where a provider says, and answer with
-## its program (see `Steps.Archive`). Every argv is the provider's and runs
-## from the project root. The fresh directory is beside the destination, so
-## the last rename stays on one filesystem and is atomic. An archive kept in
-## the generated root is generated state, ignored like the rest of it.
-fetch! : Steps.Archive, Layout => Try(Str, _)
-fetch! = |archive, layout| {
-	root = layout.project_root
-	program = "${archive.directory}/${archive.program}"
-	safe_path!(archive.directory)?
-	if !relative_parts(archive.program) or archive.moves.any(|move| !relative_parts(move.from) or !relative_parts(move.to)) {
-		return Err(FetchFailed("the archive for ${archive.directory} names a path outside it"))
-	}
-	if path(program).is_file!() ?? False {
-		return Ok(program)
-	}
-	beside = path(Paths.parent(archive.directory))
-	beside.create_all!()?
-	if archive.directory.starts_with("${layout.generated_root}/") {
-		ignore_generated!(layout)?
-	}
-	fresh = Env.create_temp_dir_in!(beside, ".blueprint-fetch-")?
-	unpack! = || {
-		base = Paths.portable(fresh.to_str()?)
-		file = "${base}/archive"
-		tree = "${base}/tree"
-		place = |argv| argv.map(|arg| arg.replace_each(archive.archive, file).replace_each(archive.tree, tree))
-		expected = archive_digest!(archive.digest, root)?
-		Stderr.line!("blueprint: fetching ${archive.directory}")?
-		fetch_exec!(place(archive.download), root)?
-		if !(path(file).is_file!() ?? False) {
-			return Err(FetchFailed("`${Str.join_with(archive.download, " ")}` downloaded nothing"))
-		}
-		actual = Store.file_digest!(file)?.to_hex()
-		if actual != expected {
-			return Err(FetchFailed("the archive for ${archive.directory} has SHA-256 ${actual}, not ${expected}; nothing was unpacked"))
-		}
-		path(tree).create_dir!()?
-		fetch_exec!(place(archive.unpack), root)?
-		for move in archive.moves {
-			destination = "${tree}/${move.to}"
-			path(Paths.parent(destination)).create_all!()?
-			path("${tree}/${move.from}").rename!(path(destination))
-				.map_err(|_| FetchFailed("the archive for ${archive.directory} holds no ${move.from}"))?
-		}
-		if !(path("${tree}/${archive.program}").is_file!() ?? False) {
-			return Err(FetchFailed("the archive for ${archive.directory} holds no ${archive.program}"))
-		}
-		placed = path(tree).rename!(path(archive.directory))
-		# Losing the rename to another process costs nothing: its bytes are ours.
-		if placed.is_ok() or (path(program).is_file!() ?? False) {
-			Ok({})
-		} else {
-			Err(FetchFailed("cannot place the unpacked archive at ${archive.directory}; delete what is there"))
-		}
-	}
-	result = unpack!()
-	_ = fresh.delete_all!()
-	result?
-	Ok(program)
-}
-
-## A relative path of plain names, as `Steps.Archive` places things in a tree.
-relative_parts : Str -> Bool
-relative_parts = |value| !value.split_on("/").any(|part| part == "" or part == "." or part == ".." or part.contains("\\") or part.contains(":"))
-
-expect relative_parts("bin/roc-stable.exe") and relative_parts("roc_nightly-windows_x86_64-2026-10-04-130536d/roc.exe")
-expect ["", "/bin/roc", "bin//roc", "../roc", "bin/../../roc", "bin/", "D:/roc", "bin\\roc"].all(|value| !relative_parts(value))
-
-## Run one argv of a fetch. Its own diagnostics are the user's to read.
-fetch_exec! : List(Str), Str => Try({}, _)
-fetch_exec! = |argv, root|
-	exec!(argv, root).map_err(
-		|err|
-			match err {
-				CommandFailed(_, code) => FetchFailed("`${Str.join_with(argv, " ")}` exited with code ${code.to_str()}")
-				_ => FetchFailed("could not run `${Str.join_with(argv, " ")}`")
-			},
-	)
-
-## The SHA-256 an archive must have. A recorded digest is the provider's. A
-## published one is whatever the release reports now, over HTTPS: nothing in
-## Blueprint.lock pins it, which docs/architecture.adoc, invariant 3, asks of
-## every input. It guards the transfer, not the release.
-archive_digest! : Steps.Digest, Str => Try(Str, _)
-archive_digest! = |digest, root|
-	match digest {
-		Recorded(hex) => Ok(hex)
-		Published({ asset, ask, authorized, token }) => {
-			var $secrets = []
-			for variable in token.variables {
-				match Env.var_str!(OsStr.from_str(variable)) {
-					Ok(value) if !value.is_empty() => {
-						$secrets = $secrets.append(value)
-					}
-					_ => {}
-				}
-			}
-			# The token is never printed and never an argument, which any
-			# process on the host could read: the request takes it on standard
-			# input, and a failure names the request without it.
-			(argv, input) = match $secrets.first() {
-				Ok(value) => {
-					if value.to_utf8().any(|byte| byte < 32 or byte == 127 or byte == '"' or byte == '\\') {
-						return Err(FetchFailed("the token in ${Str.join_with(token.variables, " or ")} holds a character a request cannot carry"))
-					}
-					(authorized, Bytes(token.input.replace_each(token.text, value).to_utf8()))
-				}
-				Err(_) => (ask, Null)
-			}
-			asked = "`${Str.join_with(ask, " ")}`"
-			match argv {
-				[program, .. as args] => {
-					output = Cmd.new_str(program).args_str(args).cwd(path(root)).stdin(input).stderr(Inherit).exec_output!()
-						.map_err(|_| FetchFailed("could not learn the digest of ${asset}: ${asked} failed"))?
-					published_digest(output.stdout_utf8, asset)
-						.map_err(|reason| FetchFailed("could not learn the digest of ${asset} from ${asked}: ${reason}"))
-				}
-				[] => Err(FetchFailed("the provider cannot learn the digest of ${asset}"))
-			}
-		}
-	}
-
-## The SHA-256 a release reports for one of its assets, in hex.
-published_digest : Str, Str -> Try(Str, Str)
-published_digest = |text, asset| {
-	parsed : Try({ assets : List({ name : Str, digest : Str }) }, _)
-	parsed = Json.parse(text)
-	release = parsed.map_err(|_| "the release does not list its assets with digests")?
-	found = release.assets.find_first(|entry| entry.name == asset)
-		.map_err(|_| "the release has no asset of that name")?
-	hex = found.digest.drop_prefix("sha256:")
-	if found.digest.starts_with("sha256:") and hex.to_utf8().len() == 64 and hex.to_utf8().all(|b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f')) {
-		Ok(hex)
-	} else {
-		Err("its digest is not a SHA-256: ${found.digest}")
-	}
-}
-
-release_sample : Str
-release_sample =
-	\\{"tag_name":"nightly-2026-10-04-130536d","assets":[
-	\\ {"name":"roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz","size":69614310,"digest":"sha256:893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f"},
-	\\ {"name":"roc_nightly-windows_x86_64-2026-10-04-130536d.zip","size":67310620,"digest":"sha256:1f5ac14286ebea19f884176c6ab1eabe29f1ad58c10d8f490a9c282e0411033f"},
-	\\ {"name":"short","digest":"sha256:1f5a"},
-	\\ {"name":"other","digest":"sha512:1f5ac14286ebea19f884176c6ab1eabe29f1ad58c10d8f490a9c282e0411033f"}]}
-
-expect published_digest(release_sample, "roc_nightly-windows_x86_64-2026-10-04-130536d.zip") == Ok("1f5ac14286ebea19f884176c6ab1eabe29f1ad58c10d8f490a9c282e0411033f")
-expect published_digest(release_sample, "roc_nightly-macos_x86_64-2026-10-04-130536d.tar.gz") == Err("the release has no asset of that name")
-expect published_digest(release_sample, "short").is_err() and published_digest(release_sample, "other").is_err()
-expect published_digest("{\"message\":\"API rate limit exceeded\"}", "short") == Err("the release does not list its assets with digests")
-
-Context : { layout : Layout, target : Str, provider : Provider }
+Context : { layout : Layout, target : Str }
 
 ## Caller paths are observations, resolved once against the selected root.
 context! : () => Try(Context, _)
 context! = || {
-	provider = provider_for(choose(Env.var_str!("BLUEPRINT_PROVIDER"), Env.platform!().os)?)
 	# Windows reports `\\?\D:\project`; hold `D:/project` (see Paths).
 	cwd = Paths.portable(Env.cwd!()?.to_str()?)
 	root = Paths.portable(
@@ -675,12 +463,11 @@ context! = || {
 			lock_path: lock,
 		},
 		target: Env.var_str!("BLUEPRINT_TARGET") ?? host_target!(),
-		provider,
 	})
 }
 
 ## The System a machine is, when `blueprint` runs on it: the three a binary is
-## released for, and x86_64 Windows, where the host provider runs tasks.
+## released for, and x86_64 Windows, where tasks that need no provider run.
 ## Intel macOS is not one: current nixpkgs has dropped that
 ## system, so no environment could be entered there. `x86_64-darwin` remains
 ## a System a configuration may declare.
@@ -1195,9 +982,8 @@ copy_tree! = |source, target| {
 realise! : Spec, Request, Context => Try({}, _)
 realise! = |spec, request, ctx| {
 	layout = ctx.layout
-	provider = ctx.provider
-	_ = (provider.preflight)(spec, request, ctx.target, layout)
-		.map_err(|message| RenderFailed(message))?
+	# What the Spec alone rules out is said before the authority is read.
+	Realise.preflight(spec, request, ctx.target, layout, providers).map_err(|problems| PlanFailed(problems))?
 	if !(path(layout.lock_path).exists!()?) {
 		return Err(LockFailed("missing authoritative lock; run `blueprint update`"))
 	}
@@ -1208,14 +994,10 @@ realise! = |spec, request, ctx| {
 	lock = Lock.parse(path(layout.lock_path).read_utf8!()?)
 		.map_err(|_| LockFailed("unsupported Blueprint lock format; run blueprint update"))?
 	lock.stale(spec).map_err(|message| LockFailed(message))?
-	steps = (provider.realise)(spec, request, ctx.target, layout, lock)
-		.map_err(
-			|err|
-				match err {
-					InvalidLock(message) => LockFailed(message)
-					Unrealisable(message) => RenderFailed(message)
-				},
-		)?
+	# Everything that stops the request is known, and said together, before
+	# the first effect of any step.
+	steps = Realise.plan(spec, request, ctx.target, layout, lock, providers)
+		.map_err(|problems| PlanFailed(problems))?
 	# A build cannot run on this host: say so before the first step's effects.
 	for step in steps.steps {
 		for operation in step.operations {
@@ -1225,21 +1007,101 @@ realise! = |spec, request, ctx| {
 			}
 		}
 	}
+	present!(steps.steps, request)?
+	fetched = fetch_programs!(steps.steps)?
 	for step in steps.steps {
-		execute_step!(step, ctx)?
+		execute_step!(step, fetched, ctx)?
 	}
 	Ok({})
 }
 
+## What a request is to its user, for a message.
+subject : Request -> Str
+subject = |request|
+	match request {
+		Request.Shell(_) => "the shell"
+		Request.Build(_) => "the build"
+		Request.Generate => "this"
+		_ => "the task"
+	}
+
+## Every program the steps need the machine to have already (see `Present`
+## in `Steps.Operation`), looked up on PATH without being started. All of
+## them are checked, for every step, before anything is downloaded or run,
+## so one refusal names everything that is missing.
+present! : List(Steps.Step), Request => Try({}, _)
+present! = |steps, request| {
+	var $missing = []
+	var $checked = []
+	for step in steps {
+		for operation in step.operations {
+			match operation {
+				Present(entries) => {
+					for entry in entries {
+						if !$checked.contains(entry) {
+							$checked = $checked.append(entry)
+							if !Cmd.check_available!(entry.program) {
+								$missing = $missing.append("  ${entry.program}: ${entry.because}")
+							}
+						}
+					}
+				}
+				_ => {}
+			}
+		}
+	}
+	if $missing.is_empty() {
+		Ok({})
+	} else {
+		Err(Refused("this machine lacks what ${subject(request)} needs, and blueprint installs none of it:\n${Str.join_with($missing, "\n")}"))
+	}
+}
+
+## A fetched program and its real path in the store.
+Fetched : { program : Steps.Program, file : Str }
+
+## Every program the steps name (see `Programs` in `Steps.Operation`), each
+## verified and made ready in the store once, before the first step runs.
+fetch_programs! : List(Steps.Step) => Try(List(Fetched), _)
+fetch_programs! = |steps| {
+	var $wanted = []
+	for step in steps {
+		for operation in step.operations {
+			match operation {
+				Programs(programs) => {
+					for program in programs {
+						if !$wanted.contains(program) {
+							$wanted = $wanted.append(program)
+						}
+					}
+				}
+				_ => {}
+			}
+		}
+	}
+	if $wanted.is_empty() {
+		return Ok([])
+	}
+	store = Store.root!().map_err(|message| FetchFailed(message))?
+	var $fetched = []
+	for program in $wanted {
+		file = Store.program!(store, program, Lock).map_err(|message| FetchFailed(message))?
+		$fetched = $fetched.append({ program, file })
+	}
+	Ok($fetched)
+}
+
 ## One consumer-owned executor for standalone requests and workflow steps.
-## All planning has succeeded before the first materialization or task effect.
-execute_step! : Steps.Step, Context => Try({}, _)
-execute_step! = |step, ctx| {
+## All planning has succeeded, every expected program has been found and
+## every fetched one is in the store before the first materialization or task
+## effect.
+execute_step! : Steps.Step, List(Fetched), Context => Try({}, _)
+execute_step! = |step, fetched, ctx| {
 	layout = ctx.layout
 	var $files = step.files
 	var $roc_packages = []
 	var $roc_bundles = []
-	var $search = []
+	var $programs = []
 	for operation in step.operations {
 		match operation {
 			VerifyTree({ path: local, digest }) => {
@@ -1269,21 +1131,18 @@ execute_step! = |step, ctx| {
 					|file| { ..file, contents: file.contents.replace_each(executable, own) },
 				)
 			}
-			RocBundles(request) => {
-				$roc_bundles = $roc_bundles.append(request)
+			RocBundles(bundles) => {
+				$roc_bundles = $roc_bundles.concat(bundles)
 			}
-			Fetch(archive) => {
-				_ = fetch!(archive, layout)?
+			# Checked for every step before the first one started.
+			Present(_) => {}
+			Programs(programs) => {
+				for program in programs {
+					entry = fetched.find_first(|known| known.program == program)
+						.map_err(|_| FetchFailed("${program.name} was not fetched before the step that needs it"))?
+					$programs = $programs.append({ name: program.name, file: entry.file })
+				}
 			}
-			# No provider this executor runs plans these; a step that held
-			# one would otherwise start without what it was promised.
-			Present(_) | Programs(_) => {
-				return Err(RenderFailed("this blueprint cannot yet check for expected programs or fetch declared ones"))
-			}
-			Search(directories) => {
-				$search = $search.concat(directories)
-			}
-			Require(probes) => require!(probes, layout.project_root)?
 			# Locating the bundles reads the files staged below.
 			RocPackages(request) => {
 				$roc_packages = $roc_packages.append(request)
@@ -1292,14 +1151,51 @@ execute_step! = |step, ctx| {
 	}
 	stage!($files, layout)?
 	for request in $roc_packages {
-		publish_roc_packages!(request.names, request.locate, layout.project_root, ctx.provider.name)?
+		publish_roc_packages!(request.names, request.locate, layout.project_root, provider_names)?
 	}
-	for request in $roc_bundles {
-		publish_roc_bundles!(request.compiler, request.bundles, ctx)?
+	publish_roc_bundles!($roc_bundles, ctx)?
+	if $programs.is_empty() {
+		start!(step, [], "", layout)
+	} else {
+		# The step's own directory of links, first on its PATH and gone when
+		# it ends, however it ends.
+		runs = "${layout.generated_root}/run"
+		safe_path!(layout.generated_root)?
+		path(runs).create_all!()?
+		ignore_generated!(layout)?
+		run = Env.create_temp_dir_in!(path(runs), "run-")?
+		linked! = || {
+			bin = "${Paths.portable(run.to_str()?)}/bin"
+			path(bin).create_dir!()?
+			for program in $programs {
+				Store.expose!(bin, program.name, program.file).map_err(|message| FetchFailed(message))?
+			}
+			start!(step, $programs.map(|program| program.name), bin, layout)
+		}
+		result = linked!()
+		_ = run.delete_all!()
+		result
 	}
+}
+
+## Start a step's command from the project root, with `bin` ahead of the
+## caller's PATH when the step has programs there. A program the argv names
+## that is one of them is started from `bin` itself, whatever the caller's
+## PATH would have found. A shell with no argv is the caller's own: `SHELL`,
+## or `/bin/sh`.
+start! : Steps.Step, List(Str), Str, Layout => Try({}, _)
+start! = |step, names, bin, layout| {
+	directories = if bin.is_empty() [] else [bin]
 	match step.action {
 		Build(name) => report_build!(step, name, layout.project_root)
-		_ => exec_within!(step.argv, layout.project_root, $search).map_err(
+		Shell(_) if step.argv.is_empty() => {
+			shell = match Env.var_str!("SHELL") {
+				Ok(value) if !value.is_empty() => value
+				_ => "/bin/sh"
+			}
+			exec_within!([shell], layout.project_root, directories)
+		}
+		_ => exec_within!(started(step.argv, names, bin), layout.project_root, directories).map_err(
 			|err|
 				match (step.action, err) {
 					(Run(name), CommandFailed(_, code)) => TaskFailed(name, code)
@@ -1308,6 +1204,18 @@ execute_step! = |step, ctx| {
 		)
 	}
 }
+
+## An argv whose program is one of the step's linked programs, by its link.
+started : List(Str), List(Str), Str -> List(Str)
+started = |argv, names, bin|
+	match argv {
+		[program, .. as rest] if names.contains(program) => ["${bin}/${program}"].concat(rest)
+		_ => argv
+	}
+
+expect started(["roc-stable", "version"], ["roc-stable"], "/p/.blueprint/run/x/bin") == ["/p/.blueprint/run/x/bin/roc-stable", "version"]
+expect started(["printf", "roc-stable"], ["roc-stable"], "/b") == ["printf", "roc-stable"]
+expect started(["/usr/bin/roc-stable"], ["roc-stable"], "/b") == ["/usr/bin/roc-stable"] and started([], ["roc-stable"], "/b") == []
 
 ## The directory Roc reads URL packages from, as bytes: `roc/packages` under
 ## `XDG_CACHE_HOME` when that is set, otherwise under `.cache` in `HOME`. Roc
@@ -1396,13 +1304,16 @@ roc_package_staging! = |cache, name| {
 	}
 }
 
-## Make each named bundle resolvable by Roc without Nix (see `RocBundles` in
-## `Steps.Operation`): the provider's argv download a missing one and the
-## compiler unpacks it, which fails unless the bytes are those the bundle's
-## name is the hash of. A bundle that is already there is left alone, and when
-## none is missing nothing runs.
-publish_roc_bundles! : Str, List({ name : Str, download : List(Str), unbundle : List(Str) }), Context => Try({}, _)
-publish_roc_bundles! = |placeholder, bundles, ctx| {
+## Make each named bundle resolvable by Roc with no provider (see `RocBundles`
+## in `Steps.Operation`): a missing one is downloaded and the compiler unpacks
+## it, which fails unless the bytes are those the bundle's name is the hash
+## of. A bundle that is already there is left alone, and when none is missing
+## nothing is fetched.
+publish_roc_bundles! : List({ name : Str, url : Str }), Context => Try({}, _)
+publish_roc_bundles! = |bundles, ctx| {
+	if bundles.is_empty() {
+		return Ok({})
+	}
 	cache = roc_package_cache!(ctx.layout.project_root)?
 	var $missing = []
 	for bundle in bundles {
@@ -1421,9 +1332,12 @@ publish_roc_bundles! = |placeholder, bundles, ctx| {
 	for bundle in $missing {
 		fresh = roc_package_staging!(cache, "${bundle.name}.download")?
 		unbundle! = || {
-			Stderr.line!("blueprint: fetching Roc package ${bundle.name}")?
-			roc_bundle_exec!(bundle.download, fresh, bundle.name)?
-			roc_bundle_exec!(bundle.unbundle.map(|arg| arg.replace_each(placeholder, compiler)), fresh, bundle.name)?
+			file = "${bundle.name}.tar.zst"
+			Stderr.line!("blueprint: fetching Roc package ${bundle.name} from ${bundle.url}")?
+			bytes = Download.get!(bundle.url).map_err(|reason| RocPackagesFailed("could not download Roc package ${bundle.name} from ${bundle.url}: ${reason}; nothing was published"))?
+			child(fresh, file).write_bytes!(bytes).map_err(|_| RocPackagesFailed("cannot write Roc package ${bundle.name} in ${fresh.display()}"))?
+			Cmd.new_str(compiler).args_str(["unbundle", file]).cwd(fresh).exec_cmd!()
+				.map_err(|_| RocPackagesFailed("Roc package ${bundle.name} from ${bundle.url} is not the bundle its name is the hash of: `roc unbundle` refused it; nothing was published"))?
 			publish_roc_package!(cache, bundle.name, child(fresh, bundle.name))
 		}
 		result = unbundle!()
@@ -1433,17 +1347,6 @@ publish_roc_bundles! = |placeholder, bundles, ctx| {
 	}
 	Ok({})
 }
-
-## Run one argv of a bundle's fetch in its fresh directory.
-roc_bundle_exec! : List(Str), Path, Str => Try({}, _)
-roc_bundle_exec! = |argv, directory, name|
-	match argv {
-		[program, .. as args] =>
-			Cmd.new_str(program).args_str(args).cwd(directory).exec_cmd!()
-				.map_err(|_| RocPackagesFailed("cannot fetch Roc package ${name}: `${Str.join_with(argv, " ")}` failed; nothing was published"))
-
-		[] => Err(RocPackagesFailed("the provider cannot fetch Roc package ${name}"))
-	}
 
 ## Roc resolves a URL package from `<cache>/<hash>/main.roc` alone.
 roc_package_present! : Path, Str => Bool
@@ -1639,7 +1542,7 @@ list_tasks! = |spec| {
 resolve! : Spec, List(Str), Context => Try({}, _)
 resolve! = |spec, names, ctx| {
 	layout = ctx.layout
-	provider = ctx.provider
+	provider = providers.first().map_err(|_| Refused("this blueprint has no provider to resolve pins with"))?
 	safe_path!(layout.lock_path)?
 	prior = authority_token!(layout.lock_path)?
 	update = if names.is_empty() {
@@ -1680,7 +1583,13 @@ resolve! = |spec, names, ctx| {
 	safe_path!(native_lock)?
 	resolved = (provider.lock_from_native)(spec, layout, path(native_lock).read_utf8!()?, $trees)
 		.map_err(|message| LockFailed(message))?
-	lock = { ..resolved, intent: Lock.intent_of(spec) }
+	# What was recorded for a declared program stays: the provider resolves
+	# package sources and knows nothing of downloads.
+	kept = match path(layout.lock_path).read_utf8!() {
+		Ok(text) => Lock.parse(text).map_ok(|before| before.fetched) ?? []
+		Err(_) => []
+	}
+	lock = { ..resolved, intent: Lock.intent_of(spec), fetched: kept.keep_if(|entry| spec.programs.any(|program| program.name == entry.name and program.system == entry.system)) }
 	path(Paths.parent(layout.lock_path)).create_all!()?
 	publish_authority!(layout.lock_path, prior, lock.to_str())
 }
@@ -1733,7 +1642,7 @@ atomic_write! = |destination, contents| {
 path : Str -> Path
 path = |p| Path.from_os_str(OsStr.from_str(p))
 
-## `provider` names the provider the run selected.
+## `provider` names the providers a request may be planned with.
 describe : _, Str -> Str
 describe = |err, provider|
 	match err {
@@ -1750,7 +1659,8 @@ describe = |err, provider|
 				.concat("or set ROC to its executable:\n${message}")
 		LockFailed(message) => "${message}; use `blueprint update` to initialize "
 			.concat("or deliberately refresh pins")
-		UnknownProvider(name) => "BLUEPRINT_PROVIDER selects the host provider with `host` and takes no other value, not ${Str.inspect(name)}"
+		PlanFailed([problem]) => problem
+		PlanFailed(problems) => "this cannot be carried out:\n  ${Str.join_with(problems, "\n  ")}"
 		UnsafePath(value) => "refusing unsafe or symlinked runtime path: ${value}"
 		Refused(message) => message
 		BadSpec(InvalidSexpr(msg)) => "could not read the Spec from Blueprint.roc: ${msg}"

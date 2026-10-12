@@ -349,7 +349,7 @@ cases! = |bench| {
 	# Request checks precede every Nix, workspace and lock effect. These use
 	# the real compiler: Auto grammar is deliberately checked after selection.
 	incompatible = [
-		{ name: "source", command: ["shell", "ci"], tool: "git", declaration: "Packages(\"default\", From(GuixPackages(\"current\"))),", diagnostic: "source default requires Guix, not Nix" },
+		{ name: "source", command: ["shell", "ci"], tool: "git", declaration: "Packages(\"default\", From(GuixPackages(\"current\"))),", diagnostic: "environment ci takes tools from the source default (GuixPackages), which no provider of this blueprint supplies" },
 		{ name: "auto-grammar", command: ["run", "echo-args"], tool: "python@3.12:out", declaration: "Packages(\"default\", Auto),", diagnostic: "invalid Nix tool: python@3.12:out" },
 	]
 	for case in incompatible {
