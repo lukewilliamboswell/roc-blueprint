@@ -44,11 +44,10 @@ SmokeBinary := [].{
 	Inputs : [Pinned, Floating]
 
 	## A package source, the Roc overlay and the compiler attribute in it.
-	## An empty `source` leaves the provider's default source.
 	References : { source : Str, overlay : Str, compiler : Str }
 
 	floating : References
-	floating = { source: "", overlay: "github:roc-lang/roc-overlay", compiler: "rocpkgs.nightly" }
+	floating = { source: "github:NixOS/nixpkgs/nixos-unstable", overlay: "github:roc-lang/roc-overlay", compiler: "rocpkgs.nightly" }
 
 	## The pins of the committed files, or which of them has none.
 	pinned : Try(References, [NoPin(Str)])
@@ -77,13 +76,12 @@ SmokeBinary := [].{
 	## The project the binary is given.
 	blueprint_roc : Str, References -> Str
 	blueprint_roc = |platform_path, inputs| {
-		declared = if inputs.source.is_empty() [] else ["	Packages(\"default\", From(NixPackages(\"${inputs.source}\"))),"]
 		Str.join_with(
 			["app [config] { pf: platform \"${platform_path}\" }", "", "config = [", "	Name(\"smoke\"),"]
-				.concat(declared)
 				.concat([
+					"	Packages(\"default\", From(NixPackages(\"${inputs.source}\"))),",
 					"	Overlay(\"roc\", \"${inputs.overlay}\"),",
-					"	Environment(\"dev\", [Tools([\"git\"]), Overlays([\"roc\"]), Command(\"roc-stable\", \"${inputs.compiler}\")]),",
+					"	Environment(\"dev\", [Tools([\"default#git\"]), Overlays([\"roc\"]), Command(\"roc-stable\", \"default#${inputs.compiler}\")]),",
 					"	Shell(\"default\", [Use(\"dev\")]),",
 					"	Task(\"git\", [Use(\"dev\"), Run([\"git\", \"--version\"])]),",
 					"	Task(\"script\", [Use(\"dev\"), Run([\"./hello.roc\"])]),",
@@ -220,18 +218,17 @@ smoke! = |root, blueprint, work, inputs| {
 
 expect SmokeBinary.is_python("python3") and SmokeBinary.is_python("/tmp/work/no-python/python3")
 expect !SmokeBinary.is_python("smoke-x86_64-linux") and !SmokeBinary.is_python("dist/smoke-aarch64-darwin") and !SmokeBinary.is_python("")
-# The floating project is what a new user's holds: no package source of its
-# own, the overlay's default branch and its newest nightly.
-expect !SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).contains("Packages(")
-expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nconfig = [\n\tName(\"smoke\"),\n\tOverlay(\"roc\", \"github:roc-lang/roc-overlay\"),\n")
-expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).contains("Command(\"roc-stable\", \"rocpkgs.nightly\")")
+# The floating project is what a new user's holds: a branch of nixpkgs, the
+# overlay's default branch and its newest nightly.
+expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nconfig = [\n\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),\n\tOverlay(\"roc\", \"github:roc-lang/roc-overlay\"),\n")
+expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly\")")
 
 sample_pins : SmokeBinary.References
 sample_pins = { source: "github:NixOS/nixpkgs/abc", overlay: "github:roc-lang/roc-overlay/def", compiler: "rocpkgs.nightly-2026-10-04-130536d" }
 
 # The pinned project names a revision or tag for everything it resolves.
 expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\"))),\n\tOverlay(\"roc\", \"github:roc-lang/roc-overlay/def\"),\n")
-expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("Command(\"roc-stable\", \"rocpkgs.nightly-2026-10-04-130536d\")")
+expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly-2026-10-04-130536d\")")
 
 lock_sample : Str, Str, Str -> Str
 lock_sample = |node, repo, rev| "{\n  \"nodes\": {\n    \"${node}\": {\n      \"locked\": {\n        \"narHash\": \"sha256-AAAA\",\n        \"owner\": \"o\",\n        \"repo\": \"${repo}\",\n        \"rev\": \"${rev}\",\n        \"type\": \"github\"\n      }\n    }\n  }\n}\n"

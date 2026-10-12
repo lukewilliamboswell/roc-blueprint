@@ -398,22 +398,23 @@ expect Lower.lower([Name("invalid"), Environment("dev", [RocPackages([]), RocPac
 # needs a consumer that knows them.
 expect match Lower.lower([
 	Name("configured"),
-	Environment("dev", [ToolWith("rust-bin.stable.\"1.95.0\".default", [("extensions", List([Str("rust-src")]))])]),
+	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
+	Environment("dev", [ToolWith("nix#rust-bin.stable.\"1.95.0\".default", [("extensions", List([Str("rust-src")]))])]),
 ]) {
 	Ok(spec) => spec.requires_ == ["configured-tools"]
 		and spec.configured_tools == [
 			{
 				environment: "dev",
-				tool: { source: "default", name: "rust-bin.stable.\"1.95.0\".default" },
+				tool: { source: "nix", name: "rust-bin.stable.\"1.95.0\".default" },
 				options: Value.Attrs([{ name: "extensions", value: Value.List([Value.Str("rust-src")]) }]),
 			},
 		]
 	Err(_) => False
 }
 
-expect Lower.lower([Name("invalid"), Environment("dev", [ToolWith("zig", []), ToolWith("zig", [])])]) == Err("DuplicateToolWith: environment dev: zig")
-expect Lower.lower([Name("invalid"), Environment("dev", [Tools(["zig"]), ToolWith("zig", [])])]) == Err("tool is both plain and configured in environment dev: zig")
-expect Lower.lower([Name("invalid"), Environment("dev", [ToolWith("zig", [("a", Int(1)), ("a", Int(2))])])]) == Err("DuplicateOption: tool zig: a")
+expect Lower.lower([Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [ToolWith("nix#zig", []), ToolWith("nix#zig", [])])]) == Err("DuplicateToolWith: environment dev: zig")
+expect Lower.lower([Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [Tools(["nix#zig"]), ToolWith("nix#zig", [])])]) == Err("tool is both plain and configured in environment dev: zig")
+expect Lower.lower([Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [ToolWith("nix#zig", [("a", Int(1)), ("a", Int(2))])])]) == Err("DuplicateOption: tool zig: a")
 expect Lower.lower([Name("plain"), Environment("dev", [])]).map_ok(|spec| spec.requires_.contains("roc-packages") or !spec.roc_packages.is_empty()) == Ok(False)
 
 # A recipe from a local function: the release's version is captured, and the
@@ -516,8 +517,8 @@ expect {
 	Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Archive("https://example.test/tool.tar.gz", TarGz, "${up}/tool"))])])]) == Err("program tool on x86_64-linux: invalid path in its archive:\n    ../tool")
 }
 expect Lower.lower([Name("invalid"), Environment("dev", [Programs([tool]), Expect(["tool"])])]) == Err("environment dev has tool as both a program and an expected tool")
-expect Lower.lower([Name("invalid"), Environment("base", [Command("tool", "hello")]), Environment("dev", [Extend("base"), Programs([tool])])]) == Err("environment dev has tool as both a program and a Command")
-expect Lower.lower([Name("invalid"), Environment("dev", [Command("git", "git"), Expect(["git"])])]) == Err("environment dev has git as both an expected tool and a Command")
+expect Lower.lower([Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Command("tool", "nix#hello")]), Environment("dev", [Extend("base"), Programs([tool])])]) == Err("environment dev has tool as both a program and a Command")
+expect Lower.lower([Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [Command("git", "nix#git"), Expect(["git"])])]) == Err("environment dev has git as both an expected tool and a Command")
 
 # Alternates for the same bytes follow the download's own URL, in order, for a
 # file and for an archive; with none given the download is as it was.

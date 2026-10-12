@@ -26,12 +26,17 @@ CliTest := [].{
 		result
 	}
 
+	## The package source those settings take their one tool from.
+	source : Str
+	source = "Packages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),"
+
 	## The settings most cases start from: one environment, two shells, a task.
 	valid : Str
 	valid = Str.join_with(
 		[
 			"	Name(\"argument-test\"),",
-			"	Environment(\"ci\", [Tools([\"git\"])]),",
+			"	${source}",
+			"	Environment(\"ci\", [Tools([\"default#git\"])]),",
 			"	Shell(\"default\", [Use(\"ci\")]),",
 			"	Shell(\"ci\", [Use(\"ci\")]),",
 			"	Task(\"echo-args\", [Run([\"printf\", \"%s\\n\", \"configured argument\"]), Use(\"ci\")]),",
@@ -60,7 +65,7 @@ CliTest := [].{
 	wire =
 		\\((format ((major 2) (minor 0))) (name "wire")
 		\\ (systems ("x86_64-linux"))
-		\\ (sources (((name "default") (provider Auto))))
+		\\ (sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
 		\\ (environments (((name "ci") (parents ()) (tools ()) (overlays ()))))
 		\\ (shells (((name "default") (environment "ci"))))
 		\\ (tasks (((name "echo-args") (environment "ci") (run ("true"))))))
@@ -311,7 +316,7 @@ cases! = |bench| {
 	# target that only the provider can refuse.
 	settings!(test, work, "${CliTest.valid}	Custom(\"services\", \"demo\", Str(\"value\")),\n")?
 	CliHarness.contains!(run!(test, work, ["check"], 1, [])?, "needs features: extensions", "check with a Custom setting")?
-	settings!(test, work, "	Environment(\"ci\", [Tools([\"git\"])]),\n	Shell(\"default\", [Use(\"ci\")]),\n")?
+	settings!(test, work, "	${CliTest.source}\n	Environment(\"ci\", [Tools([\"default#git\"])]),\n	Shell(\"default\", [Use(\"ci\")]),\n")?
 	CliHarness.contains!(run!(test, work, ["check"], 1, [])?, "MissingName", "check without a Name")?
 	settings!(test, work, "${CliTest.valid}	Raw(\"nix\", \"unknown\", Attrs([])),\n")?
 	CliHarness.contains!(run!(test, work, ["check"], 1, [])?, "unknown raw nix target", "check with an unknown Raw target")?
@@ -349,12 +354,12 @@ cases! = |bench| {
 	# Request checks precede every Nix, workspace and lock effect. These use
 	# the real compiler: Auto grammar is deliberately checked after selection.
 	incompatible = [
-		{ name: "source", command: ["shell", "ci"], tool: "git", declaration: "Packages(\"default\", From(GuixPackages(\"current\"))),", diagnostic: "environment ci takes tools from the source default (GuixPackages), which no provider of this blueprint supplies" },
-		{ name: "auto-grammar", command: ["run", "echo-args"], tool: "python@3.12:out", declaration: "Packages(\"default\", Auto),", diagnostic: "invalid Nix tool: python@3.12:out" },
+		{ name: "source", command: ["shell", "ci"], tool: "default#git", declaration: "Packages(\"default\", From(GuixPackages(\"current\"))),", diagnostic: "environment ci takes tools from the source default (GuixPackages), which no provider of this blueprint supplies" },
+		{ name: "auto-grammar", command: ["run", "echo-args"], tool: "default#python@3.12:out", declaration: "Packages(\"default\", Auto),", diagnostic: "invalid Nix tool: python@3.12:out" },
 	]
 	for case in incompatible {
 		cwd = isolated!(test, "request-${case.name}")?
-		settings!(test, cwd, "${CliTest.valid.replace_each("Tools([\"git\"])", "Tools([\"${case.tool}\"])")}	${case.declaration}\n")?
+		settings!(test, cwd, "${CliTest.valid.replace_each("Tools([\"default#git\"])", "Tools([\"${case.tool}\"])").replace_each("\t${CliTest.source}\n", "")}	${case.declaration}\n")?
 		output = run!(test, cwd, case.command, 1, [])?
 		CliHarness.contains!(output, case.diagnostic, "blueprint ${Str.join_with(case.command, " ")} with an incompatible ${case.name}")?
 		untouched!(cwd)?

@@ -29,7 +29,7 @@ CliUpdateTest := [].{
 	wire =
 		\\((format ((major 2) (minor 0))) (name "wire")
 		\\(systems ("x86_64-linux"))
-		\\(sources (((name "default") (provider Auto))))
+		\\(sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
 		\\(environments (((name "ci") (parents ()) (tools ()) (overlays ()))))
 		\\(shells (((name "default") (environment "ci")))))
 
@@ -37,7 +37,7 @@ CliUpdateTest := [].{
 	local_inputs : List({ kind : Str, wire : Str })
 	local_inputs = [
 		{ kind: "build-source", wire: "${wire.drop_suffix(")")}(build_sources (((name \"assets\") (ref \"path:./outer/assets\")))) (requires (\"sources\")))" },
-		{ kind: "package-source", wire: wire.replace_each("(provider Auto)", "(provider (NixPackages \"path:./outer/assets\"))") },
+		{ kind: "package-source", wire: wire.replace_each("(provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\"))", "(provider (NixPackages \"path:./outer/assets\"))") },
 		{ kind: "overlay", wire: "${wire.drop_suffix(")")}(inputs (((name \"assets\") (url \"path:./outer/assets\") (kind Overlay)))))" },
 	]
 

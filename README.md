@@ -19,11 +19,12 @@ app [config] { pf: platform "https://github.com/lukewilliamboswell/roc-blueprint
 
 config = [
 	Name("my-project"),
+	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 	Overlay("roc", "github:roc-lang/roc-overlay"),
-	Environment("base", [Tools(["git", "zig"])]),
+	Environment("base", [Tools(["nix#git", "nix#zig"])]),
 	Environment("dev", [
 		Extend("base"),
-		Tools(["rocpkgs.nightly", "python3", "sqlite"]),
+		Tools(["nix#rocpkgs.nightly", "nix#python3", "nix#sqlite"]),
 		Overlays(["roc"]),
 	]),
 	Shell("default", [Use("dev")]),

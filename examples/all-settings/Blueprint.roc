@@ -8,16 +8,16 @@ import pf.Recipes
 config = [
 	Name("fixture"),
 	Systems(["x86_64-linux"]),
-	Packages("default", Auto),
+	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 	Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
 	Input("utils", "github:numtide/flake-utils"),
 	Overlay("roc", "github:roc-lang/roc-overlay"),
-	Environment("base", [Tools(["git"])]),
+	Environment("base", [Tools(["nix#git"])]),
 	Environment(
 		"dev",
 		[
 			Extend("base"),
-			Tools(["python3Packages.requests", "stable#jq"]),
+			Tools(["nix#python3Packages.requests", "stable#jq"]),
 			Command("json-query", "stable#jq"),
 			Overlays(["roc"]),
 		],

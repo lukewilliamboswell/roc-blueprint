@@ -9,8 +9,9 @@
 ## config = [
 ## 	Name("my-project"),
 ## 	Systems(["x86_64-linux", "aarch64-darwin"]),
+## 	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 ## 	Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
-## 	Environment("dev", [Tools(["git", "python3", "stable#nodejs"])]),
+## 	Environment("dev", [Tools(["nix#git", "nix#python3", "stable#nodejs"])]),
 ## 	Shell("default", [Use("dev")]),
 ## 	Task("test", [Use("dev"), Run(["python3", "-m", "pytest"])]),
 ## 	Raw("nix", "shell:default", Attrs([("shellHook", Str("echo hi"))])),

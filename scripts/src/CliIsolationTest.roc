@@ -33,7 +33,7 @@ CliIsolationTest := [].{
 		\\((format ((major 2) (minor 1))) (name "wire")
 		\\(requires ("builds"))
 		\\(systems ("x86_64-linux"))
-		\\(sources (((name "default") (provider Auto))))
+		\\(sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
 		\\(environments (((name "ci") (parents ()) (tools ()) (overlays ()))))
 		\\(shells (((name "default") (environment "ci"))))
 		\\(builds (((name "app") (environment "ci") (inputs ()) (needs ())

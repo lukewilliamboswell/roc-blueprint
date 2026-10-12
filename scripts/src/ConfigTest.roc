@@ -329,22 +329,22 @@ valid_fixtures : List(ConfigTest.Fixture)
 valid_fixtures = [
 	valid(
 		"Valid",
-		\\[Name("valid"), Environment("dev", [Tools(["git"])]), Shell("default", [Use("dev")])]
+		\\[Name("valid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [Tools(["nix#git"])]), Shell("default", [Use("dev")])]
 		,
 	),
 	valid(
 		"EquivalentComposition",
-		\\[Name("composed"), Systems(["x86_64-linux"]), Environment("base", [Tools(["git"])]), Environment("dev", [Tools(["git", "python3"])]), Environment("release", [Tools(["git", "python3"]), Programs([Fetch("blueprint", Recipes.file("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-{system}"))])]), Shell("default", [Use("dev")]), Task("fmt", [Use("dev"), Run(["python3", "--version"])]), Task("test", [Use("dev"), Run(["git", "--version"])]), Task("args", [Use("dev"), Run(["python3", "-c", "import json, sys; print(json.dumps(sys.argv[1:]))", "configured argument"])])]
+		\\[Name("composed"), Systems(["x86_64-linux"]), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Tools(["nix#git"])]), Environment("dev", [Tools(["nix#git", "nix#python3"])]), Environment("release", [Tools(["nix#git", "nix#python3"]), Programs([Fetch("blueprint", Recipes.file("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-{system}"))])]), Shell("default", [Use("dev")]), Task("fmt", [Use("dev"), Run(["python3", "--version"])]), Task("test", [Use("dev"), Run(["git", "--version"])]), Task("args", [Use("dev"), Run(["python3", "-c", "import json, sys; print(json.dumps(sys.argv[1:]))", "configured argument"])])]
 		,
 	),
 	valid(
 		"Commands",
-		\\[Name("commands"), Overlay("roc", "github:roc-lang/roc-overlay"), Environment("base", [Command("vcs", "git"), Command("py", "python3")]), Environment("dev", [Extend("base"), Overlays(["roc"]), Command("py", "python312"), Command("roc-stable", "rocpkgs.nightly")]), Shell("default", [Use("dev")])]
+		\\[Name("commands"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Overlay("roc", "github:roc-lang/roc-overlay"), Environment("base", [Command("vcs", "nix#git"), Command("py", "nix#python3")]), Environment("dev", [Extend("base"), Overlays(["roc"]), Command("py", "nix#python312"), Command("roc-stable", "nix#rocpkgs.nightly")]), Shell("default", [Use("dev")])]
 		,
 	),
 	valid(
 		"ConfiguredTools",
-		\\[Name("configured"), Overlay("rust", "github:oxalica/rust-overlay"), Environment("base", [Overlays(["rust"]), ToolWith("rust-bin.stable.latest.default", [("targets", List([Str("x86_64-unknown-linux-musl")]))])]), Environment("dev", [Extend("base"), ToolWith("rust-bin.stable.latest.default", [("targets", List([Str("aarch64-unknown-linux-musl")])), ("extensions", List([Str("rust-src")]))])]), Shell("default", [Use("dev")])]
+		\\[Name("configured"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Overlay("rust", "github:oxalica/rust-overlay"), Environment("base", [Overlays(["rust"]), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("x86_64-unknown-linux-musl")]))])]), Environment("dev", [Extend("base"), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("aarch64-unknown-linux-musl")])), ("extensions", List([Str("rust-src")]))])]), Shell("default", [Use("dev")])]
 		,
 	),
 	valid(
@@ -354,7 +354,7 @@ valid_fixtures = [
 	),
 	valid(
 		"SystemTools",
-		\\[Name("systems"), Systems(["x86_64-linux", "aarch64-darwin"]), Environment("base", [Tools(["git"]), ToolsFor("x86_64-linux", ["wayland"])]), Environment("dev", [Extend("base"), ToolsFor("x86_64-linux", ["alsa-lib"])]), Shell("default", [Use("dev")])]
+		\\[Name("systems"), Systems(["x86_64-linux", "aarch64-darwin"]), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Tools(["nix#git"]), ToolsFor("x86_64-linux", ["nix#wayland"])]), Environment("dev", [Extend("base"), ToolsFor("x86_64-linux", ["nix#alsa-lib"])]), Shell("default", [Use("dev")])]
 		,
 	),
 	# Builds use ordinary typed settings, including forward dependencies.
@@ -441,13 +441,13 @@ lower_fixtures = [
 	rejected(
 		"DuplicateToolWith",
 		"DuplicateToolWith",
-		\\[Name("invalid"), Environment("dev", [ToolWith("zig", []), ToolWith("zig", [])])]
+		\\[Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [ToolWith("nix#zig", []), ToolWith("nix#zig", [])])]
 		,
 	),
 	rejected(
 		"PlainAndConfiguredTool",
 		"tool is both plain and configured",
-		\\[Name("invalid"), Environment("base", [Tools(["zig"])]), Environment("dev", [Extend("base"), ToolWith("zig", [])])]
+		\\[Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Tools(["nix#zig"])]), Environment("dev", [Extend("base"), ToolWith("nix#zig", [])])]
 		,
 	),
 	rejected(
@@ -748,7 +748,7 @@ program_fixtures = [
 	rejected(
 		"ProgramAndCommand",
 		"has roc-stable as both",
-		\\[Name("invalid"), Environment("base", [Command("roc-stable", "rocpkgs.nightly")]), Environment("dev", [Extend("base"), Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))])])]
+		\\[Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Command("roc-stable", "nix#rocpkgs.nightly")]), Environment("dev", [Extend("base"), Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))])])]
 		,
 	),
 	rejected(

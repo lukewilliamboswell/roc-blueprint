@@ -4,8 +4,8 @@ app [config] { pf: platform "../../blueprint-platform/main.roc" }
 
 config = [
 	Name("extensions"),
-	Packages("default", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
-	Environment("dev", [Tools(["git", "llvmPackages.bintools"])]),
+	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
+	Environment("dev", [Tools(["nix#git", "nix#llvmPackages.bintools"])]),
 	Shell("default", [Use("dev")]),
 	Custom(
 		"services",

@@ -12,7 +12,7 @@ config = [
 	# Tasks and builds are Roc scripts: one pinned compiler and the bundles
 	# those scripts name, and no other tool. Roc takes the first `--` for
 	# itself, so each command has one before the script's arguments.
-	Environment("builder", [Overlays(["roc"]), Command("roc-stable", "rocpkgs.@ROC_COMPILER@"), RocPackages([@ROC_PACKAGES@])]),
+	Environment("builder", [Overlays(["roc"]), Command("roc-stable", "default#rocpkgs.@ROC_COMPILER@"), RocPackages([@ROC_PACKAGES@])]),
 	Environment("foreign", [Tools(["foreign#python"])]),
 	Source("assets", "path:./assets"),
 	Task("record", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "record", "configured argument"])]),

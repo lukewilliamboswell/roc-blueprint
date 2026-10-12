@@ -9,7 +9,8 @@ app [config] { pf: platform "<the platform URL of a release>" }
 
 config = [
 	Name("my-project"),
-	Environment("dev", [Tools(["git"])]),
+	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
+	Environment("dev", [Tools(["nix#git"])]),
 	Shell("default", [Use("dev")]),
 ]
 ----
@@ -138,8 +139,9 @@ Provider details stay in source declarations (a fragment inside `config`):
 
 [source,roc]
 ----
+Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
-Environment("dev", [Tools(["git", "stable#jq"])]),
+Environment("dev", [Tools(["nix#git", "stable#jq"])]),
 ----
 
 The core does not inspect `PATH`, autodetect a provider or translate package
@@ -158,8 +160,8 @@ platform libraries explicitly:
 [source,roc]
 ----
 Environment("dev", [
-	Tools(["git", "python3"]),
-	ToolsFor("x86_64-linux", ["wayland", "alsa-lib"]),
+	Tools(["nix#git", "nix#python3"]),
+	ToolsFor("x86_64-linux", ["nix#wayland", "nix#alsa-lib"]),
 ]),
 ----
 
@@ -178,7 +180,7 @@ with whichever `roc` is already on `PATH`:
 Overlay("roc", "github:roc-lang/roc-overlay"),
 Environment("dev", [
 	Overlays(["roc"]),
-	Command("roc-stable", "rocpkgs.nightly-2026-09-10-a670e34"),
+	Command("roc-stable", "nix#rocpkgs.nightly-2026-09-10-a670e34"),
 ]),
 ----
 
@@ -202,8 +204,8 @@ Overlay("rust", "github:oxalica/rust-overlay"),
 Overlay("zig", "github:mitchellh/zig-overlay"),
 Environment("host", [
 	Overlays(["rust", "zig"]),
-	Tools(["zigpkgs.\"0.16.0\""]),
-	ToolWith("rust-bin.stable.\"1.95.0\".default", [
+	Tools(["nix#zigpkgs.\"0.16.0\""]),
+	ToolWith("nix#rust-bin.stable.\"1.95.0\".default", [
 		("targets", List([Str("x86_64-unknown-linux-musl"), Str("aarch64-unknown-linux-musl")])),
 		("extensions", List([Str("rust-src")])),
 	]),
@@ -239,7 +241,7 @@ revision that ships that version. For CPython 3.14.3:
 [source,roc]
 ----
 Packages("py", From(NixPackages("github:NixOS/nixpkgs/<revision>"))),
-Environment("dev", [Tools(["git", "py#python314"])]),
+Environment("dev", [Tools(["nix#git", "py#python314"])]),
 ----
 
 `<revision>` is a full nixpkgs commit whose `python314` is 3.14.3. To find
@@ -271,7 +273,7 @@ source: select the attribute, quoting a segment that contains dots.
 [source,roc]
 ----
 Overlay("zig", "github:mitchellh/zig-overlay"),
-Environment("dev", [Overlays(["zig"]), Tools(["zigpkgs.\"0.16.0\""])]),
+Environment("dev", [Overlays(["zig"]), Tools(["nix#zigpkgs.\"0.16.0\""])]),
 ----
 
 [#roc-packages]
@@ -287,7 +289,7 @@ which has no network:
 Overlay("roc", "github:roc-lang/roc-overlay"),
 Environment("scripts", [
 	Overlays(["roc"]),
-	Command("roc-stable", "rocpkgs.nightly-2026-10-04-130536d"),
+	Command("roc-stable", "nix#rocpkgs.nightly-2026-10-04-130536d"),
 	RocPackages([
 		"https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
 		"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",

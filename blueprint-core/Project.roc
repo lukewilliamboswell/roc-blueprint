@@ -1030,15 +1030,15 @@ fixture = |environments| Spec.{
 }
 
 base : Spec.Environment
-base = { name: "base", parents: [], tools: [{ source: "default", name: "git" }], overlays: ["first"] }
+base = { name: "base", parents: [], tools: [{ source: "nix", name: "git" }], overlays: ["first"] }
 
 child : Spec.Environment
-child = { name: "dev", parents: ["base"], tools: [{ source: "default", name: "python3" }, { source: "default", name: "git" }], overlays: ["first", "second"] }
+child = { name: "dev", parents: ["base"], tools: [{ source: "nix", name: "python3" }, { source: "nix", name: "git" }], overlays: ["first", "second"] }
 
 # Declaration order is irrelevant; inheritance order is not. First wins.
 expect Project.validate(fixture([child, base])) == Project.validate(
 	fixture([
-		{ name: "dev", parents: [], tools: [{ source: "default", name: "git" }, { source: "default", name: "python3" }], overlays: ["first", "second"] },
+		{ name: "dev", parents: [], tools: [{ source: "nix", name: "git" }, { source: "nix", name: "python3" }], overlays: ["first", "second"] },
 		base,
 	]),
 )
@@ -1063,7 +1063,7 @@ expect Project.validate(fixture([base, { ..child, parents: ["base", "base"] }]))
 expect Project.validate(fixture([{ ..base, tools: [{ source: "missing", name: "git" }] }])) == Err("unknown source: missing")
 expect Project.validate(fixture([{ ..base, overlays: ["missing"] }])) == Err("unknown overlay: missing")
 expect Project.validate(fixture([{ ..base, overlays: ["data"] }])) == Err("unknown overlay: data")
-expect Project.validate(fixture([{ ..base, tools: [{ source: "default", name: "git#extra" }] }])).is_err()
+expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "git#extra" }] }])).is_err()
 expect Project.validate(fixture([{ ..base, name: "bad/name" }])).is_err()
 
 # Explicit providers validate grammar statically; Auto waits for selection.
@@ -1095,21 +1095,21 @@ expect {
 		requires_: ["system-tools"],
 		systems: ["x86_64-linux", "aarch64-darwin"],
 		system_tools: [
-			{ environment: "base", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] },
-			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "default", name: "alsa-lib" }, { source: "default", name: "wayland" }] },
+			{ environment: "base", system: "x86_64-linux", tools: [{ source: "nix", name: "wayland" }] },
+			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "nix", name: "alsa-lib" }, { source: "nix", name: "wayland" }] },
 		],
 	}
 	match Project.validate(spec) {
 		Ok(valid) => valid.system_tools == [
-			{ environment: "base", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] },
-			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }, { source: "default", name: "alsa-lib" }] },
+			{ environment: "base", system: "x86_64-linux", tools: [{ source: "nix", name: "wayland" }] },
+			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "nix", name: "wayland" }, { source: "nix", name: "alsa-lib" }] },
 		] and Project.validate(valid) == Ok(valid) and Project.validate({ ..spec, systems: ["x86_64-linux", "aarch64-darwin", "x86_64-linux"] }) == Ok(valid)
 		Err(_) => False
 	}
 }
 
 expect {
-	entry = { environment: "base", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] }
+	entry = { environment: "base", system: "x86_64-linux", tools: [{ source: "nix", name: "wayland" }] }
 	spec = { ..fixture([base]), system_tools: [entry] }
 	Project.validate(spec) == Err("system tools require feature: system-tools") and
 		Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [entry, entry] }) == Err("DuplicateToolsFor: environment base on x86_64-linux") and
@@ -1188,14 +1188,14 @@ expect ["", "/absolute", ".", "..", "./artifact", "dist/../escape", "dist//file"
 expect Project.validate(build_fixture([{ ..library, output: "dist/my artifact" }])).is_ok()
 # Commands inherit parent first; a child replaces a same-named command in place.
 expect {
-	git = { source: "default", name: "git" }
+	git = { source: "nix", name: "git" }
 	spec = {
 		..fixture([base, { ..child, overlays: [] }]),
 		requires_: ["commands"],
 		commands: [
 			{ environment: "base", name: "vcs", tool: git },
 			{ environment: "base", name: "py", tool: git },
-			{ environment: "dev", name: "py", tool: { source: "default", name: "python3" } },
+			{ environment: "dev", name: "py", tool: { source: "nix", name: "python3" } },
 			{ environment: "dev", name: "roc-stable", tool: { source: "nix", name: "rocpkgs.nightly" } },
 		],
 	}
@@ -1204,7 +1204,7 @@ expect {
 			{ environment: "base", name: "vcs", tool: git },
 			{ environment: "base", name: "py", tool: git },
 			{ environment: "dev", name: "vcs", tool: git },
-			{ environment: "dev", name: "py", tool: { source: "default", name: "python3" } },
+			{ environment: "dev", name: "py", tool: { source: "nix", name: "python3" } },
 			{ environment: "dev", name: "roc-stable", tool: { source: "nix", name: "rocpkgs.nightly" } },
 		]
 		Err(_) => False
@@ -1212,7 +1212,7 @@ expect {
 }
 
 expect {
-	entry = { environment: "base", name: "vcs", tool: { source: "default", name: "git" } }
+	entry = { environment: "base", name: "vcs", tool: { source: "nix", name: "git" } }
 	spec = { ..fixture([base]), commands: [entry] }
 	Project.validate(spec) == Err("commands require feature: commands") and
 		Project.validate({ ..spec, requires_: ["commands"], commands: [entry, entry] }) == Err("DuplicateCommand: environment base: vcs") and
@@ -1620,7 +1620,7 @@ expect {
 expect Project.validate(fixture([{ ..base, tools: [{ source: "data", name: "git" }] }])) == Err("unknown source: data")
 expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])) == Err("invalid Nix tool: python@3")
 expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])) == Err("invalid Guix tool: python@")
-expect Project.validate({ ..fixture([base]), requires_: ["commands"], commands: [{ environment: "base", name: "bin/vcs", tool: { source: "default", name: "git" } }] }) == Err("invalid command name: bin/vcs")
+expect Project.validate({ ..fixture([base]), requires_: ["commands"], commands: [{ environment: "base", name: "bin/vcs", tool: { source: "nix", name: "git" } }] }) == Err("invalid command name: bin/vcs")
 
 rust : Spec.Tool
 rust = { source: "nix", name: "rust-bin.stable.\"1.95.0\".default" }
@@ -1827,7 +1827,7 @@ expect
 
 # One name on PATH has one origin, in the environment and in what it inherits.
 expect {
-	command = { environment: "base", name: "roc-stable", tool: { source: "default", name: "rocpkgs.nightly" } }
+	command = { environment: "base", name: "roc-stable", tool: { source: "nix", name: "rocpkgs.nightly" } }
 	Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["tool"] }], expects: [{ environment: "dev", programs: ["tool"] }] }) == Err("environment dev has tool as both a program and an expected tool") and
 		Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["tool"] }], expects: [{ environment: "base", programs: ["tool"] }] }) == Err("environment dev has tool as both a program and an expected tool") and
 			Project.validate({ ..fetching, commands: [command], environment_programs: [{ environment: "base", programs: ["roc-stable"] }] }) == Err("environment base has roc-stable as both a program and a Command") and
@@ -1844,17 +1844,17 @@ expect {
 # there, the names of those that do not, what the machine must have, and each
 # Roc bundle with its URL. Inherited selections come first.
 expect {
-	git = { source: "default", name: "git" }
+	git = { source: "nix", name: "git" }
 	zig = { source: "nix", name: "zigpkgs.\"0.16.0\"" }
 	spec = {
 		..fetching,
 		requires_: ["programs", "expects", "commands", "system-tools", "configured-tools", "roc-packages", "sources"],
 		environments: [{ ..base, tools: [git], overlays: [] }, { name: "dev", parents: ["base"], tools: [zig, git], overlays: [] }],
 		system_tools: [
-			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] },
-			{ environment: "dev", system: "aarch64-darwin", tools: [{ source: "default", name: "libiconv" }] },
+			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "nix", name: "wayland" }] },
+			{ environment: "dev", system: "aarch64-darwin", tools: [{ source: "nix", name: "libiconv" }] },
 		],
-		commands: [{ environment: "base", name: "py", tool: { source: "default", name: "python3" } }],
+		commands: [{ environment: "base", name: "py", tool: { source: "nix", name: "python3" } }],
 		configured_tools: [{ environment: "dev", tool: rust, options: rust_targets([]) }],
 		environment_programs: [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["tool"] }],
 		expects: [{ environment: "dev", programs: ["gh"] }],
@@ -1865,20 +1865,20 @@ expect {
 	darwin_tool = { ..linux_tool, system: "aarch64-darwin", urls: ["https://example.test/tool-aarch64-darwin", "https://mirror.example.test/tool-aarch64-darwin"] }
 	bundles = [{ name: "abc", url: "https://example.test/releases/1.0/abc.tar.zst" }]
 	Project.environment_use(project, "dev", "x86_64-linux") == Ok({
-		tools: [git, zig, { source: "default", name: "wayland" }, { source: "default", name: "python3" }, rust],
+		tools: [git, zig, { source: "nix", name: "wayland" }, { source: "nix", name: "python3" }, rust],
 		programs: [linux_roc, linux_tool],
 		unavailable: [],
 		expects: ["gh"],
 		bundles,
 	})
 		and Project.environment_use(project, "dev", "aarch64-darwin") == Ok({
-			tools: [git, zig, { source: "default", name: "libiconv" }, { source: "default", name: "python3" }, rust],
+			tools: [git, zig, { source: "nix", name: "libiconv" }, { source: "nix", name: "python3" }, rust],
 			programs: [darwin_tool],
 			unavailable: ["roc-stable"],
 			expects: ["gh"],
 			bundles,
 		})
-			and Project.environment_use(project, "base", "x86_64-linux") == Ok({ tools: [git, { source: "default", name: "python3" }], programs: [linux_roc], unavailable: [], expects: [], bundles })
+			and Project.environment_use(project, "base", "x86_64-linux") == Ok({ tools: [git, { source: "nix", name: "python3" }], programs: [linux_roc], unavailable: [], expects: [], bundles })
 				and Project.environment_use(project, "missing", "x86_64-linux") == Err("unknown environment: missing")
 }
 

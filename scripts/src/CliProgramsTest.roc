@@ -363,7 +363,7 @@ cases! = |bench, idle| {
 	# the links ahead of what it adds to PATH; and a machine without Nix is
 	# told so before anything is fetched.
 	empty_store!(test)?
-	mixed = project!(test, "mixed", CliProgramsTest.fetching({ roc: [roc_url], tool: tool_url, expects: ["tar", "ln"], extra: ", Tools([\"git\"])" }))?
+	mixed = project!(test, "mixed", CliProgramsTest.fetching({ roc: [roc_url], tool: tool_url, expects: ["tar", "ln"], extra: ", Tools([\"default#git\"])" }).append("Packages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),"))?
 	lock!(test, server, mixed, both)?
 	CliHarness.tool!(["chmod", "0644", "--", "${mixed}/Blueprint.lock"])?
 	updated = server.drive!([job(test, mixed, ["update"], [])])?
@@ -399,7 +399,7 @@ system_of = |machine|
 
 expect CliProgramsTest.blueprint_roc("../pf/main.roc", ["Name(\"a\"),"]) == "app [config] { pf: platform \"../pf/main.roc\" }\nconfig = [\n\tName(\"a\"),\n]\n"
 expect CliProgramsTest.mirrored("File(\"a\")", []) == "File(\"a\")" and CliProgramsTest.mirrored("File(\"a\")", ["b", "c"]) == "Mirrored(File(\"a\"), [\"b\", \"c\"])"
-expect CliProgramsTest.fetching({ roc: ["http://127.0.0.1:1/a", "http://127.0.0.1:1/b"], tool: "http://127.0.0.1:1/t", expects: ["tar"], extra: ", Tools([\"git\"])" }).keep_if(|line| line.starts_with("Environment")) == [
-	"Environment(\"dev\", [Programs([Fetch(\"roc-stable\", |_| Mirrored(Archive(\"http://127.0.0.1:1/a\", TarGz, \"pkg/roc-stable\"), [\"http://127.0.0.1:1/b\"])), Fetch(\"tool\", |_| File(\"http://127.0.0.1:1/t\"))]), Expect([\"tar\"]), Tools([\"git\"])]),",
+expect CliProgramsTest.fetching({ roc: ["http://127.0.0.1:1/a", "http://127.0.0.1:1/b"], tool: "http://127.0.0.1:1/t", expects: ["tar"], extra: ", Tools([\"default#git\"])" }).keep_if(|line| line.starts_with("Environment")) == [
+	"Environment(\"dev\", [Programs([Fetch(\"roc-stable\", |_| Mirrored(Archive(\"http://127.0.0.1:1/a\", TarGz, \"pkg/roc-stable\"), [\"http://127.0.0.1:1/b\"])), Fetch(\"tool\", |_| File(\"http://127.0.0.1:1/t\"))]), Expect([\"tar\"]), Tools([\"default#git\"])]),",
 ]
 expect system_of({ arch: X64, os: LINUX }) == "x86_64-linux" and system_of({ arch: AARCH64, os: MACOS }) == "aarch64-darwin"
