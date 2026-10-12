@@ -1,0 +1,346 @@
+= roc-blueprint 0.6.0
+
+This release makes Nix one source among several. A `Blueprint.roc` now says
+where each thing comes from: a program downloaded from a URL and checked
+against a digest in `Blueprint.lock`, a tool the machine already has, or a
+tool from a Nix package source the project declares. `blueprint` starts Nix
+only for an environment that has a tool from a Nix source, and for a build.
+A project that fetches its compiler and expects `git` runs its tasks with no
+Nix installed.
+
+That matters most in CI. A job that ran one Roc script through `blueprint`
+spent about 40 seconds on Nix before the script started. The same task in a
+project with no Nix source takes 3 to 7 seconds on an empty cache and under a
+second after that, measured on x86_64 Linux.
+
+Every `Blueprint.roc` written for 0.5 must be edited, and its lock resolved
+again. "If you used 0.5", below, has the steps.
+
+== Use this release
+
+[source,roc,snippet=unchecked]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+The `blueprint` binary is attached for x86_64 Linux, arm64 Linux and Apple
+Silicon macOS, with SHA-256 sums in `blueprint.sha256`. It needs no Roc: it
+downloads the compiler that reads `Blueprint.roc` into its own store and
+checks it against a digest it records. It needs Nix only for what a project
+takes from Nix. Use this release's binary with this release's platform URL.
+
+== Fetch a program
+
+`Fetch` inside `Programs` puts a downloaded program on an environment's
+`PATH`. A recipe, a function from the system to a download, says where it
+comes from; `Blueprint.lock` holds its SHA-256 and length for every declared
+system.
+
+[source,roc]
+----
+app [config] { pf: platform "{platform-url}" }
+
+import pf.Recipes
+
+config = [
+	Name("my-package"),
+	Environment("dev", [
+		Programs([
+			Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")),
+			Fetch("blueprint-0-5", Recipes.file("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-{system}")),
+		]),
+	]),
+	Task("check", [Use("dev"), Run(["roc-stable", "check", "main.roc"])]),
+]
+----
+
+* `Recipes.roc_nightly(tag)` is the Roc compiler of one release of
+  roc-lang/nightlies. When the tag is the nightly `blueprint` itself runs on,
+  one download serves both.
+* `Recipes.file(template)` is a program that is one file, at a URL in which
+  `{system}`, `{arch}` and `{os}` stand for the system.
+* A recipe of your own is an ordinary function, `System -> Config.Download`,
+  that answers `File(url)`, `Archive(url, TarGz | TarXz | Zip, path)`,
+  `Mirrored(download, alternate_urls)` or `Unavailable`.
+* A URL, the path inside an archive, a system and a nightly tag are each
+  checked where they are written, by `roc check`.
+
+A download is kept in a per-user store, `blueprint/` under `XDG_CACHE_HOME` or
+`~/.cache`, and hashed again before every use. An archive is unpacked whole
+and the command is a link into it.
+
+== Expect a tool on the machine
+
+`Expect` names programs the machine must already have. `blueprint` looks for
+them on `PATH` before it downloads or runs anything, names every one that is
+missing in one message, and installs nothing.
+
+[source,roc]
+----
+Environment("dev", [
+	Expect(["git", "gh"]),
+]),
+----
+
+== Name the source of every tool
+
+A tool from a package source is written `"<source>#<name>"`, and the source is
+declared. There is no default source:
+
+[source,roc]
+----
+Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
+Environment("host", [Tools(["nix#zig", "nix#pkg-config"])]),
+----
+
+Only an environment with such a tool starts Nix. Other tasks of the same
+project run without it.
+
+== Update without Nix
+
+`blueprint update` starts Nix only when `Blueprint.roc` declares something Nix
+resolves: a Nix package source, an input, an overlay or a build source. A
+project that declares none is updated on a machine with no Nix.
+
+* For each fetched program it downloads and hashes this machine's file. When
+  the URL is a GitHub release asset it also asks the release, once and with
+  no token, what digest it publishes. The two must agree, and the published
+  digest is recorded for the other systems without downloading them. The lock
+  says how each digest was obtained: `Computed`, `Published` or `Both`.
+* When GitHub cannot be asked, which its limit of 60 requests an hour from
+  one address makes common on shared CI runners, the update says so and
+  downloads and hashes the file for every system instead.
+* `blueprint update PROGRAM` resolves one fetched program again and nothing
+  else, and never needs Nix.
+* After writing the lock it prints every download host the new lock names and
+  the old one did not.
+
+== Ask what tasks need
+
+`blueprint requirements [--json] [TASK...]` reads `Blueprint.roc` alone and
+says, for each task, whether it needs Nix, which programs it fetches and
+which it expects of the machine. A CI job can install Nix exactly when it is
+needed:
+
+[source,sh]
+----
+blueprint requirements --json check | jq -e '.providers | index("nix")'
+----
+
+`blueprint shell` works without Nix too: for an environment with no Nix tool
+it starts your own `$SHELL` with the fetched programs on `PATH`.
+
+== If you used 0.5
+
+1. Replace the platform URL in the `app` header with this release's, and use
+   this release's `blueprint` binary.
+2. Declare a package source, and write its name before every tool: `"git"`
+   becomes `"nix#git"`, in `Tools`, `ToolsFor`, `Command` and `ToolWith`. A
+   0.5 project that declared no source used
+   `github:NixOS/nixpkgs/nixos-unstable`; declare that to keep the same
+   packages. Remove `Packages(name, Auto)`.
+3. Or take the tool off Nix: move a program that is published as a download
+   to `Programs([Fetch(...)])`, and a tool every machine has to `Expect`.
+   `roc check Blueprint.roc` reports each remaining tool with no source and
+   shows both ways out.
+4. Run `blueprint update` and commit the new `Blueprint.lock`. A 0.5 lock is
+   refused until then. Read the diff: it gains a `fetched` entry for each
+   program and system.
+5. In CI, install Nix only where `blueprint requirements` says a task needs
+   it, and cache the `v1/artifacts` directory of the store, keyed on
+   `Blueprint.lock`.
+
+=== A pure package
+
+Before, for 0.5:
+
+[source,roc,snippet=unchecked]
+----
+config = [
+	Name("my-package"),
+	Overlay("roc", "github:roc-lang/roc-overlay"),
+	Environment("dev", [
+		Overlays(["roc"]),
+		Command("roc-stable", "rocpkgs.nightly-2026-10-04-130536d"),
+		Tools(["git", "gh"]),
+		RocPackages([
+			"https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+			"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
+		]),
+	]),
+	Task("check", [Use("dev"), Run(["scripts/check_all.roc"])]),
+]
+----
+
+After. Nothing in it is Nix's, so no command starts Nix:
+
+[source,roc]
+----
+app [config] { pf: platform "{platform-url}" }
+
+import pf.Recipes
+
+config = [
+	Name("my-package"),
+	Environment("dev", [
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))]),
+		Expect(["git", "gh"]),
+		RocPackages([
+			"https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+			"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
+		]),
+	]),
+	Task("check", [Use("dev"), Run(["scripts/check_all.roc"])]),
+]
+----
+
+=== A platform with a Zig toolchain from Nix
+
+Before, for 0.5:
+
+[source,roc,snippet=unchecked]
+----
+config = [
+	Name("my-platform"),
+	Overlay("roc", "github:roc-lang/roc-overlay"),
+	Overlay("zig", "github:mitchellh/zig-overlay"),
+	Environment("dev", [
+		Overlays(["roc", "zig"]),
+		Command("roc-stable", "rocpkgs.nightly-2026-10-04-130536d"),
+		Tools(["git", "zigpkgs.\"0.16.0\""]),
+	]),
+	Task("check", [Use("dev"), Run(["scripts/check_all.roc"])]),
+	Task("build-host", [Use("dev"), Run(["zig", "build"])]),
+]
+----
+
+After. The scripts' environment needs no Nix; the environment that builds the
+host extends it and takes Zig from a declared source:
+
+[source,roc]
+----
+app [config] { pf: platform "{platform-url}" }
+
+import pf.Recipes
+
+config = [
+	Name("my-platform"),
+	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
+	Overlay("zig", "github:mitchellh/zig-overlay"),
+	Environment("dev", [
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))]),
+		Expect(["git"]),
+	]),
+	Environment("host", [
+		Extend("dev"),
+		Overlays(["zig"]),
+		Tools(["nix#zigpkgs.\"0.16.0\""]),
+	]),
+	Task("check", [Use("dev"), Run(["scripts/check_all.roc"])]),
+	Task("build-host", [Use("host"), Run(["zig", "build"])]),
+]
+----
+
+`blueprint update` needs Nix in this project, because it declares a Nix
+source. After it, `blueprint run check` starts no Nix and
+`blueprint run build-host` does.
+
+== Breaking changes
+
+* *Every tool names its source.* A tool is `"<source>#<name>"` in `Tools`,
+  `ToolsFor`, `Command` and `ToolWith`. `"git"` alone is an error at the
+  literal, with both fixes in the message.
+* *No default source and no `Auto`.* `Packages(name, Auto)` is refused, and a
+  project that declares no source has none. A project with no tool from a
+  package source declares none.
+* *The first declared Nix source has the roles `default` had.* An
+  environment Nix must build although it has no tool of its own, such as the
+  sandbox of a build with an empty environment, uses the first Nix source in
+  the order of `Blueprint.roc`. So does the `nixpkgs` input the generated
+  flake gives `nix develop` for its bash. A source called `default` is no
+  longer preferred for either.
+* *`Systems` accepts known systems only.* Each is `<arch>-<os>` of `x86_64`,
+  `aarch64`, `riscv64`, `i686`, `armv7l` or `powerpc64le` and `linux`,
+  `darwin`, `windows` or `freebsd`. Another name is an error where it is
+  written.
+* *The lock is format 1.1 and a 0.5 lock is refused.* It gains `fetched`, the
+  digest of each program on each system with how it was `obtained`. Run
+  `blueprint update`.
+* *Roc packages that only tasks and shells use leave the lock.* `blueprint`
+  downloads them itself, and the compiler refuses bytes that are not those
+  the URL's hash names. A bundle stays in the lock when a build's environment
+  has it, since Nix fetches it for the sandbox.
+* *`BLUEPRINT_PROVIDER` is gone*, with the host provider it selected.
+  `Blueprint.roc` alone decides whether a request needs Nix. The fixed table
+  that mapped Nix tool names to programs of the machine, and its exact-version
+  check of Zig and Rust, went with it: write `Expect`, which asks no version.
+* *`GH_TOKEN` and `GITHUB_TOKEN` are not read.* No request carries a token.
+  Only `blueprint update` asks GitHub anything, and it falls back to
+  downloading when refused.
+* *A build cannot use fetched programs or expected tools.* An environment
+  that a build uses takes everything from its package sources.
+* *The generated flake has no `blueprintRocPackages` output*, and it leaves
+  out every shell and task environment that has no tool from a Nix source. A
+  project with no Nix source has no flake at all: `blueprint gen` writes none
+  and `blueprint flake` prints nothing.
+* *The "no input named X" message* of `blueprint update NAME` now reads
+  `no input or program named X` and lists both.
+
+== When versions are mixed
+
+The Spec is format 2.7 and always requires the feature `explicit-sources`.
+
+* A 0.5 `blueprint` given a 0.6 `Blueprint.roc` says
+  `Blueprint.roc needs features: explicit-sources; upgrade blueprint`.
+* A 0.6 `blueprint` given a `Blueprint.roc` on an older platform says
+  `Blueprint.roc uses a roc-blueprint platform older than 0.6.0; update the
+  platform URL in its app header and see docs/releases/0.6.0`.
+* A 0.6 `blueprint` given a 0.5 lock says `Blueprint.lock was written by
+  blueprint 0.5 or older, which gave every project a package source it did
+  not declare; run blueprint update to resolve it again with this blueprint,
+  and review what changes`.
+
+== For programs that import the core package
+
+[source,roc,snippet=unchecked]
+----
+core: "{core-url}"
+----
+
+* `Provider` gains `realises`, which says which package sources a provider
+  supplies, and loses `compiler` and the `Compiler` type: the Core fetches
+  its own compiler.
+* `Provider.Resolution` gains `present`, the programs the machine must have
+  for an update.
+* The new module `Realise` plans a request (`plan`, `preflight`,
+  `requirements`, `resolvers`). A consumer that called a provider's `plan`
+  directly should call `Realise.plan`, which asks the provider only for
+  environments that need it.
+* `Steps.Operation` loses `RocPackages`, `Fetch`, `Search` and `Require` and
+  gains `Present` and `Programs`; `RocBundles` is a list of names and URLs.
+  `Steps.Program` is new.
+* `Spec` gains `programs`, `environment_programs` and `expects`, and `Lock`
+  gains `fetched`. `Project.tool` accepts only `<source>#<name>`, and
+  `Tool.to_str` always writes the source.
+
+== Known limits
+
+* The Nix-free path is run in CI on x86_64 Linux, arm64 Linux and Apple
+  Silicon macOS. It was developed and measured on x86_64 Linux.
+* Windows cannot use this release: no Windows binary is attached and the
+  platform has no Windows target.
+* `tar`, `ln` and `chmod` must be on `PATH` to unpack and link a fetched
+  program. A `Zip` archive unpacks only where `tar` is bsdtar.
+* A `Fetch` gives one command. An archive that holds several programs needs
+  a `Fetch` for each.
+* An expected tool is not version-checked.
+* `blueprint requirements` reports tasks. It does not say that a build, a
+  workflow with a build, or `blueprint update` needs Nix.
+* `Recipes.file` answers for every declared system. Where a release has no
+  file for one of them, `blueprint update` fails on it and says to list the
+  supported systems in `Systems` or to write a recipe that answers
+  `Unavailable`.
+* Adding the first Nix source to a project makes its lock stale for every
+  task until someone with Nix runs `blueprint update`.
+* The digests in the lock are those `blueprint update` saw. Review a lock
+  change as you review code.
