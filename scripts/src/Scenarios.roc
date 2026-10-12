@@ -7,6 +7,7 @@ import Process
 import Script
 import "../../flake.lock" as flake_lock : Str
 import "../../fixtures/consumer/inputs.lock" as fixture_lock : Str
+import "../../fixtures/overlays/configurable/flake.nix" as configurable_overlay : Str
 import "../../fixtures/overlays/first/flake.nix" as first_overlay : Str
 import "../../fixtures/overlays/patch/flake.nix" as patch_overlay : Str
 import "../../fixtures/overlays/unused/flake.nix" as unused_overlay : Str
@@ -306,6 +307,45 @@ Scenarios := [].{
 				Eval("devShells.x86_64-linux.rust.drvPath", Succeeds),
 				Eval("devShells.aarch64-darwin.rust.drvPath", Succeeds),
 				Cli(["run", "zig"], Prints("0.16.0\n")),
+			],
+		},
+		{
+			name: "configured tools: options reach the package, a child replaces them, Rust takes targets",
+			place: Fresh,
+			files: [
+				("configurable/flake.nix", configurable_overlay),
+				(
+					"Blueprint.roc",
+					Str.join_with(
+						[
+							"${header}config = [",
+							"	Name(\"configured-tools\"),",
+							"	Systems([\"x86_64-linux\", \"aarch64-darwin\"]),",
+							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
+							"	Overlay(\"configurable\", \"path:./configurable\"),",
+							"	Overlay(\"rust\", \"${toolchains.rust}\"),",
+							"	Environment(\"base\", [Overlays([\"configurable\"]), ToolWith(\"configurableTool\", [(\"targets\", List([Str(\"a\")]))])]),",
+							"	Environment(\"dev\", [Extend(\"base\"), ToolWith(\"configurableTool\", [(\"targets\", List([Str(\"b\"), Str(\"c d\")])), (\"extensions\", List([Str(\"src\")]))])]),",
+							"	Environment(\"rust\", [Overlays([\"rust\"]), ToolWith(\"rust-bin.stable.\\\"1.95.0\\\".default\", [(\"targets\", List([Str(\"x86_64-unknown-linux-musl\"), Str(\"aarch64-unknown-linux-musl\")])), (\"extensions\", List([Str(\"rust-src\")]))])]),",
+							"	Shell(\"rust\", [Use(\"rust\")]),",
+							"	Task(\"base\", [Use(\"base\"), Run([\"configurable-tool\"])]),",
+							"	Task(\"dev\", [Use(\"dev\"), Run([\"configurable-tool\"])]),",
+							"]",
+							"",
+						],
+						"\n",
+					),
+				),
+			],
+			executable: [],
+			steps: [
+				# rust-overlay accepts the targets and the component; nothing is built.
+				Eval("devShells.x86_64-linux.rust.drvPath", Succeeds),
+				Eval("devShells.aarch64-darwin.rust.drvPath", Succeeds),
+				Cli(["run", "base"], Prints("targets=a extensions=\n")),
+				# The child's options replace the parent's whole; they are not merged.
+				Cli(["run", "dev"], Prints("targets=b c d extensions=src\n")),
+				Generated([], [".\"configurableTool\".override { \"targets\" = [ \"b\" \"c d\" ]; \"extensions\" = [ \"src\" ]; })"]),
 			],
 		},
 	]
@@ -696,7 +736,7 @@ expect Scenarios.scenarios("github:NixOS/nixpkgs/abc", "github:roc-lang/roc-over
 				}
 		},
 )
-expect Scenarios.scenarios("p", "o", sample_roc, sample_toolchains).len() == 7
+expect Scenarios.scenarios("p", "o", sample_roc, sample_toolchains).len() == 8
 
 # What Nix 2.35 prints at --debug when the flake has an input named nixpkgs,
 # and what it printed for a generated flake before one followed `default`.
@@ -730,7 +770,7 @@ expect Scenarios.bash_problem(debugged(locked_bash_log.replace_each("evaluating 
 expect Scenarios.bash_problem({ code: 1, stdout: "", stderr: locked_bash_log }, "github:NixOS/nixpkgs/4975466d") == "expected exit 0, got 1"
 
 # Two fresh scenarios check which bash `nix develop` takes: a task's entry and a shell alias.
-expect Scenarios.scenarios("p", "o", sample_roc, sample_toolchains).map(|scenario| scenario.steps.keep_if(|step| step == LockedBash("devShells.x86_64-linux.default", "p") or step == LockedBash("devShells.x86_64-linux.blueprint-env-base", "p")).len()) == [0, 0, 1, 0, 1, 0, 0]
+expect Scenarios.scenarios("p", "o", sample_roc, sample_toolchains).map(|scenario| scenario.steps.keep_if(|step| step == LockedBash("devShells.x86_64-linux.default", "p") or step == LockedBash("devShells.x86_64-linux.blueprint-env-base", "p")).len()) == [0, 0, 1, 0, 1, 0, 0, 0]
 
 # The edge an update now records is removed whole, leaving balanced text;
 # a lock without it, or with another edge of that name, is left as it is.

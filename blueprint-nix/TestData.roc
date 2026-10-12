@@ -117,6 +117,7 @@ TestData :: [].{
 		environments: t.environments,
 		system_tools: [],
 		commands: [],
+		configured_tools: [],
 		roc_packages: [],
 		shells: t.shells,
 		tasks: t.tasks,

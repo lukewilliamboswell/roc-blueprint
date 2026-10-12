@@ -137,7 +137,8 @@ message names every tool that is missing or of the wrong version.
 
 A task whose environment declares any other tool is refused on Windows, with
 every such tool named. The package source a tool comes from (`py#python314`)
-means nothing there. `ToolsFor` cannot yet name Windows: the Nix provider
+means nothing there. A tool configured with `ToolWith` is checked for as the
+tool itself; its options, such as Rust targets, are not checked. `ToolsFor` cannot yet name Windows: the Nix provider
 refuses a configuration whose `Systems` lists it.
 
 == Where things are kept

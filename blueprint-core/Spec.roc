@@ -19,6 +19,7 @@ Spec := {
 	environments : List({ name : Str, parents : List(Str), tools : List({ source : Str, name : Str }), overlays : List(Str) }),
 	system_tools : List({ environment : Str, system : Str, tools : List({ source : Str, name : Str }) }),
 	commands : List({ environment : Str, name : Str, tool : { source : Str, name : Str } }),
+	configured_tools : List({ environment : Str, tool : { source : Str, name : Str }, options : Value }),
 	roc_packages : List({ environment : Str, name : Str, source : Str }),
 	shells : List({ name : Str, environment : Str }),
 	tasks : List({ name : Str, environment : Str, run : List(Str) }),
@@ -54,6 +55,11 @@ Spec := {
 	## receives only that command, not the tool's own executables.
 	Command : { environment : Str, name : Str, tool : Tool }
 
+	## A tool built with options its package takes, such as a toolchain's
+	## targets. `options` is data the provider passes to the package, never an
+	## expression. The environment receives the tool as it would a plain one.
+	ConfiguredTool : { environment : Str, tool : Tool, options : Value }
+
 	## A released Roc package bundle the environment's Roc programs resolve
 	## without a download. `name` is its content hash, the directory Roc looks
 	## for in its package cache; `source` names the locked build source that
@@ -80,7 +86,7 @@ Spec := {
 	Raw : { backend : Str, target : Str, value : Value }
 
 	current_format : Format
-	current_format = { major: 2, minor: 5 }
+	current_format = { major: 2, minor: 6 }
 
 	empty : Str -> Spec
 	empty = |name| Spec.{
@@ -93,6 +99,7 @@ Spec := {
 		environments: [],
 		system_tools: [],
 		commands: [],
+		configured_tools: [],
 		roc_packages: [],
 		shells: [],
 		tasks: [],
@@ -127,6 +134,7 @@ Spec := {
 				environments: wire.environments ?? [],
 				system_tools: wire.system_tools ?? [],
 				commands: wire.commands ?? [],
+				configured_tools: wire.configured_tools ?? [],
 				roc_packages: wire.roc_packages ?? [],
 				shells: wire.shells ?? [],
 				tasks: wire.tasks ?? [],
@@ -153,6 +161,7 @@ Wire : {
 	environments : Try(List(Spec.Environment), [Missing]),
 	system_tools : Try(List(Spec.SystemTools), [Missing]),
 	commands : Try(List(Spec.Command), [Missing]),
+	configured_tools : Try(List(Spec.ConfiguredTool), [Missing]),
 	roc_packages : Try(List(Spec.RocPackage), [Missing]),
 	shells : Try(List(Spec.Shell), [Missing]),
 	tasks : Try(List(Spec.Task), [Missing]),
@@ -177,8 +186,17 @@ expect {
 
 expect {
 	spec = { ..Spec.empty("x"), requires_: ["sources", "roc-packages"], build_sources: [{ name: "roc-abc", ref: "tarball+https://example.test/abc.tar.zst" }], roc_packages: [{ environment: "dev", name: "abc", source: "roc-abc" }] }
-	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 5 }
+	Spec.parse(spec.to_str()) == Ok(spec)
 }
+
+expect {
+	options = Value.Attrs([{ name: "targets", value: Value.List([Value.Str("x86_64-unknown-linux-musl")]) }])
+	spec = { ..Spec.empty("x"), requires_: ["configured-tools"], configured_tools: [{ environment: "dev", tool: { source: "default", name: "rust-bin.stable.\"1.95.0\".default" }, options }] }
+	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 6 }
+}
+
+# A 2.5 record has no configured tools.
+expect Spec.parse("((format ((major 2) (minor 5))) (name \"x\"))").map_ok(|spec| spec.configured_tools) == Ok([])
 expect Spec.parse("((format ((major 1) (minor 0))) (shells 42))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
 expect Spec.parse("((format ((major 3) (minor 0))))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))
 # Earlier minor records omit newer optional build and workflow fields.

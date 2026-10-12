@@ -12,7 +12,7 @@ xref:architecture.adoc#terms[The architecture chapter] defines the terms.
 
 In outline:
 
-* `format` — `((major 2) (minor 5))`; see <<compatibility-of-the-formats>>.
+* `format` — `((major 2) (minor 6))`; see <<compatibility-of-the-formats>>.
 * `name`, `systems` (strings such as `"x86_64-linux"`).
 * `sources` — `{ name, provider }`, where provider is `Auto`,
   `NixPackages(Str)` or `GuixPackages(Str)`. Validation supplies
@@ -25,6 +25,10 @@ In outline:
   inherit parent first and only enter the environment on their named System.
 * `commands` — optional `{ environment, name, tool }` launchers. Validation
   flattens inheritance; a child replaces a same-named inherited command.
+* `configured_tools` — optional `{ environment, tool, options }`: a tool and
+  the options its package is built with, an `Attrs` value. Validation
+  flattens inheritance; a child replaces an inherited tool's options, and a
+  tool an environment also has plain is rejected.
 * `roc_packages` — optional `{ environment, name, source }`: a Roc bundle's
   content hash and the `build_sources` entry that fetches it. The platform
   derives both from the bundle URL (`roc-<hash>`, `tarball+<url>`);
@@ -42,7 +46,7 @@ In outline:
   wire field keeps the name `backend`).
 * `extensions` — `{ kind, name, value }`, blocks a provider may understand.
 * `requires` — features the config uses beyond the core (`"raw"`,
-  `"extensions"`, `"sources"`, `"builds"`, `"workflows"`, `"system-tools"`, `"commands"`, `"roc-packages"`), so an older `blueprint` can say what's missing.
+  `"extensions"`, `"sources"`, `"builds"`, `"workflows"`, `"system-tools"`, `"commands"`, `"roc-packages"`, `"configured-tools"`), so an older `blueprint` can say what's missing.
 
 `Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its S-expression encoder
 and parser are hand-written to avoid recursive-codec derivation problems.
@@ -127,7 +131,8 @@ provider. It:
   filtering: missing/unavailable packages fail in Nix. Explicit `system_tools`
   select packages for their named System before Nix evaluates them. Each
   `commands` entry becomes a package holding one launcher that execs the
-  tool's main program;
+  tool's main program. Each `configured_tools` entry is the tool's `override`
+  applied to its options, rendered as data like `raw`, in shells and builds;
 * makes `roc_packages` available without a download. A shell or task step
   carries a `RocPackages` operation naming the environment's bundles and a
   `locate` argv (`nix eval --json` of the generated flake's
@@ -143,7 +148,8 @@ provider. It:
   rejecting invalid targets, duplicate attributes and managed-field overrides.
   Alias Raw does not affect other aliases or tasks; other providers' Raw is inert;
 * refuses any `extensions` and advertises `"raw"`, `"sources"`, `"builds"`,
-  `"workflows"`, `"system-tools"`, `"commands"` and `"roc-packages"`;
+  `"workflows"`, `"system-tools"`, `"commands"`, `"roc-packages"` and
+  `"configured-tools"`;
 * builds ordinary derivations with exact argv, filtered project snapshots,
   read-only declared sources/artifacts and checked file/directory outputs. Each
   is a raw `derivation` whose builder is the CLI's own executable, run as

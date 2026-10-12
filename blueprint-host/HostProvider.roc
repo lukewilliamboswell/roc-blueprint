@@ -17,7 +17,7 @@ HostProvider :: [].{
 		name: "host",
 		# What a Blueprint.roc may require and still load here. Loading is not
 		# realising: `preflight` refuses what this provider cannot do.
-		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages"],
+		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools"],
 		render: |spec| {
 			_ = Project.validate(spec)?
 			Ok([])
@@ -373,7 +373,9 @@ HostProvider :: [].{
 	## programs the host must already have. Nothing is installed: a tool is
 	## known here by what proves it present, and one that is not known is
 	## refused, all of them in one message. A tool's source says which Nix
-	## package set it comes from and means nothing here.
+	## package set it comes from and means nothing here, and neither do the
+	## options of a configured tool: nothing on the host says which targets
+	## or components a toolchain was installed with.
 	environment_probes : Spec, Str, Str -> Try(List(Steps.Probe), Str)
 	environment_probes = |project, name, target| {
 		environment = project.environments.find_first(|e| e.name == name)
@@ -381,7 +383,7 @@ HostProvider :: [].{
 		tools = environment.tools.concat(
 			project.system_tools.keep_if(|entry| entry.environment == name and entry.system == target)
 				.fold([], |all, entry| all.concat(entry.tools)),
-		)
+		).concat(project.configured_tools.keep_if(|entry| entry.environment == name).map(|entry| entry.tool))
 		var $probes = []
 		var $unknown = []
 		for tool in tools {
@@ -727,3 +729,12 @@ expect
 	["python3", "zigpkgs.master", "zigpkgs.\"0.16\"", "rust-bin.nightly.\"2026-10-01\".default", "rust-bin.stable.\"1.95.0\".minimal", "git.doc", "nodejs"].all(
 		|name| HostProvider.tool_probes({ source: "default", name }) == Err(UnknownTool),
 	)
+
+# A configured tool is asked for as the tool it configures.
+expect
+	HostProvider.environment_probes(
+		{ ..sample, requires_: sample.requires_.append("configured-tools"), configured_tools: [{ environment: "plain", tool: { source: "default", name: "rust-bin.stable.\"1.95.0\".default" }, options: Attrs([]) }] },
+		"plain",
+		"x86_64-windows",
+	).map_ok(|probes| probes.map(|probe| probe.probe))
+		== Ok([["rustc", "--version"], ["cargo", "--version"]])

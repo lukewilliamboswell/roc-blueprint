@@ -35,6 +35,29 @@ identifies a package by its URL, so this is a different package from the one
 under the `core-` tags, and the two cannot be mixed in one program. There will
 be no further `core-X.Y.Z` releases.
 
+== Configure a tool
+
+`ToolWith` adds a tool built with options its package takes. A platform host
+that cross-compiles Rust can now declare its toolchain's targets and
+components:
+
+[source,roc]
+----
+Overlay("rust", "github:oxalica/rust-overlay"),
+Environment("host", [
+	Overlays(["rust"]),
+	ToolWith("rust-bin.stable.\"1.95.0\".default", [
+		("targets", List([Str("x86_64-unknown-linux-musl"), Str("aarch64-unknown-linux-musl")])),
+		("extensions", List([Str("rust-src")])),
+	]),
+]),
+----
+
+The options are data passed to the package's `override`, never an
+expression. The Spec is now format 2.6, and a configuration that uses
+`ToolWith` requires the feature `configured-tools`, which a `blueprint` older
+than this release refuses by name.
+
 == Changes to the tool
 
 * `blueprint` writes a `.gitignore` into the directory it generates

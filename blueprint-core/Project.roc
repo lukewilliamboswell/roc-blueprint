@@ -1,5 +1,6 @@
 # Shared normalization, reference checks and bounded graph expansion.
 import Spec
+import Value
 
 ## Shared pure semantic boundary. Validation observes neither PATH nor the host.
 ## It normalizes defaults and inheritance, and is safe to repeat on emitted Spec.
@@ -286,6 +287,18 @@ Project :: [].{
 				return Err("DuplicateCommand: environment ${entry.environment}: ${entry.name}")
 			}
 		}
+		if !spec.configured_tools.is_empty() and !spec.requires_.contains("configured-tools") {
+			return Err("configured tools require feature: configured-tools")
+		}
+		for entry in spec.configured_tools {
+			if !spec.environments.any(|e| e.name == entry.environment) {
+				return Err("unknown environment for configured tool: ${entry.environment}")
+			}
+			if spec.configured_tools.keep_if(|other| other.environment == entry.environment and other.tool == entry.tool).len() > 1 {
+				return Err("DuplicateToolWith: environment ${entry.environment}: ${entry.tool.name}")
+			}
+			check_options(entry)?
+		}
 		if !spec.roc_packages.is_empty() and !spec.requires_.contains("roc-packages") {
 			return Err("Roc packages require feature: roc-packages")
 		}
@@ -311,11 +324,14 @@ Project :: [].{
 		var $environments = []
 		var $system_tools = []
 		var $commands = []
+		var $configured_tools = []
 		var $roc_packages = []
 		for env in spec.environments {
 			resolved = resolve(spec.environments, env.name, [])?
 			env_commands = resolve_commands(spec.environments, spec.commands, env.name, [])?
 			$commands = $commands.concat(env_commands)
+			env_configured = resolve_configured_tools(spec.environments, spec.configured_tools, env.name, [])?
+			$configured_tools = $configured_tools.concat(env_configured)
 			$roc_packages = $roc_packages.concat(resolve_roc_packages(spec.environments, spec.roc_packages, env.name, [])?)
 			for system in declared_systems {
 				tools_for_system = resolve_system_tools(spec.environments, spec.system_tools, env.name, system, [])?
@@ -323,7 +339,8 @@ Project :: [].{
 					$system_tools = $system_tools.append({ environment: env.name, system, tools: tools_for_system })
 				}
 			}
-			all_tools = resolved.tools.concat($system_tools.keep_if(|entry| entry.environment == env.name).fold([], |tools, entry| tools.concat(entry.tools))).concat(env_commands.map(|entry| entry.tool))
+			plain_tools = resolved.tools.concat($system_tools.keep_if(|entry| entry.environment == env.name).fold([], |tools, entry| tools.concat(entry.tools)))
+			all_tools = plain_tools.concat(env_commands.map(|entry| entry.tool)).concat(env_configured.map(|entry| entry.tool))
 			for t in all_tools {
 				parsed = tool("${t.source}#${t.name}")?
 				source = sources.find_first(|s| s.name == parsed.source).map_err(|_| "unknown source: ${t.source}")?
@@ -335,6 +352,15 @@ Project :: [].{
 					GuixPackages(_) => {
 						check_tool(Guix, t.name)?
 					}
+				}
+			}
+			# One package cannot be on PATH both as it is and with options.
+			for entry in env_configured {
+				if plain_tools.contains(entry.tool) {
+					return Err("tool is both plain and configured in environment ${env.name}: ${entry.tool.name}")
+				}
+				if sources.any(|s| s.name == entry.tool.source and guix_source(s.provider)) {
+					return Err("Guix does not support configured tools: ${entry.tool.name}")
 				}
 			}
 			for overlay in resolved.overlays {
@@ -392,7 +418,7 @@ Project :: [].{
 				return Err("empty Raw provider or target")
 			}
 		}
-		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, roc_packages: $roc_packages, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
+		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
 	}
 
 	## Whole-project checks precede expansion, even for an empty request.
@@ -623,6 +649,59 @@ Project :: [].{
 		}
 	}
 
+	## Configured tools inherit parent first. A child configuring an inherited
+	## tool replaces its options, keeping the parent's position.
+	resolve_configured_tools : List(Spec.Environment), List(Spec.ConfiguredTool), Str, List(Str) -> Try(List(Spec.ConfiguredTool), Str)
+	resolve_configured_tools = |environments, entries, name, visiting| {
+		if visiting.contains(name) or visiting.len() >= 128 {
+			return Err("environment cycle or inheritance limit: ${name}")
+		}
+		env = environments.find_first(|e| e.name == name).map_err(|_| "unknown environment: ${name}")?
+		own = entries.keep_if(|entry| entry.environment == name)
+		match env.parents {
+			[] => Ok(own)
+			[parent] => {
+				inherited = resolve_configured_tools(environments, entries, parent, visiting.append(name))?
+				kept = inherited.map(
+					|entry| {
+						replacement = own.find_first(|o| o.tool == entry.tool).map_ok(|o| o.options) ?? entry.options
+						{ environment: name, tool: entry.tool, options: replacement }
+					},
+				)
+				Ok(kept.concat(own.keep_if(|o| !inherited.any(|entry| entry.tool == o.tool))))
+			}
+			_ => Err("environment ${name} has several parents")
+		}
+	}
+
+	## Options are named values, each name once: what any provider can pass
+	## to a package as data.
+	check_options : Spec.ConfiguredTool -> Try({}, Str)
+	check_options = |entry|
+		match entry.options {
+			Attrs(options) => {
+				var $seen = []
+				for option in options {
+					if !clean(option.name) {
+						return Err("invalid option name for tool ${entry.tool.name}: ${option.name}")
+					}
+					if $seen.contains(option.name) {
+						return Err("DuplicateOption: tool ${entry.tool.name}: ${option.name}")
+					}
+					$seen = $seen.append(option.name)
+				}
+				Ok({})
+			}
+			_ => Err("options of tool ${entry.tool.name} must be Attrs")
+		}
+
+	guix_source : Spec.Provider -> Bool
+	guix_source = |provider|
+		match provider {
+			GuixPackages(_) => True
+			_ => False
+		}
+
 	## Roc packages inherit parent first. A name is a content hash, so a child
 	## repeating an inherited package adds nothing.
 	resolve_roc_packages : List(Spec.Environment), List(Spec.RocPackage), Str, List(Str) -> Try(List(Spec.RocPackage), Str)
@@ -653,7 +732,11 @@ Project :: [].{
 			return Err("Guix does not support overlays in environment ${name}")
 		}
 		# An empty environment still uses the default provider's environment builder.
-		all_tools = env.tools.concat(project.system_tools.keep_if(|entry| entry.environment == name).fold([], |tools, entry| tools.concat(entry.tools))).concat(project.commands.keep_if(|entry| entry.environment == name).map(|entry| entry.tool))
+		configured = project.configured_tools.keep_if(|entry| entry.environment == name)
+		if provider == Guix and !configured.is_empty() {
+			return Err("Guix does not support configured tools in environment ${name}")
+		}
+		all_tools = env.tools.concat(project.system_tools.keep_if(|entry| entry.environment == name).fold([], |tools, entry| tools.concat(entry.tools))).concat(project.commands.keep_if(|entry| entry.environment == name).map(|entry| entry.tool)).concat(configured.map(|entry| entry.tool))
 		source_names = if all_tools.is_empty() ["default"] else unique(all_tools.map(|t| t.source))
 		for source_name in source_names {
 			source = project.sources.find_first(|s| s.name == source_name).map_err(|_| "unknown source: ${source_name}")?
@@ -718,6 +801,7 @@ fixture = |environments| Spec.{
 	environments,
 	system_tools: [],
 	commands: [],
+	configured_tools: [],
 	roc_packages: [],
 	shells: [],
 	tasks: [],
@@ -832,6 +916,7 @@ build_fixture = |builds| Spec.{
 	environments: [{ name: "builder", parents: [], tools: [], overlays: [] }],
 	system_tools: [],
 	commands: [],
+	configured_tools: [],
 	roc_packages: [],
 	shells: [],
 	tasks: [],
@@ -957,7 +1042,7 @@ expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../esc
 build_source_fixture : List(Spec.BuildSource), List(Str) -> Spec
 build_source_fixture = |build_sources, requires_| {
 	spec = build_fixture([library])
-	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, roc_packages: spec.roc_packages, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
+	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
 }
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["builds"])) == Err("build sources require feature: sources")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["sources"])) == Err("builds require feature: builds")
@@ -1022,6 +1107,7 @@ workflow_features = |workflows, features| Spec.{
 	environments: [{ name: "builder", parents: [], tools: [], overlays: [] }],
 	system_tools: [],
 	commands: [],
+	configured_tools: [],
 	roc_packages: [],
 	shells: [],
 	tasks: [{ name: "check.all", environment: "builder", run: ["cmd"] }],
@@ -1312,6 +1398,58 @@ expect Project.validate(fixture([{ ..base, tools: [{ source: "data", name: "git"
 expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])) == Err("invalid Nix tool: python@3")
 expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])) == Err("invalid Guix tool: python@")
 expect Project.validate({ ..fixture([base]), requires_: ["commands"], commands: [{ environment: "base", name: "bin/vcs", tool: { source: "default", name: "git" } }] }) == Err("invalid command name: bin/vcs")
+
+rust : Spec.Tool
+rust = { source: "nix", name: "rust-bin.stable.\"1.95.0\".default" }
+
+rust_targets : List(Str) -> Value
+rust_targets = |names| Value.Attrs([{ name: "targets", value: Value.List(names.map(|name| Value.Str(name))) }])
+
+# A child inherits a configured tool and replaces its options in place.
+expect {
+	spec = {
+		..fixture([{ ..base, tools: [], overlays: [] }, { name: "dev", parents: ["base"], tools: [], overlays: [] }, { name: "ci", parents: ["base"], tools: [], overlays: [] }]),
+		requires_: ["configured-tools"],
+		configured_tools: [
+			{ environment: "base", tool: rust, options: rust_targets(["a"]) },
+			{ environment: "dev", tool: rust, options: rust_targets(["b"]) },
+			{ environment: "dev", tool: { source: "nix", name: "zig" }, options: Value.Attrs([]) },
+		],
+	}
+	match Project.validate(spec) {
+		Ok(valid) => valid.configured_tools == [
+			{ environment: "base", tool: rust, options: rust_targets(["a"]) },
+			{ environment: "dev", tool: rust, options: rust_targets(["b"]) },
+			{ environment: "dev", tool: { source: "nix", name: "zig" }, options: Value.Attrs([]) },
+			{ environment: "ci", tool: rust, options: rust_targets(["a"]) },
+		]
+			and Project.check_environment(spec, Nix, "ci").is_ok()
+				and Project.check_environment(spec, Guix, "ci") == Err("Guix does not support configured tools in environment ci")
+		Err(_) => False
+	}
+}
+
+expect {
+	entry = { environment: "base", tool: rust, options: rust_targets(["a"]) }
+	spec = { ..fixture([{ ..base, tools: [], overlays: [] }]), configured_tools: [entry] }
+	featured = { ..spec, requires_: ["configured-tools"] }
+	Project.validate(spec) == Err("configured tools require feature: configured-tools") and
+		Project.validate({ ..featured, configured_tools: [entry, entry] }) == Err("DuplicateToolWith: environment base: ${rust.name}") and
+			Project.validate({ ..featured, configured_tools: [{ ..entry, environment: "missing" }] }) == Err("unknown environment for configured tool: missing") and
+				Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing") and
+					Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "nix", name: "python@3" } }] }).is_err() and
+						Project.validate({ ..featured, configured_tools: [{ ..entry, options: Value.List([]) }] }) == Err("options of tool ${rust.name} must be Attrs") and
+							Project.validate({ ..featured, configured_tools: [{ ..entry, options: Value.Attrs([{ name: "targets", value: Value.Int(1) }, { name: "targets", value: Value.Int(2) }]) }] }) == Err("DuplicateOption: tool ${rust.name}: targets") and
+								Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "guix", name: "git" } }] }) == Err("Guix does not support configured tools: git")
+}
+
+# A tool the environment already has as it is cannot also be configured,
+# whether its own or inherited.
+expect {
+	plain = { ..base, overlays: [], tools: [rust] }
+	Project.validate({ ..fixture([plain]), requires_: ["configured-tools"], configured_tools: [{ environment: "base", tool: rust, options: rust_targets([]) }] }) == Err("tool is both plain and configured in environment base: ${rust.name}") and
+		Project.validate({ ..fixture([plain, { name: "dev", parents: ["base"], tools: [], overlays: [] }]), requires_: ["configured-tools"], configured_tools: [{ environment: "dev", tool: rust, options: rust_targets([]) }] }) == Err("tool is both plain and configured in environment dev: ${rust.name}")
+}
 
 # Build references name build sources and builds only, each at most once.
 expect Project.validate(build_fixture([{ ..library, inputs: ["default"] }])) == Err("unknown build source: default")

@@ -49,7 +49,7 @@ flake.nix                builds blueprint with the pinned Roc; the development s
 ----
 
 The local platform and CLI share `blueprint-core`, including
-`Project.validate`. The Spec wire format is major 2 (currently 2.5); published
+`Project.validate`. The Spec wire format is major 2 (currently 2.6); published
 major-1 bundles are not compatible. The architecture, terminology (Spec,
 Provider, Lock, stages) and invariants are defined in
 xref:architecture.adoc#purpose[the architecture chapter]; keep it in sync with changes.
@@ -156,7 +156,9 @@ unscoped one, renamed commands, and a task that names a script by path, as
 `scripts/check_all.roc`, which starts by its `roc-stable` shebang on a platform
 `RocPackages` supplies and imports a module beside it, and zig-overlay and
 rust-overlay as overlays, each supplying an exact release named in a quoted
-attribute. It also runs `nix develop --debug` on a
+attribute, and configured tools: a fixture overlay's package says which
+options it was built with, and rust-overlay evaluates a toolchain with two
+targets and a component. It also runs `nix develop --debug` on a
 staged flake and requires Nix's own report that its bash comes from the locked
 package source, with no registry lookup, and runs a task with the `nixpkgs`
 edge removed from `Blueprint.lock`, as an earlier blueprint wrote it. A project it writes pins its inputs to the

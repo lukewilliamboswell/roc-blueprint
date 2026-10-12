@@ -71,7 +71,8 @@ complete file with the current URL.
 
 Inside an `Environment`, `Tools` and `Overlays` occur at most once, `ToolsFor`
 occurs at most once per System, `Command` occurs at most once per command
-name, and `RocPackages` occurs at most once:
+name, `ToolWith` occurs at most once per tool, and `RocPackages` occurs at
+most once:
 
 [cols="3,4",options="header"]
 |===
@@ -87,6 +88,9 @@ name, and `RocPackages` occurs at most once:
 | `Command(Str, Tool)`
 | Expose one tool's main program under another command name, without adding the tool's own executables.
 
+| `ToolWith(Tool, List((Str, Val)))`
+| A tool built with options its package takes; see <<configure-a-tool>>.
+
 | `RocPackages(List(Str))`
 | Released Roc bundle URLs to lock, so Roc programs in the environment resolve them without downloading.
 
@@ -94,7 +98,7 @@ name, and `RocPackages` occurs at most once:
 | Ordered selection of declared overlay names.
 
 | `Extend(EnvName)`
-| Inherit one environment's tools, overlays, commands and Roc packages before appending this environment's selections.
+| Inherit one environment's tools, overlays, commands, configured tools and Roc packages before appending this environment's selections.
 |===
 
 Inheritance deduplicates by first occurrence, parent first. Omitted or empty
@@ -158,6 +162,47 @@ The environment gains `roc-stable` and no `roc`, so a script can start with
 package declares it; a package that declares none fails in Nix. Command names
 are plain file names. An extending environment inherits commands and replaces
 one by declaring the same name.
+
+[#configure-a-tool]
+== Configure a tool
+
+Some packages are built to order. A Rust toolchain from rust-overlay comes
+with the host's standard library only; the targets it can compile for and
+its extra components are options of the package. `ToolWith` names the tool
+and those options:
+
+[source,roc]
+----
+Overlay("rust", "github:oxalica/rust-overlay"),
+Overlay("zig", "github:mitchellh/zig-overlay"),
+Environment("host", [
+	Overlays(["rust", "zig"]),
+	Tools(["zigpkgs.\"0.16.0\""]),
+	ToolWith("rust-bin.stable.\"1.95.0\".default", [
+		("targets", List([Str("x86_64-unknown-linux-musl"), Str("aarch64-unknown-linux-musl")])),
+		("extensions", List([Str("rust-src")])),
+	]),
+]),
+----
+
+The environment gains `cargo` and `rustc` from Rust 1.95.0 with both musl
+targets and the standard library's source. Zig needs no options: zig-overlay
+names each release as an attribute, which `Tools` selects.
+
+The options are the names and values the package's own `override` takes,
+written as `Val` data: strings, integers, booleans, lists and attribute
+sets. They are passed as data and are never an expression, so they select
+among what the package offers and cannot say how to build it. A package
+that takes no options, or not the ones named, fails in Nix.
+
+A tool is either plain or configured in an environment, not both. An
+extending environment inherits configured tools; configuring an inherited
+tool replaces all of its options. Three things are not supported:
+
+* options on a `ToolsFor` or `Command` tool;
+* rust-overlay's `fromRustupToolchainFile`, which reads a file of the
+  project: the generated flake does not see the project's files;
+* configured tools from a Guix source.
 
 == Pin an exact version of a tool
 

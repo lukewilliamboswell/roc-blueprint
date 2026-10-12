@@ -42,6 +42,7 @@
         in extra: sets."stable".mkShell ({
           packages = [
             sets."stable"."jq"
+            (sets."stable"."rust-bin"."stable"."1.95.0"."default".override { "targets" = [ "x86_64-unknown-linux-musl" ]; "extensions" = [ "rust-src" ]; })
           ];
         } // extra);
       };

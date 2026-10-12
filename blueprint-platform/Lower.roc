@@ -16,6 +16,7 @@ Lower :: [].{
 		environments : List(Spec.Environment),
 		system_tools : List(Spec.SystemTools),
 		commands : List(Spec.Command),
+		configured_tools : List(Spec.ConfiguredTool),
 		roc_packages : List(Spec.RocPackage),
 		shells : List(Spec.Shell),
 		tasks : List(Spec.Task),
@@ -33,7 +34,7 @@ Lower :: [].{
 	lower : List(Config.Setting) -> Try(Spec, Str)
 	lower = |settings| {
 		initial : Acc
-		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], roc_packages: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
+		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], configured_tools: [], roc_packages: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
 		acc = settings.fold(Ok(initial), |result, setting| add(result?, setting))?
 		name = match acc.names {
 			[] => return Err("MissingName: declare Name once")
@@ -53,6 +54,7 @@ Lower :: [].{
 				.concat(if acc.workflows.is_empty() [] else ["workflows"])
 				.concat(if acc.system_tools.is_empty() [] else ["system-tools"])
 				.concat(if acc.commands.is_empty() [] else ["commands"])
+				.concat(if acc.configured_tools.is_empty() [] else ["configured-tools"])
 				.concat(if acc.roc_packages.is_empty() [] else ["roc-packages"])
 		Project.validate(
 			Spec.{
@@ -65,6 +67,7 @@ Lower :: [].{
 				environments: acc.environments,
 				system_tools: acc.system_tools,
 				commands: acc.commands,
+				configured_tools: acc.configured_tools,
 				roc_packages: acc.roc_packages,
 				shells: acc.shells,
 				tasks: acc.tasks,
@@ -89,7 +92,7 @@ Lower :: [].{
 				lowered = environment(name.to_str(), inner)?
 				# Environments sharing a bundle share its one locked source.
 				new_sources = lowered.roc_sources.keep_if(|source| !acc.build_sources.contains(source))
-				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools), commands: acc.commands.concat(lowered.commands), roc_packages: acc.roc_packages.concat(lowered.roc_packages), build_sources: acc.build_sources.concat(new_sources) }
+				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools), commands: acc.commands.concat(lowered.commands), configured_tools: acc.configured_tools.concat(lowered.configured_tools), roc_packages: acc.roc_packages.concat(lowered.roc_packages), build_sources: acc.build_sources.concat(new_sources) }
 			}
 			Shell(name, inner) => { ..acc, shells: acc.shells.append(shell(name.to_str(), inner)?) }
 			Task(name, inner) => { ..acc, tasks: acc.tasks.append(task(name.to_str(), inner)?) }
@@ -124,15 +127,16 @@ Lower :: [].{
 			From(GuixPackages(channel)) => GuixPackages(channel)
 		}
 
-	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command), roc_packages : List(Spec.RocPackage), roc_sources : List(Spec.BuildSource) }, Str)
+	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command), configured_tools : List(Spec.ConfiguredTool), roc_packages : List(Spec.RocPackage), roc_sources : List(Spec.BuildSource) }, Str)
 	environment = |name, inner| {
 		draft = inner.fold(
-			{ tools: [], system_tools: [], commands: [], roc_urls: [], overlays: [], parents: [] },
+			{ tools: [], system_tools: [], commands: [], configured_tools: [], roc_urls: [], overlays: [], parents: [] },
 			|acc, setting|
 				match setting {
 					Tools(tools) => { ..acc, tools: acc.tools.append(tools.map(|tool| tool.to_spec())) }
 					ToolsFor(system, tools) => { ..acc, system_tools: acc.system_tools.append({ environment: name, system: system.to_str(), tools: tools.map(|tool| tool.to_spec()) }) }
 					Command(command, tool) => { ..acc, commands: acc.commands.append({ environment: name, name: command, tool: tool.to_spec() }) }
+					ToolWith(tool, options) => { ..acc, configured_tools: acc.configured_tools.append({ environment: name, tool: tool.to_spec(), options: to_value(Attrs(options)) }) }
 					RocPackages(urls) => { ..acc, roc_urls: acc.roc_urls.append(urls) }
 					Overlays(overlays) => { ..acc, overlays: acc.overlays.append(overlays.map(|overlay| overlay.to_str())) }
 					Extend(parent) => { ..acc, parents: acc.parents.append(parent.to_str()) }
@@ -159,7 +163,7 @@ Lower :: [].{
 		if draft.parents.len() > 1 {
 			return Err("DuplicateExtend: environment ${name}")
 		}
-		Ok({ environment: { name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] }, system_tools: draft.system_tools, commands: draft.commands, roc_packages: $roc_packages, roc_sources: $roc_sources })
+		Ok({ environment: { name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] }, system_tools: draft.system_tools, commands: draft.commands, configured_tools: draft.configured_tools, roc_packages: $roc_packages, roc_sources: $roc_sources })
 	}
 
 	## A release bundle URL ends in `<content hash>.tar.zst`. The hash is the
@@ -289,4 +293,25 @@ expect match Lower.lower([
 }
 
 expect Lower.lower([Name("invalid"), Environment("dev", [RocPackages([]), RocPackages([])])]) == Err("DuplicateRocPackages: environment dev")
+
+# A configured tool is the tool and its options as data; the Spec says it
+# needs a consumer that knows them.
+expect match Lower.lower([
+	Name("configured"),
+	Environment("dev", [ToolWith("rust-bin.stable.\"1.95.0\".default", [("extensions", List([Str("rust-src")]))])]),
+]) {
+	Ok(spec) => spec.requires_ == ["configured-tools"]
+		and spec.configured_tools == [
+			{
+				environment: "dev",
+				tool: { source: "default", name: "rust-bin.stable.\"1.95.0\".default" },
+				options: Value.Attrs([{ name: "extensions", value: Value.List([Value.Str("rust-src")]) }]),
+			},
+		]
+	Err(_) => False
+}
+
+expect Lower.lower([Name("invalid"), Environment("dev", [ToolWith("zig", []), ToolWith("zig", [])])]) == Err("DuplicateToolWith: environment dev: zig")
+expect Lower.lower([Name("invalid"), Environment("dev", [Tools(["zig"]), ToolWith("zig", [])])]) == Err("tool is both plain and configured in environment dev: zig")
+expect Lower.lower([Name("invalid"), Environment("dev", [ToolWith("zig", [("a", Int(1)), ("a", Int(2))])])]) == Err("DuplicateOption: tool zig: a")
 expect Lower.lower([Name("plain"), Environment("dev", [])]).map_ok(|spec| spec.requires_.contains("roc-packages") or !spec.roc_packages.is_empty()) == Ok(False)

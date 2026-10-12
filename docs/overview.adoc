@@ -32,7 +32,7 @@ by Nix, not by Roc.
 == How it works
 
 The platform lowers and validates the whole configuration, then prints it as
-a *Spec*, a provider-neutral S-expression (format 2.5). The `blueprint`
+a *Spec*, a provider-neutral S-expression (format 2.6). The `blueprint`
 command runs Roc to get that Spec, validates it again through the same shared
 rules, selects the Nix provider, and owns every file write, the lock and
 execution. The core package and the Nix renderer are pure: they discover
