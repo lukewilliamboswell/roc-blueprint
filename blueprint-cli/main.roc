@@ -35,7 +35,7 @@ import nix.NixProvider
 import "compiler-version" as compiler_version : Str
 
 version : Str
-version = "0.4.1"
+version = "0.5.0"
 
 ## The provider every command of a run goes through. These are the only
 ## references to a concrete provider: everything else uses the Provider
