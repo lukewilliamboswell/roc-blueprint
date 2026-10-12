@@ -75,14 +75,14 @@ cli_for : Try(Spec, _) -> Cli.CliParser(Try(Command, [NoSubcommand]))
 cli_for = |loaded| {
 	generic_shell_cmd = SubCmd.finish(
 		Cli.map(Param.maybe_str({ name: "name", help: "The shell to enter (default: \"default\")." }), |name| Shell(name ?? "default")),
-		{ name: "shell", description: "Generate, then enter a dev shell", mapper: |c| c },
+		{ name: "shell", description: "Enter a shell's environment", mapper: |c| c },
 	)
 	generic_run_cmd = SubCmd.finish(
 		{
 			task: Param.str({ name: "task", help: "The task to run.", default: NoDefault }),
 			args: Param.str_list({ name: "args", help: "Extra arguments for the task; put them after --." }),
 		}.Cli,
-		{ name: "run", description: "Generate, then run a task in its shell", mapper: |r| Run(r) },
+		{ name: "run", description: "Run a task in its environment", mapper: |r| Run(r) },
 	)
 	generic_build_cmd = SubCmd.finish(
 		Cli.map(
@@ -149,14 +149,14 @@ cli_for = |loaded| {
 				else
 					SubCmd.finish(
 						Cli.map(SubCmd.optional(spec.shells.map(shell_choice)), |picked| Shell(picked ?? "default")),
-						{ name: "shell", description: "Generate, then enter a dev shell (default: \"default\")", mapper: |c| c },
+						{ name: "shell", description: "Enter a shell's environment (default: \"default\")", mapper: |c| c },
 					),
 				run_cmd: if spec.tasks.is_empty()
 					generic_run_cmd
 				else
 					SubCmd.finish(
 						SubCmd.required(spec.tasks.map(task_choice)),
-						{ name: "run", description: "Generate, then run a task in its shell", mapper: |r| Run(r) },
+						{ name: "run", description: "Run a task in its environment", mapper: |r| Run(r) },
 					),
 				about: summary(spec),
 			}
@@ -176,7 +176,7 @@ cli_for = |loaded| {
 			SubCmd.optional([
 				SubCmd.empty({
 					name: "gen",
-					description: "Generate from the authoritative lock (the default)",
+					description: "Generate the Nix files from the lock (the default)",
 					value: Gen,
 				}),
 				shell_cmd,
@@ -194,9 +194,9 @@ cli_for = |loaded| {
 				name: "blueprint",
 				version,
 				authors: [],
-				description: "Turn a Blueprint.roc into Nix environments and artifacts. "
-					.concat("Run update to initialize pins. ")
-					.concat("Set ROC to choose the roc compiler (default: roc).")
+				description: "Carry out a Blueprint.roc: its environments, tasks, builds and workflows. "
+					.concat("Run update to write Blueprint.lock. ")
+					.concat("Set ROC to choose the Roc compiler.")
 					.concat("\n\n${about}"),
 				text_style: Color,
 			},
