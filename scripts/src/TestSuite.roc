@@ -4,6 +4,7 @@ import cli.OsStr
 import cli.Path
 import Bundle
 import FlakeLock
+import Fuzz
 import Process
 import Release
 import Script
@@ -225,6 +226,15 @@ static! = |context| {
 	# git grep exits 1 when no file matches.
 	pins = Process.capture!(Process.command("git", ["grep", "-E", "^[[:space:]]*roc: \"", "--", "*.roc"], context.root))?
 	problem!(StaticChecks.compilers_problem(pinned.stdout, StaticChecks.constant(flake, "rocStableTag"), pins.stdout, $shebangs))?
+
+	step!("fuzz.yml fuzzes every fuzz target")?
+	var $targets = []
+	for entry in Path.list!(Path.utf8("${context.root}/${Fuzz.targets_dir}"))? {
+		if Path.is_file!(entry.join("main.roc")) ?? False {
+			$targets = $targets.append(Path.to_str(entry)?.split_on("/").last() ?? "")
+		}
+	}
+	problem!(StaticChecks.fuzz_matrix_problem(read!(context, ".github/workflows/fuzz.yml")?, $targets))?
 
 	step!("The flake lists the core package's modules and the CLI's version")?
 	in_directory = Bundle.modules(file_names!("${context.root}/${Bundle.core_dir}")?)

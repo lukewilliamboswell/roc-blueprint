@@ -109,7 +109,8 @@ core, see below), `glue` (`scripts/check_glue.roc`: the host's committed
 product compiler; `scripts/check_glue.roc --update` rewrites it) and `fuzz`
 (each target's committed corpus, replayed, which
 takes seconds; `.github/workflows/fuzz.yml` fuzzes each target for five minutes
-every week and uploads any crashing input). `scenarios` and `builds` are the
+every week, starting from the inputs earlier runs found, which it keeps in the
+Actions cache through `FUZZ_CORPUS`, and uploads any crashing input). `scenarios` and `builds` are the
 real-Nix suites, split into two groups of about the same length so that CI runs
 them as two jobs at the same time.
 `scripts/test_config.roc` runs the compiler on generated `Blueprint.roc`

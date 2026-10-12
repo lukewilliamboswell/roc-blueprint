@@ -127,6 +127,26 @@ StaticChecks := [].{
 			},
 		)
 
+	## fuzz.yml runs one job for each fuzz target, named in its matrix. A
+	## target missing there would be replayed on every commit and never
+	## fuzzed. `fuzzers` are the directories of `blueprint-core/fuzz` that
+	## hold a `main.roc`.
+	fuzz_matrix_problem : Str, List(Str) -> Str
+	fuzz_matrix_problem = |workflow, fuzzers| {
+		prefix = "target: ["
+		listed = match workflow.split_on("\n").map(|line| line.trim()).find_first(|line| line.starts_with(prefix)) {
+			Ok(line) => (line.drop_prefix(prefix).split_on("]").first() ?? "").split_on(",").map(|name| name.trim()).keep_if(|name| !name.is_empty())
+			Err(_) => []
+		}
+		missing = fuzzers.keep_if(|name| !listed.contains(name))
+		extra = listed.keep_if(|name| !fuzzers.contains(name))
+		if missing.is_empty() and extra.is_empty() {
+			""
+		} else {
+			"the target matrix of .github/workflows/fuzz.yml must list the fuzz targets (missing: ${Str.join_with(missing, " ")}; not a target: ${Str.join_with(extra, " ")})"
+		}
+	}
+
 	## The string a source file binds a name to, as in `name = "value"`.
 	constant : Str, Str -> Try(Str, [NoConstant])
 	constant = |source, name| {
@@ -235,6 +255,11 @@ expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/smoke_
 expect StaticChecks.compilers_problem("", Ok("nightly-1"), "scripts/smoke_binary.roc:\troc: \"nightly-1\",\n", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable")]) == "only a script roc-stable runs may pin a compiler with a roc field: scripts/smoke_binary.roc"
 expect StaticChecks.compilers_problem("", Ok("nightly-1"), "examples/a/main.roc:\troc: \"nightly-1\",\n", []) == "only a script roc-stable runs may pin a compiler with a roc field: examples/a/main.roc"
 expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable"), ("scripts/b.roc", "#!/usr/bin/env roc"), ("scripts/c.roc", "app [main!] {")]) == "scripts must start with #!/usr/bin/env roc-stable: scripts/b.roc scripts/c.roc"
+
+expect StaticChecks.fuzz_matrix_problem("      matrix:\n        target: [lock-parse, spec-parse]\n", ["spec-parse", "lock-parse"]) == ""
+expect StaticChecks.fuzz_matrix_problem("        target: [lock-parse]\n", ["lock-parse", "spec-parse"]) == "the target matrix of .github/workflows/fuzz.yml must list the fuzz targets (missing: spec-parse; not a target: )"
+expect StaticChecks.fuzz_matrix_problem("        target: [lock-parse, gone]\n", ["lock-parse"]) != ""
+expect StaticChecks.fuzz_matrix_problem("jobs:\n", ["lock-parse"]) != ""
 
 expect StaticChecks.constant("  roc_overlay : Str\n  roc_overlay = \"abc\"\n", "roc_overlay") == Ok("abc")
 expect StaticChecks.constant("            version = \"0.4.0-rc2\";\n", "version") == Ok("0.4.0-rc2")
