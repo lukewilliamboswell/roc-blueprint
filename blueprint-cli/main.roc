@@ -39,7 +39,7 @@ import nix.NixProvider
 import "compiler-version" as compiler_version : Str
 
 version : Str
-version = "0.5.0"
+version = "0.6.0-rc1"
 
 ## The providers a request may be planned with. This is the only reference to
 ## a concrete provider: everything else uses the Provider contract

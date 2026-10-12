@@ -131,7 +131,7 @@
 
           blueprint = pkgs.stdenv.mkDerivation {
             pname = "blueprint";
-            version = "0.5.0";
+            version = "0.6.0-rc1";
             src = lib.fileset.toSource {
               root = ./.;
               fileset = lib.fileset.unions [
