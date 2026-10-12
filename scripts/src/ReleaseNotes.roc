@@ -5,13 +5,35 @@ import Bundle
 import FlakeLock
 import Integrity
 import LinkInputs
+import Notes
 import Process
 import Release
 import Script
 
 ## The notes and names of a GitHub release. One release holds the platform
 ## bundle, the core bundle it depends on and the CLI binaries.
+##
+## The notes are written by hand in `docs/releases/<version>.adoc`. A release
+## renders them with its bundle URLs and adds what it was built from.
 ReleaseNotes := [].{
+
+	## The notes a version is released with. A release candidate uses the
+	## notes of the version it is a candidate for; a dry run, which releases
+	## nothing, renders the newest the chapter includes.
+	noted : Str, Str -> Try(Str, [NoNotes])
+	noted = |version, chapter|
+		if version == Bundle.dry_run_version {
+			Notes.included(chapter).first().map_err(|_| NoNotes)
+		} else {
+			Ok(version.split_on("-").first() ?? version)
+		}
+
+	notes_file : Str -> Str
+	notes_file = |version| "docs/releases/${version}.adoc"
+
+	## What stands for each bundle's URL in the notes.
+	platform_placeholder = "{platform-url}"
+	core_placeholder = "{core-url}"
 
 	## A version with a `-` in it, such as `1.2.3-rc1`, is a pre-release.
 	prerelease : Str -> Bool
@@ -23,6 +45,7 @@ ReleaseNotes := [].{
 	## What a release was built from, beside the repository itself.
 	Built : {
 		roc_tag : Str,
+		roc_stable : Str,
 		zig : Str,
 		overlay_rev : Str,
 		archives : List({ system : Str, hash : Str }),
@@ -57,23 +80,15 @@ ReleaseNotes := [].{
 			_ => "`${url}`"
 		}
 
-	notes : { repository : Str, tag : Str, archive : Str, built : Built } -> Str
-	notes = |release| {
-		built = release.built
+	## The record a release appends to its notes.
+	built_from : Built -> Str
+	built_from = |built| {
 		archives = built.archives.map(|fetched| "${fetched.system} `${fetched.hash}`")
 		Str.join_with(
 			[
-				"Platform (use in `Blueprint.roc`):",
+				"## Built from",
 				"",
-				"```roc",
-				"app [config] { pf: platform \"${Bundle.release_url(release.repository, release.tag, release.archive)}\" }",
-				"```",
-				"",
-				"The `blueprint` CLI is attached for x86_64 Linux, arm64 Linux and Apple Silicon macOS, with sha256 sums in `blueprint.sha256`. It needs Nix, and fetches its own Roc compiler through Nix. The platform supports x64musl, arm64musl, arm64mac and x64mac.",
-				"",
-				"Built from:",
-				"",
-				"- Roc `${built.roc_tag}` and Zig `${built.zig}`",
+				"- Roc `${built.roc_tag}` and Zig `${built.zig}`; release scripts run with `roc-stable` ${built.roc_stable}",
 				"- Compiler archives from roc-overlay `${built.overlay_rev}`: ${Str.join_with(archives, ", ")}",
 				"- nixpkgs `${built.nixpkgs_rev}`",
 				"- roc-blueprint-core `${built.core_url}`",
@@ -92,12 +107,20 @@ ReleaseNotes := [].{
 	outputs : Str, Str, Str -> Str
 	outputs = |tag, archive, core_archive| "bundle=${archive}\ncore_bundle=${core_archive}\ntitle=${title(tag)}\nprerelease=${if prerelease(tag) "true" else "false"}\n"
 
-	## Write the notes of the release `GITHUB_REF_NAME` names to `output`, from
-	## the repository root, after the bundles were built into `dist/`.
-	write! : Str, Str => Try({}, _)
-	write! = |root, output| {
-		repository = variable!("GITHUB_REPOSITORY")?
-		tag = variable!("GITHUB_REF_NAME")?
+	## Write the notes of the release of `tag` to `output`, from the
+	## repository root, after the bundles were built into `dist/` for it.
+	write! : Str, Str, Str => Try({}, _)
+	write! = |root, tag, output| {
+		repository = Bundle.repository!()
+		chapter = Path.read_utf8!(Path.utf8("${root}/docs/releases.adoc"))?
+		version = match noted(tag, chapter) {
+			Ok(found) => found
+			Err(NoNotes) => return Script.fail!("docs/releases.adoc includes no release notes")
+		}
+		authored = notes_file(version)
+		if !(Path.is_file!(Path.utf8("${root}/${authored}")) ?? False) {
+			return Script.fail!("${authored} does not exist: write the notes of ${version} before releasing it")
+		}
 		list = Path.read_utf8!(Path.utf8("${root}/dist/bundles.txt"))?
 		archive = bundled!(list, "roc-blueprint")?
 		core_archive = bundled!(list, "roc-blueprint-core")?
@@ -110,6 +133,7 @@ ReleaseNotes := [].{
 		deps = Process.succeed!(Process.command(Process.roc!(), ["deps", cli_source], root))?.stdout
 		built = {
 			roc_tag: first_line!("${root}/blueprint-cli/compiler-version")?,
+			roc_stable: Process.succeed!(Process.command("roc-stable", ["version"], root))?.stdout.trim(),
 			zig: Process.succeed!(Process.command("zig", ["version"], root))?.stdout.trim(),
 			overlay_rev: revision!(flake_lock, "roc-overlay")?,
 			archives: [
@@ -123,7 +147,18 @@ ReleaseNotes := [].{
 			lock_sha256: Integrity.digest(lock_bytes),
 		}
 		Process.check!(!built.bundles.is_empty() and !built.zig.is_empty(), "`roc deps ${cli_source}` listed no package, or `zig version` printed nothing")?
-		Path.write_utf8!(Path.utf8(output), notes({ repository, tag, archive, built }))?
+		urls = [
+			{ placeholder: platform_placeholder, url: Bundle.release_url(repository, tag, archive) },
+			{ placeholder: core_placeholder, url: built.core_url },
+		]
+		rendered = match Notes.render(Path.read_utf8!(Path.utf8("${root}/${authored}"))?, { title: "= ${title(version)}", urls }) {
+			Ok(markdown) => markdown
+			Err(WrongTitle(found)) => return Script.fail!("${authored} must open with `= ${title(version)}`, not `${found}`")
+			Err(UnusedPlaceholder(name)) => return Script.fail!("${authored} never uses ${name}")
+			Err(UnresolvedPlaceholder(name)) => return Script.fail!("${authored} uses ${name}, which this release does not fill in")
+			Err(UnclosedBlock) => return Script.fail!("${authored} has a source block that is never closed")
+		}
+		Path.write_utf8!(Path.utf8(output), "${rendered}\n${built_from(built)}")?
 		Script.pass!("wrote the notes of ${title(tag)} to ${output}")?
 		match Env.var_str!(OsStr.from_str("GITHUB_OUTPUT")) {
 			Ok(file) => {
@@ -134,13 +169,6 @@ ReleaseNotes := [].{
 		}
 	}
 }
-
-variable! : Str => Try(Str, _)
-variable! = |name|
-	match Env.var_str!(OsStr.from_str(name)) {
-		Ok(value) => if value.is_empty() Script.fail!("${name} is empty") else Ok(value)
-		Err(_) => Script.fail!("${name} is not set")
-	}
 
 ## The revision `flake.lock` pins an input to.
 revision! : Str, Str => Try(Str, _)
@@ -192,6 +220,7 @@ expect ReleaseNotes.bundle_name("https://github.com/roc-lang/path/releases/downl
 built_sample : ReleaseNotes.Built
 built_sample = {
 	roc_tag: "nightly-1",
+	roc_stable: "Roc compiler version nightly-0",
 	zig: "0.16.0",
 	overlay_rev: "fb02fef7",
 	archives: [{ system: "x86_64-linux", hash: "sha256-iTyG=" }, { system: "aarch64-darwin", hash: "sha256-4BR/=" }],
@@ -202,24 +231,22 @@ built_sample = {
 	lock_sha256: "ff00",
 }
 
-expect ReleaseNotes.notes({ repository: "me/roc-blueprint", tag: "0.4.0", archive: "def.tar.zst", built: built_sample }) ==
-	\\Platform (use in `Blueprint.roc`):
+expect ReleaseNotes.built_from(built_sample) ==
+	\\## Built from
 	\\
-	\\```roc
-	\\app [config] { pf: platform "https://github.com/me/roc-blueprint/releases/download/0.4.0/def.tar.zst" }
-	\\```
-	\\
-	\\The `blueprint` CLI is attached for x86_64 Linux, arm64 Linux and Apple Silicon macOS, with sha256 sums in `blueprint.sha256`. It needs Nix, and fetches its own Roc compiler through Nix. The platform supports x64musl, arm64musl, arm64mac and x64mac.
-	\\
-	\\Built from:
-	\\
-	\\- Roc `nightly-1` and Zig `0.16.0`
+	\\- Roc `nightly-1` and Zig `0.16.0`; release scripts run with `roc-stable` Roc compiler version nightly-0
 	\\- Compiler archives from roc-overlay `fb02fef7`: x86_64-linux `sha256-iTyG=`, aarch64-darwin `sha256-4BR/=`
 	\\- nixpkgs `4975466d`
 	\\- roc-blueprint-core `https://example.test/core.tar.zst`
 	\\- Roc packages in the CLI: basic-cli 0.24.0 `AEjfyaMF`, http 1.0.0 `6ZUwqYhC`
 	\\- Linker inputs: roc-platform-template-zig release `link-inputs-sha256-2d` (`link-inputs.lock.json` sha256 `ff00`)
 	\\
+
+# A candidate is released with the notes of its version, a dry run with the newest.
+expect ReleaseNotes.noted("0.5.0-rc1", "") == Ok("0.5.0") and ReleaseNotes.noted("0.5.0", "") == Ok("0.5.0")
+expect ReleaseNotes.noted("0.0.1-dry-run", "include::releases/0.6.0.adoc[leveloffset=+1]\ninclude::releases/0.5.0.adoc[leveloffset=+1]\n") == Ok("0.6.0")
+expect ReleaseNotes.noted("0.0.1-dry-run", "= Release notes\n") == Err(NoNotes)
+expect ReleaseNotes.notes_file("0.5.0") == "docs/releases/0.5.0.adoc"
 
 # The archives recorded are the two the release compiler is assembled from.
 expect [Release.compiler_system, Release.sysroot_system] == ["x86_64-linux", "aarch64-darwin"]

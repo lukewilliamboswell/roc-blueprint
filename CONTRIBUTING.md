@@ -446,6 +446,15 @@ differ.
 
 A tag with a `-` in it (e.g. `X.Y.Z-rc1`) is published as a pre-release.
 
+Write the release's notes by hand in `docs/releases/X.Y.Z.adoc` and include
+the file in `docs/releases.adoc`, newest first, before tagging. They say what
+changed for a user, open with `= roc-blueprint X.Y.Z`, and name the bundles as
+`{platform-url}` and `{core-url}`, because the URLs hold hashes that do not
+exist until the release builds them. `scripts/release_notes.roc X.Y.Z
+dist/notes.md` renders them as the release body with the real URLs and fails
+on a placeholder that is unused or unknown; a release candidate uses the notes
+of its version.
+
 During development the platform uses `core: "../blueprint-core/main.roc"`. `roc bundle`
 only packs files below the entry point's directory, so `scripts/bundle.roc
 [VERSION]` bundles the core package first, then a staged copy of the platform

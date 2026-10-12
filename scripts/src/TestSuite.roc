@@ -5,6 +5,7 @@ import cli.Path
 import Bundle
 import FlakeLock
 import Fuzz
+import Notes
 import Process
 import Release
 import Script
@@ -241,6 +242,9 @@ static! = |context| {
 	for workflow in workflows {
 		problem!(StaticChecks.workflow_problem(workflow, read!(context, ".github/workflows/${workflow}")?))?
 	}
+
+	step!("The release notes chapter includes every release's notes")?
+	problem!(Notes.chapter_problem(read!(context, "docs/releases.adoc")?, file_names!("${context.root}/docs/releases")?))?
 
 	step!("The flake lists the core package's modules and the CLI's version")?
 	in_directory = Bundle.modules(file_names!("${context.root}/${Bundle.core_dir}")?)
