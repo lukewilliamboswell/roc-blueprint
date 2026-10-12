@@ -169,10 +169,13 @@ system the published digest is recorded and nothing is downloaded; an asset
 with no published digest, or a URL that is not a release asset, is downloaded
 and hashed instead.
 
-The question to GitHub carries no token. GitHub answers 60 such requests an
-hour from one address; when it refuses, the update stops, says so, and writes
-nothing. Wait for the hour to pass and run it again: entries already in the
-lock ask nothing. A run never asks GitHub anything.
+The question to GitHub carries no token, and GitHub answers 60 such requests
+an hour from one address. A question that is refused, that cannot be put, or
+whose answer does not describe a release does not stop the update:
+`blueprint update` says so once for the release, downloads and hashes that
+release's assets for every system, and records each as `Computed`. A digest
+that is published and differs from the computed one always stops it. A run
+never asks GitHub anything.
 
 After writing the lock, `blueprint update` prints every download host the new
 lock names and the lock before it did not, one to a line:

@@ -642,25 +642,38 @@ updating! = |test, idle, given| {
 		"a download that differs from what its release publishes was recorded or kept (code ${differed.code.to_str()}):\n${differed.stderr}",
 	)?
 
-	# A release that cannot be asked about stops the update, saying what the
-	# limit is and that nothing was written; one that is not there at all is
-	# an answer, and every download is hashed instead.
-	limited = command!(test, assets.with_status("repos/owner/tool/releases/tags/1.0", "403 Forbidden"), differing, ["update"], bare)?
+	# A release that cannot be asked about does not stop the update: it is
+	# said once, with what the limit is, and every download is hashed
+	# instead. So is one whose answer describes no release, and one that is
+	# not there at all, which is an answer and needs no notice.
+	whole = assets.with_route("owner/tool/releases/download/1.0/tool-${far}", given.archive)
+	computed = Process.sorted(["${system} ${tool_sha} Computed", "${far} ${roc_sha} Computed", "${bare_asset} ${page_sha} Computed"])
+	how = |lock| Process.sorted(recorded(lock.fetched, "tool").map(|(declared, sha256, _, obtained)| "${declared} ${sha256} ${Str.inspect(obtained)}"))
+	refused = project!(test, "refused", release)?
+	limited = command!(test, whole.with_status("repos/owner/tool/releases/tags/1.0", "403 Forbidden"), refused, ["update"], bare)?
+	limit_notice = "blueprint: could not ask for the digests owner/tool publishes for its release 1.0: HTTP 403 from ${api} (1 attempt). GitHub answers 60 such requests an hour from one address when no token is sent, and blueprint sends none. The digests of its downloads are computed by downloading each of them instead, and Blueprint.lock records them as computed"
 	CliHarness.check!(
-		limited.code == 1 and limited.stderr.contains("could not ask for the digests owner/tool publishes for its release 1.0: HTTP 403 from ${api} (1 attempt). GitHub answers 60 such requests an hour from one address when no token is sent, and blueprint sends none: wait until the hour has passed, or run blueprint update from another address. Nothing was written to Blueprint.lock.")
-			and !limited.stderr.contains("fetching") and !CliHarness.present!("${differing}/Blueprint.lock"),
-		"a refused question about a release did not stop the update with what to do (code ${limited.code.to_str()}):\n${limited.stderr}",
+		limited.code == 0 and occurrences(limited.stderr, limit_notice) == 1 and occurrences(limited.stderr, "could not ask") == 1
+			and how(locked!(refused)?) == computed,
+		"a refused question about a release stopped the update, was not said once, or left a digest that was not computed (code ${limited.code.to_str()}):\n${limited.stderr}",
 	)?
-	garbled = command!(test, assets.with_route("repos/owner/tool/releases/tags/1.0", given.page), differing, ["update"], bare)?
-	CliHarness.check!(garbled.code == 1 and garbled.stderr.contains("the answer from ${api} does not describe a release") and !CliHarness.present!("${differing}/Blueprint.lock"), "an answer that is no release's description was taken for one (code ${garbled.code.to_str()}):\n${garbled.stderr}")?
+	empty_store!(test)?
+	unread = project!(test, "unread", release)?
+	garbled = command!(test, whole.with_route("repos/owner/tool/releases/tags/1.0", given.page), unread, ["update"], bare)?
+	CliHarness.check!(
+		garbled.code == 0 and occurrences(garbled.stderr, "blueprint: could not ask for the digests owner/tool publishes for its release 1.0: the answer from ${api} does not describe a release. The digests of its downloads are computed by downloading each of them instead") == 1
+			and !garbled.stderr.contains("60 such requests") and how(locked!(unread)?) == computed,
+		"an answer that is no release's description stopped the update or was taken for one (code ${garbled.code.to_str()}):\n${garbled.stderr}",
+	)?
+	# A digest the release does publish is not set aside by any of this: the
+	# refused question's fallback is only for a question with no answer.
+	empty_store!(test)?
 	unlisted = command!(test, assets.with_route("owner/tool/releases/download/1.0/tool-${far}", given.archive), differing, ["update"], bare)?
 	CliHarness.check!(
-		unlisted.code == 0
-			and Process.sorted(recorded(locked!(differing)?.fetched, "tool").map(|(declared, sha256, _, obtained)| "${declared} ${sha256} ${Str.inspect(obtained)}"))
-				== Process.sorted(["${system} ${tool_sha} Computed", "${far} ${roc_sha} Computed", "${bare_asset} ${page_sha} Computed"]),
+		unlisted.code == 0 and !unlisted.stderr.contains("could not ask") and how(locked!(differing)?) == computed,
 		"with no release to ask about, the downloads were not all hashed (code ${unlisted.code.to_str()}):\n${unlisted.stderr}",
 	)?
-	Script.pass!("a published digest that differs, a refused question and an unreadable answer each stop the update with nothing written; a release that is not there leaves every digest computed")?
+	Script.pass!("a published digest that differs stops the update with nothing written; a refused question and an unreadable answer are each said once and leave every digest computed, as a release that is not there does")?
 
 	# A project that also declares a Nix source: update needs Nix, and says so
 	# before anything is fetched. With it, one lock holds the pins and the

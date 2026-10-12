@@ -1735,7 +1735,7 @@ pinned! = |provider, spec, update, ctx| {
 
 ## A release that has been asked about during this update, and its answer:
 ## each is asked once, however many of its assets are programs.
-Asked : { api : Str, answer : [Described(Str), NoRelease] }
+Asked : { api : Str, answer : [Described(Str), NoRelease, Unanswered(Str)] }
 
 ## The entries an update records, in order: those it keeps as they are and
 ## those whose digest it obtains (see `obtain!`).
@@ -1767,7 +1767,7 @@ record! = |step, host, asked|
 ## published for it. Two digests that differ record nothing.
 obtain! : Spec.Program, Str, List(Asked) => Try({ entry : Lock.Fetched, asked : List(Asked) }, _)
 obtain! = |program, host, asked| {
-	looked = published!(program, asked)?
+	looked = published!(program, asked)
 	what = "${program.name} for ${program.system}"
 	here = program.system == host
 	downloaded : Try({ sha256 : Str, size : U64, bytes : List(U8) }, [NotDownloaded])
@@ -1789,32 +1789,32 @@ obtain! = |program, host, asked| {
 }
 
 ## What a program's release publishes for its download, when its first URL is
-## a release asset: asked of the release's host, once for each release.
-published! : Spec.Program, List(Asked) => Try({ published : Try(Lock.Digest, [NotPublished]), asked : List(Asked) }, _)
+## a release asset: asked of the release's host, once for each release. A
+## release that cannot be asked about is said so once, and every download of
+## it is then hashed here, as for a host that publishes nothing.
+published! : Spec.Program, List(Asked) => { published : Try(Lock.Digest, [NotPublished]), asked : List(Asked) }
 published! = |program, asked| {
 	release = match program.urls.first().map_ok(Published.release) {
 		Ok(Ok(found)) => found
-		_ => return Ok({ published: Err(NotPublished), asked })
+		_ => return { published: Err(NotPublished), asked }
 	}
 	known = match asked.find_first(|entry| entry.api == release.api) {
 		Ok(entry) => asked.keep_if(|other| other.api != entry.api).append(entry)
 		Err(_) => {
 			_ = Stderr.line!("blueprint: asking ${release.api} what ${release.repository} publishes for its release ${release.tag}")
-			answer = Published.ask!(release).map_err(|message| FetchFailed(message))?
+			answer = Published.ask!(release)
+			_ = match answer {
+				Unanswered(notice) => Stderr.line!("blueprint: ${notice}")
+				_ => Ok({})
+			}
 			asked.append({ api: release.api, answer })
 		}
 	}
-	answer = known.last().map_ok(|entry| entry.answer) ?? NoRelease
-	published = match answer {
-		NoRelease => Err(NotPublished)
-		Described(text) =>
-			match Published.digest(text, release.asset) {
-				Ok(found) => Ok(found)
-				Err(NotPublished) => Err(NotPublished)
-				Err(Unreadable) => return Err(FetchFailed(Published.refusal(release, 200, "the answer from ${release.api} does not describe a release")))
-			}
+	published = match known.last().map_ok(|entry| entry.answer) {
+		Ok(Described(text)) => Published.digest(text, release.asset).map_err(|_| NotPublished)
+		_ => Err(NotPublished)
 	}
-	Ok({ published, asked: known })
+	{ published, asked: known }
 }
 
 ## Publish only if the authority still has the token observed before

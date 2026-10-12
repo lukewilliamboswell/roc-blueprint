@@ -67,35 +67,39 @@ Published := [].{
 		}
 	}
 
-	## What to say when a release could not be asked about. The service
-	## answers a limited number of unidentified requests, and that limit is
-	## the usual reason: the message says what the limit is and that waiting
-	## lifts it, because nothing else the reader can do here does.
-	refusal : Release, U16, Str -> Str
-	refusal = |asked, status, reason| {
+	## What to say when a release could not be asked about. Nothing stops:
+	## what a release publishes is a second witness, and an update that lacks
+	## it hashes every download itself, as it does for a host that publishes
+	## nothing. The service answers a limited number of unidentified requests,
+	## and that limit is the usual reason, so the message says what it is.
+	notice : Release, U16, Str -> Str
+	notice = |asked, status, reason| {
 		limited = if status == 403 or status == 429 {
-			" GitHub answers 60 such requests an hour from one address when no token is sent, and blueprint sends none: wait until the hour has passed, or run blueprint update from another address."
+			" GitHub answers 60 such requests an hour from one address when no token is sent, and blueprint sends none."
 		} else {
 			""
 		}
-		"could not ask for the digests ${asked.repository} publishes for its release ${asked.tag}: ${reason}.${limited} Nothing was written to Blueprint.lock. Entries already in it are kept without asking, so an update that changes no program asks nothing"
+		"could not ask for the digests ${asked.repository} publishes for its release ${asked.tag}: ${reason}.${limited} The digests of its downloads are computed by downloading each of them instead, and Blueprint.lock records them as computed"
 	}
 
 	## The description of a release, as its host gives it now. `NoRelease`:
 	## the host knows no release with that tag, so nothing is published for
-	## its assets. Anything else that is not an answer is an error: a digest
-	## that could not be asked for is not taken for one that does not exist.
-	ask! : Release => Try([Described(Str), NoRelease], Str)
+	## its assets. `Unanswered`: the host refused, could not be reached, or
+	## sent what is not a release's description; it carries the notice to
+	## print. In both cases the caller has no published digest and computes
+	## every one. A digest that is published is never set aside this way: one
+	## that differs from the computed digest still stops the update.
+	ask! : Release => [Described(Str), NoRelease, Unanswered(Str)]
 	ask! = |asked|
 		match Download.asked!(asked.api, [("User-Agent", "blueprint"), ("Accept", "application/vnd.github+json")]) {
 			Ok(bytes) =>
 				match Str.from_utf8(bytes) {
-					Ok(text) => Ok(Described(text))
-					Err(_) => Err(refusal(asked, 200, "the answer from ${asked.api} is not text"))
+					Ok(text) => if digest(text, asked.asset) == Err(Unreadable) Unanswered(notice(asked, 200, "the answer from ${asked.api} does not describe a release")) else Described(text)
+					Err(_) => Unanswered(notice(asked, 200, "the answer from ${asked.api} is not text"))
 				}
 
-			Err({ status: 404, .. }) => Ok(NoRelease)
-			Err({ status, reason }) => Err(refusal(asked, status, reason))
+			Err({ status: 404, .. }) => NoRelease
+			Err({ status, reason }) => Unanswered(notice(asked, status, reason))
 		}
 }
 
@@ -155,12 +159,12 @@ expect ["absent", "old", "bare", "short", "other"].all(|asset| Published.digest(
 expect Published.digest("{\"message\":\"API rate limit exceeded\"}", "tool-x86_64-linux") == Err(Unreadable)
 expect Published.digest("<html>", "tool-x86_64-linux") == Err(Unreadable) and Published.digest("", "tool-x86_64-linux") == Err(Unreadable)
 
-# A refusal that is the service's limit says what the limit is and what lifts
-# it; any other says what happened. Both say the Lock is as it was.
+# A question that was refused says what happened and what is done instead;
+# when it is the service's limit, also what the limit is.
 expect {
 	asked = { api: "https://api.github.com/repos/owner/tool/releases/tags/1.0", repository: "owner/tool", tag: "1.0", asset: "tool" }
-	Published.refusal(asked, 403, "HTTP 403 from https://api.github.com/repos/owner/tool/releases/tags/1.0 (1 attempt)") == "could not ask for the digests owner/tool publishes for its release 1.0: HTTP 403 from https://api.github.com/repos/owner/tool/releases/tags/1.0 (1 attempt). GitHub answers 60 such requests an hour from one address when no token is sent, and blueprint sends none: wait until the hour has passed, or run blueprint update from another address. Nothing was written to Blueprint.lock. Entries already in it are kept without asking, so an update that changes no program asks nothing"
-		and Published.refusal(asked, 429, "x").contains("60 such requests an hour")
-			and !Published.refusal(asked, 0, "could not reach https://api.github.com/x (3 attempts)").contains("60 such requests")
-				and Published.refusal(asked, 500, "x").contains("Nothing was written to Blueprint.lock")
+	Published.notice(asked, 403, "HTTP 403 from https://api.github.com/repos/owner/tool/releases/tags/1.0 (1 attempt)") == "could not ask for the digests owner/tool publishes for its release 1.0: HTTP 403 from https://api.github.com/repos/owner/tool/releases/tags/1.0 (1 attempt). GitHub answers 60 such requests an hour from one address when no token is sent, and blueprint sends none. The digests of its downloads are computed by downloading each of them instead, and Blueprint.lock records them as computed"
+		and Published.notice(asked, 429, "x").contains("60 such requests an hour")
+			and !Published.notice(asked, 0, "could not reach https://api.github.com/x (3 attempts)").contains("60 such requests")
+				and Published.notice(asked, 500, "x").contains("computed by downloading each of them instead")
 }

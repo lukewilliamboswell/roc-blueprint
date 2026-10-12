@@ -213,8 +213,9 @@ lock: with no `nix` on `PATH` for a project that only fetches, with nothing
 asked when nothing changed, for a named program alone, after a URL list
 changed, and for release assets, whose release is described by the same
 loopback server, so that a digest computed here is compared with a published
-one, another system's is recorded unfetched, and a refusal of the question
-stops the update.
+one, another system's is recorded unfetched, and a question that is refused
+or answered with something else leaves every digest computed and says so
+once.
 It ends with `blueprint requirements`, asked with no `nix`, no lock, an empty
 store and no server: the report is the same, a declared and unused Nix source
 requires no provider, and nothing is written.
