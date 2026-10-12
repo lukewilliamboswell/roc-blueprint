@@ -63,6 +63,14 @@ CliUpdateTest := [].{
 			Err(_) => bytes
 		}
 
+	## A lock for `wire` as blueprint 0.5 wrote one: Lock format 1.0, and a
+	## `default` source that named no package set, which every project had.
+	as_0_5 : Str -> Str
+	as_0_5 = |lock|
+		lock.replace_each("(minor 1)", "(minor 0)")
+			.replace_each("(provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\"))", "(provider Auto)")
+			.replace_each("(Str \"packages\")", "(Str \"auto\")")
+
 	## The entries an interrupted publication would leave beside the authority.
 	leftovers : List(Str) -> List(Str)
 	leftovers = |names| names.keep_if(|name| name.starts_with(".blueprint-write-") or name.contains("writer"))
@@ -313,13 +321,35 @@ cases! = |bench| {
 	no_effects!(named, "a named update with no lock")?
 	CliHarness.exited!(run!(test, named, ["update"], [("STUB_NIX_REV", "a")])?, 0, "the update before a named one")?
 	before_named = CliHarness.identity!(named_lock)?
-	refused!(run!(test, named, ["update", "default", "nope"], [])?, "no input named nope", "an update of an undeclared input")?
+	refused!(run!(test, named, ["update", "default", "nope"], [])?, "no input or program named nope; Blueprint.roc declares the inputs default and no program", "an update of an undeclared input")?
 	CliHarness.check!(CliHarness.identity!(named_lock)? == before_named, "an update of an undeclared input rewrote the authority")?
 	CliHarness.exited!(run!(test, named, ["update", "default"], [("STUB_NIX_REV", "b")])?, 0, "a named update")?
 	CliHarness.check!(pinned_rev!(named_lock)? == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "a named update did not publish its pins")?
 	updates = CliHarness.calls!("${named}/nix-calls")?.map(|call| call.drop_last(1))
 	CliHarness.same_calls!(updates, [["flake", "update", "--flake"], ["flake", "update", "default", "--flake"]], "the provider calls of a full and a named update")?
 	Script.pass!("update INPUT: refused with no lock or an undeclared name before any effect; otherwise the provider updates that input beside the staged lock")?
+
+	# A lock blueprint 0.5 wrote is stale for every project now, and is said
+	# to be old instead of to differ: by what uses it and by a named update,
+	# before any effect. A full update resolves it again.
+	earlier = project!(test, "old-lock", CliUpdateTest.wire)?
+	earlier_lock = "${earlier}/Blueprint.lock"
+	CliHarness.exited!(run!(test, earlier, ["update"], [("STUB_NIX_REV", "a")])?, 0, "the update whose lock is rewritten as 0.5 wrote one")?
+	lock_0_5 = CliUpdateTest.as_0_5(Path.read_utf8!(Path.utf8(earlier_lock))?)
+	CliHarness.check!(lock_0_5.contains("(provider Auto)") and lock_0_5.contains("(minor 0)"), "the lock could not be rewritten as blueprint 0.5 wrote one:\n${lock_0_5}")?
+	Path.write_utf8!(Path.utf8(earlier_lock), lock_0_5)?
+	Path.delete_all!(Path.utf8("${earlier}/.blueprint"))?
+	CliHarness.forget!("${earlier}/nix-calls")?
+	for args in [["gen"], ["shell", "default"], ["update", "default"]] {
+		refused!(run!(test, earlier, args, [])?, "Blueprint.lock was written by blueprint 0.5 or older, which gave every project a package source it did not declare; run `blueprint update` to resolve it again with this blueprint, and review what changes", "${Str.join_with(args, " ")} with a lock from blueprint 0.5")?
+	}
+	no_effects!(earlier, "a lock from blueprint 0.5")?
+	CliHarness.check!(Path.read_utf8!(Path.utf8(earlier_lock))? == lock_0_5, "a refused command rewrote a lock from blueprint 0.5")?
+	CliHarness.exited!(run!(test, earlier, ["update"], [("STUB_NIX_REV", "c")])?, 0, "update over a lock from blueprint 0.5")?
+	renewed = Path.read_utf8!(Path.utf8(earlier_lock))?
+	CliHarness.check!(!renewed.contains("(provider Auto)") and renewed.contains("(minor 1)") and pinned_rev!(earlier_lock)? == "cccccccccccccccccccccccccccccccccccccccc", "an update did not replace a lock from blueprint 0.5:\n${renewed}")?
+	CliHarness.exited!(run!(test, earlier, ["gen"], [])?, 0, "gen after the lock was resolved again")?
+	Script.pass!("a lock from blueprint 0.5: gen, shell and a named update say it is old and what to run; update resolves it again")?
 
 	used = CliHarness.calls!(python_log)?
 	CliHarness.check!(used.is_empty(), "blueprint ran a host python3: ${Str.inspect(used)}")?
@@ -341,3 +371,5 @@ expect {
 }
 
 expect CliUpdateTest.leftovers(["Blueprint.lock", ".blueprint-write-ab12", "wire.scm", "lock-writer.tmp", ".blueprint"]) == [".blueprint-write-ab12", "lock-writer.tmp"]
+
+expect CliUpdateTest.as_0_5("(format (\n(major 1)\n(minor 1)))\n(sources ((\n(name \"default\")\n(provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\")))))") == "(format (\n(major 1)\n(minor 0)))\n(sources ((\n(name \"default\")\n(provider Auto))))"

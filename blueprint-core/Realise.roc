@@ -45,6 +45,26 @@ Realise :: [].{
 		Ok({})
 	}
 
+	## The providers Resolve has pins to ask of, for a validated Spec: one
+	## that supplies a declared package source, and, while a project has
+	## flake inputs or build sources a provider resolves, every provider at
+	## hand. A project that declares none of these has nothing for a provider
+	## to resolve, and its update needs none installed: what it fetches and
+	## expects is the Core's own.
+	resolvers : Spec, List(Provider) -> List(Provider)
+	resolvers = |project, providers| {
+		shared = !project.inputs.is_empty() or !Project.resolved_build_sources(project).is_empty()
+		providers.keep_if(|candidate| shared or project.sources.any(|source| (candidate.realises)(source.provider)))
+	}
+
+	## An update was asked for names that are neither an input a provider
+	## resolves nor a program: what the project does declare of each.
+	unknown_names : List(Str), List(Str), List(Str) -> Str
+	unknown_names = |unknown, inputs, programs| {
+		listed = |kind, names| if names.is_empty() "no ${kind}" else "the ${kind}s ${Str.join_with(names, ", ")}"
+		"no input or program named ${Str.join_with(unknown, ", ")}; Blueprint.roc declares ${listed("input", inputs)} and ${listed("program", programs)}"
+	}
+
 	## The Lock a plan is made from, or that none has been read yet.
 	Authority : [Read(Lock), Unread]
 
@@ -506,7 +526,6 @@ stub = Provider.{
 		},
 	resolve: |_spec, _system, _layout, _update| Err("not resolved here"),
 	lock_from_native: |_spec, _layout, _text, _trees| Err("not resolved here"),
-	compiler: |_tag, _system, _layout| Err("not fetched here"),
 }
 
 provided : [Generate, Shell(Str), Run(Str), Build(Str)], List(Str), Layout, List(Steps.Operation) -> Steps.Step
@@ -585,10 +604,10 @@ locked = Lock.{
 	sources: [],
 	hints: [],
 	fetched: [
-		{ name: "roc-stable", system: "x86_64-linux", urls: roc_urls("x86_64-linux"), sha256: roc_sha, size: 69614310 },
-		{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256: roc_sha, size: 66810227 },
-		{ name: "roc-stable", system: "x86_64-windows", urls: ["https://example.test/roc-windows.zip"], sha256: roc_sha, size: 67310620 },
-		{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux"], sha256: tool_sha, size: 5900520 },
+		{ name: "roc-stable", system: "x86_64-linux", urls: roc_urls("x86_64-linux"), sha256: roc_sha, size: 69614310, obtained: Both },
+		{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256: roc_sha, size: 66810227, obtained: Published },
+		{ name: "roc-stable", system: "x86_64-windows", urls: ["https://example.test/roc-windows.zip"], sha256: roc_sha, size: 67310620, obtained: Published },
+		{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux"], sha256: tool_sha, size: 5900520, obtained: Computed },
 	],
 }
 
@@ -757,7 +776,7 @@ expect {
 # A program the Lock has not resolved, or resolved from other URLs, is named
 # with the command that resolves it; every such program is, in one answer.
 expect {
-	stale = { ..locked, fetched: [{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/older.tar.gz"], sha256: roc_sha, size: 1 }] }
+	stale = { ..locked, fetched: [{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/older.tar.gz"], sha256: roc_sha, size: 1, obtained: Computed }] }
 	planned(sample, Request.Run("check", []), "x86_64-linux", unix, stale) == Err([
 		"roc-stable for x86_64-linux: Blueprint.roc now names https://example.test/roc-x86_64-linux.tar.gz, https://mirror.example.test/roc-x86_64-linux.tar.gz, the lock https://example.test/older.tar.gz; run blueprint update roc-stable",
 		"tool for x86_64-linux is not in Blueprint.lock; run blueprint update",
@@ -772,7 +791,7 @@ expect {
 # A digest that is not one is never handed to an executor to compare with.
 expect
 	["", "893c86d2", "sha256:${roc_sha}", roc_sha.replace_each("8", "G"), "${roc_sha}00"].all(
-		|sha256| planned(sample, Request.Run("script", []), "aarch64-darwin", unix, { ..locked, fetched: [{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256, size: 1 }] }) == Err(["roc-stable for aarch64-darwin: Blueprint.lock holds no SHA-256 for it; run blueprint update roc-stable"]),
+		|sha256| planned(sample, Request.Run("script", []), "aarch64-darwin", unix, { ..locked, fetched: [{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256, size: 1, obtained: Computed }] }) == Err(["roc-stable for aarch64-darwin: Blueprint.lock holds no SHA-256 for it; run blueprint update roc-stable"]),
 	)
 
 # The request is refused whole before planning: an invalid project, a System
@@ -848,3 +867,24 @@ expect {
 		# A provider is not asked about a request it has no part in.
 		and Realise.preflight(sample, Request.Run("check", []), "x86_64-linux", unix, [refusing]) == Ok({})
 }
+
+# Resolve asks a provider only for what a provider resolves: a source it
+# supplies, a flake input, or a build source that is not a task's own bundle.
+# Programs, expected tools and the Roc packages of tasks ask none.
+expect {
+	names = |project| Realise.resolvers(project, [stub]).map(|provider| provider.name)
+	fetching = { ..sample, sources: [], environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), shells: [], tasks: [], builds: [], workflows: [] }
+	names(sample) == ["nix"]
+		# `sample` has Roc packages, and with no build they are the Core's.
+		and names(fetching) == []
+			and names({ ..fetching, sources: [{ name: "channel", provider: GuixPackages("https://example.test/guix.git") }] }) == []
+				and names({ ..fetching, sources: sample.sources }) == ["nix"]
+					and names({ ..fetching, inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }) == ["nix"]
+						and names({ ..fetching, build_sources: fetching.build_sources.append({ name: "assets", ref: "path:./assets" }) }) == ["nix"]
+							# A build in an environment with a Roc package makes its bundle a provider's.
+							and names({ ..fetching, builds: [{ name: "app", environment: "scripts", inputs: [], needs: [], run: ["true"], output: "out" }] }) == ["nix"]
+								and Realise.resolvers(sample, []).is_empty()
+}
+
+expect Realise.unknown_names(["nope", "gone"], ["nix", "roc"], ["roc-stable"]) == "no input or program named nope, gone; Blueprint.roc declares the inputs nix, roc and the programs roc-stable"
+expect Realise.unknown_names(["nope"], [], []) == "no input or program named nope; Blueprint.roc declares no input and no program"

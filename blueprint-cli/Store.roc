@@ -203,6 +203,38 @@ Store := [].{
 		if regular!(file) Ok(file) else Err("the store has no ${file} after making it; delete ${tree_path(store, program.sha256, program.unpack)} and run again")
 	}
 
+	## What a program's URLs serve now, with its SHA-256 and length, for an
+	## update that records them: the first URL that answers. Nothing is
+	## compared here, because there is nothing yet to compare with; the
+	## caller decides what the digest is worth and whether to keep the bytes.
+	hashed! : Str, List(Str) => Try({ sha256 : Str, size : U64, bytes : List(U8) }, Str)
+	hashed! = |what, urls| {
+		var $failures = []
+		for url in urls {
+			_ = Stderr.line!("blueprint: fetching ${what} from ${url} to record its digest")
+			match Download.get!(url) {
+				Ok(bytes) => return Ok({ sha256: Crypto.SHA256.hash(bytes).to_hex(), size: bytes.len(), bytes })
+				Err(reason) => {
+					$failures = $failures.append("could not download ${what} from ${url}: ${reason}")
+				}
+			}
+		}
+		match $failures {
+			[] => Err("${what} has no URL to download it from")
+			[only] => Err(only)
+			_ => Err("no URL of ${what} served it:\n  ${Str.join_with($failures, "\n  ")}")
+		}
+	}
+
+	## Keep bytes an update has just hashed as the artifact of that digest,
+	## so that the run after it need not fetch them again. A use still
+	## hashes the file before it trusts it.
+	remember! : Str, Str, List(U8) => Try({}, Str)
+	remember! = |store, sha256, bytes| {
+		file = artifact_path(store, sha256)
+		if regular!(file) Ok({}) else keep!(Paths.parent(file), file, bytes)
+	}
+
 	## Put `target` on a run's PATH as `name`: a symbolic link in `bin`, so
 	## that a program finds what is beside its real path.
 	expose! : Str, Str, Str => Try({}, Str)

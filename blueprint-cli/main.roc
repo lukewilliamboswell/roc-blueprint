@@ -32,6 +32,7 @@ import core.Tree
 import Bootstrap
 import Download
 import Paths
+import Published
 import Store
 import nix.NixProvider
 import "compiler-version" as compiler_version : Str
@@ -98,10 +99,10 @@ cli_for = |loaded| {
 	)
 	update_cmd = SubCmd.finish(
 		Cli.map(
-			Param.str_list({ name: "inputs", help: "Inputs to update, by name; every input when none is given." }),
+			Param.str_list({ name: "names", help: "Inputs and fetched programs to update, by name; all of them when none is given." }),
 			|names| Update(names),
 		),
-		{ name: "update", description: "Update Blueprint.lock to the latest inputs", mapper: |c| c },
+		{ name: "update", description: "Update Blueprint.lock: the latest inputs, and the digests of fetched programs", mapper: |c| c },
 	)
 	workflow_cmd = SubCmd.finish(
 		Cli.map(
@@ -1006,6 +1007,10 @@ realise! = |spec, request, ctx| {
 	}
 	lock = Lock.parse(path(layout.lock_path).read_utf8!()?)
 		.map_err(|_| LockFailed("unsupported Blueprint lock format; run blueprint update"))?
+	# Stale for every project: said as what it is, not as what changed.
+	if Lock.from_before_explicit_sources(lock) {
+		return Err(OldLock)
+	}
 	lock.stale(spec).map_err(|message| LockFailed(message))?
 	# Everything that stops the request is known, and said together, before
 	# the first effect of any step.
@@ -1502,31 +1507,113 @@ list_tasks! = |spec| {
 	Stdout.line!(Str.join_with(lines, "\n"))
 }
 
-## Explicit update alone resolves pins and atomically publishes the authority.
-## With names it resolves those inputs and keeps the other pins of the
-## authority, which must exist and be current for Blueprint.roc.
+## Explicit update alone resolves and atomically publishes the authority: one
+## Lock for the pins a provider resolves and the digests of fetched programs.
+##
+## A provider is asked only when the project declares something it resolves
+## (see `Realise.resolvers`), and the programs it needs on the machine are
+## looked for first. A project that fetches, expects and has Roc packages for
+## its tasks, and declares nothing else, is updated with no provider at all.
+##
+## With names it resolves those inputs and programs and keeps everything else
+## of the authority, which must exist and be current for Blueprint.roc. An
+## update of programs alone asks no provider.
 resolve! : Spec, List(Str), Context => Try({}, _)
 resolve! = |spec, names, ctx| {
 	layout = ctx.layout
-	provider = providers.first().map_err(|_| Refused("this blueprint has no provider to resolve pins with"))?
 	safe_path!(layout.lock_path)?
 	prior = authority_token!(layout.lock_path)?
-	update = if names.is_empty() {
-		All
+	before = held!(layout)?
+	declared = Project.unique(spec.programs.map(|program| program.name))
+	wanted = names.keep_if(|name| declared.contains(name))
+	others = names.keep_if(|name| !declared.contains(name))
+	several = Refused("several providers have pins to resolve for this project, and one lock holds those of one")
+	pins = if names.is_empty() {
+		match Realise.resolvers(spec, providers) {
+			[] => unpinned
+			[provider] => pinned!(provider, spec, All, ctx)?
+			_ => return Err(several)
+		}
 	} else {
-		if !(path(layout.lock_path).exists!()?) {
-			return Err(LockFailed("no lock to keep the other pins from; run `blueprint update` without input names first"))
+		lock = match before {
+			Held(found) => found
+			Absent => return Err(LockFailed("no lock to keep the other pins from; run `blueprint update` without input names first"))
+			Unreadable => return Err(LockFailed("unsupported Blueprint lock format; run `blueprint update` without input names"))
 		}
-		if path(layout.lock_path).type!()? != IsFile {
-			return Err(UnsafePath(layout.lock_path))
+		if Lock.from_before_explicit_sources(lock) {
+			return Err(OldLock)
 		}
-		lock = Lock.parse(path(layout.lock_path).read_utf8!()?)
-			.map_err(|_| LockFailed("unsupported Blueprint lock format; run `blueprint update` without input names"))?
 		lock.stale(spec).map_err(|message| LockFailed("${message} without input names"))?
-		Named(names, lock)
+		if others.is_empty() {
+			lock
+		} else {
+			match Realise.resolvers(spec, providers) {
+				[] => return Err(Refused(Realise.unknown_names(others, [], declared)))
+				[provider] => pinned!(provider, spec, Named(others, lock), ctx)?
+				_ => return Err(several)
+			}
+		}
 	}
+	# What was recorded for a program stays while its URLs do; a provider
+	# resolves package sources and knows nothing of downloads.
+	known = match before {
+		Held(found) => found.fetched
+		_ => []
+	}
+	fetched = obtained!(Lock.refresh(spec.programs, known, if names.is_empty() All else Named(wanted)))?
+	lock = { ..pins, intent: Lock.intent_of(spec), fetched }
+	path(Paths.parent(layout.lock_path)).create_all!()?
+	publish_authority!(layout.lock_path, prior, lock.to_str())?
+	# A new place downloads come from is what a reviewer of the lock should
+	# not miss among its digests.
+	match Lock.new_hosts(known, fetched) {
+		[] => Ok({})
+		added => Stdout.line!("Blueprint.lock now names download hosts it did not name before:\n${Str.join_with(added.map(|host| "  ${host}"), "\n")}")
+	}
+}
+
+## A Lock with no pins: what a project that asks no provider starts from.
+unpinned : Lock
+unpinned = Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], hints: [], fetched: [] }
+
+## The authority as it is now, when there is one that can be read.
+held! : Layout => Try([Held(Lock), Absent, Unreadable], _)
+held! = |layout| {
+	if !(path(layout.lock_path).exists!()?) {
+		return Ok(Absent)
+	}
+	if path(layout.lock_path).type!()? != IsFile {
+		return Err(UnsafePath(layout.lock_path))
+	}
+	# Bytes that are not text are no more a Lock than text that is not one.
+	match path(layout.lock_path).read_utf8!() {
+		Ok(text) =>
+			match Lock.parse(text) {
+				Ok(lock) => Ok(Held(lock))
+				Err(_) => Ok(Unreadable)
+			}
+
+		Err(_) => Ok(Unreadable)
+	}
+}
+
+## The pins one provider resolves: what the machine must have is looked for
+## before anything else, then the provider's files are staged and its argv
+## run, and the native lock it wrote is converted.
+pinned! : Provider, Spec, Provider.Update, Context => Try(Lock, _)
+pinned! = |provider, spec, update, ctx| {
+	layout = ctx.layout
 	resolution = (provider.resolve)(spec, ctx.target, layout, update)
 		.map_err(|message| RenderFailed(message))?
+	var $missing = []
+	for entry in resolution.present {
+		if !Cmd.check_available!(entry.program) {
+			$missing = $missing.append("  ${entry.program}: ${entry.because}")
+		}
+	}
+	if !$missing.is_empty() {
+		return Err(Refused("this machine lacks what blueprint update needs, and blueprint installs none of it:\n${Str.join_with($missing, "\n")}"))
+	}
 	# Reject ancestor escapes and nested symlinks before staging or fetching.
 	var $trees = []
 	for local in resolution.locals {
@@ -1547,17 +1634,92 @@ resolve! = |spec, names, ctx| {
 	stage!(resolution.files, layout)?
 	exec!(resolution.argv, layout.project_root)?
 	safe_path!(native_lock)?
-	resolved = (provider.lock_from_native)(spec, layout, path(native_lock).read_utf8!()?, $trees)
-		.map_err(|message| LockFailed(message))?
-	# What was recorded for a declared program stays: the provider resolves
-	# package sources and knows nothing of downloads.
-	kept = match path(layout.lock_path).read_utf8!() {
-		Ok(text) => Lock.parse(text).map_ok(|before| before.fetched) ?? []
-		Err(_) => []
+	(provider.lock_from_native)(spec, layout, path(native_lock).read_utf8!()?, $trees)
+		.map_err(|message| LockFailed(message))
+}
+
+## A release that has been asked about during this update, and its answer:
+## each is asked once, however many of its assets are programs.
+Asked : { api : Str, answer : [Described(Str), NoRelease] }
+
+## The entries an update records, in order: those it keeps as they are and
+## those whose digest it obtains (see `obtain!`).
+obtained! : List(Lock.Refresh) => Try(List(Lock.Fetched), _)
+obtained! = |plan| {
+	host = host_system!() ?? ""
+	var $entries = []
+	var $asked = []
+	for step in plan {
+		recorded = record!(step, host, $asked)?
+		$entries = $entries.append(recorded.entry)
+		$asked = recorded.asked
 	}
-	lock = { ..resolved, intent: Lock.intent_of(spec), fetched: kept.keep_if(|entry| spec.programs.any(|program| program.name == entry.name and program.system == entry.system)) }
-	path(Paths.parent(layout.lock_path)).create_all!()?
-	publish_authority!(layout.lock_path, prior, lock.to_str())
+	Ok($entries)
+}
+
+record! : Lock.Refresh, Str, List(Asked) => Try({ entry : Lock.Fetched, asked : List(Asked) }, _)
+record! = |step, host, asked|
+	match step {
+		Keep(entry) => Ok({ entry, asked })
+		Obtain(program) => obtain!(program, host, asked)
+	}
+
+## The digest of one program on one System, obtained now. The download of
+## the System this machine is, is fetched and hashed here, compared with what
+## its release publishes when it publishes one, and kept in the store for the
+## run that follows. Another System's is recorded by the published digest
+## without being fetched, and fetched and hashed only when nothing is
+## published for it. Two digests that differ record nothing.
+obtain! : Spec.Program, Str, List(Asked) => Try({ entry : Lock.Fetched, asked : List(Asked) }, _)
+obtain! = |program, host, asked| {
+	looked = published!(program, asked)?
+	what = "${program.name} for ${program.system}"
+	here = program.system == host
+	downloaded : Try({ sha256 : Str, size : U64, bytes : List(U8) }, [NotDownloaded])
+	downloaded = if here or looked.published.is_err() {
+		Ok(Store.hashed!(what, program.urls).map_err(|message| FetchFailed(message))?)
+	} else {
+		Err(NotDownloaded)
+	}
+	entry = Lock.record(program, downloaded.map_ok(|found| { sha256: found.sha256, size: found.size }), looked.published)
+		.map_err(|message| FetchFailed(message))?
+	match downloaded {
+		Ok(found) if here => {
+			store = Store.root!().map_err(|message| FetchFailed(message))?
+			Store.remember!(store, found.sha256, found.bytes).map_err(|message| FetchFailed(message))?
+		}
+		_ => {}
+	}
+	Ok({ entry, asked: looked.asked })
+}
+
+## What a program's release publishes for its download, when its first URL is
+## a release asset: asked of the release's host, once for each release.
+published! : Spec.Program, List(Asked) => Try({ published : Try(Lock.Digest, [NotPublished]), asked : List(Asked) }, _)
+published! = |program, asked| {
+	release = match program.urls.first().map_ok(Published.release) {
+		Ok(Ok(found)) => found
+		_ => return Ok({ published: Err(NotPublished), asked })
+	}
+	known = match asked.find_first(|entry| entry.api == release.api) {
+		Ok(entry) => asked.keep_if(|other| other.api != entry.api).append(entry)
+		Err(_) => {
+			_ = Stderr.line!("blueprint: asking ${release.api} what ${release.repository} publishes for its release ${release.tag}")
+			answer = Published.ask!(release).map_err(|message| FetchFailed(message))?
+			asked.append({ api: release.api, answer })
+		}
+	}
+	answer = known.last().map_ok(|entry| entry.answer) ?? NoRelease
+	published = match answer {
+		NoRelease => Err(NotPublished)
+		Described(text) =>
+			match Published.digest(text, release.asset) {
+				Ok(found) => Ok(found)
+				Err(NotPublished) => Err(NotPublished)
+				Err(Unreadable) => return Err(FetchFailed(Published.refusal(release, 200, "the answer from ${release.api} does not describe a release")))
+			}
+	}
+	Ok({ published, asked: known })
 }
 
 ## Publish only if the authority still has the token observed before
@@ -1625,6 +1787,7 @@ describe = |err, provider|
 				.concat("or set ROC to its executable:\n${message}")
 		LockFailed(message) => "${message}; use `blueprint update` to initialize "
 			.concat("or deliberately refresh pins")
+		OldLock => "Blueprint.lock was written by blueprint 0.5 or older, which gave every project a package source it did not declare; run `blueprint update` to resolve it again with this blueprint, and review what changes"
 		PlanFailed([problem]) => problem
 		PlanFailed(problems) => "this cannot be carried out:\n  ${Str.join_with(problems, "\n  ")}"
 		UnsafePath(value) => "refusing unsafe or symlinked runtime path: ${value}"

@@ -116,7 +116,8 @@ https://github.com/lukewilliamboswell/roc-blueprint/blob/main/blueprint-platform
 
 `scripts/test.roc` is the full CI entry point. Its groups are `static`
 (formatting; no tracked object file, archive or import library; the CLI's use of
-the Provider contract; `roc_overlay` against `flake.lock`; each workflow's
+the Provider contract; the compiler downloads `Bootstrap.roc` records, one
+for each system the CLI runs on; each workflow's
 permissions and checkouts; the release notes chapter against the notes files;
 the flake's list of core modules and its version), `unit` (the platform's, the scripts', the CLI's
 and the consumer's `expect`s and the configuration fixtures), `cli`,
@@ -189,8 +190,9 @@ Roc scripts run as `roc-stable` through `RocPackages`. Their inputs are pinned
 in `fixtures/consumer/inputs.lock` and `fixtures/roc-inputs.lock.json`; one
 first step fetches them and every later Nix call is recorded and run with
 `--offline`. See https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/builds/README.md[fixtures/builds/README.md].
-`scripts/test_update.roc` checks local-source preflight, authority observation and
-concurrent publication. `scripts/test_isolation.roc` checks what a build stages
+`scripts/test_update.roc` checks local-source preflight, authority observation,
+concurrent publication, named updates and what a lock from blueprint 0.5 is
+told. `scripts/test_isolation.roc` checks what a build stages
 about its caller: the namespace identities, the CLI's own path as the runner,
 and the refusals when either cannot be used. Both put a failing
 `python3` on `PATH`: the CLI itself must not use a host Python.
@@ -206,7 +208,13 @@ every refusal (a missing expected program, a program the lock does not hold or
 holds under other URLs, another length or digest, each URL's failure, an
 archive with a link out of its tree), the caller's own shell, and parity: the
 same task with one Nix tool added prints the same from the same store file,
-and only then starts Nix.
+and only then starts Nix. Its last cases let `blueprint update` write the
+lock: with no `nix` on `PATH` for a project that only fetches, with nothing
+asked when nothing changed, for a named program alone, after a URL list
+changed, and for release assets, whose release is described by the same
+loopback server, so that a digest computed here is compared with a published
+one, another system's is recorded unfetched, and a refusal of the question
+stops the update.
 These are Roc scripts, run from the repository root with `./blueprint`
 built; `ROC` names the compiler. They replace every tool the CLI runs with one
 program, `scripts/stubs/tool.roc`, which each test builds once and installs

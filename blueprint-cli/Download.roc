@@ -17,7 +17,15 @@ Download := [].{
 	## The whole body is held in memory: the platform has no streaming
 	## client. A download of 70 MB peaks near twice that.
 	get! : Str => Try(List(U8), Str)
-	get! = |url| attempt!(url, 1)
+	get! = |url| asked!(url, []).map_err(|failure| failure.reason)
+
+	## `get!` with request headers that say who asks, such as a `User-Agent`
+	## a service requires, and an answer that keeps the status of a refusal
+	## apart from its words: 0 when no answer came at all. A header is never
+	## a credential, and is sent to the first address alone: a redirect is
+	## followed without it.
+	asked! : Str, List((Str, Str)) => Try(List(U8), { status : U16, reason : Str })
+	asked! = |url, headers| attempt!(url, headers, 1)
 
 	## How many times one URL is tried.
 	attempts : U64
@@ -91,48 +99,49 @@ Download := [].{
 lowercase : Str -> Str
 lowercase = |text| Str.from_utf8_lossy(text.to_utf8().map(|b| if b >= 'A' and b <= 'Z' b + 32 else b))
 
-attempt! : Str, U64 => Try(List(U8), Str)
-attempt! = |url, number|
-	match follow!(url, url, 0) {
+attempt! : Str, List((Str, Str)), U64 => Try(List(U8), { status : U16, reason : Str })
+attempt! = |url, headers, number|
+	match follow!(url, url, headers, 0) {
 		Ok(bytes) => Ok(bytes)
-		Err(Final(reason)) => Err("${reason} (${tried(number)})")
-		Err(Transient(reason)) =>
+		Err(Final(status, reason)) => Err({ status, reason: "${reason} (${tried(number)})" })
+		Err(Transient(status, reason)) =>
 			if number >= Download.attempts {
-				Err("${reason} (${tried(number)})")
+				Err({ status, reason: "${reason} (${tried(number)})" })
 			} else {
 				Sleep.millis!(250 * number)
-				attempt!(url, number + 1)
+				attempt!(url, headers, number + 1)
 			}
 	}
 
 tried : U64 -> Str
 tried = |number| if number == 1 "1 attempt" else "${number.to_str()} attempts"
 
-follow! : Str, Str, U64 => Try(List(U8), [Final(Str), Transient(Str)])
-follow! = |declared, current, hops| {
-	request = Request.from_method(GET).with_uri(current).with_timeout(TimeoutMilliseconds(Download.timeout_ms))
+follow! : Str, Str, List((Str, Str)), U64 => Try(List(U8), [Final(U16, Str), Transient(U16, Str)])
+follow! = |declared, current, headers, hops| {
+	plain = Request.from_method(GET).with_uri(current).with_timeout(TimeoutMilliseconds(Download.timeout_ms))
+	request = headers.fold(plain, |built, (name, value)| built.add_header(name, value))
 	response = match Http.send!(request) {
 		Ok(answer) => answer
-		Err(HttpErr(Timeout)) => return Err(Transient("no answer from ${Download.shown(current)} within ${(Download.timeout_ms // 1000).to_str()} seconds"))
-		Err(HttpErr(_)) => return Err(Transient("could not reach ${Download.shown(current)}"))
-		Err(InvalidUrl(_)) => return Err(Final("${Download.shown(current)} is not a URL"))
+		Err(HttpErr(Timeout)) => return Err(Transient(0, "no answer from ${Download.shown(current)} within ${(Download.timeout_ms // 1000).to_str()} seconds"))
+		Err(HttpErr(_)) => return Err(Transient(0, "could not reach ${Download.shown(current)}"))
+		Err(InvalidUrl(_)) => return Err(Final(0, "${Download.shown(current)} is not a URL"))
 	}
 	status = Response.status(response)
 	if status >= 200 and status < 300 {
 		Ok(Response.body(response))
 	} else if status >= 300 and status < 400 {
 		if hops >= Download.max_hops {
-			return Err(Final("more than ${Download.max_hops.to_str()} redirects"))
+			return Err(Final(status, "more than ${Download.max_hops.to_str()} redirects"))
 		}
 		target = match Download.location(Response.headers(response)) {
-			Ok(value) => Download.hop(declared, current, value).map_err(|reason| Final(reason))?
-			Err(NoLocation) => return Err(Final("HTTP ${status.to_str()} from ${Download.shown(current)} with no Location"))
+			Ok(value) => Download.hop(declared, current, value).map_err(|reason| Final(status, reason))?
+			Err(NoLocation) => return Err(Final(status, "HTTP ${status.to_str()} from ${Download.shown(current)} with no Location"))
 		}
-		follow!(declared, target, hops + 1)
+		follow!(declared, target, [], hops + 1)
 	} else if Download.retryable(status) {
-		Err(Transient("HTTP ${status.to_str()} from ${Download.shown(current)}"))
+		Err(Transient(status, "HTTP ${status.to_str()} from ${Download.shown(current)}"))
 	} else {
-		Err(Final("HTTP ${status.to_str()} from ${Download.shown(current)}"))
+		Err(Final(status, "HTTP ${status.to_str()} from ${Download.shown(current)}"))
 	}
 }
 

@@ -212,8 +212,7 @@ static! = |context| {
 	cli_source = read!(context, "blueprint-cli/main.roc")?
 	problem!(StaticChecks.provider_contract_problem(cli_source))?
 
-	step!("The fetched compiler comes from the locked roc-overlay revision")?
-	problem!(StaticChecks.overlay_problem(read!(context, "flake.lock")?, read!(context, "blueprint-nix/NixProvider.roc")?))?
+	step!("The CLI records a download of its compiler for every system it runs on")?
 	problem!(StaticChecks.bootstrap_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-cli/Bootstrap.roc")?))?
 
 	step!("The scripts run on roc-stable, pin its nightly, and nothing else selects a compiler")?

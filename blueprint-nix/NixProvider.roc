@@ -43,7 +43,6 @@ NixProvider :: [].{
 			locks = Locks.from_nix(spec, layout, text)?
 			Ok(Locks.to_lock(locks.with_trees(layout, trees)?))
 		},
-		compiler: |tag, _target, _layout| Ok(Printed(["nix", "build", "--no-link", "--print-out-paths", "${roc_overlay}#\"${tag}\""])),
 	}
 
 	## Nix supplies a source that names a Nix package set, and no other: a
@@ -66,14 +65,16 @@ NixProvider :: [].{
 		locals = local_checks(spec, target, layout)?
 		native_lock = "${layout.generated_root}/flake.lock"
 		flake = ["--flake", "path:${layout.generated_root}"]
+		# The machine must have Nix itself: nothing installs it.
+		present = [{ program: "nix", because: resolving(Project.validate(spec)?) }]
 		match update {
-			All => Ok({ files, locals, argv: ["nix", "flake", "update"].concat(flake), native_lock })
+			All => Ok({ present, files, locals, argv: ["nix", "flake", "update"].concat(flake), native_lock })
 			Named(names, lock) => {
 				project = Project.validate(spec)?
 				declared = Locks.inputs(project)?
 				unknown = names.keep_if(|name| !declared.any(|input| input.name == name))
 				if !unknown.is_empty() {
-					return Err("no input named ${Str.join_with(unknown, ", ")}; Blueprint.roc declares ${Str.join_with(declared.map(|input| input.name), ", ")}")
+					return Err(Realise.unknown_names(unknown, declared.map(|input| input.name), Project.unique(project.programs.map(|program| program.name))))
 				}
 				derived = Locks.derive(Locks.from_lock(lock)?, project, layout)?
 				# Nix leaves a lock it has nothing to change in as it found it,
@@ -82,6 +83,7 @@ NixProvider :: [].{
 				kept = LockJson.encode(LockJson.sorted(LockJson.decode(derived.contents)?))
 				local = declared.keep_if(|input| input.ref.starts_with("path:") and !names.contains(input.name)).map(|input| input.name)
 				Ok({
+					present,
 					files: files.append({ path: native_lock, contents: kept }),
 					locals,
 					argv: ["nix", "flake", "update"].concat(names).concat(local).concat(flake),
@@ -91,11 +93,16 @@ NixProvider :: [].{
 		}
 	}
 
-	## The roc-overlay revision that packages the compiler evaluating
-	## Blueprint.roc. scripts/test.roc keeps it equal to flake.lock, so the
-	## fetched compiler is the one this CLI was built and tested with.
-	roc_overlay : Str
-	roc_overlay = "github:roc-lang/roc-overlay/fb02fef7a45ddf115f558c8eaf32bd1ce2f9912f?narHash=sha256-R4ZjP2ceAyOyllFY%2B8wE1LLFVV4qvjw2yix57tzu6g0%3D"
+	## Why an update starts Nix, for whoever finds it missing: the first
+	## thing the project declares that only Nix resolves.
+	resolving : Spec -> Str
+	resolving = |project|
+		match (project.sources.find_first(|source| realises(source.provider)), project.inputs.first(), Project.resolved_build_sources(project).first()) {
+			(Ok(source), _, _) => "Blueprint.roc declares the Nix source ${source.name}, which Nix resolves"
+			(Err(_), Ok(input), _) => "Blueprint.roc declares the input ${input.name}, which Nix resolves"
+			(Err(_), Err(_), Ok(source)) => "Blueprint.roc declares the source ${source.name}, which Nix locks"
+			(Err(_), Err(_), Err(_)) => "blueprint update resolves pins with Nix"
+		}
 
 	## Rendering supports these target shapes, not cross-compilation or a host
 	## support claim. Nix itself rejects tools unavailable on a declared target.
@@ -1449,10 +1456,6 @@ expect {
 	rendered.split_on("(sets.\"default\".\"zig\".override { \"debug\" = true; })").len() == 2
 }
 
-# The evaluating compiler is fetched by tag from the pinned overlay revision.
-expect (NixProvider.provider.compiler)("nightly-2026-10-04-130536d", "x86_64-linux", Layout.{ project_root: "/project", workspace: "/project/.blueprint", generated_root: "/project/.blueprint", lock_path: "/project/Blueprint.lock" }) == Ok(Printed(["nix", "build", "--no-link", "--print-out-paths", "${NixProvider.roc_overlay}#\"nightly-2026-10-04-130536d\""]))
-expect NixProvider.roc_overlay.starts_with("github:roc-lang/roc-overlay/") and NixProvider.roc_overlay.contains("?narHash=sha256-")
-
 # A tool name that is not a Nix attribute path is refused before any effects.
 expect NixProvider.render(
 	mk({
@@ -1608,7 +1611,7 @@ expect {
 	project = TestData.project(TestData.data)
 	lock = Locks.to_lock(plan_locks?)
 	renamed = { ..project, build_sources: [{ name: "other", ref: "path:./assets" }] }
-	(NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, Named(["assets", "nope"], lock)) == Err("no input named nope; Blueprint.roc declares default, assets")
+	(NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, Named(["assets", "nope"], lock)) == Err("no input or program named nope; Blueprint.roc declares the inputs default, assets and no program")
 		and (NixProvider.provider.resolve)(renamed, "x86_64-linux", TestData.layout, Named(["other"], lock)).is_err()
 }
 
@@ -3074,3 +3077,12 @@ expect {
 
 expect NixProvider.realises(NixPackages("github:NixOS/nixpkgs/nixos-unstable")) and !NixProvider.realises(GuixPackages("https://git.savannah.gnu.org/git/guix.git")) and !NixProvider.realises(Auto)
 expect (NixProvider.provider.realises)(NixPackages("github:NixOS/nixpkgs/nixos-unstable")) and !(NixProvider.provider.realises)(Auto)
+
+# An update says the machine must have Nix, and why: the first thing declared
+# that only Nix resolves. A named update asks the same.
+expect {
+	project = TestData.project(TestData.data)
+	(NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, All).map_ok(|resolution| resolution.present) == Ok([{ program: "nix", because: "Blueprint.roc declares the Nix source default, which Nix resolves" }])
+		and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }) == "Blueprint.roc declares the input roc, which Nix resolves"
+			and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [] }) == "Blueprint.roc declares the source assets, which Nix locks"
+}

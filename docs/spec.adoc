@@ -100,17 +100,21 @@ probes the host or installs/fetches anything.
 `Blueprint.lock` is a `blueprint-core/Lock.roc` value in the same S-expression
 codec, with its own `format` (currently 1.1) and the same compatibility rules
 as the Spec. It holds `intent` (the parts of the Spec Resolve consumed: source
-and input declarations, build sources and per-environment overlay order), which
+and input declarations, the build sources a provider resolves and
+per-environment overlay order), which
 the CLI records on `update` and compares before every other command, failing
 with what changed; `sources` (one provider-neutral `{ name, provider, ref,
 rev, digest }` per declared input; `digest` is `sha256:<hex>`: the Nix
 provider converts its NAR hashes for remote inputs, and local inputs carry
 Blueprint's own tree digest from core `Tree`), provider-namespaced
-`hints`, and `fetched` (one `{ name, system, urls, sha256, size }` per declared
-program and System: the SHA-256, in hex, and the length of the download when
-it was resolved, with the URLs it was declared with. Programs are not part of
-`intent`; each entry carries its URLs, so a program whose URLs changed is
-stale alone). The Nix provider's hint carries its declared input identity and the
+`hints`, and `fetched` (one `{ name, system, urls, sha256, size, obtained }`
+per declared program and System: the SHA-256, in hex, and the length of the
+download when it was resolved, the URLs it was declared with, and whether the
+digest was `Computed` from the bytes, `Published` by the release that serves
+them, or `Both`; an entry with no `obtained` is read as `Unstated`. Programs
+are not part of `intent`; each entry carries its URLs, so a program whose URLs
+changed is stale alone). A project that asks no provider for anything has a
+Lock with no `sources` and no `hints`. The Nix provider's hint carries its declared input identity and the
 complete native lock graph; decoding rejects a lock whose Sources disagree with
 those pins, so hand edits to either side fail. The graph's root holds one edge
 that is no declared input: `nixpkgs`, following the package source
@@ -118,8 +122,10 @@ that is no declared input: `nixpkgs`, following the package source
 flake (see Providers). Decoding accepts that edge only as the declarations
 determine it. A Lock written before the alias has no such edge and is still
 valid: `Locks.derive` adds it to the working lock, which changes no pin, so
-nothing needs `blueprint update` and the next update records it. Older JSON
-locks are not migrated: run `blueprint update`. `fuzz/lock-parse` fuzzes the parser.
+nothing needs `blueprint update` and the next update records it. A Lock that
+blueprint 0.5 or older wrote records, in its `intent`, the `Auto` source every
+project had then: it is read, found stale for every Spec, and reported as
+old. Older JSON locks are not migrated. Either way, run `blueprint update`. `fuzz/lock-parse` fuzzes the parser.
 
 == Compatibility of the formats
 
@@ -161,9 +167,11 @@ The caller owns all effects; no provider registry or serialized config recipes
 are involved. `blueprint-core/Provider.roc` is the Core/Provider contract: a
 `name`, the `features` the provider implements, `render`, `preflight`,
 `realises` (which package sources it supplies), `realise` (Steps from the
-Lock), `resolve` plus `lock_from_native` (what to
-stage and run to produce new pins) and `compiler` (the argv that fetches the
-pinned Roc). The CLI uses only that record; `scripts/test.roc` fails if it
+Lock) and `resolve` plus `lock_from_native` (the programs the machine must
+have, and what to stage and run to produce new pins). Resolve asks a provider
+only when the Spec declares something it resolves (`Realise.resolvers`); the
+digests of fetched programs are the Core's own to obtain. The CLI uses only
+that record; `scripts/test.roc` fails if it
 reaches into a provider's modules directly. Nix is the only implemented
 provider. It:
 

@@ -8,9 +8,11 @@ request, with whatever the new compiler breaks fixed in the same request.
 To move the product compiler:
 
 . Put the nightly's tag in `blueprint-cli/compiler-version`.
+. Record the nightly's archive for every system `blueprint` runs on in
+   `blueprint-cli/Bootstrap.roc`, with the digest and size its release
+   publishes; `scripts/test.roc static` names the systems that are missing.
 . If the locked roc-overlay predates that nightly, run
-   `nix flake update roc-overlay` and set `NixProvider.roc_overlay` to the
-   value `scripts/test.roc static` asks for.
+   `nix flake update roc-overlay`.
 . Set the compiler and overlay in `fixtures/roc-inputs.lock.json` to match.
 . Move the basic-cli release in `blueprint-cli/main.roc`, the fixtures, the
    examples and `rocPackages` in `flake.nix` if the nightly needs a newer one.
@@ -130,9 +132,8 @@ at the same time, each about 2.3 GB at its peak.
 A binary downloads the compiler named in `blueprint-cli/compiler-version`
 from roc-lang/nightlies, by the digest in `blueprint-cli/Bootstrap.roc`, and
 keeps it in the per-user store; it starts no provider to read a
-`Blueprint.roc`. `NixProvider.roc_overlay` still names the roc-overlay
-revision of that compiler: change it whenever `flake.lock` moves the
-`roc-overlay` input; `scripts/test.roc` fails when the two differ.
+`Blueprint.roc`. `scripts/test.roc` fails when that table has no entry of the
+nightly for a system the CLI runs on.
 
 === Write the release notes
 

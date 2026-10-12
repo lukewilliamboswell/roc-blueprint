@@ -15,8 +15,11 @@ import Serve
 ## programs and expect tools of the machine. Nothing selects how a project is
 ## run but its own Blueprint.roc: one with no Nix tool never starts Nix, which
 ## is a stub here that records being started. Downloads come from a server on
-## the loopback address, the store is a directory of the test's own, and the
-## lock entries are written here, as `blueprint update` does not write them.
+## the loopback address and the store is a directory of the test's own. The
+## first cases write the lock entries they need themselves, to say exactly
+## what a run finds there. The last write none: `blueprint update` resolves
+## them, with no Nix on PATH where the project declares nothing Nix resolves,
+## and what a release publishes is asked of the same loopback server.
 CliProgramsTest := [].{
 
 	## Run every case from the repository root, in a temporary directory that is
@@ -111,7 +114,7 @@ lock! = |test, server, cwd, downloads| {
 	for program in spec.programs {
 		match downloads.find_first(|download| program.urls.first() == Ok(download.url)) {
 			Ok(download) => {
-				$fetched = $fetched.append({ name: program.name, system: program.system, urls: program.urls, sha256: Integrity.digest(download.bytes), size: download.bytes.len() })
+				$fetched = $fetched.append({ name: program.name, system: program.system, urls: program.urls, sha256: Integrity.digest(download.bytes), size: download.bytes.len(), obtained: Computed })
 			}
 			Err(_) => {}
 		}
@@ -385,7 +388,244 @@ cases! = |bench, idle| {
 	CliHarness.same_calls!(CliHarness.calls!("${mixed}/nix-calls")?, [["develop", "--no-update-lock-file", "--no-write-lock-file", "path:${mixed}/.blueprint#devShells.${system}.blueprint-env-dev", "--command", "roc-stable", "configured", "extra"]], "the task with a Nix tool did not enter Nix once, with the task's own argv")?
 	without_nix!(first)?
 	no_run_left!(mixed)?
-	Script.pass!("parity: with one Nix tool added, the task prints the same from the same store file, and only then starts Nix; without Nix it is refused before any download")
+	Script.pass!("parity: with one Nix tool added, the task prints the same from the same store file, and only then starts Nix; without Nix it is refused before any download")?
+	updating!(test, idle, { archive, stub, page, system })
+}
+
+## `blueprint update` or another command while the server answers, with
+## nothing required of the authority.
+command! : Test, Serve, Str, List(Str), List((Str, Str)) => Try(Process.Outcome, _)
+command! = |test, server, cwd, args, overrides|
+	match server.drive!([job(test, cwd, args, overrides)])? {
+		[only] => Ok(only)
+		_ => Script.fail!("blueprint ${Str.join_with(args, " ")} did not report one result")
+	}
+
+## The fetched entries of a project's lock, and whether a provider pinned
+## anything in it.
+locked! : Str => Try({ fetched : List(Lock.Fetched), pinned : Bool, text : Str }, _)
+locked! = |cwd| {
+	text = Path.read_utf8!(Path.utf8("${cwd}/Blueprint.lock"))?
+	match Lock.parse(text) {
+		Ok(lock) => Ok({ fetched: lock.fetched, pinned: !(lock.sources.is_empty() and lock.hints.is_empty()), text })
+		Err(_) => Script.fail!("${cwd}/Blueprint.lock is not a Lock:\n${text}")
+	}
+}
+
+## What the entries of one program record, in the lock's order.
+recorded : List(Lock.Fetched), Str -> List((Str, Str, U64, Lock.Obtained))
+recorded = |fetched, name| fetched.keep_if(|entry| entry.name == name).map(|entry| (entry.system, entry.sha256, entry.size, entry.obtained))
+
+## How often `part` occurs in `text`.
+occurrences : Str, Str -> U64
+occurrences = |text, part| text.split_on(part).len() - 1
+
+## A release as its host describes it: these assets, each with its length
+## and, when it has one, its SHA-256.
+described : List({ name : Str, size : U64, sha256 : Str }) -> Str
+described = |assets| {
+	listed = assets.map(
+		|asset| {
+			digest = if asset.sha256.is_empty() "null" else "\"sha256:${asset.sha256}\""
+			"{ \"name\": \"${asset.name}\", \"label\": null, \"size\": ${asset.size.to_str()}, \"digest\": ${digest} }"
+		},
+	)
+	"{\n  \"tag_name\": \"1.0\",\n  \"body\": null,\n  \"assets\": [\n    ${Str.join_with(listed, ",\n    ")}\n  ]\n}\n"
+}
+
+## `blueprint update` writes the digests of fetched programs itself. Nothing
+## of it needs Nix unless the project declares what Nix resolves, a digest
+## that is unchanged asks nothing, and what a release publishes is compared
+## with what was downloaded or recorded in its place.
+updating! : Test, Serve, { archive : List(U8), stub : List(U8), page : List(U8), system : Str } => Try({}, _)
+updating! = |test, idle, given| {
+	bench = test.bench
+	system = given.system
+	systems = ["x86_64-linux", "aarch64-linux", "x86_64-darwin", "aarch64-darwin"]
+	roc_sha = Integrity.digest(given.archive)
+	tool_sha = Integrity.digest(given.stub)
+	page_sha = Integrity.digest(given.page)
+	roc_url = idle.url("releases/1.0/roc.tar.gz")
+	tool_url = idle.url("releases/1.0/tool")
+	mirror_url = idle.url("mirror/roc.tar.gz")
+	server = idle
+		.with_route("releases/1.0/roc.tar.gz", given.archive)
+		.with_route("releases/1.0/tool", given.stub)
+		.with_route("mirror/roc.tar.gz", given.archive)
+	refusing = Serve.emptied(server)
+	roc_file = "${test.store}/v1/trees/sha256/${roc_sha}.tar.gz/pkg/roc-stable"
+	heading = "Blueprint.lock now names download hosts it did not name before:\n"
+
+	# A PATH with the stub compiler and nothing else: no `nix`, real or stub.
+	bare_bin = "${bench.work}/bare-path"
+	Path.create_dir!(Path.utf8(bare_bin))?
+	Path.copy!(Path.utf8("${bench.work}/stub-tool"), Path.utf8("${bare_bin}/roc-record"))?
+	bare = [("PATH", bare_bin), ("ROC", "${bare_bin}/roc-record")]
+	every = |sha256, size, obtained| systems.map(|declared| (declared, sha256, size, obtained))
+
+	# A project that only fetches: update needs no Nix, records every declared
+	# system, says where downloads come from, and leaves this machine's
+	# downloads in the store for the run that follows.
+	empty_store!(test)?
+	solo = project!(test, "solo", CliProgramsTest.fetching({ roc: [roc_url], tool: tool_url, expects: ["tar", "ln"], extra: "" }))?
+	first = command!(test, server, solo, ["update"], bare)?
+	CliHarness.check!(first.code == 0 and first.stdout == "${heading}  127.0.0.1\n", "update of a project that only fetches, with no nix on PATH, exited with code ${first.code.to_str()}:\n${first.stdout}${first.stderr}")?
+	CliHarness.contains!(first.stderr, "blueprint: fetching roc-stable for ${system} from ${roc_url} to record its digest", "the first update")?
+	solo_lock = locked!(solo)?
+	CliHarness.check!(
+		!solo_lock.pinned and solo_lock.fetched.len() == 8
+			and recorded(solo_lock.fetched, "roc-stable") == every(roc_sha, given.archive.len(), Computed)
+				and recorded(solo_lock.fetched, "tool") == every(tool_sha, given.stub.len(), Computed),
+		"the lock of a project that only fetches does not hold each program's digest for every declared system:\n${solo_lock.text}",
+	)?
+	without_nix!(solo)?
+	CliHarness.check!(kept!(test)? == { artifacts: Process.sorted([roc_sha, tool_sha]), trees: [] }, "update did not keep this machine's downloads in the store: ${Str.inspect(kept!(test)?)}")?
+	ran = run!(test, refusing, solo, ["run", "say"], 0, [])?
+	CliHarness.check!(ran.stdout == "exe: ${roc_file}\nstub roc-stable: configured\n" and !ran.stderr.contains("fetching"), "the run after an update fetched again or did not run:\n${ran.stdout}${ran.stderr}")?
+	without_nix!(solo)?
+	Script.pass!("update with no nix on PATH: a project that only fetches gets a digest for every declared system, a report of its download host, and its downloads in the store")?
+
+	# Nothing changed: no request is made, the lock is written with the same
+	# bytes, and there is no host to report.
+	again = command!(test, refusing, solo, ["update"], bare)?
+	CliHarness.check!(again.code == 0 and again.stdout == "" and !again.stderr.contains("fetching") and locked!(solo)?.text == solo_lock.text, "an update with nothing changed asked for something or changed the lock (code ${again.code.to_str()}):\n${again.stdout}${again.stderr}")?
+	Script.pass!("update with nothing changed: no request, the same lock, nothing reported")?
+
+	# A named program is fetched again whatever the lock holds, and only it.
+	# With no server there is nothing to record, and the lock stays.
+	unserved = command!(test, refusing, solo, ["update", "tool"], bare)?
+	CliHarness.check!(unserved.code == 1 and unserved.stderr.contains("could not download tool for ") and unserved.stderr.contains(" from ${tool_url}: HTTP 404") and locked!(solo)?.text == solo_lock.text, "update tool with no server did not fail as that, or changed the lock (code ${unserved.code.to_str()}):\n${unserved.stderr}")?
+	replaced = idle.with_route("releases/1.0/roc.tar.gz", given.archive).with_route("releases/1.0/tool", given.page).with_route("mirror/roc.tar.gz", given.archive)
+	named = command!(test, replaced, solo, ["update", "tool"], bare)?
+	named_lock = locked!(solo)?
+	CliHarness.check!(
+		named.code == 0 and named.stdout == "" and !named.stderr.contains("fetching roc-stable")
+			and recorded(named_lock.fetched, "tool") == every(page_sha, given.page.len(), Computed)
+				and recorded(named_lock.fetched, "roc-stable") == recorded(solo_lock.fetched, "roc-stable"),
+		"update tool did not record what its URL serves now, and only that (code ${named.code.to_str()}):\n${named.stderr}${named_lock.text}",
+	)?
+	unknown = command!(test, refusing, solo, ["update", "tool", "nope"], bare)?
+	CliHarness.check!(unknown.code == 1 and unknown.stderr.contains("no input or program named nope; Blueprint.roc declares no input and the programs roc-stable, tool") and locked!(solo)?.text == named_lock.text, "update of an undeclared name did not say what is declared, or changed the lock:\n${unknown.stderr}")?
+	lockless = project!(test, "lockless", CliProgramsTest.fetching({ roc: [roc_url], tool: tool_url, expects: [], extra: "" }))?
+	early = command!(test, server, lockless, ["update", "tool"], bare)?
+	CliHarness.check!(early.code == 1 and early.stderr.contains("no lock to keep the other pins from") and !CliHarness.present!("${lockless}/Blueprint.lock"), "a named update with no lock did not refuse (code ${early.code.to_str()}):\n${early.stderr}")?
+	Script.pass!("update PROGRAM: that program is fetched again on every system and nothing else; an undeclared name, a missing server and a missing lock change nothing")?
+
+	# A program declared with other URLs is the one an update resolves again.
+	# A host that was not in the lock before is reported, though the first URL
+	# served the bytes and the new one was never asked.
+	Path.write_utf8!(Path.utf8("${solo}/Blueprint.roc"), Path.read_utf8!(Path.utf8("${solo}/Blueprint.roc"))?.replace_each("Archive(\"${roc_url}\", TarGz, \"pkg/roc-stable\")", "Mirrored(Archive(\"${mirror_url}\", TarGz, \"pkg/roc-stable\"), [\"https://mirror.example.invalid/roc.tar.gz\"])"))?
+	stale = run!(test, refusing, solo, ["run", "say"], 1, [])?
+	CliHarness.contains!(stale.stderr, "roc-stable for ${system}: Blueprint.roc now names ${mirror_url}, https://mirror.example.invalid/roc.tar.gz, the lock ${roc_url}; run blueprint update roc-stable", "run say after the URLs changed")?
+	moved = command!(test, replaced, solo, ["update"], bare)?
+	moved_lock = locked!(solo)?
+	CliHarness.check!(
+		moved.code == 0 and moved.stdout == "${heading}  mirror.example.invalid\n" and !moved.stderr.contains("fetching tool") and !moved.stderr.contains("mirror.example.invalid")
+			and moved_lock.fetched.keep_if(|entry| entry.name == "roc-stable").all(|entry| entry.urls == [mirror_url, "https://mirror.example.invalid/roc.tar.gz"] and entry.sha256 == roc_sha)
+				and recorded(moved_lock.fetched, "tool") == recorded(named_lock.fetched, "tool"),
+		"an update after one program's URLs changed did not resolve that program alone and report its new host (code ${moved.code.to_str()}):\n${moved.stdout}${moved.stderr}",
+	)?
+	Script.pass!("update after a URL list changed: that program alone is resolved again, and a host the lock did not name is reported")?
+
+	# A release asset: what its release publishes is asked once. This
+	# machine's download is hashed and must agree; another system's is
+	# recorded by the published digest and never fetched; one the release
+	# gives no digest for is fetched and hashed.
+	host_asset = "owner/tool/releases/download/1.0/tool-${system}"
+	others = ["x86_64-linux", "aarch64-linux", "aarch64-darwin"].keep_if(|declared| declared != system)
+	(far, bare_asset) = match others {
+		[one, two] => (one, two)
+		_ => return Script.fail!("this test runs on one of x86_64-linux, aarch64-linux and aarch64-darwin, not ${system}")
+	}
+	api = idle.url("repos/owner/tool/releases/tags/1.0")
+	far_sha = "abababababababababababababababababababababababababababababababab"
+	release = [
+		"Name(\"released\"),",
+		"Systems([\"x86_64-linux\", \"aarch64-linux\", \"aarch64-darwin\"]),",
+		"Environment(\"dev\", [Programs([Fetch(\"tool\", |system| File(\"${idle.url("owner/tool/releases/download/1.0/tool")}-\${system.to_str()}\"))])]),",
+		"Task(\"tool\", [Use(\"dev\"), Run([\"tool\"])]),",
+	]
+	listing = |host_sha| described([
+		{ name: "tool-${system}", size: given.stub.len(), sha256: host_sha },
+		{ name: "tool-${far}", size: 11, sha256: far_sha },
+		{ name: "tool-${bare_asset}", size: given.page.len(), sha256: "" },
+		{ name: "notes.txt", size: 3, sha256: "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" },
+	])
+	assets = idle.with_route(host_asset, given.stub).with_route("owner/tool/releases/download/1.0/tool-${bare_asset}", given.page)
+	empty_store!(test)?
+	released = project!(test, "released", release)?
+	published = command!(test, assets.with_route("repos/owner/tool/releases/tags/1.0", listing(tool_sha).to_utf8()), released, ["update"], bare)?
+	CliHarness.check!(published.code == 0, "update of a release asset exited with code ${published.code.to_str()}:\n${published.stderr}")?
+	released_lock = locked!(released)?
+	CliHarness.check!(
+		Process.sorted(recorded(released_lock.fetched, "tool").map(|(declared, sha256, size, obtained)| "${declared} ${sha256} ${size.to_str()} ${Str.inspect(obtained)}"))
+			== Process.sorted(["${system} ${tool_sha} ${given.stub.len().to_str()} Both", "${far} ${far_sha} 11 Published", "${bare_asset} ${page_sha} ${given.page.len().to_str()} Computed"]),
+		"the lock does not say how each digest of a release asset was obtained:\n${released_lock.text}",
+	)?
+	CliHarness.check!(occurrences(published.stderr, "blueprint: asking ${api} what owner/tool publishes for its release 1.0") == 1 and !published.stderr.contains("tool-${far}"), "the release was not asked once, or a system with a published digest was fetched:\n${published.stderr}")?
+	CliHarness.check!(kept!(test)? == { artifacts: [tool_sha], trees: [] }, "update kept something other than this machine's download: ${Str.inspect(kept!(test)?)}")?
+	Script.pass!("update of a release asset: the release is asked once; this machine's digest is computed and agrees, another system's is the published one, unfetched, and one with none is computed")?
+
+	# A download that is not what its release publishes records nothing.
+	empty_store!(test)?
+	differing = project!(test, "differing", release)?
+	differed = command!(test, assets.with_route("repos/owner/tool/releases/tags/1.0", listing(page_sha).to_utf8()), differing, ["update"], bare)?
+	CliHarness.check!(
+		differed.code == 1 and differed.stderr.contains("tool for ${system}: the download has SHA-256 ${tool_sha} and ${given.stub.len().to_str()} bytes, and its release publishes ${page_sha} and ${given.stub.len().to_str()} bytes; nothing was recorded")
+			and !CliHarness.present!("${differing}/Blueprint.lock") and kept!(test)? == { artifacts: [], trees: [] },
+		"a download that differs from what its release publishes was recorded or kept (code ${differed.code.to_str()}):\n${differed.stderr}",
+	)?
+
+	# A release that cannot be asked about stops the update, saying what the
+	# limit is and that nothing was written; one that is not there at all is
+	# an answer, and every download is hashed instead.
+	limited = command!(test, assets.with_status("repos/owner/tool/releases/tags/1.0", "403 Forbidden"), differing, ["update"], bare)?
+	CliHarness.check!(
+		limited.code == 1 and limited.stderr.contains("could not ask for the digests owner/tool publishes for its release 1.0: HTTP 403 from ${api} (1 attempt). GitHub answers 60 such requests an hour from one address when no token is sent, and blueprint sends none: wait until the hour has passed, or run blueprint update from another address. Nothing was written to Blueprint.lock.")
+			and !limited.stderr.contains("fetching") and !CliHarness.present!("${differing}/Blueprint.lock"),
+		"a refused question about a release did not stop the update with what to do (code ${limited.code.to_str()}):\n${limited.stderr}",
+	)?
+	garbled = command!(test, assets.with_route("repos/owner/tool/releases/tags/1.0", given.page), differing, ["update"], bare)?
+	CliHarness.check!(garbled.code == 1 and garbled.stderr.contains("the answer from ${api} does not describe a release") and !CliHarness.present!("${differing}/Blueprint.lock"), "an answer that is no release's description was taken for one (code ${garbled.code.to_str()}):\n${garbled.stderr}")?
+	unlisted = command!(test, assets.with_route("owner/tool/releases/download/1.0/tool-${far}", given.archive), differing, ["update"], bare)?
+	CliHarness.check!(
+		unlisted.code == 0
+			and Process.sorted(recorded(locked!(differing)?.fetched, "tool").map(|(declared, sha256, _, obtained)| "${declared} ${sha256} ${Str.inspect(obtained)}"))
+				== Process.sorted(["${system} ${tool_sha} Computed", "${far} ${roc_sha} Computed", "${bare_asset} ${page_sha} Computed"]),
+		"with no release to ask about, the downloads were not all hashed (code ${unlisted.code.to_str()}):\n${unlisted.stderr}",
+	)?
+	Script.pass!("a published digest that differs, a refused question and an unreadable answer each stop the update with nothing written; a release that is not there leaves every digest computed")?
+
+	# A project that also declares a Nix source: update needs Nix, and says so
+	# before anything is fetched. With it, one lock holds the pins and the
+	# digests. A program of that project is still updated with no Nix.
+	empty_store!(test)?
+	both = project!(test, "both", CliProgramsTest.fetching({ roc: [roc_url], tool: tool_url, expects: [], extra: ", Tools([\"default#git\"])" }).append("Packages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),"))?
+	needing = command!(test, server, both, ["update"], bare)?
+	CliHarness.check!(
+		needing.code == 1 and needing.stderr.contains("this machine lacks what blueprint update needs, and blueprint installs none of it:\n  nix: Blueprint.roc declares the Nix source default, which Nix resolves")
+			and !needing.stderr.contains("fetching") and !CliHarness.present!("${both}/Blueprint.lock") and !CliHarness.present!("${both}/.blueprint"),
+		"update of a project with a Nix source and no nix did not refuse before any effect (code ${needing.code.to_str()}):\n${needing.stderr}",
+	)?
+	mixed = command!(test, server, both, ["update"], [])?
+	mixed_lock = locked!(both)?
+	CliHarness.check!(
+		mixed.code == 0 and mixed.stdout == "${heading}  127.0.0.1\n" and mixed_lock.pinned
+			and recorded(mixed_lock.fetched, "roc-stable") == every(roc_sha, given.archive.len(), Computed) and recorded(mixed_lock.fetched, "tool") == every(tool_sha, given.stub.len(), Computed),
+		"update of a project with a Nix source and programs did not write both into one lock (code ${mixed.code.to_str()}):\n${mixed.stderr}${mixed_lock.text}",
+	)?
+	CliHarness.same_calls!(CliHarness.calls!("${both}/nix-calls")?.map(|call| call.take_first(2)), [["flake", "update"]], "the provider calls of an update with a Nix source")?
+	program_only = command!(test, replaced, both, ["update", "tool"], bare)?
+	after = locked!(both)?
+	CliHarness.check!(
+		program_only.code == 0 and after.pinned and recorded(after.fetched, "tool") == every(page_sha, given.page.len(), Computed)
+			and after.text.replace_each(page_sha, tool_sha).replace_each("(size ${given.page.len().to_str()})", "(size ${given.stub.len().to_str()})") == mixed_lock.text,
+		"update of a program in a project with a Nix source needed Nix or changed its pins (code ${program_only.code.to_str()}):\n${program_only.stderr}",
+	)?
+	input_named = command!(test, server, both, ["update", "default"], bare)?
+	CliHarness.check!(input_named.code == 1 and input_named.stderr.contains("  nix: Blueprint.roc declares the Nix source default, which Nix resolves") and locked!(both)?.text == after.text, "update of an input with no nix did not refuse (code ${input_named.code.to_str()}):\n${input_named.stderr}")?
+	CliHarness.same_calls!(CliHarness.calls!("${both}/nix-calls")?.map(|call| call.take_first(2)), [["flake", "update"]], "the provider calls after a program's update and a refused input's")?
+	Script.pass!("update with a Nix source: refused with no nix before any effect; with it, pins and digests share one lock; a program alone is then updated with no nix")
 }
 
 ## The System a machine is, as `blueprint` names the one it runs on.
@@ -403,3 +643,7 @@ expect CliProgramsTest.fetching({ roc: ["http://127.0.0.1:1/a", "http://127.0.0.
 	"Environment(\"dev\", [Programs([Fetch(\"roc-stable\", |_| Mirrored(Archive(\"http://127.0.0.1:1/a\", TarGz, \"pkg/roc-stable\"), [\"http://127.0.0.1:1/b\"])), Fetch(\"tool\", |_| File(\"http://127.0.0.1:1/t\"))]), Expect([\"tar\"]), Tools([\"default#git\"])]),",
 ]
 expect system_of({ arch: X64, os: LINUX }) == "x86_64-linux" and system_of({ arch: AARCH64, os: MACOS }) == "aarch64-darwin"
+
+expect occurrences("a, b, a", "a") == 2 and occurrences("b", "a") == 0
+expect described([{ name: "tool", size: 3, sha256: "ab" }, { name: "old", size: 4, sha256: "" }]) == "{\n  \"tag_name\": \"1.0\",\n  \"body\": null,\n  \"assets\": [\n    { \"name\": \"tool\", \"label\": null, \"size\": 3, \"digest\": \"sha256:ab\" },\n    { \"name\": \"old\", \"label\": null, \"size\": 4, \"digest\": null }\n  ]\n}\n"
+expect recorded([{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool"], sha256: "ab", size: 3, obtained: Both }, { name: "other", system: "x86_64-linux", urls: ["https://example.test/other"], sha256: "cd", size: 4, obtained: Computed }], "tool") == [("x86_64-linux", "ab", 3, Both)]

@@ -235,7 +235,7 @@ Scenarios := [].{
 				Cli(["run", "greet"], Says("Hello, world!")),
 				# The steps after this run from the lock a named update published.
 				UpdateInputs(["roc"]),
-				Cli(["update", "rocpkgs"], FailsWith("no input named rocpkgs")),
+				Cli(["update", "rocpkgs"], FailsWith("no input or program named rocpkgs")),
 				Cli(["run", "version"], LineStarts("Roc compiler version ")),
 				Cli(["run", "script"], Says("Hello from a roc-stable script")),
 				Launchers("path", ["greet", "roc-stable"]),

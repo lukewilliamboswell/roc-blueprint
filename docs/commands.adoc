@@ -2,8 +2,6 @@
 
 Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 
-Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
-
 [cols="3,5",options="header"]
 |===
 | Command
@@ -28,10 +26,10 @@ Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 | List tasks and their environments
 
 | `blueprint update`
-| Explicitly initialize/update and atomically publish the authoritative lock
+| Explicitly initialize/update and atomically publish the authoritative lock: the pins of package sources, inputs and build sources, and the digest of every fetched program on every declared system
 
-| `blueprint update INPUT...`
-| Update only the named package sources, inputs or build sources, keeping every other pin of a lock that is current for `Blueprint.roc`. Local `path:` inputs are read again either way
+| `blueprint update NAME...`
+| Update only the named package sources, inputs, build sources and fetched programs, keeping everything else of a lock that is current for `Blueprint.roc`. Local `path:` inputs are read again either way. A named program is downloaded again whether or not its URLs changed
 
 | `blueprint check`
 | Run the compiler check and validate all shell/task/build environments without requiring a lock
@@ -60,10 +58,65 @@ structural validation and required-feature checks still apply. Full rendering
 * Normal `gen`, `shell`, `run`, `build` and `workflow` require matching pins and never
   rewrite authority or independently update derived locks.
 * `nix develop` takes the bash it runs a shell or task with from a flake input
-  named `nixpkgs`, so the generated flake gives that name to the `default`
-  package source (or, without one, the first Nix package source declared) and
-  that bash is pinned by `Blueprint.lock` like every tool, unless the project
-  declares an input named `nixpkgs` itself.
+  named `nixpkgs`, so the generated flake gives that name to the first Nix
+  package source declared and that bash is pinned by `Blueprint.lock` like
+  every tool, unless the project declares an input named `nixpkgs` itself.
+
+== What update needs and records
+
+`blueprint update` starts Nix only when `Blueprint.roc` declares something Nix
+resolves: a Nix package source, an input or overlay, or a build source,
+including the bundle of a Roc package that a build uses. It looks for `nix`
+before doing anything else and says why it needs it. A project that declares
+none of these is updated with no Nix on the machine, and so is a named update
+of fetched programs alone in any project.
+
+For each fetched program and each declared system, the lock holds the URLs the
+program is declared with, the SHA-256 and the length of the download, and how
+the digest was obtained:
+
+[cols="1,4",options="header"]
+|===
+| `obtained`
+| Meaning
+
+| `Computed`
+| `blueprint update` downloaded the bytes and hashed them. Nothing else was to be had.
+
+| `Published`
+| The release that serves the download reports this digest, and the bytes were not downloaded. A run on that system checks its download against it.
+
+| `Both`
+| It hashed the bytes, and the release reports the same digest and length.
+|===
+
+An entry whose URLs are unchanged is kept, and nothing is asked or downloaded
+for it. Otherwise the download for the system the update runs on is fetched
+and hashed, and is kept in the store for the run that follows. When the first
+URL is a GitHub release asset,
+`https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>`, the
+release is asked once what it publishes. A digest computed here that differs
+from the published one stops the update, and nothing is written. For another
+system the published digest is recorded and nothing is downloaded; an asset
+with no published digest, or a URL that is not a release asset, is downloaded
+and hashed instead.
+
+The question to GitHub carries no token. GitHub answers 60 such requests an
+hour from one address; when it refuses, the update stops, says so, and writes
+nothing. Wait for the hour to pass and run it again: entries already in the
+lock ask nothing. A run never asks GitHub anything.
+
+After writing the lock, `blueprint update` prints every download host the new
+lock names and the lock before it did not, one to a line:
+
+[source]
+----
+Blueprint.lock now names download hosts it did not name before:
+  github.com
+----
+
+It prints nothing when there is none. A new host in a lock update is worth a
+reviewer's look.
 
 == Environment variables
 

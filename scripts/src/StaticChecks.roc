@@ -1,4 +1,4 @@
-import FlakeLock
+
 
 ## Checks of the repository's own text that need no compiler and no Nix. Each
 ## returns what is wrong, or "" when nothing is.
@@ -60,19 +60,6 @@ StaticChecks := [].{
 		}
 		$found
 	}
-
-	## The compiler a released binary fetches comes from the roc-overlay
-	## revision the flake locks: `roc_overlay` in the Nix provider is that
-	## revision's reference with its content hash.
-	overlay_problem : Str, Str -> Str
-	overlay_problem = |flake_lock, provider_source|
-		match FlakeLock.locked(flake_lock, "roc-overlay") {
-			Err(NoPin(_)) => "flake.lock has no GitHub pin for roc-overlay"
-			Ok(pin) => {
-				expected = FlakeLock.ref_with_hash(pin)
-				if constant(provider_source, "roc_overlay") == Ok(expected) "" else "update roc_overlay in NixProvider.roc to ${expected}"
-			}
-		}
 
 	## The Systems `blueprint` runs on (`supported_host` in the CLI).
 	host_systems = ["x86_64-linux", "aarch64-linux", "aarch64-darwin", "x86_64-windows"]
@@ -228,21 +215,6 @@ cli_sample =
 	\\main! = |_| Realise.plan("nix develop", providers)
 	\\
 
-lock_sample =
-	\\{
-	\\  "nodes": {
-	\\    "roc-overlay": {
-	\\      "locked": {
-	\\        "narHash": "sha256-R4Zj+8w/E1L=",
-	\\        "owner": "roc-lang",
-	\\        "repo": "roc-overlay",
-	\\        "rev": "fb02fef7",
-	\\        "type": "github"
-	\\      }
-	\\    }
-	\\  }
-	\\}
-
 workflow_sample =
 	\\permissions: {}
 	\\
@@ -274,11 +246,6 @@ expect StaticChecks.provider_contract_problem("${cli_sample}run = Cmd.new(\"nix\
 expect StaticChecks.provider_references("x = MyNixProvider.y\nz = NixProvider\nw = Nix2.v\nu = unLocks.t\n") == []
 expect StaticChecks.provider_references("a = Locks.decode\nb = NixProvider.plan(Nix.x)\nc = HostProvider.plan\nd = Host.x") == ["Locks", "NixProvider", "Nix"]
 expect StaticChecks.provider_references("Locks.") == ["Locks"]
-
-expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-lang/roc-overlay/fb02fef7?narHash=sha256-R4Zj%2B8w%2FE1L%3D\"\n") == ""
-expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-lang/roc-overlay/00000000?narHash=sha256-R4Zj%2B8w%2FE1L%3D\"\n") == "update roc_overlay in NixProvider.roc to github:roc-lang/roc-overlay/fb02fef7?narHash=sha256-R4Zj%2B8w%2FE1L%3D"
-expect StaticChecks.overlay_problem(lock_sample, "nothing here") != ""
-expect StaticChecks.overlay_problem("{}", "roc_overlay = \"x\"") == "flake.lock has no GitHub pin for roc-overlay"
 
 expect StaticChecks.bootstrap_problem("nightly-1\n", StaticChecks.host_systems.map(|system| "\t\t\ttag: \"nightly-1\",\n\t\t\tsystem: \"${system}\",\n").fold("", Str.concat)) == ""
 expect StaticChecks.bootstrap_problem("nightly-2\n", "\t\t\ttag: \"nightly-1\",\n\t\t\tsystem: \"x86_64-linux\",\n\t\t\ttag: \"nightly-2\",\n\t\t\tsystem: \"x86_64-linux\",\n") == "record the download of the nightly-2 compiler for aarch64-linux, aarch64-darwin, x86_64-windows in compilers in blueprint-cli/Bootstrap.roc"
