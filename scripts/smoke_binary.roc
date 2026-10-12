@@ -23,6 +23,12 @@ import src/SmokeBinary
 ## resolves what a new user's project would that day:
 ##
 ##   dist/smoke-x86_64-linux --floating dist/blueprint-x86_64-linux
+##
+## With `--no-nix` the project takes nothing from Nix, and the machine must
+## have none: the compiler is a fetched program, and a basic-cli script is
+## built, linked and run with it.
+##
+##   dist/smoke-aarch64-darwin --no-nix dist/blueprint-aarch64-darwin
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	arguments = args.map(OsStr.display)
@@ -31,9 +37,9 @@ main! = |args| {
 		return SmokeBinary.python!(arguments)
 	}
 	result = match SmokeBinary.requested(arguments) {
-		Ok(request) => SmokeBinary.run!(request.binary, request.inputs)
+		Ok(request) => SmokeBinary.run!(request.binary, request.mode)
 		Err(Usage) => {
-			_ = Stderr.line!("usage: scripts/smoke_binary.roc [--floating] BLUEPRINT_BINARY")
+			_ = Stderr.line!("usage: scripts/smoke_binary.roc [--floating | --no-nix] BLUEPRINT_BINARY")
 			return Err(Exit(2))
 		}
 	}
