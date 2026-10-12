@@ -1,0 +1,62 @@
+= The roc-blueprint manual
+:doctype: book
+:author: The roc-blueprint contributors
+:revnumber: {docs-version}
+:toc: left
+:toclevels: 2
+:sectnums:
+:sectanchors:
+:icons: font
+:source-highlighter: rouge
+
+[.lead]
+roc-blueprint lets a project describe its development environments, the
+commands that run in them, its sandboxed builds and its ordered workflows in
+one typed file, `Blueprint.roc`. The `blueprint` command realises that file
+through Nix, from pins the project commits.
+
+ifdef::backend-html5[]
+link:roc-blueprint.pdf[Download this manual as a PDF] ·
+link:api/index.html[Platform API reference] ·
+https://github.com/lukewilliamboswell/roc-blueprint[View roc-blueprint on GitHub].
+endif::[]
+
+.How to use this manual
+****
+Deciding whether to use Blueprint:: Start with <<what-blueprint-is>>.
+Using it for the first time:: Follow <<get-started>>.
+Writing a configuration:: <<write-blueprint-roc>> describes every setting, and
+<<build-artifacts-and-run-workflows>> the sandboxed builds.
+Looking up a command or variable:: See <<run-blueprint>>.
+Running a project's tasks on Windows:: Read <<run-tasks-on-windows>>.
+Looking for a project to adapt:: Browse <<learn-from-the-examples>>.
+Writing a provider or judging a design change:: Read
+<<understand-the-architecture>> and <<the-spec-the-lock-and-providers>>.
+Changing roc-blueprint itself:: Read <<contribute>>.
+Releasing or looking after the repository:: Read <<maintain-and-release>>.
+Upgrading:: See <<release-notes>>.
+****
+
+include::overview.adoc[leveloffset=+1]
+
+include::getting-started.adoc[leveloffset=+1]
+
+include::configuration.adoc[leveloffset=+1]
+
+include::builds.adoc[leveloffset=+1]
+
+include::commands.adoc[leveloffset=+1]
+
+include::windows.adoc[leveloffset=+1]
+
+include::examples.adoc[leveloffset=+1]
+
+include::architecture.adoc[leveloffset=+1]
+
+include::spec.adoc[leveloffset=+1]
+
+include::contributing.adoc[leveloffset=+1]
+
+include::maintaining.adoc[leveloffset=+1]
+
+include::releases.adoc[leveloffset=+1]

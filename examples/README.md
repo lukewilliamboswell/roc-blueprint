@@ -1,6 +1,6 @@
 # Examples
 
-These examples use the platform in this repository and Spec 2.5, not the latest
+These examples use the platform in this repository and Spec 2.6, not the latest
 published platform. Each directory keeps its
 `Blueprint.roc` and related files together.
 
@@ -23,7 +23,7 @@ published platform. Each directory keeps its
 - [extensions](extensions/Blueprint.roc): custom extension blocks and raw
   values. The platform emits these, and the CLI reports unsupported extensions.
 
-After building the CLI and platform host (see [contributing](../CONTRIBUTING.md)),
+After building the CLI and platform host (see [Contribute](../docs/contributing.adoc)),
 run on x86_64 Linux from the repository root:
 
 ```sh

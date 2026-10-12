@@ -12,6 +12,9 @@ const Target = struct {
     bundle_compiler_rt: bool,
 };
 
+// TODO(#40): no Windows host is built. An x64win target waits on a nightly
+// that links one from listed inputs alone and on the linker inputs for it;
+// see "What remains for Windows" in docs/maintaining.adoc.
 const targets = [_]Target{
     .{ .dir = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }, .bundle_compiler_rt = false },
     .{ .dir = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }, .bundle_compiler_rt = false },

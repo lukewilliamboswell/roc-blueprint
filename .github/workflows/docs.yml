@@ -1,0 +1,79 @@
+name: Documentation
+
+# Renders the manual in docs/ as a site and a PDF, with the platform's API
+# reference beside it. A pull request builds the site, so a broken manual
+# fails review, and the result can be downloaded from the run. Only the
+# default branch deploys it. The release workflow calls this after publishing,
+# so the site names the new release.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+# The release workflow's call is a run of its own, not a newer docs run.
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build the manual and site
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/toolchain
+
+      # The first program in the manual names the latest release's bundle URL.
+      - name: Write the part of the manual that depends on what is released
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: nix develop -c scripts/docs_snippet.roc
+
+      # build-docs runs outside the development shell and needs the compiler's path.
+      - id: roc
+        name: Find the product compiler
+        run: echo "command=$(nix develop -c sh -c 'command -v roc')" >> "$GITHUB_OUTPUT"
+
+      - id: docs
+        name: Render the manual as a site and a PDF
+        uses: lukewilliamboswell/roc-automation/actions/build-docs@7fdb8be46b12da9b119023c3a5aac28a9fdaa72b
+        with:
+          pdf-filename: roc-blueprint.pdf
+          docs-version: ${{ github.event_name == 'pull_request' && format('main (pull request {0})', github.event.number) || 'main' }}
+          api-entrypoint: blueprint-platform/main.roc
+          roc-command: ${{ steps.roc.outputs.command }}
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ steps.docs.outputs.site-directory }}
+
+  # Holds the Pages permissions, checks out nothing, and deploys the artifact
+  # the build job produced.
+  deploy:
+    name: Deploy the site
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

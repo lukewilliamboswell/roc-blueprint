@@ -182,7 +182,7 @@ cases! = |bench| {
 	CliHarness.check!(!flake.contains("@blueprint-caller"), "the staged flake still holds a placeholder:\n${flake}")?
 	# The CLI copies nothing: no snapshot, witness file or runner in its state.
 	generated = CliHarness.names!("${root}/.blueprint")?.sort_with(Project.bytewise)
-	CliHarness.check!(generated == ["excluded-secret", "flake.lock", "flake.nix"], "the generated root holds ${Str.join_with(generated, " ")}")?
+	CliHarness.check!(generated == [".gitignore", "excluded-secret", "flake.lock", "flake.nix"], "the generated root holds ${Str.join_with(generated, " ")}")?
 	for source in sources {
 		kept = CliHarness.stat!("%a %h", "${root}/${source.file}")?
 		CliHarness.check!(kept == "${source.mode} 1", "${source.file} now has mode and link count ${kept}, not ${source.mode} 1")?

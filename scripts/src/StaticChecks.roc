@@ -5,7 +5,12 @@ import FlakeLock
 StaticChecks := [].{
 
 	## The Roc source directories `roc fmt --check` covers.
-	formatted = ["blueprint-core", "blueprint-platform", "blueprint-nix", "blueprint-cli", "fixtures", "examples", "scripts"]
+	formatted = ["blueprint-core", "blueprint-platform", "blueprint-nix", "blueprint-host", "blueprint-cli", "fixtures", "examples"]
+
+	## The directories `roc-stable fmt --check` covers instead. `roc fmt`
+	## rewrites a header's `roc` field to the nightly that runs it, so the
+	## scripts are formatted by the compiler their headers name.
+	formatted_stable = ["scripts"]
 
 	## Object files, archives and import libraries are fetched by content from
 	## the release in `link-inputs.lock.json`; none may be committed.
@@ -18,14 +23,14 @@ StaticChecks := [].{
 	}
 
 	## docs/architecture.adoc invariant 7: the CLI reaches a provider through
-	## the Provider contract alone. Its source imports one provider module,
-	## names it once, where the provider is selected, and never runs a
-	## provider's tool itself.
+	## the Provider contract alone. Its source imports one module of each
+	## provider, names each once, where the provider is selected, and never
+	## runs a provider's tool itself.
 	provider_contract_problem : Str -> Str
 	provider_contract_problem = |cli_source| {
-		imported = cli_source.split_on("\n").keep_if(|line| line.starts_with("import nix."))
+		imported = cli_source.split_on("\n").keep_if(|line| line.starts_with("import nix.") or line.starts_with("import host."))
 		references = provider_references(cli_source)
-		if imported != ["import nix.NixProvider"] or references != ["NixProvider"] {
+		if imported != ["import host.HostProvider", "import nix.NixProvider"] or references != ["HostProvider", "NixProvider"] {
 			"blueprint-cli/main.roc must use only provider.* (found: ${Str.join_with(imported, ", ")} / ${Str.join_with(references, ", ")})"
 		} else if cli_source.contains("\"nix\"") {
 			"blueprint-cli/main.roc must not run provider tools itself"
@@ -34,8 +39,9 @@ StaticChecks := [].{
 		}
 	}
 
-	## Every use of a member of a provider module: an identifier `Locks`, or
-	## one starting `Nix` and made of letters, followed by a dot.
+	## Every use of a member of a provider module: an identifier `Locks` or
+	## `HostProvider`, or one starting `Nix` and made of letters, followed by a
+	## dot.
 	provider_references : Str -> List(Str)
 	provider_references = |source| {
 		bytes = source.to_utf8()
@@ -69,28 +75,103 @@ StaticChecks := [].{
 			}
 		}
 
-	## The scripts run on `roc-stable`, which the flake names. No other file
-	## may select a compiler for them: not a `.roc-version`, which the product's
-	## `blueprint-cli/compiler-version` replaced, and not a script that starts
-	## under another command, and not a `roc` field in a header. `tracked` is
-	## what git lists for `.roc-version`, `headers` the Roc files git finds
-	## with such a field, `shebangs` each script with its first line.
-	compilers_problem : Str, Str, List((Str, Str)) -> Str
-	compilers_problem = |tracked, headers, shebangs| {
+	## Where there is no Nix, the host provider fetches that compiler from its
+	## release, by a digest recorded for each nightly. There must be one for
+	## the nightly the CLI evaluates with.
+	host_compiler_problem : Str, Str -> Str
+	host_compiler_problem = |compiler_version, provider_source| {
+		tag = compiler_version.trim()
+		if provider_source.contains("{ tag: \"${tag}\", system: \"x86_64-windows\", sha256: \"") "" else "record the SHA-256 of each ${tag} compiler archive in compilers in blueprint-host/HostProvider.roc"
+	}
+
+	## The scripts run on `roc-stable`, which the flake names as `rocStableTag`.
+	## Each script it runs says so twice: its first line starts it under that
+	## command, and its header's `roc` field names that same nightly, so
+	## another compiler refuses it. Nothing else selects a compiler: not a
+	## `.roc-version`, which the product's `blueprint-cli/compiler-version`
+	## replaced, and not a `roc` field in the platform, a package, an example
+	## or a fixture, which follow the product compiler. `tracked` is what git
+	## lists for `.roc-version`, `stable` the flake's tag, `pins` what git
+	## grep prints for the `roc` fields of every Roc file, `shebangs` each
+	## script with its first line.
+	compilers_problem : Str, Try(Str, [NoConstant]), Str, List((Str, Str)) -> Str
+	compilers_problem = |tracked, stable, pins, shebangs| {
 		others = shebangs.keep_if(|(_, line)| line != script_shebang).map(|(script, _)| script)
-		pinned = headers.split_on("\n").keep_if(|line| !line.is_empty())
+		found = header_pins(pins)
+		pinned = shebangs.map(|(script, _)| script).keep_if(|script| !product_built.contains(script))
+		stray = found.keep_if(|(file, _)| !pinned.contains(file)).map(|(file, _)| file)
 		if !tracked.trim().is_empty() {
 			".roc-version must not exist: the product compiler is named in blueprint-cli/compiler-version, the scripts' in flake.nix"
-		} else if !pinned.is_empty() {
-			"no header may pin a compiler with a roc field: ${Str.join_with(pinned, " ")}"
+		} else if !stray.is_empty() {
+			"only a script roc-stable runs may pin a compiler with a roc field: ${Str.join_with(stray, " ")}"
 		} else if !others.is_empty() {
 			"scripts must start with ${script_shebang}: ${Str.join_with(others, " ")}"
 		} else {
-			""
+			match stable {
+				Err(NoConstant) => "flake.nix does not name rocStableTag"
+				Ok(tag) => {
+					wrong = pinned.keep_if(|script| found.keep_if(|(file, _)| file == script).map(|(_, pin)| pin) != [tag])
+					if wrong.is_empty() "" else "scripts must pin rocStableTag in their header, as roc: \"${tag}\": ${Str.join_with(wrong, " ")}"
+				}
+			}
 		}
 	}
 
 	script_shebang = "#!/usr/bin/env roc-stable"
+
+	## The scripts the product compiler builds: the smoke program released
+	## beside each binary, and the tool the stubbed suites stand in for Nix
+	## with. A header that named `roc-stable`'s nightly would stop them the day
+	## the two compilers differ, so they name none.
+	product_built = ["scripts/smoke_binary.roc", "scripts/stubs/tool.roc"]
+
+	## Each file and nightly in what `git grep` prints for `roc` header
+	## fields: lines of `<file>:<indent>roc: "<tag>",`.
+	header_pins : Str -> List((Str, Str))
+	header_pins = |listed|
+		listed.split_on("\n").keep_if(|line| !line.is_empty()).map(
+			|line| {
+				file = line.split_on(":").first() ?? ""
+				pin = line.split_on("roc: \"").get(1).map_ok(|rest| rest.split_on("\"").first() ?? "") ?? ""
+				(file, pin)
+			},
+		)
+
+	## fuzz.yml runs one job for each fuzz target, named in its matrix. A
+	## target missing there would be replayed on every commit and never
+	## fuzzed. `fuzzers` are the directories of `blueprint-core/fuzz` that
+	## hold a `main.roc`.
+	fuzz_matrix_problem : Str, List(Str) -> Str
+	fuzz_matrix_problem = |workflow, fuzzers| {
+		prefix = "target: ["
+		listed = match workflow.split_on("\n").map(|line| line.trim()).find_first(|line| line.starts_with(prefix)) {
+			Ok(line) => (line.drop_prefix(prefix).split_on("]").first() ?? "").split_on(",").map(|name| name.trim()).keep_if(|name| !name.is_empty())
+			Err(_) => []
+		}
+		missing = fuzzers.keep_if(|name| !listed.contains(name))
+		extra = listed.keep_if(|name| !fuzzers.contains(name))
+		if missing.is_empty() and extra.is_empty() {
+			""
+		} else {
+			"the target matrix of .github/workflows/fuzz.yml must list the fuzz targets (missing: ${Str.join_with(missing, " ")}; not a target: ${Str.join_with(extra, " ")})"
+		}
+	}
+
+	## A workflow's token can do nothing unless a job says otherwise, and no
+	## checkout leaves that token in the repository's git configuration.
+	workflow_problem : Str, Str -> Str
+	workflow_problem = |name, text| {
+		lines = text.split_on("\n")
+		checkouts = lines.keep_if(|line| line.contains("uses: actions/checkout@"))
+		without_token = lines.keep_if(|line| line.trim() == "persist-credentials: false")
+		if !lines.contains("permissions: {}") {
+			"${name} must set top-level permissions: {} and state permissions per job"
+		} else if checkouts.len() != without_token.len() {
+			"${name}: every actions/checkout step must set persist-credentials: false"
+		} else {
+			""
+		}
+	}
 
 	## The string a source file binds a name to, as in `name = "value"`.
 	constant : Str, Str -> Try(Str, [NoConstant])
@@ -132,16 +213,21 @@ letter : U8 -> Bool
 letter = |byte| (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z')
 
 provider_module : Str -> Bool
-provider_module = |name| name == "Locks" or (name.starts_with("Nix") and name.to_utf8().all(letter))
+provider_module = |name| name == "Locks" or name == "HostProvider" or (name.starts_with("Nix") and name.to_utf8().all(letter))
 
 cli_sample =
 	\\import core.Provider
+	\\import host.HostProvider
 	\\import nix.NixProvider
 	\\
-	\\provider : Provider
-	\\provider = NixProvider.provider
+	\\provider_for : [Host, Nix] -> Provider
+	\\provider_for = |choice|
+	\\	match choice {
+	\\		Host => HostProvider.provider
+	\\		Nix => NixProvider.provider
+	\\	}
 	\\
-	\\main! = |_| provider.plan("nix develop")
+	\\main! = |_| provider_for(Nix).plan("nix develop")
 	\\
 
 lock_sample =
@@ -159,23 +245,39 @@ lock_sample =
 	\\  }
 	\\}
 
+workflow_sample =
+	\\permissions: {}
+	\\
+	\\jobs:
+	\\  build:
+	\\    permissions:
+	\\      contents: read
+	\\    steps:
+	\\      - uses: actions/checkout@3d3c42e5 # v7.0.1
+	\\        with:
+	\\          persist-credentials: false
+	\\
+
 expect StaticChecks.tracked_binaries_problem("") == "" and StaticChecks.tracked_binaries_problem("\n") == ""
 expect StaticChecks.tracked_binaries_problem("targets/x64musl/libc.a\ntargets/x64musl/crt1.o\n") == "object files, archives and import libraries must not be committed:\ntargets/x64musl/libc.a\ntargets/x64musl/crt1.o"
 
 expect StaticChecks.provider_contract_problem(cli_sample) == ""
-expect StaticChecks.provider_references(cli_sample) == ["NixProvider"]
+expect StaticChecks.provider_references(cli_sample) == ["HostProvider", "NixProvider"]
 
 # A second use of the provider module, or any use of its internals, is refused.
-expect StaticChecks.provider_contract_problem("${cli_sample}other = NixProvider.render\n") == "blueprint-cli/main.roc must use only provider.* (found: import nix.NixProvider / NixProvider, NixProvider)"
+expect StaticChecks.provider_contract_problem("${cli_sample}other = NixProvider.render\n") == "blueprint-cli/main.roc must use only provider.* (found: import host.HostProvider, import nix.NixProvider / HostProvider, NixProvider, NixProvider)"
+expect StaticChecks.provider_contract_problem("${cli_sample}other = HostProvider.plan\n") != ""
+expect StaticChecks.provider_contract_problem(cli_sample.replace_each("import host.HostProvider\n", "")) != ""
 expect StaticChecks.provider_contract_problem("${cli_sample}import nix.Locks\n") != ""
 expect StaticChecks.provider_contract_problem("${cli_sample}decoded = Locks.decode(text)\n") != ""
 expect StaticChecks.provider_contract_problem(cli_sample.replace_each("import nix.NixProvider\n", "")) != ""
 expect StaticChecks.provider_contract_problem(cli_sample.replace_each("NixProvider.provider", "provider_from_elsewhere")) != ""
+expect StaticChecks.provider_contract_problem(cli_sample.replace_each("HostProvider.provider", "provider_from_elsewhere")) != ""
 expect StaticChecks.provider_contract_problem("${cli_sample}run = Cmd.new(\"nix\")\n") == "blueprint-cli/main.roc must not run provider tools itself"
 
 # Only an identifier of its own followed by a dot is a reference.
 expect StaticChecks.provider_references("x = MyNixProvider.y\nz = NixProvider\nw = Nix2.v\nu = unLocks.t\n") == []
-expect StaticChecks.provider_references("a = Locks.decode\nb = NixProvider.plan(Nix.x)") == ["Locks", "NixProvider", "Nix"]
+expect StaticChecks.provider_references("a = Locks.decode\nb = NixProvider.plan(Nix.x)\nc = HostProvider.plan\nd = Host.x") == ["Locks", "NixProvider", "Nix", "HostProvider"]
 expect StaticChecks.provider_references("Locks.") == ["Locks"]
 
 expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-lang/roc-overlay/fb02fef7?narHash=sha256-R4Zj%2B8w%2FE1L%3D\"\n") == ""
@@ -183,10 +285,38 @@ expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-l
 expect StaticChecks.overlay_problem(lock_sample, "nothing here") != ""
 expect StaticChecks.overlay_problem("{}", "roc_overlay = \"x\"") == "flake.lock has no GitHub pin for roc-overlay"
 
-expect StaticChecks.compilers_problem("", "", [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) == ""
-expect StaticChecks.compilers_problem(".roc-version\n", "", []) != ""
-expect StaticChecks.compilers_problem("", "examples/a/main.roc\n", []) == "no header may pin a compiler with a roc field: examples/a/main.roc"
-expect StaticChecks.compilers_problem("", "", [("scripts/a.roc", "#!/usr/bin/env roc-stable"), ("scripts/b.roc", "#!/usr/bin/env roc"), ("scripts/c.roc", "app [main!] {")]) == "scripts must start with #!/usr/bin/env roc-stable: scripts/b.roc scripts/c.roc"
+expect StaticChecks.host_compiler_problem("nightly-2026-10-04-130536d\n", "\t\t{ tag: \"nightly-2026-10-04-130536d\", system: \"x86_64-windows\", sha256: \"1f5a\" },\n") == ""
+expect StaticChecks.host_compiler_problem("nightly-2026-10-11-7d256b9\n", "\t\t{ tag: \"nightly-2026-10-04-130536d\", system: \"x86_64-windows\", sha256: \"1f5a\" },\n") == "record the SHA-256 of each nightly-2026-10-11-7d256b9 compiler archive in compilers in blueprint-host/HostProvider.roc"
+
+pin_sample = "scripts/test.roc:\troc: \"nightly-1\",\n"
+
+expect StaticChecks.header_pins("${pin_sample}examples/a/main.roc:    roc: \"0.1.0\" }\n") == [("scripts/test.roc", "nightly-1"), ("examples/a/main.roc", "0.1.0")]
+expect StaticChecks.header_pins("") == []
+
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), pin_sample, [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) == ""
+expect StaticChecks.compilers_problem(".roc-version\n", Ok("nightly-1"), "", []) != ""
+expect StaticChecks.compilers_problem("", Err(NoConstant), pin_sample, [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) == "flake.nix does not name rocStableTag"
+# A script without the pin, with another nightly's or with two.
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) == "scripts must pin rocStableTag in their header, as roc: \"nightly-1\": scripts/test.roc"
+expect StaticChecks.compilers_problem("", Ok("nightly-2"), pin_sample, [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) != ""
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "${pin_sample}${pin_sample}", [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) != ""
+# The product compiler builds the smoke program, so it pins nothing.
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable")]) == ""
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "scripts/smoke_binary.roc:\troc: \"nightly-1\",\n", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable")]) == "only a script roc-stable runs may pin a compiler with a roc field: scripts/smoke_binary.roc"
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "examples/a/main.roc:\troc: \"nightly-1\",\n", []) == "only a script roc-stable runs may pin a compiler with a roc field: examples/a/main.roc"
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable"), ("scripts/b.roc", "#!/usr/bin/env roc"), ("scripts/c.roc", "app [main!] {")]) == "scripts must start with #!/usr/bin/env roc-stable: scripts/b.roc scripts/c.roc"
+
+expect StaticChecks.fuzz_matrix_problem("      matrix:\n        target: [lock-parse, spec-parse]\n", ["spec-parse", "lock-parse"]) == ""
+expect StaticChecks.fuzz_matrix_problem("        target: [lock-parse]\n", ["lock-parse", "spec-parse"]) == "the target matrix of .github/workflows/fuzz.yml must list the fuzz targets (missing: spec-parse; not a target: )"
+expect StaticChecks.fuzz_matrix_problem("        target: [lock-parse, gone]\n", ["lock-parse"]) != ""
+expect StaticChecks.fuzz_matrix_problem("jobs:\n", ["lock-parse"]) != ""
+
+expect StaticChecks.workflow_problem("ci.yml", workflow_sample) == ""
+expect StaticChecks.workflow_problem("ci.yml", workflow_sample.replace_each("permissions: {}", "permissions:\n  contents: read")) == "ci.yml must set top-level permissions: {} and state permissions per job"
+expect StaticChecks.workflow_problem("ci.yml", workflow_sample.replace_each("          persist-credentials: false\n", "")) == "ci.yml: every actions/checkout step must set persist-credentials: false"
+
+# A job's own empty permissions are indented, so they are not the top-level setting.
+expect StaticChecks.workflow_problem("ci.yml", "jobs:\n  test:\n    permissions: {}\n") != ""
 
 expect StaticChecks.constant("  roc_overlay : Str\n  roc_overlay = \"abc\"\n", "roc_overlay") == Ok("abc")
 expect StaticChecks.constant("            version = \"0.4.0-rc2\";\n", "version") == Ok("0.4.0-rc2")

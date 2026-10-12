@@ -20,7 +20,7 @@ NixProvider :: [].{
 	provider : Provider
 	provider = Provider.{
 		name: "nix",
-		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages"],
+		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools"],
 		render: |spec| render(spec).map_ok(
 			|contents| [{ path: "flake.nix", contents }],
 		),
@@ -34,7 +34,7 @@ NixProvider :: [].{
 			locks = Locks.from_nix(spec, layout, text)?
 			Ok(Locks.to_lock(locks.with_trees(layout, trees)?))
 		},
-		compiler: |tag| ["nix", "build", "--no-link", "--print-out-paths", "${roc_overlay}#\"${tag}\""],
+		compiler: |tag, _target, _layout| Ok(Printed(["nix", "build", "--no-link", "--print-out-paths", "${roc_overlay}#\"${tag}\""])),
 	}
 
 	## `nix flake update` resolves every input of the staged flake. Given
@@ -456,6 +456,7 @@ NixProvider :: [].{
 		# must never become its ancestor: the workspace is a directory.
 		files = staged_files(layout, "").map(|file| file.path)
 			.append("${layout.generated_root}/flake.lock")
+			.append(Layout.ignore_file(layout))
 		for file in files {
 			if Layout.contains(file, layout.workspace)
 				or Layout.contains(file, layout.lock_path)
@@ -625,7 +626,7 @@ NixProvider :: [].{
 		match staging {
 			None => {
 				for source in spec.sources.keep_if(
-					|s| environments.any(|e| source_names(e, spec.system_tools, spec.commands).contains(s.name)),
+					|s| environments.any(|e| source_names(e, spec.system_tools, spec.commands, spec.configured_tools).contains(s.name)),
 				) {
 					url = match source.provider {
 						Auto => default_nixpkgs
@@ -684,7 +685,7 @@ NixProvider :: [].{
 		for environment in environments {
 			$rendered = append_rendered(
 				$rendered,
-				render_environment_definition(environment, spec.system_tools, spec.commands),
+				render_environment_definition(environment, spec.system_tools, spec.commands, spec.configured_tools),
 			)?
 		}
 		$rendered = append_rendered(
@@ -741,7 +742,7 @@ NixProvider :: [].{
 						.map_err(|_| "unknown build environment")?
 					$rendered = append_rendered(
 						$rendered,
-						render_build(build, env, spec.system_tools, spec.commands, spec.roc_packages, system),
+						render_build(build, env, spec.system_tools, spec.commands, spec.configured_tools, spec.roc_packages, system),
 					)?
 				}
 				$rendered = append_rendered(
@@ -773,9 +774,9 @@ NixProvider :: [].{
 
 	## mkShell comes from the first tool's source, keeping unrelated providers
 	## outside the request. Empty environments use the default source instead.
-	source_names : Spec.Environment, List(Spec.SystemTools), List(Spec.Command) -> List(Str)
-	source_names = |environment, system_tools, commands| {
-		all_tools = environment.tools.concat(system_tools.keep_if(|entry| entry.environment == environment.name).fold([], |tools, entry| tools.concat(entry.tools))).concat(commands.keep_if(|entry| entry.environment == environment.name).map(|entry| entry.tool))
+	source_names : Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool) -> List(Str)
+	source_names = |environment, system_tools, commands, configured| {
+		all_tools = environment.tools.concat(system_tools.keep_if(|entry| entry.environment == environment.name).fold([], |tools, entry| tools.concat(entry.tools))).concat(commands.keep_if(|entry| entry.environment == environment.name).map(|entry| entry.tool)).concat(configured.keep_if(|entry| entry.environment == environment.name).map(|entry| entry.tool))
 		# With no shared tools, the default source builds the shell even on
 		# Systems where none of the scoped tools apply.
 		initial = if environment.tools.is_empty() ["default"] else []
@@ -796,9 +797,16 @@ NixProvider :: [].{
 		"(${set}.writeShellScriptBin ${quote(command.name)} ''exec \${${set}.lib.getExe ${target}} \"$@\"'')"
 	}
 
-	render_environment_definition : Spec.Environment, List(Spec.SystemTools), List(Spec.Command) -> Str
-	render_environment_definition = |environment, system_tools, commands| {
-		sources = source_names(environment, system_tools, commands)
+	## The tool with its options passed to the package's own `override`. The
+	## options are rendered as data, so they select among what the package
+	## offers and cannot say how to build it.
+	configured_package : Spec.ConfiguredTool -> Str
+	configured_package = |entry|
+		"(sets.${quote(entry.tool.source)}.${attr_path(tool_path(entry.tool.name))}.override ${value_to_nix(entry.options)})"
+
+	render_environment_definition : Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool) -> Str
+	render_environment_definition = |environment, system_tools, commands, configured| {
+		sources = source_names(environment, system_tools, commands, configured)
 		primary = sources.first() ?? "default"
 		overlays = environment.overlays.map(
 			|name| "inputs.${quote(name)}.overlays.default",
@@ -815,6 +823,10 @@ NixProvider :: [].{
 		).concat(
 			commands.keep_if(|entry| entry.environment == environment.name).map(
 				|entry| "            ${command_package(entry)}",
+			),
+		).concat(
+			configured.keep_if(|entry| entry.environment == environment.name).map(
+				|entry| "            ${configured_package(entry)}",
 			),
 		)
 		scoped = system_tools.keep_if(|entry| entry.environment == environment.name).map(
@@ -889,8 +901,8 @@ NixProvider :: [].{
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
 	## The builder is `blueprint __build-runner`, with no shell around it. Its
 	## own tools are absolute paths; argv and metadata enter through JSON.
-	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.RocPackage), Str -> Str
-	render_build = |build, environment, system_tools, commands, roc_packages, system| {
+	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Spec.RocPackage), Str -> Str
+	render_build = |build, environment, system_tools, commands, configured, roc_packages, system| {
 		# A build has no network, so the runner gives Roc a cache of its own
 		# holding these. Other builds' derivations stay as they were.
 		bundles = roc_packages.keep_if(|entry| entry.environment == environment.name).map(roc_package_location)
@@ -902,7 +914,7 @@ NixProvider :: [].{
 				"              ln = \"\${pkgs.coreutils}/bin/ln\";",
 			]
 		}
-		sources = source_names(environment, system_tools, commands)
+		sources = source_names(environment, system_tools, commands, configured)
 		primary = sources.first() ?? "default"
 		overlays = environment.overlays.map(
 			|name| "inputs.${quote(name)}.overlays.default",
@@ -917,6 +929,7 @@ NixProvider :: [].{
 			|tool|
 				"sets.${quote(tool.source)}.${attr_path(tool_path(tool.name))}",
 		).concat(commands.keep_if(|entry| entry.environment == environment.name).map(command_package))
+			.concat(configured.keep_if(|entry| entry.environment == environment.name).map(configured_package))
 		inputs = build.inputs.map(
 			|name|
 				"{ name = ${quote(name)}; path = inputs.${quote(name)}; }",
@@ -1119,6 +1132,7 @@ mk = |t| Spec.{
 	environments: t.environments,
 	system_tools: [],
 	commands: [],
+	configured_tools: [],
 	roc_packages: [],
 	shells: t.shells,
 	tasks: t.tasks,
@@ -1388,8 +1402,38 @@ expect {
 
 expect NixProvider.render({ ..mk(simple), commands: [{ environment: "dev", name: "vcs", tool: { source: "default", name: "git" } }] }).is_err()
 
+# A configured tool is the package's own override applied to data: strings
+# stay strings whatever they hold, and its source joins the package sets.
+expect {
+	options = Value.Attrs([
+		{ name: "targets", value: Value.List([Value.Str("x86_64-unknown-linux-musl"), Value.Str("aarch64-unknown-linux-musl")]) },
+		{ name: "extensions", value: Value.List([Value.Str("rust-src\"; } // builtins.abort \"\${x}")]) },
+	])
+	project = {
+		..mk(simple),
+		sources: [{ name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		requires_: ["configured-tools"],
+		configured_tools: [{ environment: "dev", tool: { source: "stable", name: "rust-bin.stable.\"1.95.0\".default" }, options }],
+	}
+	match NixProvider.render(project) {
+		Ok(text) => text.contains("            (sets.\"stable\".\"rust-bin\".\"stable\".\"1.95.0\".\"default\".override { \"targets\" = [ \"x86_64-unknown-linux-musl\" \"aarch64-unknown-linux-musl\" ]; \"extensions\" = [ \"rust-src\\\"; } // builtins.abort \\\"\\\${x}\" ]; })\n") and
+			text.contains("\"stable\" = import inputs.\"stable\"")
+		Err(_) => False
+	}
+}
+
+expect NixProvider.render({ ..mk(simple), configured_tools: [{ environment: "dev", tool: { source: "default", name: "git" }, options: Value.Attrs([]) }] }).is_err()
+
+# A build's PATH takes the same configured package as the environment's shell.
+expect {
+	entry = { environment: "builder", tool: { source: "default", name: "zig" }, options: Value.Attrs([{ name: "debug", value: Value.Bool(True) }]) }
+	build = { name: "app", environment: "builder", inputs: [], needs: [], run: ["true"], output: "out" }
+	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [], overlays: [] }, [], [], [entry, { ..entry, environment: "other" }], [], "x86_64-linux")
+	rendered.split_on("(sets.\"default\".\"zig\".override { \"debug\" = true; })").len() == 2
+}
+
 # The evaluating compiler is fetched by tag from the pinned overlay revision.
-expect (NixProvider.provider.compiler)("nightly-2026-10-04-130536d") == ["nix", "build", "--no-link", "--print-out-paths", "${NixProvider.roc_overlay}#\"nightly-2026-10-04-130536d\""]
+expect (NixProvider.provider.compiler)("nightly-2026-10-04-130536d", "x86_64-linux", Layout.{ project_root: "/project", workspace: "/project/.blueprint", generated_root: "/project/.blueprint", lock_path: "/project/Blueprint.lock" }) == Ok(Printed(["nix", "build", "--no-link", "--print-out-paths", "${NixProvider.roc_overlay}#\"nightly-2026-10-04-130536d\""]))
 expect NixProvider.roc_overlay.starts_with("github:roc-lang/roc-overlay/") and NixProvider.roc_overlay.contains("?narHash=sha256-")
 
 # Auto tool syntax is checked for the selected provider before any effects.

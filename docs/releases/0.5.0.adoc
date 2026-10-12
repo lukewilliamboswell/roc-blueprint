@@ -1,0 +1,85 @@
+= roc-blueprint 0.5.0
+
+This release puts everything a project needs in one place: the platform, the
+core package it depends on and the `blueprint` binaries are now published
+together under one version. It is also the first release with a manual and an
+archive of the examples.
+
+A `Blueprint.roc` written for 0.4 needs only the new platform URL.
+
+== Use this release
+
+[source,roc]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+The `blueprint` binary is attached for x86_64 Linux, arm64 Linux and Apple
+Silicon macOS, with SHA-256 sums in `blueprint.sha256`. It needs Nix, and
+fetches its own Roc compiler through Nix. Use this release's binary with this
+release's platform URL.
+
+== The core package moves into this release
+
+roc-blueprint-core, the package that defines the Spec and its S-expression
+format, used to have releases of its own under `core-X.Y.Z` tags. It is now an
+asset of each roc-blueprint release:
+
+[source,roc]
+----
+core: "{core-url}"
+----
+
+A program that imports the core package must change its URL to this form. Roc
+identifies a package by its URL, so this is a different package from the one
+under the `core-` tags, and the two cannot be mixed in one program. There will
+be no further `core-X.Y.Z` releases.
+
+== Configure a tool
+
+`ToolWith` adds a tool built with options its package takes. A platform host
+that cross-compiles Rust can now declare its toolchain's targets and
+components:
+
+[source,roc]
+----
+Overlay("rust", "github:oxalica/rust-overlay"),
+Environment("host", [
+	Overlays(["rust"]),
+	ToolWith("rust-bin.stable.\"1.95.0\".default", [
+		("targets", List([Str("x86_64-unknown-linux-musl"), Str("aarch64-unknown-linux-musl")])),
+		("extensions", List([Str("rust-src")])),
+	]),
+]),
+----
+
+The options are data passed to the package's `override`, never an
+expression. The Spec is now format 2.6, and a configuration that uses
+`ToolWith` requires the feature `configured-tools`, which a `blueprint` older
+than this release refuses by name.
+
+== Changes to the tool
+
+* `blueprint` writes a `.gitignore` into the directory it generates
+  (`.blueprint/` unless you moved it), so generated state stays out of a
+  commit even when the repository's own `.gitignore` does not list it. A
+  directory that is already tracked stays tracked until you run
+  `git rm -r --cached .blueprint`.
+* On Intel macOS `blueprint` now stops with a message that names the supported
+  systems, where it used to fail inside Nix. `x86_64-darwin` remains a system
+  a configuration may list.
+* `nix run github:lukewilliamboswell/roc-blueprint/0.5.0` works on arm64
+  Linux.
+* The code that will run tasks on Windows without Nix is included, but this
+  release has no Windows binary and its platform has no Windows target, so
+  Windows cannot use it yet.
+
+== Documentation and examples
+
+* The project has a manual, published as a site and attached to this release
+  as `roc-blueprint-0.5.0.pdf`. The reference that was in the README is now
+  there.
+* `roc-blueprint-examples-0.5.0.zip` holds the example projects with their
+  platform set to this release, and the Spec each one printed when the
+  release was made.
+* `roc-blueprint-docs-0.5.0.zip` holds the rendered manual.

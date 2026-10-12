@@ -10,6 +10,7 @@ import cli.OsStr
 import cli.Path
 import cli.Sleep
 import cli.Stderr
+import cli.Stdin
 import cli.Stdout
 import cli.Utc
 import StubTool
@@ -22,6 +23,7 @@ import StubTool
 ##   roc-record  record the arguments, then run `STUB_REAL_ROC` with them
 ##   roc-wire    `version` prints `STUB_ROC_VERSION`; `Blueprint.roc` prints `./wire.scm`
 ##   roc-probe   record; `version` prints `STUB_PROBE_VERSION`, exits `STUB_PROBE_STATUS`
+##   roc-stable  record, then print the arguments on one line
 ##   nix         record; `flake update [INPUT...]` writes a `flake.lock` from `STUB_NIX_FIXTURE`
 ##               as `STUB_NIX_MODE` says (`declared` or `local`, the latter with
 ##               `STUB_NIX_REV`), after waiting at `STUB_NIX_PAUSE` if set;
@@ -29,6 +31,12 @@ import StubTool
 ##   guix        record, exit 99
 ##   python3     record in the directory `STUB_PYTHON_LOG`, exit 97
 ##   readlink    print `STUB_READLINK`, or exit 1 without it
+##   curl        record, in the directory `STUB_CURL_LOG` if set; exit
+##               `STUB_CURL_STATUS` if set; with `--output FILE` copy
+##               `STUB_CURL_ARCHIVE` there, otherwise print the file `STUB_CURL_RELEASE`
+##   zig         record; `version` prints `STUB_ZIG_VERSION`
+##   tar         record; `-xf ARCHIVE -C DIRECTORY` copies the tree `STUB_TAR_TREE`
+##               into the directory
 ##
 ## A record is one file holding one line of JSON, in `<name>-calls/` under the
 ## working directory. It runs nothing through a shell.
@@ -55,7 +63,16 @@ main! = |args| {
 
 act! : StubTool.Role, List(OsStr) => Try(I32, Str)
 act! = |role, args| {
-	argv = args.map(OsStr.display)
+	given = args.map(OsStr.display)
+	# What `curl --config -` reads from standard input is part of the request:
+	# it is recorded as a last argument, `stdin:<text>`.
+	argv = match role {
+		Curl if StubTool.curl_reads_input(given) => {
+			text = Stdin.read_to_end!().map_err(|_| "cannot read standard input")?
+			given.append("stdin:${Str.from_utf8_lossy(text)}")
+		}
+		_ => given
+	}
 	match role {
 		RocRecord => {
 			record!("roc-calls", argv)?
@@ -121,6 +138,51 @@ act! = |role, args| {
 				Ok(identity) => written!("${identity}\n")
 				Err(_) => Ok(1)
 			}
+
+		RocStable => {
+			record!("roc-stable-calls", argv)?
+			written!("stub roc-stable: ${Str.join_with(argv, " ")}\n")
+		}
+		Curl => {
+			record!(optional!("STUB_CURL_LOG") ?? "curl-calls", argv)?
+			match optional!("STUB_CURL_STATUS") {
+				Ok(status) => {
+					_ = Stderr.line!("curl: (22) the stub was told to fail")
+					I32.from_str(status).map_err(|_| "STUB_CURL_STATUS is not a number: ${status}")
+				}
+				Err(_) =>
+					match StubTool.curl_output(argv) {
+						Ok(file) => {
+							archive = variable!("STUB_CURL_ARCHIVE")?
+							Path.copy!(Path.utf8(archive), Path.utf8(file)).map_err(|_| "cannot copy ${archive} to ${file}")?
+							Ok(0)
+						}
+						Err(NoOutput) => {
+							release = variable!("STUB_CURL_RELEASE")?
+							written!(Path.read_utf8!(Path.utf8(release)).map_err(|_| "cannot read ${release}")?)
+						}
+					}
+			}
+		}
+		Zig => {
+			record!("zig-calls", argv)?
+			match argv {
+				["version"] => written!("${variable!("STUB_ZIG_VERSION")?}\n")
+				_ => Ok(0)
+			}
+		}
+		Tar => {
+			record!("tar-calls", argv)?
+			match argv {
+				["-xf", _, "-C", directory] => {
+					tree = variable!("STUB_TAR_TREE")?
+					Path.copy_dir_with!(Path.utf8(tree), Path.utf8(directory), { symlinks: Preserve, destination: Merge })
+						.map_err(|_| "cannot copy ${tree} into ${directory}")?
+					Ok(0)
+				}
+				_ => Err("unexpected tar arguments: ${Str.inspect(argv)}")
+			}
+		}
 	}
 }
 

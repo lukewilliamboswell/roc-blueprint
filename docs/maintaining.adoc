@@ -1,0 +1,314 @@
+= Maintain and release
+
+== Move a compiler
+
+Nothing moves either compiler automatically. Each moves in one reviewed pull
+request, with whatever the new compiler breaks fixed in the same request.
+
+To move the product compiler:
+
+. Put the nightly's tag in `blueprint-cli/compiler-version`.
+. If the locked roc-overlay predates that nightly, run
+   `nix flake update roc-overlay` and set `NixProvider.roc_overlay` to the
+   value `scripts/test.roc static` asks for.
+. Set the compiler and overlay in `fixtures/roc-inputs.lock.json` to match.
+. Move the basic-cli release in `blueprint-cli/main.roc`, the fixtures, the
+   examples and `rocPackages` in `flake.nix` if the nightly needs a newer one.
+. Replace the entries of `compilers` in `blueprint-host/HostProvider.roc`
+   with the nightly's tag and the SHA-256 of each of its compiler archives,
+   which `gh release view <tag> --repo roc-lang/nightlies --json assets`
+   reports. `scripts/test.roc static` fails until the tag is there.
+. Set the hash of `rocGlueSpec` in `flake.nix` to that of the nightly's
+   source archive, which `nix build .#roc-glue-spec` reports, and run
+   `scripts/check_glue.roc --update`. Commit the bindings it changes together
+   with whatever the host needs to build against them.
+
+To move the scripts' compiler, change `rocStableTag` in `flake.nix` and the
+`roc: "<tag>"` field in the header of each `scripts/*.roc` to the same tag;
+`scripts/test.roc static` names any script that differs. Move the basic-cli
+release in those headers too if the nightly needs a newer one. A compiler
+other than the one a header names refuses the script, and `roc fmt` rewrites
+the field to the nightly that runs it, so the scripts are formatted with
+`roc-stable fmt scripts`.
+`scripts/smoke_binary.roc` and `scripts/stubs/tool.roc` are the exceptions:
+the product compiler builds them, so their headers must suit both compilers
+and carry no `roc` field.
+
+The required checks are listed under
+<<repository-settings-the-workflows-rely-on>>. Keep their names aligned with
+the workflows when changing CI.
+
+The October 4 nightly (`nightly-2026-10-04-130536d`) rejects redundant type
+exposes, so it needs the basic-cli 0.24.0 release and roc-fuzz 0.4.3.
+
+The complete suite requires x86_64 Linux and a running Nix daemon; the
+development shell supplies the rest. `zig build` builds the platform host for
+all four targets, so on Apple Silicon macOS the CLI's tests, the native CLI and
+the evaluation of a `Blueprint.roc` work too. Sandboxed builds, and so the
+`scenarios`, `builds` and `package` groups, remain x86_64 Linux only.
+
+== Release
+
+One release holds the platform bundle, the roc-blueprint-core bundle it
+depends on, the `blueprint` binaries with their checksums, the examples
+archive, the documentation archive and the manual. It is made by
+`.github/workflows/release.yml`, run by hand from `main` with a version. Every
+pull request runs the same workflow as a dry run, under the version
+`0.0.1-dry-run`, which is never published.
+
+. In one pull request, set `version` in `blueprint-cli/main.roc` and
+  `flake.nix` to the release, and write its notes (see
+  <<write-the-release-notes>>). Merge it.
+. Run the *Release* workflow from `main` with that version, for example
+  `0.5.0`, or `0.5.0-rc1` for a release candidate. A version with a `-` in it
+  is published as a pre-release.
+. Approve the `release` environment if it asks.
+
+A release candidate reports its own version, so `version` must be set to
+`X.Y.Z-rc1` for it and to `X.Y.Z` for the final release: the two are different
+commits. Both use the notes in `docs/releases/X.Y.Z.adoc`.
+
+=== What the workflow does
+
+validate::
+Requires the default branch, then `scripts/check_version.roc request`
+requires a well-formed version, its notes, that no tag or release of it
+exists, and that it is the version the CLI and the flake report.
+
+build::
+Cross-builds the binaries (`scripts/build_release.roc`), runs the whole test
+suite on them, bundles both packages for the version
+(`scripts/bundle.roc`), checks the version against the public API
+(`scripts/check_version.roc bump`), archives the examples
+(`scripts/package_examples.roc`), renders the manual with the release's
+platform URL and archives the site (`scripts/docs_snippet.roc`,
+`scripts/package_docs.roc`), renders the notes
+(`scripts/release_notes.roc`) and gathers the assets
+(`scripts/release_assets.roc`). On a pull request the test suite is left to
+`ci.yml`.
+
+test::
+Runs each binary on its own kind of machine, and
+`scripts/test_release.roc` tests the examples archive there against the two
+bundles.
+
+publish::
+The only job that may write to the repository. It checks out nothing and
+runs no script of the repository. It creates a draft release at the tested
+commit, uploads every asset, downloads each back and compares it with the
+tested file, and only then publishes. It does not run on a pull request.
+
+site::
+For a final release, rebuilds and deploys the manual, which then names the
+new release. A release candidate does not change the site.
+
+The machines that run the arm64 Linux and macOS binaries have Nix and
+deliberately no Roc, so `build_release.roc` also cross-builds
+`scripts/smoke_binary.roc` for each system and they run that
+(`dist/smoke-<system> dist/blueprint-<system>`).
+The project the smoke test writes pins what it resolves: packages at the
+nixpkgs revision in `fixtures/consumer/inputs.lock`, the overlay at the
+roc-overlay revision in `flake.lock` and the compiler at the nightly in
+`blueprint-cli/compiler-version`, all compiled into the smoke program. A
+release therefore does not depend on what moved upstream that day.
+`.github/workflows/floating.yml` runs the same test weekly with `--floating`,
+which resolves what a new user's project would: Blueprint's default package
+source, the overlay's default branch and its newest nightly.
+
+`build_release.roc` takes its compiler from the flake: `nix build .#roc-cross`
+is the x86_64 Linux compiler archive of the nightly in
+`blueprint-cli/compiler-version` with the
+`darwin/` sysroot of the Apple Silicon archive beside it, which Roc needs to
+link macOS programs. Both are fetched by the URL and hash the locked
+roc-overlay records. The package is not in the development shell, so only a
+release build downloads the macOS archive. The three CLI binaries are compiled
+at the same time, each about 2.3 GB at its peak.
+
+A binary fetches the compiler named in `blueprint-cli/compiler-version` from the roc-overlay
+revision in `NixProvider.roc_overlay`. Change that constant whenever
+`flake.lock` moves the `roc-overlay` input; `scripts/test.roc` fails when the two
+differ.
+
+=== Write the release notes
+
+Write the release's notes by hand in `docs/releases/X.Y.Z.adoc` and include
+the file in `docs/releases.adoc`, newest first; `scripts/test.roc static`
+fails when the two disagree. The notes say what changed for a user deciding
+whether and how to upgrade: what a user can or must now do, the symptom each
+fix removes, and before and after for anything breaking. They are not a list
+of commits.
+
+The file opens with `= roc-blueprint X.Y.Z` and names the bundles as
+`{platform-url}` and `{core-url}`, because the URLs hold hashes that do not
+exist until the release builds them. `scripts/release_notes.roc X.Y.Z
+dist/notes.md` renders the notes as the release body with the real URLs, and
+adds what the release was built from: the Roc nightly and the Zig version, the
+roc-overlay revision and the hashes of the two compiler archives it supplied,
+the flake's nixpkgs revision, the core bundle, the Roc packages compiled into
+the CLI as `roc deps blueprint-cli/main.roc` resolves them, and the
+linker-input release with the SHA-256 of `link-inputs.lock.json`. It fails on
+a placeholder that is unused or unknown. The committed file keeps its
+placeholders and is not rewritten after the release. A dry run renders the
+newest notes there are.
+
+=== The two bundles
+
+During development the platform uses `core: "../blueprint-core/main.roc"`. `roc bundle`
+only packs files below the entry point's directory, so `scripts/bundle.roc
+[VERSION]` bundles the core package first, then a staged copy of the platform
+whose `core:` is the URL that core bundle will have in the release of
+`VERSION`. With no version it is the dry run.
+
+Roc identifies a package by its URL minus the version and hash, so two
+archives named only by their hashes under one tag would look like one package
+served with two hashes, and the compiler refuses that as conflicting package
+contents. The core archive is therefore published as
+`roc-blueprint-core-<hash>.tar.zst`: the prefix is part of its identity. The
+platform's archive keeps the name `roc bundle` gave it, `<hash>.tar.zst`.
+
+The release does not exist while the bundles are tested, so the script serves
+both itself, from a port the operating system assigns, at the paths the
+release will give them. The compiler is told to load the core bundle from
+there (`--replace-dep`) while it checks a few of the configuration fixtures
+and runs `examples/all-settings/Blueprint.roc`. It gets an empty package cache
+for this, so it must download both bundles. The modules and linker inputs
+packed are those in the directories and in the `targets:` section of
+`blueprint-platform/main.roc`.
+
+Before bundling the platform, `scripts/bundle.roc` makes the check of
+`scripts/link_inputs.roc check`, so only linker inputs matching
+`link-inputs.lock.json` are packed. Their licences and `dependency.json`
+inventory go into the bundle under `linker-inputs/`.
+
+`scripts/test.roc package` runs the dry run on every commit, with the examples
+archive and its test. A change that adds a Spec field needs nothing more: the
+core bundle carrying the field is released with the platform that uses it.
+
+=== The version check
+
+`scripts/check_version.roc bump` runs `roc bump` for both packages against the
+latest release, and a release fails unless its version bumps at least as far
+as the public API changed. The core package is compared from the working
+tree. The platform is compared as bundled: in the working tree it names the
+core package by path, which `roc bump` refuses in a public type, so the script
+unpacks the platform bundle and puts the unpacked core bundle in a package
+cache of its own, where the compiler finds it by hash although its URL does
+not exist yet. A dry run reports the required bump and expects nothing.
+
+The platform exposes a type of the core package, and a package's URL is part
+of that type's identity, so the two versions move together.
+
+=== Asset names other repositories depend on
+
+The names of the binaries and of their checksum file are a contract.
+roc-automation's
+https://lukewilliamboswell.github.io/roc-automation/actions.html#setup-blueprint[`setup-blueprint`]
+action downloads `blueprint-x86_64-linux`, `blueprint-aarch64-linux` and
+`blueprint-aarch64-darwin` from the release a caller names, exactly as
+published, and callers copy the SHA-256 values from `blueprint.sha256`.
+Renaming an asset, archiving the binaries or changing the checksum file breaks
+every caller. `scripts/release_assets.roc` fails the build unless exactly
+those four names are present, and the publish job checks again before it
+uploads. A binary for another system is an addition; it does not change these.
+
+The platform bundle is the one `.tar.zst` asset named by its hash alone, and
+the core bundle the one that starts `roc-blueprint-core-`. The manual and the
+version check find the previous release's bundles that way.
+
+=== Repository settings the workflows rely on
+
+These are set by hand in the repository's settings.
+
+* A `release` environment, restricted to `main`. The publish job names it.
+* GitHub Pages with *GitHub Actions* as its source, and the `github-pages`
+  environment restricted to `main`. `docs.yml` deploys to it.
+* Immutable releases, and a tag ruleset under which a version tag cannot be
+  moved or deleted.
+* The `main` ruleset requires a pull request, signed commits, and these
+  checks with the branch up to date: `test` (the aggregate job of `ci.yml`),
+  `Release dry run` (that of `release.yml`) and `Build the manual and site`
+  (`docs.yml`).
+* The default workflow token is read-only, and GitHub Actions may not create
+  or approve pull requests.
+* Private vulnerability reporting is enabled; `SECURITY.md` links to it.
+
+Every workflow sets `permissions: {}` and states permissions per job, every
+checkout sets `persist-credentials: false`, and every action is pinned to a
+full commit; `scripts/test.roc static` checks the first two.
+
+To adopt a newer basic-cli release, change the URL in `blueprint-cli/main.roc`
+and `fixtures/consumer/main.roc`, then update the matching entry in `rocPackages`
+in `flake.nix` with the new URL and hash (`nix store prefetch-file <url>`). Add
+any new transitive dependency to the same list. Rerun `scripts/test.roc`.
+If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
+
+== What remains for Windows
+
+https://github.com/lukewilliamboswell/roc-blueprint/issues/40[Issue #40] asks
+for `blueprint run` on Windows. The part that needs nothing from upstream is
+merged: the host provider in `blueprint-host/`, which
+xref:windows.adoc#run-tasks-on-windows[Run tasks on Windows] describes. It is
+tested on Linux only. No Windows binary is built or released, and the platform
+has no Windows target, so a Windows user cannot run any of it yet.
+
+TODO(#40): the rest waits on three things upstream.
+
+* roc-overlay must package a nightly at or after `nightly-2026-10-11-7d256b9`,
+  the first that links a Windows program from the inputs a platform lists and
+  so can cross-link one on Linux, without the Windows SDK.
+* basic-cli must release a version whose `x64win` target lists a startup
+  object and a C runtime, which that nightly requires. The CLI is a basic-cli
+  program and does not link for Windows without it.
+* roc-platform-template-zig must publish a linker-inputs release with the
+  Windows startup inputs, for this repository's own Zig host.
+
+When they exist, in one pull request:
+
+. Move the product compiler to that nightly, as <<move-a-compiler>> describes,
+  with the basic-cli release and `link-inputs.lock.json`.
+. Add the platform's `x64win` target: `blueprint-platform/build.zig`, the
+  `targets:` section of `blueprint-platform/main.roc`, and the bundle and
+  artifact globs, which must learn `host.lib`.
+. Cross-build `blueprint-x86_64-windows.exe` in `scripts/src/Release.roc`.
+. Add a `.gitattributes` that keeps line endings as they are committed.
+. Add a `windows-latest` job that runs the cross-built binary on a committed
+  `Blueprint.roc` and `Blueprint.lock`, the lock written on Linux.
+. Attach the binary to the release and add its line to `blueprint.sha256`.
+  The existing asset names do not change.
+. Check each claim in the Windows chapter on that runner, and remove the
+  notice at its head.
+
+Known limits of what is merged, to settle then:
+
+* `roc-stable` is checked against a digest asked of GitHub at run time, not
+  one recorded in `Blueprint.lock` (xref:architecture.adoc#inv-3[invariant 3]).
+  `blueprint update` could record it.
+* curl and tar are run from `C:/Windows/System32`. A provider cannot ask where
+  Windows is installed.
+* A project whose evaluating compiler and `roc-stable` are the same nightly
+  downloads it twice.
+
+== Upstream workarounds still in place
+
+Compile-time configuration lowering is restored with Roc
+`nightly-2026-09-23-c7852fd`: `roc check Blueprint.roc` now rejects whole-config
+errors, including a missing `Name` or duplicate shells. Older compilers
+crashed while bundling a top-level constant dependent on the app's `config`;
+the local-Spec and released-Spec bundle tests guard against that regression.
+`blueprint check` retains a compiler check for diagnostics and reuses the Spec
+already loaded for CLI parsing, rather than running the configuration again.
+The loaded Spec is still needed for shared semantic validation and provider
+compatibility checks. Runtime validation also protects consumers from external
+Spec; it does not make major-1 platforms compatible with the current CLI. Loading the
+Spec still executes Roc, so retain compiler provisioning in the Nix wrapper and
+support for the `ROC` override.
+
+These remaining dependencies and workarounds still apply:
+
+* *Pinned Roc.* `blueprint-cli/compiler-version` selects the compiler, and the basic-cli
+  release in `blueprint-cli/main.roc` must be compatible with it.
+* **`roc bundle --output-dir` must be on the same filesystem as the working
+  directory.** Otherwise the bundler fails with `CrossDevice`.
+* **Error unions in `blueprint-core/Sexpr.roc` use a named extension
+  (`..others`).** These preserve open error types without the compiler
+  warning about a redundant bare `..`.

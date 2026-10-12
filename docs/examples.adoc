@@ -1,0 +1,54 @@
+= Learn from the examples
+
+Four complete projects live in
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/examples[`examples/`]. In the repository they use the platform in the
+working tree, so they follow `main`. To start a project of your own, download
+`roc-blueprint-examples-<version>.zip` from a https://github.com/lukewilliamboswell/roc-blueprint/releases[release]: the same
+projects with that release's platform URL, as they were tested for it, and the
+Spec each one prints.
+
+all-settings::
+Auto and explicit Nix package sources, a named overlay scoped to `dev`,
+parent-first environment inheritance, shell aliases, argument-list tasks, a
+locked Roc package and raw Nix settings. `ci` uses `base` without the overlay.
+
+composition::
+Imports `ProjectTasks.roc`, whose pure
+`settings : EnvName -> List(Config.Setting)` function supplies `fmt`, `test`
+and `args` tasks. The application concatenates them into `config`; all use
+`dev` directly. Inherited `git` is deduplicated before the child's `python3`.
+The tasks print tool versions or their arguments as JSON; they do not format
+files or run a test suite. No plugin registration, generated command line,
+implicit tool installation or runtime code loading is involved.
+
+artifacts::
+A complete local locked source, a sandboxed library and application that
+depends on it, and a typed workflow of tasks and builds. Its
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/examples/artifacts/README.md[README] shows usage and output, including
+explicit update and the read-only source and artifact locations.
+
+extensions::
+Custom extension blocks and raw values. The platform emits them, and
+`blueprint check` refuses the project with `needs features: extensions`,
+because no provider implements them. That refusal is what the example shows.
+
+== Run an example
+
+In an unpacked examples archive, with the `blueprint` binary of the same
+release:
+
+[source,sh]
+----
+cd composition
+blueprint check
+blueprint update
+blueprint run fmt
+blueprint run args -- 'two words' '' '--literal'
+----
+
+Only an explicit `update` creates or changes `Blueprint.lock`. `gen`, `shell`,
+`run`, `build` and `workflow` require matching pins and leave the lock as it
+is; the generated `.blueprint/flake.lock` is derived from it.
+
+In a checkout of the repository the examples need the platform host built
+first; see xref:contributing.adoc#build-and-test[Build and test].

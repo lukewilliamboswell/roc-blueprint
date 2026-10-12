@@ -1,6 +1,7 @@
 #!/usr/bin/env roc-stable
 app [main!] {
 	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+	roc: "nightly-2026-10-04-130536d",
 }
 
 import cli.Env
@@ -16,7 +17,7 @@ import src/TestSuite
 ##   scripts/test.roc                  every group, in order
 ##   scripts/test.roc unit package     only those groups
 ##
-## Groups: static, unit, cli, scenarios, builds, package, fuzz. CI runs them
+## Groups: static, unit, cli, scenarios, builds, package, glue, fuzz. CI runs them
 ## as parallel jobs. The cli, scenarios and builds groups use ./blueprint
 ## (scenarios and builds through real Nix); they build it unless
 ## BLUEPRINT_PREBUILT=1 says the caller already put a tested binary there.

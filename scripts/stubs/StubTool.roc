@@ -6,11 +6,11 @@ import nix.LockJson
 StubTool := [].{
 
 	## The program a copy stands in for.
-	Role : [RocRecord, RocWire, RocProbe, Nix, Guix, Python, Readlink]
+	Role : [RocRecord, RocWire, RocProbe, RocStable, Nix, Guix, Python, Readlink, Curl, Tar, Zig]
 
 	## The file names a copy may be installed under.
 	names : List(Str)
-	names = ["roc-record", "roc-wire", "roc-probe", "nix", "guix", "python3", "readlink"]
+	names = ["roc-record", "roc-wire", "roc-probe", "roc-stable", "nix", "guix", "python3", "readlink", "curl", "tar", "zig"]
 
 	## The role of an executable, from the last part of its resolved path. A
 	## symbolic link called `roc` therefore takes the role of its target.
@@ -21,13 +21,35 @@ StubTool := [].{
 			"roc-record" => Ok(RocRecord)
 			"roc-wire" => Ok(RocWire)
 			"roc-probe" => Ok(RocProbe)
+			"roc-stable" => Ok(RocStable)
 			"nix" => Ok(Nix)
 			"guix" => Ok(Guix)
 			"python3" => Ok(Python)
 			"readlink" => Ok(Readlink)
+			"curl" => Ok(Curl)
+			"tar" => Ok(Tar)
+			"zig" => Ok(Zig)
 			_ => Err(UnknownRole(name))
 		}
 	}
+
+	## The file a `curl` invocation is to write, when it names one.
+	curl_output : List(Str) -> Try(Str, [NoOutput])
+	curl_output = |argv|
+		match argv {
+			["--output", file, ..] => Ok(file)
+			[_, .. as rest] => curl_output(rest)
+			[] => Err(NoOutput)
+		}
+
+	## Whether a `curl` invocation reads a configuration from standard input.
+	curl_reads_input : List(Str) -> Bool
+	curl_reads_input = |argv|
+		match argv {
+			["--config", "-", ..] => True
+			[_, .. as rest] => curl_reads_input(rest)
+			[] => False
+		}
 
 	## One invocation's arguments as a line of JSON.
 	record : List(Str) -> Str
@@ -137,6 +159,11 @@ expect StubTool.role("/tmp/work/bin/roc-record") == Ok(RocRecord)
 expect StubTool.role("nix") == Ok(Nix)
 expect StubTool.role("/tmp/work/bin/roc") == Err(UnknownRole("roc"))
 expect StubTool.names.all(|name| StubTool.role("/bin/${name}").is_ok())
+expect StubTool.role("/project/.blueprint/host/commands/roc-stable/nightly-2026-10-04-130536d/bin/roc-stable") == Ok(RocStable)
+
+expect StubTool.curl_output(["--fail", "--output", "/tmp/archive", "https://example.invalid/a.zip"]) == Ok("/tmp/archive")
+expect StubTool.curl_reads_input(["--fail", "https://example.invalid/release", "--config", "-"]) and !StubTool.curl_reads_input(["--config", "file", "-"])
+expect StubTool.curl_output(["--fail", "https://example.invalid/release"]) == Err(NoOutput) and StubTool.curl_output(["--output"]) == Err(NoOutput)
 
 expect StubTool.record(["develop", "two words", "line\nbreak", "a'b\"c", ""]) == "[\"develop\",\"two words\",\"line\\u000abreak\",\"a'b\\\"c\",\"\"]\n"
 expect StubTool.parse_record(StubTool.record(["develop", "two words", "line\nbreak", "a'b\"c", ""])) == Ok(["develop", "two words", "line\nbreak", "a'b\"c", ""])

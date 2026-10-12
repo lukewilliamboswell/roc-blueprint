@@ -4,6 +4,8 @@ import cli.OsStr
 import cli.Path
 import Bundle
 import FlakeLock
+import Fuzz
+import Notes
 import Process
 import Release
 import Script
@@ -17,7 +19,7 @@ import StaticChecks
 ## `targets/<target>/libhost.a` is present, they are used as they are, and
 ## when any is missing all are built.
 TestSuite := [].{
-	groups = ["static", "unit", "cli", "scenarios", "builds", "package", "fuzz"]
+	groups = ["static", "unit", "cli", "scenarios", "builds", "package", "glue", "fuzz"]
 
 	## The groups a command line asks for: all of them, in order, when it names none.
 	requested : List(Str) -> Try(List(Str), [UnknownGroup(Str)])
@@ -130,6 +132,10 @@ group! = |context, name, done|
 		prepared = prepare!(context, done)?
 		packaged!(context)?
 		Ok(prepared)
+	} else if name == "glue" {
+		step!("The host's bindings are what roc glue writes for the platform")?
+		script!(context, "check_glue", [])?
+		Ok(done)
 	} else if name == "fuzz" {
 		step!("Fuzz targets: replay each committed corpus")?
 		script!(context, "fuzz", [])?
@@ -196,6 +202,7 @@ static! : Context => Try({}, _)
 static! = |context| {
 	step!("Formatting")?
 	compiler!(context, ["fmt", "--check"].concat(StaticChecks.formatted))?
+	Process.passthrough!(Process.command(stable, ["fmt", "--check"].concat(StaticChecks.formatted_stable), context.root))?
 
 	step!("No binary linker input is tracked")?
 	listed = Process.succeed!(Process.command("git", ["ls-files", "--"].concat(StaticChecks.binary_patterns), context.root))?
@@ -207,8 +214,10 @@ static! = |context| {
 
 	step!("The fetched compiler comes from the locked roc-overlay revision")?
 	problem!(StaticChecks.overlay_problem(read!(context, "flake.lock")?, read!(context, "blueprint-nix/NixProvider.roc")?))?
+	problem!(StaticChecks.host_compiler_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-host/HostProvider.roc")?))?
 
-	step!("The scripts run on roc-stable and nothing else selects a compiler")?
+	step!("The scripts run on roc-stable, pin its nightly, and nothing else selects a compiler")?
+	flake = read!(context, "flake.nix")?
 	pinned = Process.succeed!(Process.command("git", ["ls-files", "--", ".roc-version"], context.root))?
 	scripts = file_names!("${context.root}/scripts")?.keep_if(|name| name.ends_with(".roc"))
 	var $shebangs = []
@@ -217,11 +226,28 @@ static! = |context| {
 		$shebangs = $shebangs.append(("scripts/${script}", first))
 	}
 	# git grep exits 1 when no file matches.
-	headers = Process.capture!(Process.command("git", ["grep", "-lE", "^[[:space:]]*roc: \"", "--", "*.roc"], context.root))?
-	problem!(StaticChecks.compilers_problem(pinned.stdout, headers.stdout, $shebangs))?
+	pins = Process.capture!(Process.command("git", ["grep", "-E", "^[[:space:]]*roc: \"", "--", "*.roc"], context.root))?
+	problem!(StaticChecks.compilers_problem(pinned.stdout, StaticChecks.constant(flake, "rocStableTag"), pins.stdout, $shebangs))?
+
+	step!("fuzz.yml fuzzes every fuzz target")?
+	var $targets = []
+	for entry in Path.list!(Path.utf8("${context.root}/${Fuzz.targets_dir}"))? {
+		if Path.is_file!(entry.join("main.roc")) ?? False {
+			$targets = $targets.append(Path.to_str(entry)?.split_on("/").last() ?? "")
+		}
+	}
+	problem!(StaticChecks.fuzz_matrix_problem(read!(context, ".github/workflows/fuzz.yml")?, $targets))?
+
+	step!("Workflows hold no permissions by default and no checkout keeps the token")?
+	workflows = file_names!("${context.root}/.github/workflows")?.keep_if(|name| name.ends_with(".yml"))
+	for workflow in workflows {
+		problem!(StaticChecks.workflow_problem(workflow, read!(context, ".github/workflows/${workflow}")?))?
+	}
+
+	step!("The release notes chapter includes every release's notes")?
+	problem!(Notes.chapter_problem(read!(context, "docs/releases.adoc")?, file_names!("${context.root}/docs/releases")?))?
 
 	step!("The flake lists the core package's modules and the CLI's version")?
-	flake = read!(context, "flake.nix")?
 	in_directory = Bundle.modules(file_names!("${context.root}/${Bundle.core_dir}")?)
 	problem!(StaticChecks.core_modules_problem(in_directory, Bundle.flake_core_modules(flake)))?
 	problem!(StaticChecks.version_problem(flake, cli_source))
@@ -272,7 +298,10 @@ cli! = |context| {
 	script!(context, "test_update", [])?
 
 	step!("Staged isolation witness, build runner path and refusals")?
-	script!(context, "test_isolation", [])
+	script!(context, "test_isolation", [])?
+
+	step!("The host provider: what it refuses, and tasks from a lock the Nix provider wrote")?
+	script!(context, "test_host", [])
 }
 
 ## The real-Nix suites are two groups of about the same length, so that CI
@@ -317,9 +346,10 @@ packaged! = |context| {
 	Process.check!(StaticChecks.constant(flake, "version") == Ok(reported), "the packaged blueprint reports version ${reported}, not the version in flake.nix")?
 
 	step!("Nix flake: every system's outputs evaluate (no build)")?
-	for system in ["x86_64-linux", "aarch64-darwin"] {
-		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#packages.${system}.blueprint.drvPath"], context.root))?
-		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#devShells.${system}.default.drvPath"], context.root))?
+	# The flake exposes the systems a binary is released for.
+	for released in Release.systems {
+		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#packages.${released.system}.blueprint.drvPath"], context.root))?
+		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#devShells.${released.system}.default.drvPath"], context.root))?
 	}
 	# The release compiler exists for the one system that cross-builds.
 	_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#packages.${Release.compiler_system}.${Release.toolchain}.drvPath"], context.root))?
@@ -331,12 +361,12 @@ packaged! = |context| {
 	_ = Path.delete_all!(Path.utf8(work))
 	result?
 
-	step!("Bundle core and the platform against it")?
-	# The pinned core release is checked by release.yml when a platform release
-	# is tagged. A change that adds a Spec field cannot pass that check until a
-	# core release containing the field is published, so it is not a
-	# per-commit gate.
-	script!(context, "bundle", ["platform"])
+	step!("Bundle core and the platform against it, as one release holds them")?
+	script!(context, "bundle", [])?
+
+	step!("Archive the examples against those bundles and test the archive")?
+	script!(context, "package_examples", [])?
+	script!(context, "test_release", [Bundle.dry_run_version, "${package_path}/bin/blueprint"])
 }
 
 ## A build observes its namespaces with `readlink`. The Nix package appends
@@ -383,7 +413,7 @@ packaged_build! = |context, package_path, work| {
 	)
 }
 
-expect TestSuite.requested([]) == Ok(["static", "unit", "cli", "scenarios", "builds", "package", "fuzz"])
+expect TestSuite.requested([]) == Ok(["static", "unit", "cli", "scenarios", "builds", "package", "glue", "fuzz"])
 expect TestSuite.requested(["scenarios", "builds"]) == Ok(["scenarios", "builds"])
 
 # The real-Nix suites were one group, `nix`; it is not kept as a second name.

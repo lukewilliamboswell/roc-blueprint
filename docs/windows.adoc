@@ -1,0 +1,149 @@
+= Run tasks on Windows
+
+Windows has no Nix, so `blueprint` cannot build an environment there. It can
+run a project's tasks, which is what a Windows job in CI needs: it fetches the
+Roc compiler the project names, publishes the project's Roc packages, checks
+that the tools the task's environment declares are on the machine, and runs
+the task.
+
+IMPORTANT: No Windows binary of `blueprint` is released yet, and the released
+platform has no Windows target, so none of this can be used today. The code
+is in place and is tested on Linux with every program it runs replaced by a
+stub. Nothing has run on Windows.
+xref:maintaining.adoc#what-remains-for-windows[What remains for Windows] lists
+what is missing and what it waits on.
+
+== What works and what does not
+
+[cols="2,5",options="header"]
+|===
+| Command
+| On x86_64 Windows
+
+| `blueprint run TASK`
+| Runs the task. See the rest of this chapter for what its environment may
+  declare.
+
+| `blueprint workflow NAME`
+| Runs a workflow of tasks. A workflow with a build in it is refused before
+  its first step.
+
+| `blueprint tasks`, `spec`, `check`
+| Work as elsewhere.
+
+| `blueprint shell`
+| Refused: a shell needs Nix.
+
+| `blueprint build`
+| Refused: a sandboxed build needs Nix on Linux.
+
+| `blueprint update`
+| Refused. Run it on Linux or macOS and commit `Blueprint.lock`; Windows reads
+  that file as it is.
+
+| `blueprint` / `blueprint gen`, `blueprint flake`
+| Do nothing: no file is generated on Windows.
+|===
+
+A task still needs a `Blueprint.lock` that matches `Blueprint.roc`. The pins
+in it are Nix's and are not used on Windows; the sections below say what is
+checked in their place.
+
+== The compiler: roc-stable
+
+Declare the compiler the project's scripts run on as a command that names a
+Roc nightly:
+
+[source,roc]
+----
+Overlay("roc", "github:roc-lang/roc-overlay"),
+Environment("dev", [
+    Overlays(["roc"]),
+    Command("roc-stable", "rocpkgs.nightly-2026-10-04-130536d"),
+]),
+----
+
+On Windows that tag names a release of
+https://github.com/roc-lang/nightlies[roc-lang/nightlies]. `blueprint`
+downloads the release's Windows archive, checks it and keeps the compiler as
+`roc-stable.exe`, alone in a directory that is put ahead of `PATH` for the
+task. A floating `rocpkgs.nightly`, and a `Command` for anything but a Roc
+nightly, is refused.
+
+The archive is checked against the SHA-256 that GitHub reports for it when the
+task runs. That digest is not recorded in `Blueprint.lock`: on Windows the
+lock does not pin `roc-stable`, and the check guards the download, not the
+release. Asking GitHub is subject to its limit on requests without a token,
+which the machines of a hosted runner pool share. Set `GH_TOKEN` or
+`GITHUB_TOKEN` and the request carries it.
+
+The compiler that evaluates `Blueprint.roc` itself is found as elsewhere:
+`ROC`, then a matching `roc` on `PATH`. Failing both, `blueprint` downloads it
+from the same releases, checked against a digest built into `blueprint`.
+
+== Tasks that are scripts
+
+Windows does not read a script's `#!/usr/bin/env roc-stable` line. A task
+whose program is a `.roc` file is therefore started as that line asks, through
+`roc-stable`, with the script's path as the task wrote it and then the
+arguments:
+
+[source,roc]
+----
+Task("check", [Use("dev"), Run(["scripts/check_all.roc"])]),
+----
+
+Its environment must declare the `roc-stable` command; without it the task is
+refused. A task runs from the project root, and a program named by a relative
+path is looked for there.
+
+== Roc packages
+
+Each bundle an environment lists in `RocPackages` is downloaded from the URL
+given and unpacked by the compiler with `roc unbundle`. A bundle's file name
+is the hash of its bytes, and the compiler refuses bytes that do not match, so
+only the bundle the project named is published.
+
+Bundles are published where Roc looks for them: `roc\packages` under
+`XDG_CACHE_HOME` if that is set, otherwise under `%LOCALAPPDATA%`, otherwise
+under `.cache` in `HOME`. One that is already there is left alone.
+
+== Tools
+
+Nothing is installed on Windows. Each tool an environment declares must
+already be on `PATH`, and `blueprint` checks before it downloads anything. One
+message names every tool that is missing or of the wrong version.
+
+[cols="3,4",options="header"]
+|===
+| Tool in `Blueprint.roc`
+| What must be on the machine
+
+| `git`, `gh`, `go`, `zig`, `cargo`, `rustc`
+| That program, in any version.
+
+| `gnutar`
+| `tar`.
+
+| `zip`, `unzip`
+| That program.
+
+| `zigpkgs."0.16.0"`
+| A `zig` whose `zig version` is exactly that version.
+
+| `rust-bin.stable."1.95.0".default`
+| A `rustc` and a `cargo` of exactly that version.
+|===
+
+A task whose environment declares any other tool is refused on Windows, with
+every such tool named. The package source a tool comes from (`py#python314`)
+means nothing there. A tool configured with `ToolWith` is checked for as the
+tool itself; its options, such as Rust targets, are not checked. `ToolsFor` cannot yet name Windows: the Nix provider
+refuses a configuration whose `Systems` lists it.
+
+== Where things are kept
+
+Compilers are kept under `host/` in the generated directory (`.blueprint/`
+unless you moved it), about 230 MB each. `blueprint` writes a `.gitignore`
+there, as it does when it generates for Nix. A fresh CI machine downloads them
+again; cache `.blueprint/host` to avoid that.

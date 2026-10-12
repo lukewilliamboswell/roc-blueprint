@@ -31,7 +31,7 @@ ConfigTest := [].{
 	smoke_names = ["Valid", "MissingName", "UnknownSource", "BadWorkflowName", "Composed", "EquivalentComposition", "WorkflowExpansion"]
 
 	## Fixtures whose emitted Spec is compared or searched.
-	emitted_names = ["Valid", "Composed", "EquivalentComposition", "Builds", "ComposedBuilds", "Workflows", "ComposedWorkflows", "SystemTools", "Commands", "RocPackages"]
+	emitted_names = ["Valid", "Composed", "EquivalentComposition", "Builds", "ComposedBuilds", "Workflows", "ComposedWorkflows", "SystemTools", "Commands", "ConfiguredTools", "RocPackages"]
 
 	## Settings composed from an imported module emit the same Spec as inline ones.
 	same_spec_pairs = [("Composed", "EquivalentComposition"), ("Builds", "ComposedBuilds"), ("Workflows", "ComposedWorkflows")]
@@ -39,11 +39,11 @@ ConfigTest := [].{
 	## A new optional field comes with a feature marker for older consumers.
 	markers : List((Str, List(Str)))
 	markers = [
-		("Builds", ["(minor 5)", "(requires (\"sources\" \"builds\"))", "(build_sources ", "(builds "]),
+		("Builds", ["(minor 6)", "(requires (\"sources\" \"builds\"))", "(build_sources ", "(builds "]),
 		(
 			"Workflows",
 			[
-				"(minor 5)",
+				"(minor 6)",
 				"(requires (\"builds\" \"workflows\"))",
 				"(workflows ",
 				"(RunTask \"check.all\" (\"\" \"two words\" \"\\\"quoted\\\"\" \"\$HOME\" \"line\\nbreak\" \"--flag\"))",
@@ -51,6 +51,15 @@ ConfigTest := [].{
 		),
 		("SystemTools", ["(requires (\"system-tools\"))", "(system_tools ", "(system \"x86_64-linux\")"]),
 		("Commands", ["(requires (\"commands\"))", "(commands ", "(name \"roc-stable\")"]),
+		(
+			"ConfiguredTools",
+			[
+				"(requires (\"configured-tools\"))",
+				"(configured_tools ",
+				"(name \"rust-bin.stable.latest.default\")",
+				"(Str \"rust-src\")",
+			],
+		),
 		(
 			"RocPackages",
 			[
@@ -120,20 +129,21 @@ ConfigTest := [].{
 	## Write the fixtures into `work`, check each, then run the ones whose Spec
 	## is compared. `platform` is a path relative to `work`, or a bundle URL.
 	## `drive!` runs a batch of compiler commands together and returns their
-	## outcomes in order; a caller serving a bundle serves it meanwhile.
-	run! : { roc : Str, platform_ref : Str, work : Str, subset : Subset, environment : List((Str, Str)) }, (List(Process.Job) => Try(List(Process.Outcome), _)) => Try({}, _)
+	## outcomes in order; a caller serving a bundle serves it meanwhile, and
+	## gives in `arguments` what the compiler needs to find the rest there.
+	run! : { roc : Str, platform_ref : Str, work : Str, subset : Subset, environment : List((Str, Str)), arguments : List(Str) }, (List(Process.Job) => Try(List(Process.Outcome), _)) => Try({}, _)
 	run! = |options, drive!| {
 		for (name, text) in sources(options.platform_ref) {
 			Path.write_utf8!(Path.utf8("${options.work}/${name}"), text)?
 		}
 		chosen = selected(options.subset)
-		compiler = |args| Process.with_env(Process.command(options.roc, args, options.work), options.environment)
+		compiler = |args, name| Process.with_env(Process.command(options.roc, args.concat(options.arguments).concat(["${name}.roc"]), options.work), options.environment)
 
-		checked = drive!(chosen.map(|fixture| compiler(["check", "${fixture.name}.roc"])))?
+		checked = drive!(chosen.map(|fixture| compiler(["check"], fixture.name)))?
 		report_checks!(chosen, checked)?
 
 		emitted = chosen.map(|fixture| fixture.name).keep_if(|name| emitted_names.contains(name))
-		ran = drive!(emitted.map(|name| compiler(["${name}.roc"])))?
+		ran = drive!(emitted.map(|name| compiler([], name)))?
 		specs = collect_specs!(emitted, ran, [])?
 		compare_specs!(emitted, specs)?
 
@@ -283,6 +293,11 @@ valid_fixtures = [
 		,
 	),
 	valid(
+		"ConfiguredTools",
+		\\[Name("configured"), Overlay("rust", "github:oxalica/rust-overlay"), Environment("base", [Overlays(["rust"]), ToolWith("rust-bin.stable.latest.default", [("targets", List([Str("x86_64-unknown-linux-musl")]))])]), Environment("dev", [Extend("base"), ToolWith("rust-bin.stable.latest.default", [("targets", List([Str("aarch64-unknown-linux-musl")])), ("extensions", List([Str("rust-src")]))])]), Shell("default", [Use("dev")])]
+		,
+	),
+	valid(
 		"RocPackages",
 		\\[Name("packages"), Environment("base", [RocPackages(["https://example.test/releases/download/1.0.0/abc123.tar.zst"])]), Environment("dev", [Extend("base"), RocPackages(["https://example.test/releases/download/1.0.0/abc123.tar.zst", "https://example.test/releases/download/2.0.0/def456.tar.zst"])]), Shell("default", [Use("dev")])]
 		,
@@ -371,6 +386,18 @@ lower_fixtures = [
 		"DuplicateExtend",
 		"DuplicateExtend",
 		\\[Name("invalid"), Environment("base", []), Environment("dev", [Extend("base"), Extend("base")])]
+		,
+	),
+	rejected(
+		"DuplicateToolWith",
+		"DuplicateToolWith",
+		\\[Name("invalid"), Environment("dev", [ToolWith("zig", []), ToolWith("zig", [])])]
+		,
+	),
+	rejected(
+		"PlainAndConfiguredTool",
+		"tool is both plain and configured",
+		\\[Name("invalid"), Environment("base", [Tools(["zig"])]), Environment("dev", [Extend("base"), ToolWith("zig", [])])]
 		,
 	),
 	rejected(
@@ -553,8 +580,8 @@ accepted = { code: 0, stdout: "No errors found", stderr: "" }
 crashed : Str -> Process.Outcome
 crashed = |text| { code: 1, stdout: "", stderr: text }
 
-expect ConfigTest.fixtures.len() == 43
-expect ConfigTest.selected(Full).len() == 46 and ConfigTest.selected(Smoke).map(|fixture| fixture.name) == ["Valid", "EquivalentComposition", "MissingName", "BadWorkflowName", "UnknownSource", "WorkflowExpansion", "Composed"]
+expect ConfigTest.fixtures.len() == 46
+expect ConfigTest.selected(Full).len() == 49 and ConfigTest.selected(Smoke).map(|fixture| fixture.name) == ["Valid", "EquivalentComposition", "MissingName", "BadWorkflowName", "UnknownSource", "WorkflowExpansion", "Composed"]
 
 # Every name is used once, and every name another table mentions exists.
 expect {

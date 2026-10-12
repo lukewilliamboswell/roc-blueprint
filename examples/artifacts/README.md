@@ -1,7 +1,7 @@
 # Locked sources and dependent artifacts
 
 From the repository's development shell (`nix develop`), build the local platform host and CLI
-as described in [CONTRIBUTING](../../CONTRIBUTING.md), then:
+as described in [Contribute](../../docs/contributing.adoc), then:
 
 ```sh
 cd examples/artifacts

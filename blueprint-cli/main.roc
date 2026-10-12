@@ -5,6 +5,7 @@
 ## update publishes the authority; ordinary operations use its resolved pins.
 app [main!] {
 	core: "../blueprint-core/main.roc",
+	host: "../blueprint-host/main.roc",
 	nix: "../blueprint-nix/main.roc",
 	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
 	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
@@ -28,17 +29,43 @@ import core.Layout
 import core.Provider
 import core.Lock
 import core.Tree
+import host.HostProvider
+import Paths
 import nix.NixProvider
 import "compiler-version" as compiler_version : Str
 
 version : Str
 version = "0.4.1"
 
-## The provider every command goes through. This is the only reference to a
-## concrete provider: everything else uses the Provider contract
-## (docs/architecture.adoc, invariant 7; checked by scripts/test.roc).
-provider : Provider
-provider = NixProvider.provider
+## The provider every command of a run goes through. These are the only
+## references to a concrete provider: everything else uses the Provider
+## contract (docs/architecture.adoc, invariant 7; checked by scripts/test.roc).
+provider_for : [Host, Nix] -> Provider
+provider_for = |choice|
+	match choice {
+		Host => HostProvider.provider
+		Nix => NixProvider.provider
+	}
+
+## Windows has no Nix, so the host provider serves it. `BLUEPRINT_PROVIDER=host`
+## selects that provider on any host; the tests use it to run its plans on
+## Linux. No other value is accepted.
+choose : Try(Str, _), [LINUX, MACOS, WINDOWS, OTHER(Str)] -> Try([Host, Nix], [UnknownProvider(Str)])
+choose = |override, os|
+	match (override, os) {
+		(Ok("host"), _) => Ok(Host)
+		(Ok(other), _) => Err(UnknownProvider(other))
+		(Err(_), WINDOWS) => Ok(Host)
+		(Err(_), _) => Ok(Nix)
+	}
+
+expect choose(Err(Unset), WINDOWS) == Ok(Host)
+expect [LINUX, MACOS, OTHER("freebsd")].all(|os| choose(Err(Unset), os) == Ok(Nix) and choose(Ok("host"), os) == Ok(Host))
+expect ["", "Host", "guix"].all(|name| choose(Ok(name), LINUX) == Err(UnknownProvider(name)))
+
+# Each provider answers to its own name, and a Blueprint.roc loads under both.
+expect provider_for(Host).name == "host" and provider_for(Nix).name != "host"
+expect provider_for(Host).features == provider_for(Nix).features
 
 Command : [
 	Gen,
@@ -216,7 +243,7 @@ main! = |raw_args| {
 	}
 	context = context!()
 	loaded = match context {
-		Ok(ctx) => evaluate!(ctx.layout.project_root)
+		Ok(ctx) => evaluate!(ctx)
 		Err(err) => Err(err)
 	}
 	# basic-cli supplies arguments without the executable name.
@@ -230,7 +257,8 @@ main! = |raw_args| {
 			match run!(command ?? Gen, loaded, context) {
 				Ok({}) => Ok({})
 				Err(err) => {
-					_ = Stderr.line!("blueprint: ${describe(err)}")
+					name = context.map_ok(|ctx| ctx.provider.name) ?? "provider"
+					_ = Stderr.line!("blueprint: ${describe(err, name)}")
 					Err(Exit(1))
 				}
 			}
@@ -240,7 +268,7 @@ main! = |raw_args| {
 run! = |command, loaded, context| {
 	ctx = context?
 	match command {
-		Check => check!(loaded, ctx.layout.project_root)
+		Check => check!(loaded, ctx)
 		_ => {
 			spec = loaded?
 			match command {
@@ -252,8 +280,8 @@ run! = |command, loaded, context| {
 				Tasks => list_tasks!(spec)
 				Update(names) => resolve!(spec, names, ctx)
 				PrintSpec => Stdout.write!(spec.to_str())
-				PrintFlake => print_files!(spec)
-				Check => check!(loaded, ctx.layout.project_root)
+				PrintFlake => print_files!(ctx.provider, spec)
+				Check => check!(loaded, ctx)
 			}
 		}
 	}
@@ -262,36 +290,37 @@ run! = |command, loaded, context| {
 ## Type-check Blueprint.roc (including whole-config validation), then reuse
 ## the Spec loaded for CLI parsing to check provider compatibility. This also
 ## preserves validation for older platforms that only lower at run time.
-check! : Try(Spec, _), Str => Try({}, _)
-check! = |loaded, root| {
+check! : Try(Spec, _), Context => Try({}, _)
+check! = |loaded, ctx| {
 	check_host!()?
-	Cmd.new_str(roc!()?).args_str(["check", "Blueprint.roc"])
-		.cwd(path(root)).exec_cmd!()
+	Cmd.new_str(roc!(ctx)?).args_str(["check", "Blueprint.roc"])
+		.cwd(path(ctx.layout.project_root)).exec_cmd!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
-	_ = render(loaded?)?
+	_ = render(ctx.provider, loaded?)?
 	Stdout.line!("Blueprint.roc is valid")
 }
 
 ## Compile and run Blueprint.roc, then parse the Spec it prints.
-evaluate! : Str => Try(Spec, _)
-evaluate! = |root| {
+evaluate! : Context => Try(Spec, _)
+evaluate! = |ctx| {
+	root = ctx.layout.project_root
 	if !(path("${root}/Blueprint.roc").exists!() ?? False) {
 		return Err(NoBlueprint)
 	}
 	check_host!()?
-	output = Cmd.new_str(roc!()?).args_str(["Blueprint.roc"])
+	output = Cmd.new_str(roc!(ctx)?).args_str(["Blueprint.roc"])
 		.cwd(path(root)).exec_output!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = Spec.parse(output.stdout_utf8).map_err(|err| BadSpec(err))?
-	missing = spec.unsupported_features(provider.features)
+	missing = spec.unsupported_features(ctx.provider.features)
 	if !missing.is_empty() {
 		return Err(NeedsFeatures(missing))
 	}
 	Project.validate(spec).map_err(|message| InvalidProject(message))
 }
 
-render : Spec -> Try(List(Provider.File), _)
-render = |spec| (provider.render)(spec).map_err(|msg| RenderFailed(msg))
+render : Provider, Spec -> Try(List(Provider.File), _)
+render = |provider, spec| (provider.render)(spec).map_err(|msg| RenderFailed(msg))
 
 ## Run an argv from the provider.
 exec! : List(Str), Str => Try({}, _)
@@ -313,9 +342,89 @@ exec! = |argv, root|
 		[] => Ok({})
 	}
 
-print_files! : Spec => Try({}, _)
-print_files! = |spec| {
-	files = render(spec)?
+## Refuse a step whose environment declares programs this host lacks (see
+## `Require` in `Steps.Operation`). Every probe runs, so one refusal names
+## everything that is missing or of the wrong version.
+require! : List(Steps.Probe), Str => Try({}, _)
+require! = |probes, root| {
+	var $failures = []
+	for probe in probes {
+		command = "`${Str.join_with(probe.probe, " ")}`"
+		problem = match probe.probe {
+			[program, .. as args] =>
+				match Cmd.new_str(program).args_str(args).cwd(path(root)).exec_output!() {
+					Ok(output) => probe_problem(probe.version, output.stdout_utf8).map_ok(|reason| "${command} ${reason}")
+					Err(NonZeroExitCode({ exit_code, .. })) => Ok("${command} exited with code ${exit_code.to_str()}")
+					Err(_) => Ok("${command} could not be run")
+				}
+
+			[] => Ok("the provider has no way to check for it")
+		}
+		match problem {
+			Ok(reason) => {
+				$failures = $failures.append("  ${probe.tool}: ${reason}")
+			}
+			Err(Satisfied) => {}
+		}
+	}
+	if $failures.is_empty() {
+		Ok({})
+	} else {
+		Err(Refused("this host does not have what the task's environment declares, and nothing is installed here:\n${Str.join_with($failures, "\n")}"))
+	}
+}
+
+## What is wrong with the version a probe printed, if anything.
+probe_problem : [Any, Is(Str), Starts(Str)], Str -> Try(Str, [Satisfied])
+probe_problem = |expected, output| {
+	line = (output.split_on("\n").first() ?? "").trim()
+	match expected {
+		Any => Err(Satisfied)
+		Is(wanted) => if line == wanted Err(Satisfied) else Ok("printed ${line}, not ${wanted}")
+		Starts(wanted) => if line.starts_with(wanted) Err(Satisfied) else Ok("printed ${line}, which does not start with ${wanted.trim()}")
+	}
+}
+
+expect probe_problem(Any, "") == Err(Satisfied) and probe_problem(Is("0.16.0"), "0.16.0\r\n") == Err(Satisfied)
+expect probe_problem(Is("0.16.0"), "0.15.2\n") == Ok("printed 0.15.2, not 0.16.0") and probe_problem(Is("0.16.0"), "0.16.0-dev.1\n").is_ok()
+expect probe_problem(Starts("rustc 1.95.0 "), "rustc 1.95.0 (abc 2026-01-01)\nmore\n") == Err(Satisfied)
+expect probe_problem(Starts("rustc 1.95.0 "), "rustc 1.95.01 (abc)\n") == Ok("printed rustc 1.95.01 (abc), which does not start with rustc 1.95.0")
+
+## Run a step's argv with its directories ahead of the caller's PATH, so that
+## the argv and whatever it starts find the programs there first.
+exec_within! : List(Str), Str, List(Str) => Try({}, _)
+exec_within! = |argv, root, directories| {
+	if directories.is_empty() {
+		return exec!(argv, root)
+	}
+	existing = match Env.var!(OsStr.from_str("PATH")) {
+		Ok(value) => value.to_str_try().map_err(|_| Refused("PATH is not text, so nothing can be put ahead of it"))?
+		Err(_) => ""
+	}
+	search = Paths.search(directories, existing)
+		.map_err(|Unsearchable(directory)| Refused("${directory} cannot be an entry of PATH"))?
+	match argv {
+		[program, .. as args] =>
+			Cmd.new_str(program)
+				.args_str(args)
+				.cwd(path(root))
+				.env_str("PATH", search)
+				.exec_cmd!()
+				.map_err(
+					|err|
+						match err {
+							ExecCmdFailed({ exit_code, .. }) => CommandFailed(argv, exit_code)
+							other => other
+						},
+				)
+
+		[] => Ok({})
+	}
+}
+
+print_files! : Provider, Spec => Try({}, _)
+print_files! = |provider, spec| {
+	files = render(provider, spec)?
 	match files {
 		[only] => Stdout.write!(only.contents)
 		_ => {
@@ -330,9 +439,10 @@ print_files! = |spec| {
 ## Probe identity before evaluating config with the selected compiler.
 ## A relative ROC executable belongs to the invocation directory, not root.
 ## An explicit ROC must be the compatible compiler. Otherwise a compatible
-## `roc` on PATH is used, and failing that the provider fetches the release.
-roc! : () => Try(Str, _)
-roc! = || {
+## `roc` on PATH is used, and failing that the provider says how to obtain the
+## release.
+roc! : Context => Try(Str, _)
+roc! = |ctx| {
 	expected = "Roc compiler version ${compiler_version.trim()}"
 	match Env.var_str!("ROC") {
 		Ok(override) => {
@@ -362,7 +472,19 @@ roc! = || {
 			if on_path {
 				return Ok("roc")
 			}
-			fetch_roc!((provider.compiler)(compiler_version.trim()))
+			obtained = (ctx.provider.compiler)(compiler_version.trim(), ctx.target, ctx.layout)
+				.map_err(|message| CompilerFailed("the ${ctx.provider.name} provider cannot fetch Roc ${compiler_version.trim()}: ${message}"))?
+			match obtained {
+				Printed(argv) => fetch_roc!(argv)
+				Fetched(archive) =>
+					fetch!(archive, ctx.layout).map_err(
+						|err|
+							match err {
+								FetchFailed(message) => CompilerFailed("could not fetch Roc ${compiler_version.trim()}: ${message}")
+								other => other
+							},
+					)
+			}
 		}
 	}
 }
@@ -384,28 +506,184 @@ fetch_roc! = |argv|
 		[] => Err(CompilerFailed("the provider cannot fetch a compiler"))
 	}
 
-Context : { layout : Layout, target : Str }
+## Keep a released archive unpacked where a provider says, and answer with
+## its program (see `Steps.Archive`). Every argv is the provider's and runs
+## from the project root. The fresh directory is beside the destination, so
+## the last rename stays on one filesystem and is atomic. An archive kept in
+## the generated root is generated state, ignored like the rest of it.
+fetch! : Steps.Archive, Layout => Try(Str, _)
+fetch! = |archive, layout| {
+	root = layout.project_root
+	program = "${archive.directory}/${archive.program}"
+	safe_path!(archive.directory)?
+	if !relative_parts(archive.program) or archive.moves.any(|move| !relative_parts(move.from) or !relative_parts(move.to)) {
+		return Err(FetchFailed("the archive for ${archive.directory} names a path outside it"))
+	}
+	if path(program).is_file!() ?? False {
+		return Ok(program)
+	}
+	beside = path(Paths.parent(archive.directory))
+	beside.create_all!()?
+	if archive.directory.starts_with("${layout.generated_root}/") {
+		ignore_generated!(layout)?
+	}
+	fresh = Env.create_temp_dir_in!(beside, ".blueprint-fetch-")?
+	unpack! = || {
+		base = Paths.portable(fresh.to_str()?)
+		file = "${base}/archive"
+		tree = "${base}/tree"
+		place = |argv| argv.map(|arg| arg.replace_each(archive.archive, file).replace_each(archive.tree, tree))
+		expected = archive_digest!(archive.digest, root)?
+		Stderr.line!("blueprint: fetching ${archive.directory}")?
+		fetch_exec!(place(archive.download), root)?
+		if !(path(file).is_file!() ?? False) {
+			return Err(FetchFailed("`${Str.join_with(archive.download, " ")}` downloaded nothing"))
+		}
+		actual = file_digest!(file)?.to_hex()
+		if actual != expected {
+			return Err(FetchFailed("the archive for ${archive.directory} has SHA-256 ${actual}, not ${expected}; nothing was unpacked"))
+		}
+		path(tree).create_dir!()?
+		fetch_exec!(place(archive.unpack), root)?
+		for move in archive.moves {
+			destination = "${tree}/${move.to}"
+			path(Paths.parent(destination)).create_all!()?
+			path("${tree}/${move.from}").rename!(path(destination))
+				.map_err(|_| FetchFailed("the archive for ${archive.directory} holds no ${move.from}"))?
+		}
+		if !(path("${tree}/${archive.program}").is_file!() ?? False) {
+			return Err(FetchFailed("the archive for ${archive.directory} holds no ${archive.program}"))
+		}
+		placed = path(tree).rename!(path(archive.directory))
+		# Losing the rename to another process costs nothing: its bytes are ours.
+		if placed.is_ok() or (path(program).is_file!() ?? False) {
+			Ok({})
+		} else {
+			Err(FetchFailed("cannot place the unpacked archive at ${archive.directory}; delete what is there"))
+		}
+	}
+	result = unpack!()
+	_ = fresh.delete_all!()
+	result?
+	Ok(program)
+}
+
+## A relative path of plain names, as `Steps.Archive` places things in a tree.
+relative_parts : Str -> Bool
+relative_parts = |value| !value.split_on("/").any(|part| part == "" or part == "." or part == ".." or part.contains("\\") or part.contains(":"))
+
+expect relative_parts("bin/roc-stable.exe") and relative_parts("roc_nightly-windows_x86_64-2026-10-04-130536d/roc.exe")
+expect ["", "/bin/roc", "bin//roc", "../roc", "bin/../../roc", "bin/", "D:/roc", "bin\\roc"].all(|value| !relative_parts(value))
+
+## Run one argv of a fetch. Its own diagnostics are the user's to read.
+fetch_exec! : List(Str), Str => Try({}, _)
+fetch_exec! = |argv, root|
+	exec!(argv, root).map_err(
+		|err|
+			match err {
+				CommandFailed(_, code) => FetchFailed("`${Str.join_with(argv, " ")}` exited with code ${code.to_str()}")
+				_ => FetchFailed("could not run `${Str.join_with(argv, " ")}`")
+			},
+	)
+
+## The SHA-256 an archive must have. A recorded digest is the provider's. A
+## published one is whatever the release reports now, over HTTPS: nothing in
+## Blueprint.lock pins it, which docs/architecture.adoc, invariant 3, asks of
+## every input. It guards the transfer, not the release.
+archive_digest! : Steps.Digest, Str => Try(Str, _)
+archive_digest! = |digest, root|
+	match digest {
+		Recorded(hex) => Ok(hex)
+		Published({ asset, ask, authorized, token }) => {
+			var $secrets = []
+			for variable in token.variables {
+				match Env.var_str!(OsStr.from_str(variable)) {
+					Ok(value) if !value.is_empty() => {
+						$secrets = $secrets.append(value)
+					}
+					_ => {}
+				}
+			}
+			# The token is never printed and never an argument, which any
+			# process on the host could read: the request takes it on standard
+			# input, and a failure names the request without it.
+			(argv, input) = match $secrets.first() {
+				Ok(value) => {
+					if value.to_utf8().any(|byte| byte < 32 or byte == 127 or byte == '"' or byte == '\\') {
+						return Err(FetchFailed("the token in ${Str.join_with(token.variables, " or ")} holds a character a request cannot carry"))
+					}
+					(authorized, Bytes(token.input.replace_each(token.text, value).to_utf8()))
+				}
+				Err(_) => (ask, Null)
+			}
+			asked = "`${Str.join_with(ask, " ")}`"
+			match argv {
+				[program, .. as args] => {
+					output = Cmd.new_str(program).args_str(args).cwd(path(root)).stdin(input).stderr(Inherit).exec_output!()
+						.map_err(|_| FetchFailed("could not learn the digest of ${asset}: ${asked} failed"))?
+					published_digest(output.stdout_utf8, asset)
+						.map_err(|reason| FetchFailed("could not learn the digest of ${asset} from ${asked}: ${reason}"))
+				}
+				[] => Err(FetchFailed("the provider cannot learn the digest of ${asset}"))
+			}
+		}
+	}
+
+## The SHA-256 a release reports for one of its assets, in hex.
+published_digest : Str, Str -> Try(Str, Str)
+published_digest = |text, asset| {
+	parsed : Try({ assets : List({ name : Str, digest : Str }) }, _)
+	parsed = Json.parse(text)
+	release = parsed.map_err(|_| "the release does not list its assets with digests")?
+	found = release.assets.find_first(|entry| entry.name == asset)
+		.map_err(|_| "the release has no asset of that name")?
+	hex = found.digest.drop_prefix("sha256:")
+	if found.digest.starts_with("sha256:") and hex.to_utf8().len() == 64 and hex.to_utf8().all(|b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f')) {
+		Ok(hex)
+	} else {
+		Err("its digest is not a SHA-256: ${found.digest}")
+	}
+}
+
+release_sample : Str
+release_sample =
+	\\{"tag_name":"nightly-2026-10-04-130536d","assets":[
+	\\ {"name":"roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz","size":69614310,"digest":"sha256:893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f"},
+	\\ {"name":"roc_nightly-windows_x86_64-2026-10-04-130536d.zip","size":67310620,"digest":"sha256:1f5ac14286ebea19f884176c6ab1eabe29f1ad58c10d8f490a9c282e0411033f"},
+	\\ {"name":"short","digest":"sha256:1f5a"},
+	\\ {"name":"other","digest":"sha512:1f5ac14286ebea19f884176c6ab1eabe29f1ad58c10d8f490a9c282e0411033f"}]}
+
+expect published_digest(release_sample, "roc_nightly-windows_x86_64-2026-10-04-130536d.zip") == Ok("1f5ac14286ebea19f884176c6ab1eabe29f1ad58c10d8f490a9c282e0411033f")
+expect published_digest(release_sample, "roc_nightly-macos_x86_64-2026-10-04-130536d.tar.gz") == Err("the release has no asset of that name")
+expect published_digest(release_sample, "short").is_err() and published_digest(release_sample, "other").is_err()
+expect published_digest("{\"message\":\"API rate limit exceeded\"}", "short") == Err("the release does not list its assets with digests")
+
+Context : { layout : Layout, target : Str, provider : Provider }
 
 ## Caller paths are observations, resolved once against the selected root.
 context! : () => Try(Context, _)
 context! = || {
-	cwd = Env.cwd!()?.to_str()?
-	root = path(resolve(cwd, Env.var_str!("BLUEPRINT_ROOT") ?? cwd))
-		.canonicalize!()?.to_str()?
-	workspace = normalize(
-		resolve(
+	provider = provider_for(choose(Env.var_str!("BLUEPRINT_PROVIDER"), Env.platform!().os)?)
+	# Windows reports `\\?\D:\project`; hold `D:/project` (see Paths).
+	cwd = Paths.portable(Env.cwd!()?.to_str()?)
+	root = Paths.portable(
+		path(Paths.resolve(cwd, Env.var_str!("BLUEPRINT_ROOT") ?? cwd))
+			.canonicalize!()?.to_str()?,
+	)
+	workspace = Paths.normalize(
+		Paths.resolve(
 			root,
 			Env.var_str!("BLUEPRINT_WORKSPACE") ?? ".blueprint",
 		),
 	)
-	generated = normalize(
-		resolve(
+	generated = Paths.normalize(
+		Paths.resolve(
 			root,
 			Env.var_str!("BLUEPRINT_GENERATED_ROOT") ?? workspace,
 		),
 	)
-	lock = normalize(
-		resolve(
+	lock = Paths.normalize(
+		Paths.resolve(
 			root,
 			Env.var_str!("BLUEPRINT_LOCK") ?? "Blueprint.lock",
 		),
@@ -418,19 +696,37 @@ context! = || {
 			lock_path: lock,
 		},
 		target: Env.var_str!("BLUEPRINT_TARGET") ?? host_target!(),
+		provider,
 	})
 }
 
-## The configuration platform ships a host for these machines only.
-check_host! : () => Try({}, [UnsupportedHost])
-check_host! = ||
-	match Env.platform!() {
-		{ arch: X64, os: LINUX } => Ok({})
-		{ arch: AARCH64, os: LINUX } => Ok({})
-		{ arch: AARCH64, os: MACOS } => Ok({})
-		{ arch: X64, os: MACOS } => Ok({})
+## The System a machine is, when `blueprint` runs on it: the three a binary is
+## released for, and x86_64 Windows, where the host provider runs tasks.
+## Intel macOS is not one: current nixpkgs has dropped that
+## system, so no environment could be entered there. `x86_64-darwin` remains
+## a System a configuration may declare.
+supported_host : _ -> Try(Str, [UnsupportedHost])
+supported_host = |machine|
+	match machine {
+		{ arch: X64, os: LINUX } => Ok("x86_64-linux")
+		{ arch: AARCH64, os: LINUX } => Ok("aarch64-linux")
+		{ arch: AARCH64, os: MACOS } => Ok("aarch64-darwin")
+		{ arch: X64, os: WINDOWS } => Ok("x86_64-windows")
 		_ => Err(UnsupportedHost)
 	}
+
+expect supported_host({ arch: X64, os: LINUX }) == Ok("x86_64-linux")
+expect supported_host({ arch: AARCH64, os: LINUX }) == Ok("aarch64-linux")
+expect supported_host({ arch: AARCH64, os: MACOS }) == Ok("aarch64-darwin")
+expect supported_host({ arch: X64, os: MACOS }) == Err(UnsupportedHost)
+expect supported_host({ arch: X64, os: WINDOWS }) == Ok("x86_64-windows")
+expect supported_host({ arch: AARCH64, os: WINDOWS }) == Err(UnsupportedHost)
+
+check_host! : () => Try({}, [UnsupportedHost])
+check_host! = || {
+	_ = host_system!()?
+	Ok({})
+}
 
 ## The System this machine realises by default. Unsupported hosts fall back
 ## to the Linux default and fail later in check_host!.
@@ -439,14 +735,7 @@ host_target! = || host_system!() ?? "x86_64-linux"
 
 ## The System this executable itself runs on.
 host_system! : () => Try(Str, [UnsupportedHost])
-host_system! = ||
-	match Env.platform!() {
-		{ arch: X64, os: LINUX } => Ok("x86_64-linux")
-		{ arch: AARCH64, os: LINUX } => Ok("aarch64-linux")
-		{ arch: AARCH64, os: MACOS } => Ok("aarch64-darwin")
-		{ arch: X64, os: MACOS } => Ok("x86_64-darwin")
-		_ => Err(UnsupportedHost)
-	}
+host_system! = || supported_host(Env.platform!())
 
 ## A build runs this executable as its builder, so it must be built for the
 ## System the build runs on.
@@ -474,7 +763,7 @@ expect
 plain_path : Str -> Bool
 plain_path = |value|
 	value.starts_with("/")
-		and normalize(value) == value
+		and Paths.normalize(value) == value
 			and !value.to_utf8().any(
 				|byte| byte < 32 or byte == 127 or byte == '"' or byte == '\\' or byte == '$',
 			)
@@ -500,51 +789,17 @@ runner_executable! = |system| {
 	Ok(text)
 }
 
-resolve : Str, Str -> Str
-resolve = |root, value| if value.starts_with("/") value else "${root}/${value}"
-
-## Lexical normalization is separate from the runtime no-symlink check.
-normalize : Str -> Str
-normalize = |value| {
-	parts = value.split_on("/").fold(
-		[],
-		|acc, part|
-			match part {
-				"" | "." => acc
-				".." => acc.drop_last(1)
-				_ => acc.append(part)
-			},
-	)
-	"/${Str.join_with(parts, "/")}"
-}
-
-## Relative caller locations use the project root, not generated nesting.
-expect resolve("/project", "cache/nix") == "/project/cache/nix"
-
-## An out-of-tree caller location remains independent of the project root.
-expect resolve("/project", "/tmp/cache") == "/tmp/cache"
-
-## Equivalent lexical locations normalize before filesystem safety checks.
-expect normalize("/project/a/.././.blueprint/") == "/project/.blueprint"
-
-parent : Str -> Str
-parent = |value| {
-	parts = value.split_on("/").drop_last(1)
-	result = Str.join_with(parts, "/")
-	if result.is_empty() "/" else result
-}
-
 ## Refuse destination/source aliases before touching caller-owned files.
 safe_path! : Str => Try({}, _)
 safe_path! = |value| {
-	if !value.starts_with("/") or normalize(value) != value {
+	if !Paths.absolute(value) or Paths.normalize(value) != value {
 		return Err(UnsafePath(value))
 	}
 	if path(value).is_sym_link!()? {
 		return Err(UnsafePath(value))
 	}
-	if value != "/" {
-		safe_path!(parent(value))?
+	if Paths.parent(value) != value {
+		safe_path!(Paths.parent(value))?
 	}
 	Ok({})
 }
@@ -974,6 +1229,7 @@ copy_tree! = |source, target| {
 realise! : Spec, Request, Context => Try({}, _)
 realise! = |spec, request, ctx| {
 	layout = ctx.layout
+	provider = ctx.provider
 	_ = (provider.preflight)(spec, request, ctx.target, layout)
 		.map_err(|message| RenderFailed(message))?
 	if !(path(layout.lock_path).exists!()?) {
@@ -1004,17 +1260,20 @@ realise! = |spec, request, ctx| {
 		}
 	}
 	for step in steps.steps {
-		execute_step!(step, layout)?
+		execute_step!(step, ctx)?
 	}
 	Ok({})
 }
 
 ## One consumer-owned executor for standalone requests and workflow steps.
 ## All planning has succeeded before the first materialization or task effect.
-execute_step! : Steps.Step, Layout => Try({}, _)
-execute_step! = |step, layout| {
+execute_step! : Steps.Step, Context => Try({}, _)
+execute_step! = |step, ctx| {
+	layout = ctx.layout
 	var $files = step.files
 	var $roc_packages = []
+	var $roc_bundles = []
+	var $search = []
 	for operation in step.operations {
 		match operation {
 			VerifyTree({ path: local, digest }) => {
@@ -1044,6 +1303,16 @@ execute_step! = |step, layout| {
 					|file| { ..file, contents: file.contents.replace_each(executable, own) },
 				)
 			}
+			RocBundles(request) => {
+				$roc_bundles = $roc_bundles.append(request)
+			}
+			Fetch(archive) => {
+				_ = fetch!(archive, layout)?
+			}
+			Search(directories) => {
+				$search = $search.concat(directories)
+			}
+			Require(probes) => require!(probes, layout.project_root)?
 			# Locating the bundles reads the files staged below.
 			RocPackages(request) => {
 				$roc_packages = $roc_packages.append(request)
@@ -1052,11 +1321,14 @@ execute_step! = |step, layout| {
 	}
 	stage!($files, layout)?
 	for request in $roc_packages {
-		publish_roc_packages!(request.names, request.locate, layout.project_root)?
+		publish_roc_packages!(request.names, request.locate, layout.project_root, ctx.provider.name)?
+	}
+	for request in $roc_bundles {
+		publish_roc_bundles!(request.compiler, request.bundles, ctx)?
 	}
 	match step.action {
 		Build(name) => report_build!(step, name, layout.project_root)
-		_ => exec!(step.argv, layout.project_root).map_err(
+		_ => exec_within!(step.argv, layout.project_root, $search).map_err(
 			|err|
 				match (step.action, err) {
 					(Run(name), CommandFailed(_, code)) => TaskFailed(name, code)
@@ -1087,8 +1359,120 @@ expect roc_package_cache(Ok("cache".to_utf8()), Ok("/home/me".to_utf8()), "/proj
 expect roc_package_cache(Ok([0xff, '/', 'c']), Err(Unset), "/project".to_utf8()) == Ok("/project/".to_utf8().concat([0xff]).concat("/c/roc/packages".to_utf8()))
 expect roc_package_cache(Err(Unset), Err(Unset), "/project".to_utf8()) == Err(NoRocPackageCache)
 
+## Where Roc keeps URL packages on Windows, in the form held here: Roc reads
+## `XDG_CACHE_HOME` there too, then `LOCALAPPDATA`, and `HOME` last.
+windows_package_cache : Try(Str, _), Try(Str, _), Try(Str, _), Str -> Try(Str, [NoRocPackageCache])
+windows_package_cache = |xdg_cache_home, local_app_data, home, root| {
+	base = match (xdg_cache_home, local_app_data, home) {
+		(Ok(directory), _, _) => directory
+		(Err(_), Ok(directory), _) => directory
+		(Err(_), Err(_), Ok(directory)) => "${directory}/.cache"
+		(Err(_), Err(_), Err(_)) => return Err(NoRocPackageCache)
+	}
+	Ok(Paths.normalize("${Paths.resolve(root, base)}/roc/packages"))
+}
+
+expect windows_package_cache(Err(Unset), Ok("C:\\Users\\me\\AppData\\Local"), Ok("C:\\Users\\me"), "D:/a/project") == Ok("C:/Users/me/AppData/Local/roc/packages")
+expect windows_package_cache(Ok("D:\\cache"), Ok("C:\\Users\\me\\AppData\\Local"), Err(Unset), "D:/a/project") == Ok("D:/cache/roc/packages")
+expect windows_package_cache(Ok("cache"), Err(Unset), Err(Unset), "D:/a/project") == Ok("D:/a/project/cache/roc/packages")
+expect windows_package_cache(Err(Unset), Err(Unset), Ok("C:\\Users\\me"), "D:/a/project") == Ok("C:/Users/me/.cache/roc/packages")
+expect windows_package_cache(Err(Unset), Err(Unset), Err(Unset), "D:/a/project") == Err(NoRocPackageCache)
+
+## Roc's package cache on this host.
+roc_package_cache! : Str => Try(Path, _)
+roc_package_cache! = |root| {
+	unknown = |_| RocPackagesFailed("neither XDG_CACHE_HOME nor HOME says where Roc's package cache is")
+	match Env.platform!().os {
+		WINDOWS => {
+			text! = |name| Env.var_str!(OsStr.from_str(name))
+			directory = windows_package_cache(text!("XDG_CACHE_HOME"), text!("LOCALAPPDATA"), text!("HOME"), root)
+				.map_err(|_| RocPackagesFailed("none of XDG_CACHE_HOME, LOCALAPPDATA and HOME says where Roc's package cache is"))?
+			Ok(path(directory))
+		}
+		_ => {
+			xdg_cache_home = Env.var!(OsStr.from_str("XDG_CACHE_HOME")).map_ok(|value| value.to_bytes())
+			home = Env.var!(OsStr.from_str("HOME")).map_ok(|value| value.to_bytes())
+			Ok(Path.unix_bytes(roc_package_cache(xdg_cache_home, home, root.to_utf8()).map_err(unknown)?))
+		}
+	}
+}
+
+## An entry of a directory, in the directory's own representation.
 child : Path, Str -> Path
-child = |directory, name| Path.unix_bytes(directory.to_os_str().to_bytes().append('/').concat(name.to_utf8()))
+child = |directory, name| directory.join(name)
+
+## A directory of its own in Roc's package cache, for whatever is being
+## published as `name`. It is renamed to end in `.tmp`: Roc sweeps directories
+## of that name from its cache once they are a day old, so one abandoned by a
+## killed process does not stay forever.
+roc_package_staging! : Path, Str => Try(Path, _)
+roc_package_staging! = |cache, name| {
+	failed = |err| RocPackagesFailed("cannot stage Roc package ${name} in ${cache.display()}: ${Str.inspect(err)}")
+	created = Env.create_temp_dir_in!(cache, "blueprint-${name}.").map_err(failed)?
+	staging = match created.filename() {
+		Ok(own) => child(cache, "${own.display()}.tmp")
+		Err(err) => {
+			_ = created.delete_all!()
+			return Err(failed(err))
+		}
+	}
+	match created.rename!(staging) {
+		Ok({}) => Ok(staging)
+		Err(err) => {
+			_ = created.delete_all!()
+			Err(failed(err))
+		}
+	}
+}
+
+## Make each named bundle resolvable by Roc without Nix (see `RocBundles` in
+## `Steps.Operation`): the provider's argv download a missing one and the
+## compiler unpacks it, which fails unless the bytes are those the bundle's
+## name is the hash of. A bundle that is already there is left alone, and when
+## none is missing nothing runs.
+publish_roc_bundles! : Str, List({ name : Str, download : List(Str), unbundle : List(Str) }), Context => Try({}, _)
+publish_roc_bundles! = |placeholder, bundles, ctx| {
+	cache = roc_package_cache!(ctx.layout.project_root)?
+	var $missing = []
+	for bundle in bundles {
+		if !Project.valid_name(bundle.name) {
+			return Err(RocPackagesFailed("invalid Roc package name: ${bundle.name}"))
+		}
+		if !roc_package_present!(cache, bundle.name) {
+			$missing = $missing.append(bundle)
+		}
+	}
+	if $missing.is_empty() {
+		return Ok({})
+	}
+	compiler = roc!(ctx)?
+	cache.create_all!().map_err(|_| RocPackagesFailed("cannot create Roc's package cache ${cache.display()}"))?
+	for bundle in $missing {
+		fresh = roc_package_staging!(cache, "${bundle.name}.download")?
+		unbundle! = || {
+			Stderr.line!("blueprint: fetching Roc package ${bundle.name}")?
+			roc_bundle_exec!(bundle.download, fresh, bundle.name)?
+			roc_bundle_exec!(bundle.unbundle.map(|arg| arg.replace_each(placeholder, compiler)), fresh, bundle.name)?
+			publish_roc_package!(cache, bundle.name, child(fresh, bundle.name))
+		}
+		result = unbundle!()
+		cleanup = fresh.delete_all!()
+		result?
+		cleanup.map_err(|_| RocPackagesFailed("published Roc package ${bundle.name} but could not delete ${fresh.display()}"))?
+	}
+	Ok({})
+}
+
+## Run one argv of a bundle's fetch in its fresh directory.
+roc_bundle_exec! : List(Str), Path, Str => Try({}, _)
+roc_bundle_exec! = |argv, directory, name|
+	match argv {
+		[program, .. as args] =>
+			Cmd.new_str(program).args_str(args).cwd(directory).exec_cmd!()
+				.map_err(|_| RocPackagesFailed("cannot fetch Roc package ${name}: `${Str.join_with(argv, " ")}` failed; nothing was published"))
+
+		[] => Err(RocPackagesFailed("the provider cannot fetch Roc package ${name}"))
+	}
 
 ## Roc resolves a URL package from `<cache>/<hash>/main.roc` alone.
 roc_package_present! : Path, Str => Bool
@@ -1099,14 +1483,9 @@ roc_package_present! = |cache, name| child(child(cache, name), "main.roc").is_fi
 ## whether Roc downloaded it or an earlier run published it, is left alone, and
 ## when none is missing the provider is not asked anything. Roc may lose its
 ## cache at any time; the next run publishes again.
-publish_roc_packages! : List(Str), List(Str), Str => Try({}, _)
-publish_roc_packages! = |names, locate, root| {
-	xdg_cache_home = Env.var!(OsStr.from_str("XDG_CACHE_HOME")).map_ok(|value| value.to_bytes())
-	home = Env.var!(OsStr.from_str("HOME")).map_ok(|value| value.to_bytes())
-	cache = Path.unix_bytes(
-		roc_package_cache(xdg_cache_home, home, root.to_utf8())
-			.map_err(|_| RocPackagesFailed("neither XDG_CACHE_HOME nor HOME says where Roc's package cache is"))?,
-	)
+publish_roc_packages! : List(Str), List(Str), Str, Str => Try({}, _)
+publish_roc_packages! = |names, locate, root, provider| {
+	cache = roc_package_cache!(root)?
 	var $missing = []
 	for name in names {
 		if !Project.valid_name(name) {
@@ -1119,28 +1498,28 @@ publish_roc_packages! = |names, locate, root| {
 	if $missing.is_empty() {
 		return Ok({})
 	}
-	located = locate_roc_packages!(locate, root)?
+	located = locate_roc_packages!(locate, root, provider)?
 	cache.create_all!().map_err(|_| RocPackagesFailed("cannot create Roc's package cache ${cache.display()}"))?
 	for name in $missing {
 		bundle = located.find_first(|entry| entry.name == name)
-			.map_err(|_| RocPackagesFailed("the ${provider.name} provider did not locate Roc package ${name}"))?
+			.map_err(|_| RocPackagesFailed("the ${provider} provider did not locate Roc package ${name}"))?
 		publish_roc_package!(cache, name, path(bundle.path))?
 	}
 	Ok({})
 }
 
 ## Run the provider's argv; it prints where each locked bundle is unpacked.
-locate_roc_packages! : List(Str), Str => Try(List(RocPackage), _)
-locate_roc_packages! = |argv, root|
+locate_roc_packages! : List(Str), Str, Str => Try(List(RocPackage), _)
+locate_roc_packages! = |argv, root, provider|
 	match argv {
 		[program, .. as args] => {
 			output = Cmd.new_str(program).args_str(args).cwd(path(root)).stderr(Inherit).exec_output!()
 				.map_err(|_| RocPackagesFailed("could not locate the locked Roc packages with `${Str.join_with(argv, " ")}`"))?
 			located : Try(List(RocPackage), _)
 			located = Json.parse(output.stdout_utf8)
-			located.map_err(|_| RocPackagesFailed("the ${provider.name} provider did not say where the locked Roc packages are"))
+			located.map_err(|_| RocPackagesFailed("the ${provider} provider did not say where the locked Roc packages are"))
 		}
-		[] => Err(RocPackagesFailed("the ${provider.name} provider cannot locate Roc packages"))
+		[] => Err(RocPackagesFailed("the ${provider} provider cannot locate Roc packages"))
 	}
 
 ## Publish one bundle as `<cache>/<name>`. The provider has already verified
@@ -1148,27 +1527,15 @@ locate_roc_packages! = |argv, root|
 ##
 ## Every Roc process reads this cache, so `main.roc` must never appear before
 ## the rest. The tree is copied into a staging directory in the cache
-## directory itself and then renamed into place, which is atomic. The staging
-## directory is renamed to end in `.tmp` first: Roc sweeps directories of that
-## name from its cache once they are a day old, so one abandoned by a killed
-## process does not stay forever. Whatever happens, it is deleted on the way
-## out.
+## directory itself and then renamed into place, which is atomic. Whatever
+## happens, the staging directory is deleted on the way out.
 publish_roc_package! : Path, Str, Path => Try({}, _)
 publish_roc_package! = |cache, name, source| {
 	if !(source.join("main.roc").is_file!() ?? False) {
 		return Err(RocPackagesFailed("locked Roc package ${name} has no main.roc in ${source.display()}"))
 	}
 	final = child(cache, name)
-	created = Env.create_temp_dir_in!(cache, "blueprint-${name}.")
-		.map_err(|err| RocPackagesFailed("cannot stage Roc package ${name} in ${cache.display()}: ${Str.inspect(err)}"))?
-	staging = Path.unix_bytes(created.to_os_str().to_bytes().concat(".tmp".to_utf8()))
-	match created.rename!(staging) {
-		Ok({}) => {}
-		Err(err) => {
-			_ = created.delete_all!()
-			return Err(RocPackagesFailed("cannot stage Roc package ${name} in ${cache.display()}: ${Str.inspect(err)}"))
-		}
-	}
+	staging = roc_package_staging!(cache, name)?
 	publish! = || {
 		# The staging directory is private (mode 0700); the package is a
 		# child with ordinary permissions, so it can be deleted like any other.
@@ -1207,7 +1574,14 @@ publish_roc_package! = |cache, name, source| {
 copy_roc_package! : Path, Path => Try({}, _)
 copy_roc_package! = |source, target| {
 	for entry in source.list!()? {
-		copy = Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(basename(entry.to_os_str().to_bytes())))
+		copy = match entry.to_raw() {
+			# Windows has no path of bytes; a name there is text or it is refused.
+			WindowsU16s(_) => {
+				own = entry.filename().map_err(|_| RocPackagesFailed("Roc package holds an entry without a name: ${entry.display()}"))?
+				child(target, own.to_str().map_err(|_| RocPackagesFailed("Roc package holds a name that is not text: ${entry.display()}"))?)
+			}
+			_ => Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(basename(entry.to_os_str().to_bytes())))
+		}
 		match entry.type!()? {
 			IsDir => {
 				copy.create_dir!()?
@@ -1258,10 +1632,28 @@ stage! = |files, layout| {
 		safe_path!(file.path)?
 	}
 	for file in files {
-		path(parent(file.path)).create_all!()?
+		path(Paths.parent(file.path)).create_all!()?
 		atomic_write!(file.path, file.contents)?
 	}
-	Ok({})
+	if files.is_empty() {
+		Ok({})
+	} else {
+		ignore_generated!(layout)
+	}
+}
+
+## Generated state is not for version control, so the generated root ignores
+## its own contents. The file is written once and never again: what a caller
+## put there stays, and an unchanged project stages nothing new.
+ignore_generated! : Layout => Try({}, _)
+ignore_generated! = |layout| {
+	ignore = Layout.ignore_file(layout)
+	safe_path!(ignore)?
+	if path(ignore).exists!()? {
+		Ok({})
+	} else {
+		atomic_write!(ignore, "*\n")
+	}
 }
 
 list_tasks! : Spec => Try({}, _)
@@ -1276,6 +1668,7 @@ list_tasks! = |spec| {
 resolve! : Spec, List(Str), Context => Try({}, _)
 resolve! = |spec, names, ctx| {
 	layout = ctx.layout
+	provider = ctx.provider
 	safe_path!(layout.lock_path)?
 	prior = authority_token!(layout.lock_path)?
 	update = if names.is_empty() {
@@ -1317,7 +1710,7 @@ resolve! = |spec, names, ctx| {
 	resolved = (provider.lock_from_native)(spec, layout, path(native_lock).read_utf8!()?, $trees)
 		.map_err(|message| LockFailed(message))?
 	lock = { ..resolved, intent: Lock.intent_of(spec) }
-	path(parent(layout.lock_path)).create_all!()?
+	path(Paths.parent(layout.lock_path)).create_all!()?
 	publish_authority!(layout.lock_path, prior, lock.to_str())
 }
 
@@ -1328,7 +1721,7 @@ resolve! = |spec, names, ctx| {
 publish_authority! : Str, Str, Str => Try({}, _)
 publish_authority! = |destination, prior, contents| {
 	temporary = Env.create_temp_dir_in!(
-		path(parent(destination)),
+		path(Paths.parent(destination)),
 		".blueprint-write-",
 	)?
 	publish! = || {
@@ -1352,7 +1745,7 @@ publish_authority! = |destination, prior, contents| {
 atomic_write! : Str, Str => Try({}, _)
 atomic_write! = |destination, contents| {
 	temporary = Env.create_temp_dir_in!(
-		path(parent(destination)),
+		path(Paths.parent(destination)),
 		".blueprint-write-",
 	)?
 	publish! = || {
@@ -1369,12 +1762,15 @@ atomic_write! = |destination, contents| {
 path : Str -> Path
 path = |p| Path.from_os_str(OsStr.from_str(p))
 
-describe : _ -> Str
-describe = |err|
+## `provider` names the provider the run selected.
+describe : _, Str -> Str
+describe = |err, provider|
 	match err {
 		NoBlueprint => "there is no Blueprint.roc in the selected project root"
 		UnsupportedHost =>
-			"Blueprint.roc execution requires Linux or macOS on x86_64 or arm64; "
+			"blueprint runs on x86_64 Linux, arm64 Linux and Apple Silicon macOS, "
+				.concat("and on x86_64 Windows to run tasks only; ")
+				.concat("Intel macOS is not supported. ")
 				.concat("Systems/BLUEPRINT_TARGET describe outputs, ")
 				.concat("not compiler host support")
 		CompilerFailed(message) =>
@@ -1383,14 +1779,16 @@ describe = |err|
 				.concat("or set ROC to its executable:\n${message}")
 		LockFailed(message) => "${message}; use `blueprint update` to initialize "
 			.concat("or deliberately refresh pins")
+		UnknownProvider(name) => "BLUEPRINT_PROVIDER selects the host provider with `host` and takes no other value, not ${Str.inspect(name)}"
 		UnsafePath(value) => "refusing unsafe or symlinked runtime path: ${value}"
 		Refused(message) => message
 		BadSpec(InvalidSexpr(msg)) => "could not read the Spec from Blueprint.roc: ${msg}"
 		BadSpec(UnsupportedFormat({ major, minor })) => "Spec format ${U64.to_str(major)}.${U64.to_str(minor)} is not supported by this blueprint (understands major ${Spec.current_format.major.to_str()}); upgrade blueprint or change the platform version"
 		NeedsFeatures(missing) => "Blueprint.roc needs features: ${Str.join_with(missing, ", ")}; upgrade blueprint"
 		InvalidProject(msg) => "invalid Spec project: ${msg}"
-		RenderFailed(msg) => "cannot generate the ${provider.name} files: ${msg}"
+		RenderFailed(msg) => "cannot generate the ${provider} files: ${msg}"
 		RocPackagesFailed(msg) => msg
+		FetchFailed(msg) => msg
 		BadSpec(MissingRequiredField("format")) => "Blueprint.roc uses an older roc-blueprint platform that this blueprint can't read; update the platform URL in its app header to a current release"
 		BadSpec(MissingRequiredField(field)) => "the Spec from Blueprint.roc is missing ${field}"
 		NonZeroExitCode({ command, exit_code, stderr_utf8_lossy, .. }) =>
