@@ -28,6 +28,7 @@ Using it for the first time:: Follow <<get-started>>.
 Writing a configuration:: <<write-blueprint-roc>> describes every setting, and
 <<build-artifacts-and-run-workflows>> the sandboxed builds.
 Looking up a command or variable:: See <<run-blueprint>>.
+Running a project's tasks on Windows:: Read <<run-tasks-on-windows>>.
 Looking for a project to adapt:: Browse <<learn-from-the-examples>>.
 Writing a provider or judging a design change:: Read
 <<understand-the-architecture>> and <<the-spec-the-lock-and-providers>>.
@@ -45,6 +46,8 @@ include::configuration.adoc[leveloffset=+1]
 include::builds.adoc[leveloffset=+1]
 
 include::commands.adoc[leveloffset=+1]
+
+include::windows.adoc[leveloffset=+1]
 
 include::examples.adoc[leveloffset=+1]
 

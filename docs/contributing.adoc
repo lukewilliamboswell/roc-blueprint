@@ -186,7 +186,13 @@ concurrent publication. `scripts/test_isolation.roc` checks what a build stages
 about its caller: the namespace identities, the CLI's own path as the runner,
 and the refusals when either cannot be used. Both put a failing
 `python3` on `PATH`: the CLI itself must not use a host Python.
-These three are Roc scripts, run from the repository root with `./blueprint`
+`scripts/test_host.roc` runs the provider Windows uses, on this machine:
+`BLUEPRINT_PROVIDER=host` selects it in place of Nix, and takes no other
+value. curl, tar, `roc-stable` and zig are stubs, so it shows the order of
+effects, each argv, what is refused and that a token is never an argument or
+printed. It shows nothing about Windows itself; see
+xref:maintaining.adoc#what-remains-for-windows[What remains for Windows].
+These are Roc scripts, run from the repository root with `./blueprint`
 built; `ROC` names the compiler. They replace every tool the CLI runs with one
 program, `scripts/stubs/tool.roc`, which each test builds once and installs
 under several names (`roc-record`, `roc-wire`, `roc-probe`, `nix`, `guix`,

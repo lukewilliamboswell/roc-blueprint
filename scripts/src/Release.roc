@@ -17,6 +17,9 @@ Release := [].{
 	## A released system: Nix's name for it and Roc's target.
 	System : { system : Str, target : Str }
 
+	## TODO(#40): no Windows binary is built, though the CLI can run tasks
+	## there. It waits on a compiler and a basic-cli release that cross-link
+	## one; see "What remains for Windows" in docs/maintaining.adoc.
 	systems : List(System)
 	systems = [
 		{ system: "x86_64-linux", target: "x64musl" },

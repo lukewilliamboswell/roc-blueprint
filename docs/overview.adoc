@@ -56,13 +56,17 @@ and the rules that keep it independent of any one package ecosystem.
 | Apple Silicon macOS
 | Shells, tasks and workflows of tasks. No sandboxed builds.
 
+| x86_64 Windows
+| Tasks and workflows of tasks only, without Nix. No binary is released yet;
+  see xref:windows.adoc#run-tasks-on-windows[Run tasks on Windows].
+
 | Intel macOS
 | Not supported. `blueprint` stops with a message naming the supported
   systems. Current nixpkgs has dropped the system, so an environment could
   not be entered there.
 |===
 
-A `blueprint` binary is released for each supported system. It needs
+A `blueprint` binary is released for each supported system except Windows. It needs
 https://nixos.org/download[Nix] with flakes enabled, and nothing else: no Roc
 and no Python.
 
@@ -72,9 +76,10 @@ have. It does not install anything and is not evidence that a target runs:
 
 == What it does not do
 
-* Nix is the only provider that renders and executes. A source may state Guix
+* Nix is the only provider that builds an environment. A source may state Guix
   intent, and its compatibility is validated, but there is no Guix renderer or
-  executor.
+  executor. On Windows a second provider runs tasks with what the machine
+  already has and installs nothing.
 * There is no parallel workflow scheduler: steps run in order.
 * Tasks and the evaluation of `Blueprint.roc` are not sandboxed; only builds
   are.

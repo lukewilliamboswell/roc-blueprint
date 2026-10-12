@@ -14,6 +14,10 @@ To move the product compiler:
 . Set the compiler and overlay in `fixtures/roc-inputs.lock.json` to match.
 . Move the basic-cli release in `blueprint-cli/main.roc`, the fixtures, the
    examples and `rocPackages` in `flake.nix` if the nightly needs a newer one.
+. Replace the entries of `compilers` in `blueprint-host/HostProvider.roc`
+   with the nightly's tag and the SHA-256 of each of its compiler archives,
+   which `gh release view <tag> --repo roc-lang/nightlies --json assets`
+   reports. `scripts/test.roc static` fails until the tag is there.
 . Set the hash of `rocGlueSpec` in `flake.nix` to that of the nightly's
    source archive, which `nix build .#roc-glue-spec` reports, and run
    `scripts/check_glue.roc --update`. Commit the bindings it changes together
@@ -237,6 +241,52 @@ and `fixtures/consumer/main.roc`, then update the matching entry in `rocPackages
 in `flake.nix` with the new URL and hash (`nix store prefetch-file <url>`). Add
 any new transitive dependency to the same list. Rerun `scripts/test.roc`.
 If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
+
+== What remains for Windows
+
+https://github.com/lukewilliamboswell/roc-blueprint/issues/40[Issue #40] asks
+for `blueprint run` on Windows. The part that needs nothing from upstream is
+merged: the host provider in `blueprint-host/`, which
+xref:windows.adoc#run-tasks-on-windows[Run tasks on Windows] describes. It is
+tested on Linux only. No Windows binary is built or released, and the platform
+has no Windows target, so a Windows user cannot run any of it yet.
+
+TODO(#40): the rest waits on three things upstream.
+
+* roc-overlay must package a nightly at or after `nightly-2026-10-11-7d256b9`,
+  the first that links a Windows program from the inputs a platform lists and
+  so can cross-link one on Linux, without the Windows SDK.
+* basic-cli must release a version whose `x64win` target lists a startup
+  object and a C runtime, which that nightly requires. The CLI is a basic-cli
+  program and does not link for Windows without it.
+* roc-platform-template-zig must publish a linker-inputs release with the
+  Windows startup inputs, for this repository's own Zig host.
+
+When they exist, in one pull request:
+
+. Move the product compiler to that nightly, as <<move-a-compiler>> describes,
+  with the basic-cli release and `link-inputs.lock.json`.
+. Add the platform's `x64win` target: `blueprint-platform/build.zig`, the
+  `targets:` section of `blueprint-platform/main.roc`, and the bundle and
+  artifact globs, which must learn `host.lib`.
+. Cross-build `blueprint-x86_64-windows.exe` in `scripts/src/Release.roc`.
+. Add a `.gitattributes` that keeps line endings as they are committed.
+. Add a `windows-latest` job that runs the cross-built binary on a committed
+  `Blueprint.roc` and `Blueprint.lock`, the lock written on Linux.
+. Attach the binary to the release and add its line to `blueprint.sha256`.
+  The existing asset names do not change.
+. Check each claim in the Windows chapter on that runner, and remove the
+  notice at its head.
+
+Known limits of what is merged, to settle then:
+
+* `roc-stable` is checked against a digest asked of GitHub at run time, not
+  one recorded in `Blueprint.lock` (xref:architecture.adoc#inv-3[invariant 3]).
+  `blueprint update` could record it.
+* curl and tar are run from `C:/Windows/System32`. A provider cannot ask where
+  Windows is installed.
+* A project whose evaluating compiler and `roc-stable` are the same nightly
+  downloads it twice.
 
 == Upstream workarounds still in place
 

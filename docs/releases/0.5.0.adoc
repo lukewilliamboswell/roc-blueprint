@@ -47,6 +47,9 @@ be no further `core-X.Y.Z` releases.
   a configuration may list.
 * `nix run github:lukewilliamboswell/roc-blueprint/0.5.0` works on arm64
   Linux.
+* The code that will run tasks on Windows without Nix is included, but this
+  release has no Windows binary and its platform has no Windows target, so
+  Windows cannot use it yet.
 
 == Documentation and examples
 
