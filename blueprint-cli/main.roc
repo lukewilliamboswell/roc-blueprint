@@ -18,6 +18,7 @@ import pf.Path
 import pf.Stdout
 import pf.Stderr
 import weaver.Cli
+import weaver.Opt
 import weaver.Param
 import weaver.SubCmd
 import core.Spec
@@ -61,6 +62,7 @@ Command : [
 	Workflow(Str),
 	Tasks,
 	Update(List(Str)),
+	Requirements({ json : Bool, tasks : List(Str) }),
 	Check,
 	PrintSpec,
 	PrintFlake,
@@ -103,6 +105,13 @@ cli_for = |loaded| {
 			|names| Update(names),
 		),
 		{ name: "update", description: "Update Blueprint.lock: the latest inputs, and the digests of fetched programs", mapper: |c| c },
+	)
+	requirements_cmd = SubCmd.finish(
+		{
+			json: Opt.flag({ short: "", long: "json", help: "Print the report as JSON, for a program to read." }),
+			tasks: Param.str_list({ name: "tasks", help: "The tasks to report on; every task when none is given." }),
+		}.Cli,
+		{ name: "requirements", description: "Say what tasks need: a provider, fetched programs, tools of the machine", mapper: |r| Requirements(r) },
 	)
 	workflow_cmd = SubCmd.finish(
 		Cli.map(
@@ -176,6 +185,7 @@ cli_for = |loaded| {
 				workflow_cmd,
 				SubCmd.empty({ name: "tasks", description: "List the tasks", value: Tasks }),
 				update_cmd,
+				requirements_cmd,
 				SubCmd.empty({ name: "check", description: "Validate Blueprint.roc", value: Check }),
 				SubCmd.empty({ name: "spec", description: "Print the Spec", value: PrintSpec }),
 				SubCmd.empty({ name: "flake", description: "Print the generated files", value: PrintFlake }),
@@ -264,6 +274,7 @@ run! = |command, loaded, context| {
 				Workflow(name) => realise!(spec, Request.Workflow(name), ctx)
 				Tasks => list_tasks!(spec)
 				Update(names) => resolve!(spec, names, ctx)
+				Requirements({ json, tasks }) => report_requirements!(spec, json, tasks, ctx)
 				PrintSpec => Stdout.write!(spec.to_str())
 				PrintFlake => print_files!(spec)
 				Check => check!(loaded, ctx)
@@ -1498,6 +1509,90 @@ ignore_generated! = |layout| {
 		Ok({})
 	} else {
 		atomic_write!(ignore, "*\n")
+	}
+}
+
+## What tasks need on the target System, from the Spec alone: nothing is
+## looked up on PATH, in the store or in the Lock, so the report can be asked
+## for before anything is installed and says the same wherever it is asked.
+report_requirements! : Spec, Bool, List(Str), Context => Try({}, _)
+report_requirements! = |spec, json, tasks, ctx| {
+	needs = Realise.requirements(spec, ctx.target, tasks, providers).map_err(|problems| PlanFailed(problems))?
+	Stdout.write!(if json requirements_json(needs) else requirements_text(needs))
+}
+
+## The report for a reader: the System, the providers the tasks need between
+## them, then each task with what supplies its environment.
+requirements_text : Realise.Requirements -> Str
+requirements_text = |needs| {
+	listed = |what, names| if names.is_empty() [] else ["${what} ${Str.join_with(names, ", ")}"]
+	task = |entry| {
+		parts = (if entry.providers.is_empty() [] else ["${if entry.providers.len() == 1 "provider" else "providers"} ${Str.join_with(entry.providers, ", ")} (${Str.join_with(entry.tools, ", ")})"])
+			.concat(listed("programs", entry.programs))
+			.concat(listed("unavailable on ${needs.system}:", entry.unavailable))
+			.concat(listed("expects", entry.expects))
+			.concat(if entry.roc_packages == 0 [] else ["roc packages ${entry.roc_packages.to_str()}"])
+		"task ${entry.task} [${entry.environment}]: ${if parts.is_empty() "nothing to supply" else Str.join_with(parts, "; ")}"
+	}
+	Str.join_with(
+		["system ${needs.system}", "providers: ${if needs.providers.is_empty() "none" else Str.join_with(needs.providers, ", ")}"]
+			.concat(needs.tasks.map(task))
+			.concat([""]),
+		"\n",
+	)
+}
+
+## The report for a program, as JSON whose shape `format` numbers: a change
+## that a reader of format 1 could misread gets another number.
+##
+## `providers` holds the name of every provider that must be on the machine
+## to run the reported tasks on `system`: a provider is there exactly when
+## one of those tasks has, in its environment on that System, a tool from a
+## package source the provider supplies. A source that is declared and that
+## no reported task uses does not put its provider there; neither does a
+## shell, a build or `blueprint update`, which are not tasks. Each task
+## repeats the question for itself. `expects` are the programs the machine
+## must already have, and `unavailable` the fetched programs that do not
+## exist for `system`.
+requirements_json : Realise.Requirements -> Str
+requirements_json = |needs| {
+	texts = |items| "[${Str.join_with(items.map(|item| Json.to_str(item)), ",")}]"
+	task = |entry|
+		"{\"name\":${Json.to_str(entry.task)},\"environment\":${Json.to_str(entry.environment)},\"providers\":${texts(entry.providers)},\"tools\":${texts(entry.tools)},\"programs\":${texts(entry.programs)},\"unavailable\":${texts(entry.unavailable)},\"expects\":${texts(entry.expects)},\"roc_packages\":${entry.roc_packages.to_str()}}"
+	tasks = if needs.tasks.is_empty() "[]" else "[\n ${Str.join_with(needs.tasks.map(task), ",\n ")}]"
+	"{\"format\":${requirements_format.to_str()},\"system\":${Json.to_str(needs.system)},\"providers\":${texts(needs.providers)},\"expects\":${texts(needs.expects)},\"tasks\":${tasks}}\n"
+}
+
+## The number of the JSON report's shape.
+requirements_format : U64
+requirements_format = 1
+
+needs_sample : Realise.Requirements
+needs_sample = {
+	system: "x86_64-linux",
+	providers: ["guix"],
+	expects: ["gh", "git"],
+	tasks: [
+		{ task: "check", environment: "dev", providers: [], tools: [], programs: ["roc-stable", "tool"], unavailable: [], expects: ["gh", "git"], roc_packages: 2 },
+		{ task: "host", environment: "zig", providers: ["guix"], tools: ["stable#zigpkgs.\"0.16.0\"", "guix#git"], programs: ["roc-stable"], unavailable: ["tool"], expects: ["git"], roc_packages: 0 },
+		{ task: "hello", environment: "plain", providers: [], tools: [], programs: [], unavailable: [], expects: [], roc_packages: 0 },
+	],
+}
+
+expect requirements_text(needs_sample) == "system x86_64-linux\nproviders: guix\ntask check [dev]: programs roc-stable, tool; expects gh, git; roc packages 2\ntask host [zig]: provider guix (stable#zigpkgs.\"0.16.0\", guix#git); programs roc-stable; unavailable on x86_64-linux: tool; expects git\ntask hello [plain]: nothing to supply\n"
+expect requirements_text({ system: "aarch64-darwin", providers: [], expects: [], tasks: [] }) == "system aarch64-darwin\nproviders: none\n"
+
+# Every field is always there, in one order, and a name is quoted as JSON.
+expect requirements_json(needs_sample) == "{\"format\":1,\"system\":\"x86_64-linux\",\"providers\":[\"guix\"],\"expects\":[\"gh\",\"git\"],\"tasks\":[\n {\"name\":\"check\",\"environment\":\"dev\",\"providers\":[],\"tools\":[],\"programs\":[\"roc-stable\",\"tool\"],\"unavailable\":[],\"expects\":[\"gh\",\"git\"],\"roc_packages\":2},\n {\"name\":\"host\",\"environment\":\"zig\",\"providers\":[\"guix\"],\"tools\":[\"stable#zigpkgs.\\\"0.16.0\\\"\",\"guix#git\"],\"programs\":[\"roc-stable\"],\"unavailable\":[\"tool\"],\"expects\":[\"git\"],\"roc_packages\":0},\n {\"name\":\"hello\",\"environment\":\"plain\",\"providers\":[],\"tools\":[],\"programs\":[],\"unavailable\":[],\"expects\":[],\"roc_packages\":0}]}\n"
+expect requirements_json({ system: "aarch64-darwin", providers: [], expects: [], tasks: [] }) == "{\"format\":1,\"system\":\"aarch64-darwin\",\"providers\":[],\"expects\":[],\"tasks\":[]}\n"
+
+# What is written is JSON a program reads back whole.
+expect {
+	parsed : Try({ format : U64, system : Str, providers : List(Str), expects : List(Str), tasks : List({ name : Str, environment : Str, providers : List(Str), tools : List(Str), programs : List(Str), unavailable : List(Str), expects : List(Str), roc_packages : U64 }) }, _)
+	parsed = Json.parse(requirements_json(needs_sample))
+	match parsed {
+		Ok(read) => read.format == 1 and read.providers == ["guix"] and read.tasks.map(|entry| (entry.name, entry.providers, entry.roc_packages)) == [("check", [], 2), ("host", ["guix"], 0), ("hello", [], 0)] and read.tasks.map(|entry| entry.tools) == [[], ["stable#zigpkgs.\"0.16.0\"", "guix#git"], []]
+		Err(_) => False
 	}
 }
 

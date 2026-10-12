@@ -436,7 +436,12 @@ Realise :: [].{
 	}
 
 	## The tasks asked about, with every provider and expected program any of
-	## them needs, each once in first-use order.
+	## them needs, each once in first-use order. `providers` names a provider
+	## exactly when one of these tasks has, in its environment on the System,
+	## a tool from a package source that provider supplies: it is what must
+	## be on the machine to run them. A source that is declared and that none
+	## of these tasks uses does not put its provider there, and neither does
+	## what is not a task: a shell, a build, or resolving the Lock.
 	Requirements : { system : Str, providers : List(Str), expects : List(Str), tasks : List(Requirement) }
 
 	## What the named tasks need on a System, or every task when none is
@@ -888,3 +893,36 @@ expect {
 
 expect Realise.unknown_names(["nope", "gone"], ["nix", "roc"], ["roc-stable"]) == "no input or program named nope, gone; Blueprint.roc declares the inputs nix, roc and the programs roc-stable"
 expect Realise.unknown_names(["nope"], [], []) == "no input or program named nope; Blueprint.roc declares no input and no program"
+
+# A provider is required by use, not by declaration. A project that declares
+# a Nix source none of its tasks uses needs no provider to run them; one tool
+# of that source in one task's environment requires it, for that task alone.
+expect {
+	declared = { ..sample, environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), tasks: sample.tasks.keep_if(|task| ["hello", "script", "check"].contains(task.name)), shells: [], builds: [], workflows: [] }
+	used = { ..declared, environments: declared.environments.append({ name: "host", parents: ["dev"], tools: [{ source: "nix", name: "zig" }], overlays: [] }), tasks: declared.tasks.append({ name: "host", environment: "host", run: ["zig", "build"] }) }
+	declared.sources.any(|source| (stub.realises)(source.provider))
+		and Realise.requirements(declared, "x86_64-linux", [], [stub]).map_ok(|needs| (needs.providers, needs.tasks.map(|entry| entry.providers))) == Ok(([], [[], [], []]))
+			and Realise.requirements(used, "x86_64-linux", [], [stub]).map_ok(|needs| (needs.providers, needs.tasks.map(|entry| entry.providers))) == Ok((["nix"], [[], [], [], ["nix"]]))
+				# Asked about the tasks that do not use it, the answer is still none.
+				and Realise.requirements(used, "x86_64-linux", ["hello", "check"], [stub]).map_ok(|needs| needs.providers) == Ok([])
+}
+
+# A tool declared for one System requires its provider there and nowhere else.
+expect {
+	scoped = {
+		..sample,
+		requires_: sample.requires_.append("system-tools"),
+		environments: [{ name: "plain", parents: [], tools: [], overlays: [] }],
+		system_tools: [{ environment: "plain", system: "x86_64-linux", tools: [{ source: "nix", name: "wayland" }] }],
+		environment_programs: [],
+		expects: [],
+		roc_packages: [],
+		build_sources: [],
+		shells: [],
+		tasks: [{ name: "hello", environment: "plain", run: ["hello"] }],
+		builds: [],
+		workflows: [],
+	}
+	Realise.requirements(scoped, "x86_64-linux", [], [stub]).map_ok(|needs| (needs.providers, needs.tasks.map(|entry| entry.tools))) == Ok((["nix"], [["nix#wayland"]]))
+		and Realise.requirements(scoped, "aarch64-darwin", [], [stub]).map_ok(|needs| (needs.providers, needs.tasks.map(|entry| entry.tools))) == Ok(([], [[]]))
+}

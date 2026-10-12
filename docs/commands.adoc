@@ -31,6 +31,9 @@ Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 | `blueprint update NAME...`
 | Update only the named package sources, inputs, build sources and fetched programs, keeping everything else of a lock that is current for `Blueprint.roc`. Local `path:` inputs are read again either way. A named program is downloaded again whether or not its URLs changed
 
+| `blueprint requirements [--json] [TASK...]`
+| Say what the named tasks need, or every task: a provider, fetched programs, tools of the machine. See <<what-tasks-need>>
+
 | `blueprint check`
 | Run the compiler check and validate all shell/task/build environments without requiring a lock
 
@@ -61,6 +64,71 @@ structural validation and required-feature checks still apply. Full rendering
   named `nixpkgs`, so the generated flake gives that name to the first Nix
   package source declared and that bash is pinned by `Blueprint.lock` like
   every tool, unless the project declares an input named `nixpkgs` itself.
+
+[#what-tasks-need]
+== What tasks need
+
+`blueprint requirements` reads `Blueprint.roc` and nothing else: not `PATH`,
+not the store and not `Blueprint.lock`. It answers before anything is
+installed or resolved, and gives the same answer on every machine. The system
+is `BLUEPRINT_TARGET`, or the one it runs on.
+
+[source]
+----
+$ blueprint requirements
+system x86_64-linux
+providers: nix
+task check [dev]: programs roc-stable; expects gh, git; roc packages 2
+task host [zig]: provider nix (nix#zigpkgs."0.16.0"); programs roc-stable; expects gh, git; roc packages 2
+----
+
+With `--json` the report is one JSON object for a program to read:
+
+[source,json]
+----
+{"format":1,"system":"x86_64-linux","providers":["nix"],"expects":["gh","git"],"tasks":[
+ {"name":"check","environment":"dev","providers":[],"tools":[],"programs":["roc-stable"],"unavailable":[],"expects":["gh","git"],"roc_packages":2},
+ {"name":"host","environment":"zig","providers":["nix"],"tools":["nix#zigpkgs.\"0.16.0\""],"programs":["roc-stable"],"unavailable":[],"expects":["gh","git"],"roc_packages":2}]}
+----
+
+[cols="1,4",options="header"]
+|===
+| Field
+| Meaning
+
+| `format`
+| The number of this shape, `1`. Every field below is always present. A change a reader of format 1 could misread gets another number.
+
+| `system`
+| The system the report is for.
+
+| `providers`
+| The providers that must be on the machine to run the reported tasks on that system, each once. `"nix"` is there exactly when one of those tasks has, in its environment on that system, a tool from a Nix package source. A Nix source that is declared and that no reported task uses does not put it there. Neither does a shell, a build or `blueprint update`: they are not tasks, a build always needs Nix, and an update needs it whenever the project declares something Nix resolves.
+
+| `expects`
+| The programs those tasks expect the machine to have already, each once.
+
+| `tasks`
+| One object for each task, in the order asked, or in the order of `Blueprint.roc` when none is named.
+
+| `tasks[].providers`, `tasks[].tools`
+| The providers that task needs, by the same rule, and the tools they supply, as `Blueprint.roc` writes them.
+
+| `tasks[].programs`, `tasks[].unavailable`
+| The programs its environment fetches on that system, and those it lists that do not exist there. A task with an unavailable program cannot run on that system.
+
+| `tasks[].expects`, `tasks[].roc_packages`
+| The programs the task expects of the machine, and how many Roc packages its environment has.
+|===
+
+A task that is not declared is an error, and nothing is printed for the
+others. To install Nix only where it is needed, test whether `providers`
+holds `"nix"` for the tasks a job runs:
+
+[source,sh]
+----
+blueprint requirements --json check | jq -e '.providers | index("nix")'
+----
 
 == What update needs and records
 

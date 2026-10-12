@@ -215,6 +215,9 @@ changed, and for release assets, whose release is described by the same
 loopback server, so that a digest computed here is compared with a published
 one, another system's is recorded unfetched, and a refusal of the question
 stops the update.
+It ends with `blueprint requirements`, asked with no `nix`, no lock, an empty
+store and no server: the report is the same, a declared and unused Nix source
+requires no provider, and nothing is written.
 These are Roc scripts, run from the repository root with `./blueprint`
 built; `ROC` names the compiler. They replace every tool the CLI runs with one
 program, `scripts/stubs/tool.roc`, which each test builds once and installs

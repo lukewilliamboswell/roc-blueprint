@@ -389,7 +389,73 @@ cases! = |bench, idle| {
 	without_nix!(first)?
 	no_run_left!(mixed)?
 	Script.pass!("parity: with one Nix tool added, the task prints the same from the same store file, and only then starts Nix; without Nix it is refused before any download")?
-	updating!(test, idle, { archive, stub, page, system })
+	updating!(test, idle, { archive, stub, page, system })?
+	requiring!(test, idle, system)
+}
+
+## `blueprint requirements` answers from Blueprint.roc alone. Here it is asked
+## on a machine with nothing: no `nix`, no lock, an empty store and no server.
+## It says the same as it would anywhere, and leaves nothing behind.
+requiring! : Test, Serve, Str => Try({}, _)
+requiring! = |test, idle, system| {
+	bench = test.bench
+	nowhere = Serve.emptied(idle)
+	bare_bin = "${bench.work}/bare-requirements"
+	Path.create_dir!(Path.utf8(bare_bin))?
+	Path.copy!(Path.utf8("${bench.work}/stub-tool"), Path.utf8("${bare_bin}/roc-record"))?
+	bare = [("PATH", bare_bin), ("ROC", "${bare_bin}/roc-record")]
+	source = "Packages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),"
+	fetching = |extra| CliProgramsTest.fetching({ roc: [idle.url("releases/1.0/roc.tar.gz")], tool: idle.url("releases/1.0/tool"), expects: ["blueprint-absent-one", "git"], extra })
+	entry = |name, providers, tools| "{\"name\":\"${name}\",\"environment\":\"dev\",\"providers\":${providers},\"tools\":${tools},\"programs\":[\"roc-stable\",\"tool\"],\"unavailable\":[],\"expects\":[\"blueprint-absent-one\",\"git\"],\"roc_packages\":0}"
+	report = |target, providers, tools, names| "{\"format\":1,\"system\":\"${target}\",\"providers\":${providers},\"expects\":[\"blueprint-absent-one\",\"git\"],\"tasks\":[\n ${Str.join_with(names.map(|name| entry(name, providers, tools)), ",\n ")}]}\n"
+	untouched! = |cwd, what| {
+		CliHarness.check!(!CliHarness.present!("${cwd}/Blueprint.lock") and !CliHarness.present!("${cwd}/.blueprint") and !CliHarness.present!(test.store), "${what} wrote a lock, generated files or a store")?
+		CliHarness.same_calls!(CliHarness.calls!("${cwd}/nix-calls")?, [], "${what} started the provider")
+	}
+	empty_store!(test)?
+
+	# A project that fetches and expects, and declares no source: no provider.
+	# The machine lacks one expected program, which the report does not look
+	# for: it says what is needed, not what is there.
+	plain = project!(test, "requires-plain", fetching(""))?
+	needed = command!(test, nowhere, plain, ["requirements", "--json"], bare)?
+	CliHarness.check!(needed.code == 0 and needed.stdout == report(system, "[]", "[]", ["say", "tool", "fail"]) and needed.stderr == "", "requirements --json of a project with no source is not the report it should be (code ${needed.code.to_str()}):\n${needed.stdout}${needed.stderr}")?
+	read = command!(test, nowhere, plain, ["requirements"], bare)?
+	CliHarness.check!(
+		read.code == 0 and read.stdout == "system ${system}\nproviders: none\n${Str.join_with(["say", "tool", "fail"].map(|name| "task ${name} [dev]: programs roc-stable, tool; expects blueprint-absent-one, git\n"), "")}",
+		"requirements of a project with no source is not the report it should be (code ${read.code.to_str()}):\n${read.stdout}${read.stderr}",
+	)?
+	untouched!(plain, "requirements of a project with no source")?
+
+	# A source that is declared and that no task uses requires no provider:
+	# `providers` says what must be installed to run the tasks, and nothing
+	# here is run by Nix.
+	unused = project!(test, "requires-unused", fetching("").append(source))?
+	declared = command!(test, nowhere, unused, ["requirements", "--json"], bare)?
+	CliHarness.check!(declared.code == 0 and declared.stdout == report(system, "[]", "[]", ["say", "tool", "fail"]), "a declared and unused Nix source put a provider in the report (code ${declared.code.to_str()}):\n${declared.stdout}${declared.stderr}")?
+	untouched!(unused, "requirements of a project with an unused source")?
+
+	# One tool of that source in the tasks' environment requires its provider,
+	# for each task and for the whole; the tool is written as Blueprint.roc
+	# writes it. Named tasks are reported alone, in the order asked.
+	using = project!(test, "requires-nix", fetching(", Tools([\"default#git\"])").append(source))?
+	required = command!(test, nowhere, using, ["requirements", "--json"], bare)?
+	CliHarness.check!(required.code == 0 and required.stdout == report(system, "[\"nix\"]", "[\"default#git\"]", ["say", "tool", "fail"]), "a Nix tool in the tasks' environment did not require nix (code ${required.code.to_str()}):\n${required.stdout}${required.stderr}")?
+	chosen = command!(test, nowhere, using, ["requirements", "--json", "fail", "say"], bare)?
+	CliHarness.check!(chosen.code == 0 and chosen.stdout == report(system, "[\"nix\"]", "[\"default#git\"]", ["fail", "say"]), "requirements of named tasks is not theirs alone, in order (code ${chosen.code.to_str()}):\n${chosen.stdout}${chosen.stderr}")?
+	shown = command!(test, nowhere, using, ["requirements", "say"], bare)?
+	CliHarness.check!(shown.code == 0 and shown.stdout == "system ${system}\nproviders: nix\ntask say [dev]: provider nix (default#git); programs roc-stable, tool; expects blueprint-absent-one, git\n", "requirements of one task with a Nix tool is not the report it should be:\n${shown.stdout}${shown.stderr}")?
+	untouched!(using, "requirements of a project with a Nix tool")?
+
+	# The System is the one asked for, and a task that is not declared is an
+	# error, not an empty answer.
+	other = if system == "aarch64-darwin" "x86_64-linux" else "aarch64-darwin"
+	elsewhere = command!(test, nowhere, plain, ["requirements", "--json", "say"], bare.append(("BLUEPRINT_TARGET", other)))?
+	CliHarness.check!(elsewhere.code == 0 and elsewhere.stdout == report(other, "[]", "[]", ["say"]), "requirements for another declared system is not that system's (code ${elsewhere.code.to_str()}):\n${elsewhere.stdout}${elsewhere.stderr}")?
+	absent = command!(test, nowhere, plain, ["requirements", "--json", "say", "nope", "gone"], bare)?
+	CliHarness.check!(absent.code == 1 and absent.stdout == "" and absent.stderr.contains("unknown task: nope") and absent.stderr.contains("unknown task: gone"), "requirements of undeclared tasks did not name them (code ${absent.code.to_str()}):\n${absent.stdout}${absent.stderr}")?
+	untouched!(plain, "requirements for another system and for undeclared tasks")?
+	Script.pass!("requirements: from Blueprint.roc alone, with no nix, lock, store or server; nix is required by a task that uses a Nix tool, not by a declared source; the JSON has one shape")
 }
 
 ## `blueprint update` or another command while the server answers, with
