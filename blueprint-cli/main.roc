@@ -6,6 +6,7 @@
 app [main!] {
 	core: "../blueprint-core/main.roc",
 	host: "../blueprint-host/main.roc",
+	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	nix: "../blueprint-nix/main.roc",
 	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
 	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
@@ -13,7 +14,6 @@ app [main!] {
 
 import pf.Cmd
 import pf.Env
-import pf.File
 import pf.OsStr
 import pf.Path
 import pf.Stdout
@@ -30,7 +30,9 @@ import core.Provider
 import core.Lock
 import core.Tree
 import host.HostProvider
+import Bootstrap
 import Paths
+import Store
 import nix.NixProvider
 import "compiler-version" as compiler_version : Str
 
@@ -439,10 +441,11 @@ print_files! = |provider, spec| {
 ## Probe identity before evaluating config with the selected compiler.
 ## A relative ROC executable belongs to the invocation directory, not root.
 ## An explicit ROC must be the compatible compiler. Otherwise a compatible
-## `roc` on PATH is used, and failing that the provider says how to obtain the
-## release.
+## `roc` on PATH is used, and failing that the release this executable records
+## a download of is kept in the store, by its digest. No provider is asked:
+## reading a Blueprint.roc needs none installed.
 roc! : Context => Try(Str, _)
-roc! = |ctx| {
+roc! = |_ctx| {
 	expected = "Roc compiler version ${compiler_version.trim()}"
 	match Env.var_str!("ROC") {
 		Ok(override) => {
@@ -472,39 +475,15 @@ roc! = |ctx| {
 			if on_path {
 				return Ok("roc")
 			}
-			obtained = (ctx.provider.compiler)(compiler_version.trim(), ctx.target, ctx.layout)
-				.map_err(|message| CompilerFailed("the ${ctx.provider.name} provider cannot fetch Roc ${compiler_version.trim()}: ${message}"))?
-			match obtained {
-				Printed(argv) => fetch_roc!(argv)
-				Fetched(archive) =>
-					fetch!(archive, ctx.layout).map_err(
-						|err|
-							match err {
-								FetchFailed(message) => CompilerFailed("could not fetch Roc ${compiler_version.trim()}: ${message}")
-								other => other
-							},
-					)
-			}
+			tag = compiler_version.trim()
+			system = host_system!()?
+			program = Bootstrap.compiler(tag, system)
+				.map_err(|_| CompilerFailed("this blueprint records no download of Roc ${tag} for ${system}"))?
+			store = Store.root!().map_err(|message| CompilerFailed("could not fetch Roc ${tag}: ${message}"))?
+			Store.program!(store, program, BuiltIn).map_err(|message| CompilerFailed("could not fetch Roc ${tag}: ${message}"))
 		}
 	}
 }
-
-## Realise the compatible compiler through the provider. Its progress goes to
-## stderr; stdout is the directory holding `bin/roc`.
-fetch_roc! : List(Str) => Try(Str, _)
-fetch_roc! = |argv|
-	match argv {
-		[program, .. as args] => {
-			output = Cmd.new_str(program).args_str(args).stderr(Inherit).exec_output!()
-				.map_err(
-					|err| CompilerFailed(
-						"could not fetch Roc ${compiler_version.trim()}: ${Str.inspect(err)}",
-					),
-				)?
-			Ok("${output.stdout_utf8.trim()}/bin/roc")
-		}
-		[] => Err(CompilerFailed("the provider cannot fetch a compiler"))
-	}
 
 ## Keep a released archive unpacked where a provider says, and answer with
 ## its program (see `Steps.Archive`). Every argv is the provider's and runs
@@ -539,7 +518,7 @@ fetch! = |archive, layout| {
 		if !(path(file).is_file!() ?? False) {
 			return Err(FetchFailed("`${Str.join_with(archive.download, " ")}` downloaded nothing"))
 		}
-		actual = file_digest!(file)?.to_hex()
+		actual = Store.file_digest!(file)?.to_hex()
 		if actual != expected {
 			return Err(FetchFailed("the archive for ${archive.directory} has SHA-256 ${actual}, not ${expected}; nothing was unpacked"))
 		}
@@ -843,25 +822,12 @@ tree_entries! = |root, prefix| {
 			}
 			IsFile => {
 				executable = child.is_executable!()?
-				$entries = $entries.append({ path: relative, kind: File({ executable, digest: file_digest!(full)? }) })
+				$entries = $entries.append({ path: relative, kind: File({ executable, digest: Store.file_digest!(full)? }) })
 			}
 			_ => return Err(UnsafePath(full))
 		}
 	}
 	Ok($entries)
-}
-
-## Bytes are read in bounded chunks; an empty chunk is the end of the file.
-file_digest! : Str => Try(Crypto.SHA256.Digest, _)
-file_digest! = |file| {
-	reader = File.open_reader_with_capacity!(path(file), 65536)?
-	var $hasher = Crypto.SHA256.Hasher.empty()
-	var $chunk = reader.read_up_to!(65536)?
-	while !$chunk.is_empty() {
-		$hasher = $hasher.write($chunk)
-		$chunk = reader.read_up_to!(65536)?
-	}
-	Ok($hasher.finish())
 }
 
 ## Observe authority bytes without decoding them, including an absent
@@ -875,7 +841,7 @@ authority_token! = |file| {
 	if path(file).type!()? != IsFile {
 		return Err(Refused("authority is not a regular file: ${file}"))
 	}
-	Ok("sha256:${file_digest!(file)?.to_hex()}")
+	Ok("sha256:${Store.file_digest!(file)?.to_hex()}")
 }
 
 ## Lexical containment of normalized absolute paths, as bytes: directory

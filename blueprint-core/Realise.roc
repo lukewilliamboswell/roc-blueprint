@@ -244,9 +244,9 @@ Realise :: [].{
 		var $programs = []
 		for program in use.programs {
 			match lock.fetched_for(program) {
-				Ok(sha256) =>
-					if digest(sha256) {
-						$programs = $programs.append({ name: program.name, urls: program.urls, sha256, unpack: program.unpack, path: program.path })
+				Ok(entry) =>
+					if digest(entry.sha256) {
+						$programs = $programs.append({ name: program.name, urls: program.urls, sha256: entry.sha256, size: entry.size, unpack: program.unpack, path: program.path })
 					} else {
 						$problems = $problems.append("${program.name} for ${system}: Blueprint.lock holds no SHA-256 for it; run blueprint update ${program.name}")
 					}
@@ -591,7 +591,7 @@ planned : Spec, Request, Str, Layout, Lock -> Try(List(Steps.Step), List(Str))
 planned = |spec, request, system, layout, lock| Realise.plan(spec, request, system, layout, lock, [stub]).map_ok(|steps| steps.steps)
 
 linux_roc : Steps.Program
-linux_roc = { name: "roc-stable", urls: roc_urls("x86_64-linux"), sha256: roc_sha, unpack: TarGz, path: "roc/roc" }
+linux_roc = { name: "roc-stable", urls: roc_urls("x86_64-linux"), sha256: roc_sha, size: 69614310, unpack: TarGz, path: "roc/roc" }
 
 bundle : Str -> Steps.Operation
 bundle = |curl| RocBundles({ compiler: "@blueprint-compiler@", bundles: [{ name: "abc", download: [curl, "--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--retry", "3", "--output", "abc.tar.zst", "https://example.test/releases/1.0/abc.tar.zst"], unbundle: ["@blueprint-compiler@", "unbundle", "abc.tar.zst"] }] })
@@ -601,7 +601,7 @@ bundle = |curl| RocBundles({ compiler: "@blueprint-compiler@", bundles: [{ name:
 supplied_for : Str -> List(Steps.Operation)
 supplied_for = |environment| [
 	Present([{ program: "gh", because: "environment ${environment} expects it on PATH (Expect)" }, { program: "git", because: "environment ${environment} expects it on PATH (Expect)" }]),
-	Programs([linux_roc, { name: "tool", urls: ["https://example.test/tool-x86_64-linux"], sha256: tool_sha, unpack: File, path: "" }]),
+	Programs([linux_roc, { name: "tool", urls: ["https://example.test/tool-x86_64-linux"], sha256: tool_sha, size: 5900520, unpack: File, path: "" }]),
 	bundle("curl"),
 ]
 
@@ -612,7 +612,8 @@ expect Realise.plan(sample, Request.Run("hello", []), "x86_64-linux", unix, lock
 
 # What the Core supplies comes first and in the order an executor needs: the
 # machine's own programs are checked before anything is downloaded, programs
-# carry every URL in order with the Lock's digest, and inherited ones lead.
+# carry every URL in order with the Lock's digest and length, and inherited
+# ones lead.
 expect planned(sample, Request.Run("check", ["--verbose"]), "x86_64-linux", unix, locked) == Ok([{ action: Run("check"), files: [], argv: ["roc-stable", "version", "--verbose"], artifacts: [], operations: supplied_for("dev") }])
 
 # Elsewhere the program is that System's download; a script is left to its
@@ -623,7 +624,7 @@ expect planned(sample, Request.Run("script", ["extra"]), "aarch64-darwin", unix,
 		files: [],
 		argv: ["/project/scripts/check_all.roc", "--quick", "extra"],
 		artifacts: [],
-		operations: [Programs([{ name: "roc-stable", urls: roc_urls("aarch64-darwin"), sha256: roc_sha, unpack: TarGz, path: "roc/roc" }]), bundle("curl")],
+		operations: [Programs([{ name: "roc-stable", urls: roc_urls("aarch64-darwin"), sha256: roc_sha, size: 66810227, unpack: TarGz, path: "roc/roc" }]), bundle("curl")],
 	},
 ])
 
@@ -635,7 +636,7 @@ expect planned(sample, Request.Run("script", ["extra"]), "x86_64-windows", windo
 		files: [],
 		argv: ["roc-stable", "scripts/check_all.roc", "--quick", "extra"],
 		artifacts: [],
-		operations: [Programs([{ name: "roc-stable", urls: ["https://example.test/roc-windows.zip"], sha256: roc_sha, unpack: Zip, path: "roc/roc.exe" }]), bundle("C:/Windows/System32/curl.exe")],
+		operations: [Programs([{ name: "roc-stable", urls: ["https://example.test/roc-windows.zip"], sha256: roc_sha, size: 67310620, unpack: Zip, path: "roc/roc.exe" }]), bundle("C:/Windows/System32/curl.exe")],
 	},
 ])
 

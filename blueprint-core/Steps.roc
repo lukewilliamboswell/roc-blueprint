@@ -91,12 +91,14 @@ Steps := { steps : List(Step) }.{
 	## is `sha256`, in hex, which the Lock recorded: bytes from a cache, a
 	## mirror or an earlier run are hashed again before every use and are
 	## never trusted. `urls` serve the same bytes; try them in order and take
-	## the first that yields that digest. For `File` the bytes are the
+	## the first that yields that digest. `size` is their length when one is
+	## recorded and 0 when none is: a download of another length is refused
+	## as that, before its digest is computed. For `File` the bytes are the
 	## program. Otherwise they are an archive to unpack whole, and the
 	## program is the file at `path` inside it: the tree stays together and
 	## `name` refers into it, because a program may find its own files beside
 	## its real path.
-	Program : { name : Str, urls : List(Str), sha256 : Str, unpack : [File, TarGz, TarXz, Zip], path : Str }
+	Program : { name : Str, urls : List(Str), sha256 : Str, size : U64, unpack : [File, TarGz, TarXz, Zip], path : Str }
 
 	## `tool` is the declaration being checked, as its author wrote it. `Is`
 	## and `Starts` compare the first line the probe prints, trimmed.

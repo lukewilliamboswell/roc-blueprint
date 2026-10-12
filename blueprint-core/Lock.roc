@@ -116,16 +116,17 @@ Lock := {
 		.map_ok(|h| h.value)
 		.map_err(|_| MissingHint)
 
-	## The SHA-256, in hex, the Lock records for a program on its System.
+	## What the Lock records for a program on its System: the SHA-256, in
+	## hex, and the length of its download.
 	## `NotLocked`: the program was declared after the Lock was resolved.
 	## `UrlsChanged` carries the URLs the Lock was resolved with: the Spec now
 	## names others, or the same in another order. The entry is current only
 	## when the whole list is unchanged. The digest is fixed, so a later
 	## change may let an added alternate keep the entry; nothing does yet.
-	fetched_for : Lock, Spec.Program -> Try(Str, [NotLocked, UrlsChanged(List(Str))])
+	fetched_for : Lock, Spec.Program -> Try(Fetched, [NotLocked, UrlsChanged(List(Str))])
 	fetched_for = |lock, program|
 		match lock.fetched.find_first(|entry| entry.name == program.name and entry.system == program.system) {
-			Ok(entry) => if entry.urls == program.urls Ok(entry.sha256) else Err(UrlsChanged(entry.urls))
+			Ok(entry) => if entry.urls == program.urls Ok(entry) else Err(UrlsChanged(entry.urls))
 			Err(_) => Err(NotLocked)
 		}
 }
@@ -205,10 +206,10 @@ expect {
 # A program's digest is the one recorded for its name, System and URLs.
 expect {
 	linux = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc-linux.tar.gz"], unpack: TarGz, path: "roc/roc" }
-	sample.fetched_for(linux) == Ok("893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f")
-		and sample.fetched_for({ ..linux, system: "aarch64-darwin", urls: ["https://example.test/roc-macos.tar.gz", "https://mirror.example.test/roc-macos.tar.gz"] }) == Ok("e0147f62f072a309519cbc2a6ebfa11e4bb8bac7903d5febaf7a112d1fc2842f")
+	sample.fetched_for(linux).map_ok(|entry| (entry.sha256, entry.size)) == Ok(("893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f", 69614310))
+		and sample.fetched_for({ ..linux, system: "aarch64-darwin", urls: ["https://example.test/roc-macos.tar.gz", "https://mirror.example.test/roc-macos.tar.gz"] }).map_ok(|entry| entry.sha256) == Ok("e0147f62f072a309519cbc2a6ebfa11e4bb8bac7903d5febaf7a112d1fc2842f")
 			# How the bytes are unpacked is not what was resolved.
-			and sample.fetched_for({ ..linux, unpack: File, path: "" }) == Ok("893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f")
+			and sample.fetched_for({ ..linux, unpack: File, path: "" }).map_ok(|entry| entry.sha256) == Ok("893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f")
 }
 
 # Changed URLs name the ones that were resolved; nothing else matches them.

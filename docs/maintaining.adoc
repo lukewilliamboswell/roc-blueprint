@@ -14,10 +14,13 @@ To move the product compiler:
 . Set the compiler and overlay in `fixtures/roc-inputs.lock.json` to match.
 . Move the basic-cli release in `blueprint-cli/main.roc`, the fixtures, the
    examples and `rocPackages` in `flake.nix` if the nightly needs a newer one.
-. Replace the entries of `compilers` in `blueprint-host/HostProvider.roc`
-   with the nightly's tag and the SHA-256 of each of its compiler archives,
-   which `gh release view <tag> --repo roc-lang/nightlies --json assets`
-   reports. `scripts/test.roc static` fails until the tag is there.
+. Replace the entries of `compilers` in `blueprint-cli/Bootstrap.roc` with
+   the nightly's tag and, for each System, the URL, the SHA-256 and the size
+   of its compiler archive, which
+   `gh release view <tag> --repo roc-lang/nightlies --json assets` reports.
+   `scripts/test.roc static` fails until every System `blueprint` runs on has
+   an entry. A `blueprint` with no compatible compiler at hand downloads that
+   archive into its store and checks it against the entry.
 . Set the hash of `rocGlueSpec` in `flake.nix` to that of the nightly's
    source archive, which `nix build .#roc-glue-spec` reports, and run
    `scripts/check_glue.roc --update`. Commit the bindings it changes together
@@ -124,10 +127,12 @@ roc-overlay records. The package is not in the development shell, so only a
 release build downloads the macOS archive. The three CLI binaries are compiled
 at the same time, each about 2.3 GB at its peak.
 
-A binary fetches the compiler named in `blueprint-cli/compiler-version` from the roc-overlay
-revision in `NixProvider.roc_overlay`. Change that constant whenever
-`flake.lock` moves the `roc-overlay` input; `scripts/test.roc` fails when the two
-differ.
+A binary downloads the compiler named in `blueprint-cli/compiler-version`
+from roc-lang/nightlies, by the digest in `blueprint-cli/Bootstrap.roc`, and
+keeps it in the per-user store; it starts no provider to read a
+`Blueprint.roc`. `NixProvider.roc_overlay` still names the roc-overlay
+revision of that compiler: change it whenever `flake.lock` moves the
+`roc-overlay` input; `scripts/test.roc` fails when the two differ.
 
 === Write the release notes
 

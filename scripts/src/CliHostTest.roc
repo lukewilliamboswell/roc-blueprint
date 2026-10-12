@@ -315,26 +315,6 @@ cases! = |bench| {
 	}
 	Script.pass!("host provider: a download whose digest is wrong, unlisted or unreported is neither unpacked nor run")?
 
-	# Without ROC or a compatible roc on PATH, the compiler that evaluates
-	# Blueprint.roc is fetched by the digest the provider records for the pin.
-	# The stub's bytes are not that archive, so it must be refused.
-	pin = Path.read_utf8!(Path.utf8("${bench.root}/blueprint-cli/compiler-version"))?.trim()
-	pinned = "roc_nightly-${build}-${pin.drop_prefix("nightly-")}"
-	evaluating = project!(fetching, "compiler", CliHostTest.plain)?
-	absent = CliHarness.setting(CliHarness.unsetting(fetching.env, ["ROC"]), [("PATH", "${bench.bin}:/usr/bin:/bin"), host])
-	outcome = CliHarness.blueprint!(bench, evaluating, ["tasks"], absent)?
-	CliHarness.exited!(outcome, 1, "tasks without a compiler")?
-	CliHarness.contains!(outcome.stderr, "could not fetch Roc ${pin}: the archive for ${evaluating}/.blueprint/host/roc/${pin} has SHA-256 ${digest}, not ", "tasks without a compiler")?
-	CliHarness.contains!(outcome.stderr, "set ROC", "tasks without a compiler")?
-	compiler_transfers = CliHarness.calls!("${evaluating}/curl-calls")?
-	CliHarness.check!(
-		compiler_transfers.len() == 1 and compiler_transfers.all(|call| CliHostTest.downloads(call, "${evaluating}/.blueprint/host/roc/${pin}", "https://github.com/roc-lang/nightlies/releases/download/${pin}/${pinned}.tar.gz")),
-		"the compiler was not downloaded once, without a question: ${Str.inspect(compiler_transfers)}",
-	)?
-	CliHarness.same_calls!(CliHarness.calls!("${evaluating}/tar-calls")?, [], "a compiler archive with the wrong digest was unpacked")?
-	CliHarness.check!(CliHarness.names!("${evaluating}/.blueprint/host/roc")? == [], "a refused compiler left something in the workspace")?
-	Script.pass!("host provider: the evaluating compiler is fetched by its recorded digest, and other bytes are refused")?
-
 	# Windows does not read `#!/usr/bin/env roc-stable`, so a Roc script is
 	# started the way that line asks: by roc-stable, with the script's path as
 	# the task wrote it and then the arguments. Whatever the task starts finds

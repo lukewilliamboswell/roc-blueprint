@@ -75,13 +75,17 @@ StaticChecks := [].{
 			}
 		}
 
-	## Where there is no Nix, the host provider fetches that compiler from its
-	## release, by a digest recorded for each nightly. There must be one for
-	## the nightly the CLI evaluates with.
-	host_compiler_problem : Str, Str -> Str
-	host_compiler_problem = |compiler_version, provider_source| {
+	## The Systems `blueprint` runs on (`supported_host` in the CLI).
+	host_systems = ["x86_64-linux", "aarch64-linux", "aarch64-darwin", "x86_64-windows"]
+
+	## With no compatible compiler at hand, the CLI downloads the nightly it
+	## evaluates with by a digest it records itself. There must be an entry
+	## for that nightly on every System it runs on.
+	bootstrap_problem : Str, Str -> Str
+	bootstrap_problem = |compiler_version, bootstrap_source| {
 		tag = compiler_version.trim()
-		if provider_source.contains("{ tag: \"${tag}\", system: \"x86_64-windows\", sha256: \"") "" else "record the SHA-256 of each ${tag} compiler archive in compilers in blueprint-host/HostProvider.roc"
+		missing = host_systems.keep_if(|system| !bootstrap_source.contains("\t\t\ttag: \"${tag}\",\n\t\t\tsystem: \"${system}\",\n"))
+		if missing.is_empty() "" else "record the download of the ${tag} compiler for ${Str.join_with(missing, ", ")} in compilers in blueprint-cli/Bootstrap.roc"
 	}
 
 	## The scripts run on `roc-stable`, which the flake names as `rocStableTag`.
@@ -285,8 +289,8 @@ expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-l
 expect StaticChecks.overlay_problem(lock_sample, "nothing here") != ""
 expect StaticChecks.overlay_problem("{}", "roc_overlay = \"x\"") == "flake.lock has no GitHub pin for roc-overlay"
 
-expect StaticChecks.host_compiler_problem("nightly-2026-10-04-130536d\n", "\t\t{ tag: \"nightly-2026-10-04-130536d\", system: \"x86_64-windows\", sha256: \"1f5a\" },\n") == ""
-expect StaticChecks.host_compiler_problem("nightly-2026-10-11-7d256b9\n", "\t\t{ tag: \"nightly-2026-10-04-130536d\", system: \"x86_64-windows\", sha256: \"1f5a\" },\n") == "record the SHA-256 of each nightly-2026-10-11-7d256b9 compiler archive in compilers in blueprint-host/HostProvider.roc"
+expect StaticChecks.bootstrap_problem("nightly-1\n", StaticChecks.host_systems.map(|system| "\t\t\ttag: \"nightly-1\",\n\t\t\tsystem: \"${system}\",\n").fold("", Str.concat)) == ""
+expect StaticChecks.bootstrap_problem("nightly-2\n", "\t\t\ttag: \"nightly-1\",\n\t\t\tsystem: \"x86_64-linux\",\n\t\t\ttag: \"nightly-2\",\n\t\t\tsystem: \"x86_64-linux\",\n") == "record the download of the nightly-2 compiler for aarch64-linux, aarch64-darwin, x86_64-windows in compilers in blueprint-cli/Bootstrap.roc"
 
 pin_sample = "scripts/test.roc:\troc: \"nightly-1\",\n"
 

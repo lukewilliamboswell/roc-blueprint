@@ -228,11 +228,10 @@ cases! = |bench| {
 	Script.pass!("ROC missing, incompatible or failing: refused before any evaluation, naming ${pin}; help and version still work")?
 
 	# Without ROC, a compatible roc on PATH is used as it is. An incompatible
-	# or absent one makes the CLI fetch the pinned compiler through the provider.
-	fetched = "${work}/fetched-compiler"
-	Path.create_all!(Path.utf8("${fetched}/bin"))?
-	CliHarness.tool!(["ln", "-s", "--", record, "${fetched}/bin/roc"])?
-	for case in [{ name: "path", roc: record }, { name: "fetched", roc: probe }, { name: "absent", roc: "" }] {
+	# or absent one makes the CLI take the pinned compiler from its own store
+	# of downloads. No provider is asked for it: here there is nowhere to keep
+	# a store, so the run stops there, before any request leaves the machine.
+	for case in [{ name: "path", roc: record }, { name: "other", roc: probe }, { name: "absent", roc: "" }] {
 		cwd = isolated!(test, "compiler-${case.name}")?
 		settings!(test, cwd, CliTest.valid)?
 		on_path = "${cwd}/path-bin"
@@ -241,20 +240,26 @@ cases! = |bench| {
 			CliHarness.tool!(["ln", "-s", "--", case.roc, "${on_path}/roc"])?
 		}
 		env = CliHarness.setting(
-			CliHarness.unsetting(test.env, ["ROC"]),
+			# The compiler on PATH needs its own cache; the others never start.
+			CliHarness.unsetting(test.env, if case.name == "path" ["ROC"] else ["ROC", "HOME", "XDG_CACHE_HOME"]),
 			[
 				("PATH", "${on_path}:${bench.bin}:/usr/bin:/bin"),
 				("STUB_PROBE_VERSION", "Roc compiler version other-nightly"),
-				("STUB_NIX_OUT", fetched),
 			],
 		)
 		outcome = CliHarness.blueprint!(bench, cwd, ["spec"], env)?
-		CliHarness.exited!(outcome, 0, "spec without ROC, compiler ${case.name}")?
-		CliHarness.contains!(outcome.stdout, "(name ", "spec without ROC, compiler ${case.name}")?
-		builds = CliHarness.calls!("${cwd}/nix-calls")?.keep_if(|call| call.first() == Ok("build"))
-		CliHarness.check!(fetch_matches(case.name == "path", builds, pin), "without ROC and with compiler ${case.name}, the provider was asked to build ${Str.inspect(builds)}")?
+		what = "spec without ROC, compiler ${case.name}"
+		if case.name == "path" {
+			CliHarness.exited!(outcome, 0, what)?
+			CliHarness.contains!(outcome.stdout, "(name ", what)?
+		} else {
+			CliHarness.exited!(outcome, 1, what)?
+			CliHarness.contains!(outcome.stderr, "could not fetch Roc ${pin}: neither XDG_CACHE_HOME nor HOME names an absolute directory to keep downloads in", what)?
+			CliHarness.contains!(outcome.stderr, "set ROC", what)?
+		}
+		CliHarness.same_calls!(CliHarness.calls!("${cwd}/nix-calls")?, [], "${what} started the provider")?
 	}
-	Script.pass!("ROC unset: a compatible roc on PATH is used; otherwise one provider build of roc-overlay#\"${pin}\"")?
+	Script.pass!("ROC unset: a compatible roc on PATH is used; otherwise the pinned ${pin} comes from the store of downloads, and no provider is asked")?
 
 	# ROC is invocation-relative even when BLUEPRINT_ROOT selects elsewhere.
 	elsewhere = isolated!(test, "compiler-relative-root")?
@@ -465,18 +470,6 @@ cases! = |bench| {
 	Script.pass!("CLI compiler/loader, validation and stubbed process-boundary tests passed")
 }
 
-## What the provider was asked to build for a compiler: nothing when the one
-## on PATH is compatible, otherwise the pinned release from roc-overlay, once.
-fetch_matches : Bool, List(List(Str)), Str -> Bool
-fetch_matches = |on_path, builds, pin|
-	match builds {
-		[] => on_path
-		[["build", "--no-link", "--print-out-paths", installable]] =>
-			!on_path and installable.starts_with("github:roc-lang/roc-overlay/") and installable.ends_with("#\"${pin}\"")
-
-		_ => False
-	}
-
 expect CliTest.blueprint_roc("../p/main.roc", "	Name(\"x\"),\n") == "app [config] { pf: platform \"../p/main.roc\" }\nconfig = [\n	Name(\"x\"),\n]\n"
 expect CliTest.valid.contains("Run([\"printf\", \"%s\\n\", \"configured argument\"])")
 
@@ -485,13 +478,6 @@ expect CliTest.develop("/p", "blueprint-env-ci", ["printf", ""]) == ["develop", 
 
 expect CliTest.wire.starts_with("((format ((major 2) (minor 0))) (name \"wire\")\n") and CliTest.wire.ends_with("(run (\"true\"))))))")
 expect CliTest.workflow_wire.ends_with("(run (\"true\")))))(requires (\"workflows\")) (workflows (((name \"ci\") (steps ((RunTask \"echo-args\" ())))))))")
-
-expect fetch_matches(True, [], "nightly-x") and !fetch_matches(False, [], "nightly-x")
-expect fetch_matches(False, [["build", "--no-link", "--print-out-paths", "github:roc-lang/roc-overlay/abc?narHash=sha256-x#\"nightly-x\""]], "nightly-x")
-expect !fetch_matches(True, [["build", "--no-link", "--print-out-paths", "github:roc-lang/roc-overlay/abc#\"nightly-x\""]], "nightly-x")
-expect !fetch_matches(False, [["build", "--no-link", "--print-out-paths", "github:other/overlay#\"nightly-x\""]], "nightly-x")
-expect !fetch_matches(False, [["build", "--no-link", "--print-out-paths", "github:roc-lang/roc-overlay/abc#\"nightly-y\""]], "nightly-x")
-expect !fetch_matches(False, [["build", "github:roc-lang/roc-overlay/abc#\"nightly-x\""]], "nightly-x")
 
 native_sample : Str
 native_sample =
