@@ -1,6 +1,7 @@
 import cli.Cmd
 import cli.Env
 import cli.Path
+import BuildHarness
 import FlakeLock
 import Process
 import Script
@@ -16,8 +17,10 @@ import "../../fixtures/overlays/unused/flake.nix" as unused_overlay : Str
 ##
 ## A scenario written here pins its packages to the nixpkgs revision in
 ## `fixtures/consumer/inputs.lock` and its overlay to the roc-overlay revision
-## in `flake.lock`, so nothing it resolves moves. The two examples run as they
-## are written, with the floating inputs a reader would copy.
+## in `flake.lock`, so nothing it resolves moves. A script with a platform
+## takes its compiler and that platform from `fixtures/roc-inputs.lock.json`.
+## The two examples run as they are written, with the floating inputs a reader
+## would copy.
 Scenarios := [].{
 
 	## What a command must do: exit 0, print exactly these bytes, print this
@@ -69,8 +72,11 @@ Scenarios := [].{
 
 	header = "app [config] { pf: platform \"${platform_token}\" }\n\n"
 
-	scenarios : Str, Str -> List(Scenario)
-	scenarios = |packages_ref, overlay_ref| [
+	## The compiler a script with a platform runs on, and that platform's bundle.
+	Roc : { compiler : Str, basic_cli : Str }
+
+	scenarios : Str, Str, Roc -> List(Scenario)
+	scenarios = |packages_ref, overlay_ref, roc| [
 		{
 			name: "all-settings example: check, list, update and run tasks",
 			place: Example("examples/all-settings"),
@@ -229,6 +235,36 @@ Scenarios := [].{
 				Eval("devShells.aarch64-darwin.default.drvPath", Succeeds),
 			],
 		},
+		{
+			name: "a task names a script by path: its shebang, its platform and a module beside it",
+			place: Fresh,
+			files: [
+				(
+					"Blueprint.roc",
+					Str.join_with(
+						[
+							"${header}config = [",
+							"	Name(\"scripts\"),",
+							"	Systems([\"x86_64-linux\", \"aarch64-darwin\"]),",
+							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
+							"	Overlay(\"roc\", \"${overlay_ref}\"),",
+							"	Environment(\"dev\", [Overlays([\"roc\"]), Command(\"roc-stable\", \"rocpkgs.${roc.compiler}\"), RocPackages([\"${roc.basic_cli}\"])]),",
+							"	Task(\"check\", [Use(\"dev\"), Run([\"scripts/check_all.roc\"])]),",
+							"]",
+							"",
+						],
+						"\n",
+					),
+				),
+				("scripts/check_all.roc", check_all_script(roc.basic_cli)),
+				("scripts/src/Checked.roc", checked_module),
+			],
+			executable: ["scripts/check_all.roc"],
+			steps: [
+				Cli(["run", "check"], Says("checked [] from the project root")),
+				Cli(["run", "check", "--", "one", "two words"], Says("checked [one|two words] from the project root")),
+			],
+		},
 	]
 
 	## The lines only one of two texts holds, `-` for the first and `+` for the second.
@@ -247,6 +283,41 @@ Scenarios := [].{
 		\\main! = |_args| {
 		\\    echo!("Hello from a roc-stable script")
 		\\    Ok({})
+		\\}
+		\\
+
+	## A script as a repository following the manual writes one: started by
+	## its shebang, on a platform, importing a module from `src/` beside it.
+	## It says where it ran from, so the task's directory is the project's.
+	check_all_script : Str -> Str
+	check_all_script = |basic_cli|
+		Str.join_with(
+			[
+				"#!/usr/bin/env roc-stable",
+				"app [main!] { cli: platform \"${basic_cli}\" }",
+				"",
+				"import cli.OsStr",
+				"import cli.Path",
+				"import cli.Stdout",
+				"import src/Checked",
+				"",
+				"main! : List(OsStr) => Try({}, [Exit(I32)])",
+				"main! = |args| {",
+				"	at_root = Path.is_file!(Path.utf8(\"Blueprint.roc\")) ?? False",
+				"	Stdout.line!(Checked.line(args.map(OsStr.display), at_root)).map_err(|_| Exit(1))",
+				"}",
+				"",
+			],
+			"\n",
+		)
+
+	checked_module =
+		\\Checked := [].{
+		\\	line : List(Str), Bool -> Str
+		\\	line = |args, at_root| {
+		\\		place = if at_root "from the project root" else "from somewhere else"
+		\\		Str.join_with(["checked [", Str.join_with(args, "|"), "] ", place], "")
+		\\	}
 		\\}
 		\\
 
@@ -342,7 +413,12 @@ Scenarios := [].{
 		overlay_ref = pinned!(flake_lock, "roc-overlay", "flake.lock")?
 		work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-scenarios-")?)?)?
 		context = { root, blueprint: "${root}/blueprint", roc: Process.roc!(), work }
-		result = each!(context, scenarios(packages_ref, overlay_ref), 0)
+		roc_inputs = Path.read_utf8!(Path.utf8("${root}/fixtures/roc-inputs.lock.json"))?
+		roc = match BuildHarness.pins(fixture_lock, roc_inputs) {
+			Ok(pins) => { compiler: pins.compiler, basic_cli: BuildHarness.basic_cli }
+			Err(PinsInvalid(reason)) => return Script.fail!(reason)
+		}
+		result = each!(context, scenarios(packages_ref, overlay_ref, roc), 0)
 		# A scenario leaves its lock read-only.
 		_ = Cmd.new_str("chmod").args_str(["-R", "u+w", "--", work]).exec_cmd!()
 		_ = Path.delete_all!(Path.utf8(work))
@@ -558,8 +634,11 @@ expect Scenarios.generated_problem("  inputs = unused;\n  outputs = overlays = [
 expect Scenarios.generated_problem("  outputs = unused overlays = [  ];", ["unused"], ["overlays = [  ];"]) == "the generated outputs contain \"unused\""
 expect Scenarios.generated_problem("  outputs = overlays = [ first ];", ["unused"], ["overlays = [  ];"]) == "the generated outputs do not contain \"overlays = [  ];\""
 
+sample_roc : Scenarios.Roc
+sample_roc = { compiler: "nightly-1", basic_cli: "https://example.org/1.0.0/abc.tar.zst" }
+
 # Every fresh project names the platform by the token and pins what it resolves.
-expect Scenarios.scenarios("github:NixOS/nixpkgs/abc", "github:roc-lang/roc-overlay/def").all(
+expect Scenarios.scenarios("github:NixOS/nixpkgs/abc", "github:roc-lang/roc-overlay/def", sample_roc).all(
 	|scenario|
 		match scenario.place {
 			Example(_) => scenario.files.is_empty()
@@ -570,7 +649,7 @@ expect Scenarios.scenarios("github:NixOS/nixpkgs/abc", "github:roc-lang/roc-over
 				}
 		},
 )
-expect Scenarios.scenarios("p", "o").len() == 5
+expect Scenarios.scenarios("p", "o", sample_roc).len() == 6
 
 # What Nix 2.35 prints at --debug when the flake has an input named nixpkgs,
 # and what it printed for a generated flake before one followed `default`.
@@ -604,7 +683,7 @@ expect Scenarios.bash_problem(debugged(locked_bash_log.replace_each("evaluating 
 expect Scenarios.bash_problem({ code: 1, stdout: "", stderr: locked_bash_log }, "github:NixOS/nixpkgs/4975466d") == "expected exit 0, got 1"
 
 # Two fresh scenarios check which bash `nix develop` takes: a task's entry and a shell alias.
-expect Scenarios.scenarios("p", "o").map(|scenario| scenario.steps.keep_if(|step| step == LockedBash("devShells.x86_64-linux.default", "p") or step == LockedBash("devShells.x86_64-linux.blueprint-env-base", "p")).len()) == [0, 0, 1, 0, 1]
+expect Scenarios.scenarios("p", "o", sample_roc).map(|scenario| scenario.steps.keep_if(|step| step == LockedBash("devShells.x86_64-linux.default", "p") or step == LockedBash("devShells.x86_64-linux.blueprint-env-base", "p")).len()) == [0, 0, 1, 0, 1, 0]
 
 # The edge an update now records is removed whole, leaving balanced text;
 # a lock without it, or with another edge of that name, is left as it is.

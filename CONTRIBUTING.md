@@ -130,7 +130,9 @@ CLI and real Nix: the all-settings and extensions examples, noncommutative
 overlays in both orders with inheritance, an unselected overlay's native
 missing-package failure and a declared overlay that throws if evaluated,
 system-scoped tools on Linux and macOS with the package-target rejection of an
-unscoped one, and renamed commands. It also runs `nix develop --debug` on a
+unscoped one, renamed commands, and a task that names a script by path, as
+`scripts/check_all.roc`, which starts by its `roc-stable` shebang on a platform
+`RocPackages` supplies and imports a module beside it. It also runs `nix develop --debug` on a
 staged flake and requires Nix's own report that its bash comes from the locked
 package source, with no registry lookup, and runs a task with the `nixpkgs`
 edge removed from `Blueprint.lock`, as an earlier blueprint wrote it. A project it writes pins its inputs to the
