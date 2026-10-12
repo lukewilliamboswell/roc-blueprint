@@ -12,7 +12,7 @@ The suite (`scripts/src/BuildWorkflowGates.roc`, on the harness in
 `scripts/src/BuildHarness.roc`) renders `Blueprint.roc.in` into a temporary
 project, checks it through `blueprint check`, and explicitly initializes
 authority with `blueprint update`. The platform is local. The pins, the one
-step that may use the network, the recording `nix` that adds `--offline` to
+step in which Nix may use the network, the recording `nix` that adds `--offline` to
 every later call and the private `XDG_CACHE_HOME` are those of the build
 suite: see [its README](../builds/README.md). Real sandboxed builds require
 x86_64 Linux and an effective Nix sandbox. Tasks deliberately run on the host.

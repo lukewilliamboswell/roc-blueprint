@@ -951,6 +951,37 @@ Project :: [].{
 		})
 	}
 
+	## The build sources a provider resolves and locks: all of them, but for
+	## the bundle of a Roc package that no build uses. A task or a shell
+	## fetches its environment's bundles itself, and the bundle's name is the
+	## hash of its bytes, so nothing need be locked for it. Only a sandboxed
+	## build, which has no network, takes a bundle from its provider. A
+	## project whose Roc packages serve tasks and shells alone therefore asks
+	## no provider for anything on their account.
+	##
+	## A source is left out when Roc packages name it, none of them is in a
+	## build's environment or one that environment extends, and no build
+	## lists it among its inputs.
+	resolved_build_sources : Spec -> List(Spec.BuildSource)
+	resolved_build_sources = |spec| {
+		var $building = unique(spec.builds.map(|build| build.environment))
+		var $frontier = $building
+		var $depth = 0.U64
+		# Inheritance as declared: a validated Spec has none left to follow.
+		while !$frontier.is_empty() and $depth < 128 {
+			parents = unique($frontier.fold([], |found, name| found.concat(spec.environments.find_first(|e| e.name == name).map_ok(|e| e.parents) ?? [])))
+			$frontier = parents.keep_if(|name| !$building.contains(name))
+			$building = $building.concat($frontier)
+			$depth = $depth + 1
+		}
+		spec.build_sources.keep_if(
+			|source| {
+				bundled = spec.roc_packages.keep_if(|entry| entry.source == source.name)
+				bundled.is_empty() or bundled.any(|entry| $building.contains(entry.environment)) or spec.builds.any(|build| build.inputs.contains(source.name))
+			},
+		)
+	}
+
 	## Check only the requested environment's normalized dependency closure.
 	## This models Guix shell capability without implementing a Guix executor.
 	check_environment : Spec, ProviderName, Str -> Try({}, Str)
@@ -1922,3 +1953,35 @@ expect
 				Err(_) => False
 			},
 	)
+
+# The bundle of a Roc package is a provider's to lock only where a build uses
+# it: in the build's own environment or one that environment extends. What
+# tasks and shells alone use is left out, and every other source stays.
+expect {
+	source = |name| { name, ref: "tarball+https://example.test/${name}.tar.zst" }
+	environment = |name, parents| { name, parents, tools: [], overlays: [] }
+	spec = {
+		..Spec.empty("bundles"),
+		systems: ["x86_64-linux"],
+		requires_: ["sources", "builds", "roc-packages"],
+		environments: [environment("packages", []), environment("scripts", ["packages"]), environment("tasks", []), environment("plain", [])],
+		build_sources: [source("roc-shared"), source("roc-scripts"), source("roc-tasks"), { name: "assets", ref: "path:./assets" }, { name: "roc-notes", ref: "path:./notes" }],
+		roc_packages: [
+			{ environment: "packages", name: "shared", source: "roc-shared" },
+			{ environment: "scripts", name: "scripts", source: "roc-scripts" },
+			{ environment: "tasks", name: "tasks", source: "roc-tasks" },
+		],
+		tasks: [{ name: "check", environment: "tasks", run: ["scripts/check.roc"] }],
+		builds: [{ name: "app", environment: "scripts", inputs: [], needs: [], run: ["true"], output: "out" }],
+	}
+	names = |project| Project.resolved_build_sources(project).map(|entry| entry.name)
+	# As declared and as validated, which flattens inheritance, alike.
+	names(spec) == ["roc-shared", "roc-scripts", "assets", "roc-notes"]
+		and Project.validate(spec).map_ok(names) == Ok(["roc-shared", "roc-scripts", "assets", "roc-notes"])
+			# With no build, no bundle is a provider's; a source that is not one stays.
+			and names({ ..spec, builds: [] }) == ["assets", "roc-notes"]
+				# A build in another environment does not make the tasks' bundle its own,
+				and names({ ..spec, builds: [{ name: "app", environment: "plain", inputs: [], needs: [], run: ["true"], output: "out" }] }) == ["assets", "roc-notes"]
+					# unless it lists the bundle's source among its inputs.
+					and names({ ..spec, builds: [{ name: "app", environment: "plain", inputs: ["roc-tasks"], needs: [], run: ["true"], output: "out" }] }) == ["roc-tasks", "assets", "roc-notes"]
+}

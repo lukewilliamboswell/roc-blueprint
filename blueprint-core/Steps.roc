@@ -2,8 +2,7 @@
 Steps := { steps : List(Step) }.{
 
 	## A complete ordered sequence, not a scheduler or artifact-name cache.
-	## Execute each step's operations, then stage its files, then run its argv
-	## (`RocPackages` needs the staged files; see `Operation`).
+	## Execute each step's operations, then stage its files, then run its argv.
 	## Stop immediately on failure. Each explicit build repeats materialization.
 	Step : {
 		action : [Generate, Shell(Str), Run(Str), Build(Str)],
@@ -31,24 +30,19 @@ Steps := { steps : List(Step) }.{
 	## `system`. Refuse every step before the first unless the executor runs on
 	## that System; then replace the `executable` placeholder text with its
 	## absolute path, refusing one holding `"`, `\`, `$` or a control character.
-	## RocPackages: the step's command runs Roc programs that depend on these
-	## released bundles, named by content hash. Unlike the others, this happens
-	## after the step's files are staged and before its argv. For each name
-	## whose `<name>/main.roc` is missing from Roc's package cache, publish the
-	## bundle there: copy its tree into a fresh directory beside it, then
-	## rename that to `<name>`. Never touch one that is already complete. The
-	## `locate` argv says where the trees are: it prints a JSON list of
-	## `{ "name": ..., "path": ... }`, each path an unpacked bundle the provider
-	## has already verified against the Lock. Skip `locate` when nothing is
-	## missing.
-	## RocBundles: as RocPackages, with no unpacked tree to point at. For each
-	## bundle whose `<name>/main.roc` is missing from Roc's package cache,
-	## make a fresh directory in the cache directory, download `url` there as
-	## `<name>.tar.zst`, and run the compiler the Core evaluates the
-	## configuration with as `roc unbundle <name>.tar.zst` in it. That must
-	## succeed, which is the check that those bytes are the bundle the name is
-	## the hash of, and leave `<name>/main.roc`. Publish that tree as
-	## RocPackages does, and delete the fresh directory whatever happened.
+	## RocBundles: the step's command runs Roc programs that depend on these
+	## released bundles, each named by the hash of its bytes. Before the
+	## step's argv, for each bundle whose `<name>/main.roc` is missing from
+	## Roc's package cache, make a fresh directory in the cache directory,
+	## download `url` there as `<name>.tar.zst`, and run the compiler the Core
+	## evaluates the configuration with as `roc unbundle <name>.tar.zst` in
+	## it. That must succeed, which is the check that those bytes are the
+	## bundle the name is the hash of, and leave `<name>/main.roc`. Publish
+	## that tree: copy it into a fresh directory beside `<name>`, then rename
+	## that to `<name>`. Never touch a bundle that is already complete, fetch
+	## nothing when none is missing, and delete the fresh directories
+	## whatever happened. The same holds whether or not a provider enters the
+	## step's environment.
 	## Present: the step's command needs programs the machine must already
 	## have. Look each `program` up on the caller's PATH, without starting
 	## it. Do so for every step of the sequence before the first effect of
@@ -63,7 +57,6 @@ Steps := { steps : List(Step) }.{
 		VerifyTree({ path : Str, digest : Str }),
 		Isolation({ mnt : Str, net : Str }),
 		Runner({ executable : Str, system : Str }),
-		RocPackages({ names : List(Str), locate : List(Str) }),
 		RocBundles(List({ name : Str, url : Str })),
 		Present(List({ program : Str, because : Str })),
 		Programs(List(Program)),

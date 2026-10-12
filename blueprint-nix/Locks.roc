@@ -42,7 +42,8 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 				kind: if input.kind == Overlay "overlay" else "flake",
 			})
 		}
-		for source in spec.build_sources {
+		# The bundle of a Roc package no build uses is the Core's to fetch.
+		for source in Project.resolved_build_sources(spec) {
 			$inputs = $inputs.append({
 				name: source.name,
 				ref: normalize_ref(source.ref)?,

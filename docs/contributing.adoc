@@ -218,11 +218,14 @@ header lists what each name does. `scripts/src/CliHarness.roc` holds what the
 three tests share.
 `scripts/test_roc_packages.roc` is a Roc script, like `link_inputs.roc`. It
 runs the real CLI and Nix with a Roc package cache of its own in a temporary
-directory, and refuses to run if that directory lies inside `~/.cache`. It
-checks publication into an empty cache, that a second run writes nothing, that
-an existing package is left alone and an incomplete one replaced, that failures
-leave nothing behind, and that a sandboxed build resolves its bundles with no
-network while the same build without one of them does not.
+directory, and refuses to run if that directory lies inside `~/.cache`. A
+task's bundles are downloaded by `blueprint` itself from the releases their
+URLs name. It checks publication into an empty cache, that a second run
+writes nothing, that an existing package is left alone and an incomplete one
+replaced, that failures leave nothing behind, that a project with no build
+locks no bundle and its task still downloads them, and that a sandboxed build
+resolves its bundles from the lock with no network while the same build
+without one of them does not.
 Normal execution tests explicitly initialize authority with `update` first.
 The complete artifacts example is executed in a temporary copy by
 the workflow suite (`scripts/test_workflows.roc`).

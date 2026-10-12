@@ -292,9 +292,9 @@ Environment("dev", [Overlays(["zig"]), Tools(["nix#zigpkgs.\"0.16.0\""])]),
 == Lock the Roc packages scripts use
 
 A Roc script names its platform and packages by release URL, and Roc downloads
-them on first use. `RocPackages` locks those bundles instead, so the scripts of
-an environment run without a download, and run at all in a sandboxed build,
-which has no network:
+them on first use. `RocPackages` names those bundles for an environment
+instead, so Blueprint has them in place before its scripts start, and they
+run at all in a sandboxed build, which has no network:
 
 [source,roc]
 ----
@@ -311,10 +311,15 @@ Task("release", [Use("scripts"), Run(["roc-stable", "scripts/release.roc"])]),
 Build("notes", [Use("scripts"), Run(["roc-stable", "scripts/notes.roc"]), Output("notes.txt")]),
 ----
 
-Each URL must be `https://` and end in `<hash>.tar.zst`. `blueprint update`
-records every bundle in `Blueprint.lock` like any other source, and Nix checks
-the downloaded bytes against that pin. An extending environment inherits its
-parent's bundles.
+Each URL must be `https://` and end in `<hash>.tar.zst`. The hash is that of
+the bundle's bytes, so the URL itself says what the download must be: for a
+shell or a task, Blueprint downloads a missing bundle and has the compiler
+unpack it, which fails unless the bytes are those the name is the hash of.
+Nothing is recorded in `Blueprint.lock` for that, and no Nix is needed. A
+sandboxed build cannot download, so the bundles of an environment a build
+runs in are also fetched by Nix: `blueprint update` records those in
+`Blueprint.lock` like any other source, and Nix checks the bytes against that
+pin. An extending environment inherits its parent's bundles.
 
 *List every bundle, including dependencies of dependencies.* basic-cli above
 depends on `http`, so both are listed. `roc deps <file>` prints the URLs a
@@ -327,15 +332,17 @@ What Blueprint writes, and where:
 * *`blueprint shell` and `blueprint run`* publish the environment's bundles
   into Roc's own package cache before entering it: the directory
   `roc/packages` under `$XDG_CACHE_HOME`, or under `~/.cache` when that is
-  unset. Each bundle becomes the directory `<hash>` there, a copy of the locked
-  files, which is where Roc looks before downloading. A `<hash>` directory that
+  unset. Each bundle becomes the directory `<hash>` there, the files the
+  compiler unpacked from the download, which is where Roc looks before
+  downloading. A `<hash>` directory that
   already has a `main.roc` is never touched, whether Roc downloaded it or an
   earlier run published it; one without a `main.roc` is incomplete and is
   replaced, as Roc itself would. The copy is made in a temporary directory
   beside it, named `blueprint-<hash>.<random>.tmp`, and renamed into place, so
   another Roc process never sees half a package. Nothing else is written, and
-  nothing at all when every bundle is already there or the environment has no
-  Roc packages. If the cache is deleted, the next run publishes again.
+  nothing is downloaded or written when every bundle is already there or the
+  environment has no Roc packages. If the cache is deleted, the next run
+  downloads and publishes again.
 * *`blueprint build`* does not use that cache. The build gets a package cache
   of its own inside its build directory, holding only its environment's
   bundles, and `XDG_CACHE_HOME` points the build's command at it.

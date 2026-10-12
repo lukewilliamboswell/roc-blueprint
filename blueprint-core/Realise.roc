@@ -322,26 +322,10 @@ Realise :: [].{
 	digest = |text| text.to_utf8().len() == 64 and text.to_utf8().all(|b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f'))
 
 	## A provider's step with what the Core supplies ahead of its own
-	## operations. A step that already publishes the environment's Roc
-	## packages from the provider's own trees is not given them twice.
+	## operations: the same, Roc packages included, as for an environment no
+	## provider enters.
 	with_supplied : Steps.Step, List(Steps.Operation) -> Steps.Step
-	with_supplied = |step, operations| {
-		publishes = step.operations.any(
-			|operation|
-				match operation {
-					RocPackages(_) => True
-					_ => False
-				},
-		)
-		added = operations.keep_if(
-			|operation|
-				match operation {
-					RocBundles(_) => !publishes
-					_ => True
-				},
-		)
-		{ ..step, operations: added.concat(step.operations) }
-	}
+	with_supplied = |step, operations| { ..step, operations: operations.concat(step.operations) }
 
 	## The command every Roc script names on its first line,
 	## `#!/usr/bin/env roc-stable`.
@@ -528,14 +512,6 @@ stub = Provider.{
 provided : [Generate, Shell(Str), Run(Str), Build(Str)], List(Str), Layout, List(Steps.Operation) -> Steps.Step
 provided = |action, argv, layout, operations| { action, files: [{ path: "${layout.generated_root}/flake.nix", contents: "{ }" }], argv, artifacts: [], operations }
 
-## Publishes the environment's Roc packages from its own trees, as the Nix
-## provider does for a task.
-packaging : Provider
-packaging = {
-	..stub,
-	realise: |_spec, _request, _system, layout, _lock| Ok(Steps.{ steps: [provided(Run("packaged"), ["nix", "develop"], layout, [RocPackages({ names: ["abc"], locate: ["nix", "eval"] })])] }),
-}
-
 unix : Layout
 unix = Layout.{ project_root: "/project", workspace: "/project/.blueprint", generated_root: "/project/.blueprint", lock_path: "/project/Blueprint.lock" }
 
@@ -695,13 +671,6 @@ expect planned(sample, Request.Run("host", ["-Doptimize"]), "x86_64-linux", unix
 		operations: supplied_for("host").concat([VerifyTree({ path: "/project/assets", digest: "sha256:00" })]),
 	},
 ])
-
-# A step that publishes the Roc packages from the provider's own trees is not
-# also told to download them.
-expect
-	Realise.plan(sample, Request.Run("host", []), "x86_64-linux", unix, locked, [packaging]).map_ok(|steps| steps.steps.map(|step| step.operations)) == Ok([
-		supplied_for("host").take_first(2).concat([RocPackages({ names: ["abc"], locate: ["nix", "eval"] })]),
-	])
 
 # A shell is planned as a task is. With no package tool it has no argv: the
 # executor starts the caller's own shell with what was supplied.

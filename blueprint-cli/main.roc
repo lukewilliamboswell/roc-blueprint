@@ -1112,7 +1112,6 @@ execute_step! : Steps.Step, List(Fetched), Context => Try({}, _)
 execute_step! = |step, fetched, ctx| {
 	layout = ctx.layout
 	var $files = step.files
-	var $roc_packages = []
 	var $roc_bundles = []
 	var $programs = []
 	for operation in step.operations {
@@ -1156,16 +1155,9 @@ execute_step! = |step, fetched, ctx| {
 					$programs = $programs.append({ name: program.name, file: entry.file })
 				}
 			}
-			# Locating the bundles reads the files staged below.
-			RocPackages(request) => {
-				$roc_packages = $roc_packages.append(request)
-			}
 		}
 	}
 	stage!($files, layout)?
-	for request in $roc_packages {
-		publish_roc_packages!(request.names, request.locate, layout.project_root, provider_names)?
-	}
 	publish_roc_bundles!($roc_bundles, ctx)?
 	if $programs.is_empty() {
 		start!(step, [], "", layout)
@@ -1317,11 +1309,14 @@ roc_package_staging! = |cache, name| {
 	}
 }
 
-## Make each named bundle resolvable by Roc with no provider (see `RocBundles`
-## in `Steps.Operation`): a missing one is downloaded and the compiler unpacks
-## it, which fails unless the bytes are those the bundle's name is the hash
-## of. A bundle that is already there is left alone, and when none is missing
-## nothing is fetched.
+## Make each named bundle resolvable by Roc without Roc downloading it (see
+## `RocBundles` in `Steps.Operation`), for every task and shell, whether or
+## not a provider enters its environment: a missing one is downloaded and the
+## compiler unpacks it, which fails unless the bytes are those the bundle's
+## name is the hash of. A bundle that is already there, whether Roc
+## downloaded it or an earlier run published it, is left alone, and when
+## none is missing nothing is fetched. Roc may lose its cache at any time;
+## the next run publishes again.
 publish_roc_bundles! : List({ name : Str, url : Str }), Context => Try({}, _)
 publish_roc_bundles! = |bundles, ctx| {
 	if bundles.is_empty() {
@@ -1349,7 +1344,9 @@ publish_roc_bundles! = |bundles, ctx| {
 			Stderr.line!("blueprint: fetching Roc package ${bundle.name} from ${bundle.url}")?
 			bytes = Download.get!(bundle.url).map_err(|reason| RocPackagesFailed("could not download Roc package ${bundle.name} from ${bundle.url}: ${reason}; nothing was published"))?
 			child(fresh, file).write_bytes!(bytes).map_err(|_| RocPackagesFailed("cannot write Roc package ${bundle.name} in ${fresh.display()}"))?
-			Cmd.new_str(compiler).args_str(["unbundle", file]).cwd(fresh).exec_cmd!()
+			# What the compiler says while unpacking is kept off the standard
+			# output, which is the task's own.
+			_ = Cmd.new_str(compiler).args_str(["unbundle", file]).cwd(fresh).exec_output!()
 				.map_err(|_| RocPackagesFailed("Roc package ${bundle.name} from ${bundle.url} is not the bundle its name is the hash of: `roc unbundle` refused it; nothing was published"))?
 			publish_roc_package!(cache, bundle.name, child(fresh, bundle.name))
 		}
@@ -1365,52 +1362,9 @@ publish_roc_bundles! = |bundles, ctx| {
 roc_package_present! : Path, Str => Bool
 roc_package_present! = |cache, name| child(child(cache, name), "main.roc").is_file!() ?? False
 
-## Make each named bundle resolvable by Roc without a download, by publishing
-## the locked copy into Roc's package cache. A package that is already there,
-## whether Roc downloaded it or an earlier run published it, is left alone, and
-## when none is missing the provider is not asked anything. Roc may lose its
-## cache at any time; the next run publishes again.
-publish_roc_packages! : List(Str), List(Str), Str, Str => Try({}, _)
-publish_roc_packages! = |names, locate, root, provider| {
-	cache = roc_package_cache!(root)?
-	var $missing = []
-	for name in names {
-		if !Project.valid_name(name) {
-			return Err(RocPackagesFailed("invalid Roc package name: ${name}"))
-		}
-		if !roc_package_present!(cache, name) {
-			$missing = $missing.append(name)
-		}
-	}
-	if $missing.is_empty() {
-		return Ok({})
-	}
-	located = locate_roc_packages!(locate, root, provider)?
-	cache.create_all!().map_err(|_| RocPackagesFailed("cannot create Roc's package cache ${cache.display()}"))?
-	for name in $missing {
-		bundle = located.find_first(|entry| entry.name == name)
-			.map_err(|_| RocPackagesFailed("the ${provider} provider did not locate Roc package ${name}"))?
-		publish_roc_package!(cache, name, path(bundle.path))?
-	}
-	Ok({})
-}
-
-## Run the provider's argv; it prints where each locked bundle is unpacked.
-locate_roc_packages! : List(Str), Str, Str => Try(List(RocPackage), _)
-locate_roc_packages! = |argv, root, provider|
-	match argv {
-		[program, .. as args] => {
-			output = Cmd.new_str(program).args_str(args).cwd(path(root)).stderr(Inherit).exec_output!()
-				.map_err(|_| RocPackagesFailed("could not locate the locked Roc packages with `${Str.join_with(argv, " ")}`"))?
-			located : Try(List(RocPackage), _)
-			located = Json.parse(output.stdout_utf8)
-			located.map_err(|_| RocPackagesFailed("the ${provider} provider did not say where the locked Roc packages are"))
-		}
-		[] => Err(RocPackagesFailed("the ${provider} provider cannot locate Roc packages"))
-	}
-
-## Publish one bundle as `<cache>/<name>`. The provider has already verified
-## `source` against Blueprint.lock, so nothing is hashed again here.
+## Publish one bundle as `<cache>/<name>` from `source`, the tree the
+## compiler unpacked. Unpacking was the check of its bytes against the
+## bundle's name, so nothing is hashed again here.
 ##
 ## Every Roc process reads this cache, so `main.roc` must never appear before
 ## the rest. The tree is copied into a staging directory in the cache
@@ -1419,7 +1373,7 @@ locate_roc_packages! = |argv, root, provider|
 publish_roc_package! : Path, Str, Path => Try({}, _)
 publish_roc_package! = |cache, name, source| {
 	if !(source.join("main.roc").is_file!() ?? False) {
-		return Err(RocPackagesFailed("locked Roc package ${name} has no main.roc in ${source.display()}"))
+		return Err(RocPackagesFailed("Roc package ${name} has no main.roc in ${source.display()}"))
 	}
 	final = child(cache, name)
 	staging = roc_package_staging!(cache, name)?
@@ -1455,9 +1409,8 @@ publish_roc_package! = |cache, name, source| {
 }
 
 ## Copy a bundle's directories and regular files by raw entry names. Files
-## keep their permissions, so they stay read-only as in the store; directories
-## are created anew and writable, so the package can be deleted. A bundle
-## holds no links or special files.
+## keep their permissions; directories are created anew and writable, so the
+## package can be deleted. A bundle holds no links or special files.
 copy_roc_package! : Path, Path => Try({}, _)
 copy_roc_package! = |source, target| {
 	for entry in source.list!()? {

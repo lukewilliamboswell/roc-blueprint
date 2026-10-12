@@ -15,8 +15,10 @@ import Value
 ##   is empty when the source has none. Providers must keep these consistent
 ##   with their hints.
 ## - `intent` — the parts of the Spec that Resolve consumed: source and input
-##   declarations, build sources and each environment's overlay order, sorted
-##   by name. A Lock whose intent differs from the current Spec is stale.
+##   declarations, the build sources a provider resolves (see
+##   `Project.resolved_build_sources`) and each environment's overlay order,
+##   sorted by name. A Lock whose intent differs from the current Spec is
+##   stale.
 ## - `hints` — provider-namespaced data `{ provider, value }` a provider needs
 ##   to reproduce its pins exactly, such as a native lock graph.
 ## - `fetched` — one entry per declared program and System: `{ name, system,
@@ -56,7 +58,7 @@ Lock := {
 	intent_of = |spec| {
 		sources: spec.sources.sort_with(|x, y| Project.bytewise(x.name, y.name)),
 		inputs: spec.inputs.sort_with(|x, y| Project.bytewise(x.name, y.name)),
-		build_sources: spec.build_sources.sort_with(|x, y| Project.bytewise(x.name, y.name)),
+		build_sources: Project.resolved_build_sources(spec).sort_with(|x, y| Project.bytewise(x.name, y.name)),
 		overlays: spec.environments
 			.keep_if(|env| !env.overlays.is_empty())
 			.map(|env| { environment: env.name, overlays: env.overlays })
@@ -230,4 +232,17 @@ expect {
 	spec = { ..Spec.empty("x"), sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] }
 	lock = { ..sample, intent: Lock.intent_of(spec) }
 	lock.stale({ ..spec, programs: [{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool"], unpack: File, path: "" }] }) == Ok({})
+}
+
+# The bundle of a Roc package that only tasks use is not what Resolve
+# consumed: declaring one leaves the Lock current, and a build in that
+# environment makes it stale, because a provider must then lock the bundle.
+expect {
+	spec = { ..Spec.empty("x"), requires_: ["sources", "builds", "roc-packages"], environments: [{ name: "dev", parents: [], tools: [], overlays: [] }] }
+	lock = { ..sample, intent: Lock.intent_of(spec) }
+	bundled = { ..spec, build_sources: [{ name: "roc-abc", ref: "tarball+https://example.test/abc.tar.zst" }], roc_packages: [{ environment: "dev", name: "abc", source: "roc-abc" }] }
+	built = { ..bundled, builds: [{ name: "app", environment: "dev", inputs: [], needs: [], run: ["true"], output: "out" }] }
+	Lock.intent_of(bundled).build_sources == []
+		and lock.stale(bundled) == Ok({})
+			and lock.stale(built) == Err("Blueprint.roc changed its build sources since the lock was resolved; run blueprint update")
 }

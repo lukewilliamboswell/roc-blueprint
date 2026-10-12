@@ -174,8 +174,10 @@ BuildHarness := [].{
 	}
 
 	## Fetch and realise every pinned input, with the network, through the real
-	## Nix. This is the only step that may download: every later call goes
-	## through the recording `nix`, which adds `--offline`. Each reference is the
+	## Nix. This is the only step in which Nix may download: every later call
+	## goes through the recording `nix`, which adds `--offline`. The Roc
+	## bundles a task runs on are not Nix's to fetch: `blueprint` downloads
+	## them itself, once, into the suite's own package cache. Each reference is the
 	## one the fixtures use, and must still name the bytes the pins record.
 	warm! : Suite => Try({}, _)
 	warm! = |suite| {

@@ -6,7 +6,9 @@ import cli.Stdout
 import Script
 
 ## An end-to-end test of the `RocPackages` setting against the real
-## `./blueprint` and real Nix.
+## `./blueprint` and real Nix. A task or a shell has its bundles downloaded by
+## `blueprint` itself, from the release each URL names, and unpacked by the
+## compiler; only a sandboxed build takes them from Nix, which then locks them.
 ##
 ## Every command runs with `XDG_CACHE_HOME` set to a directory this test
 ## creates, so the Roc package cache it publishes into, breaks and repairs is
@@ -45,10 +47,15 @@ RocPackagesTest := [].{
 	within = |inner, outer| inner == outer or inner.starts_with("${outer.drop_suffix("/")}/")
 
 	## A project whose `dev` environment inherits the listed bundles and runs
-	## Roc as `roc-stable`; `plain` has no Roc packages at all.
-	blueprint_roc : Str, List(Str) -> Str
-	blueprint_roc = |platform_path, bundles| {
+	## Roc as `roc-stable`; `plain` has no Roc packages at all. With `build`,
+	## a sandboxed build runs in `dev` too.
+	blueprint_roc : Str, List(Str), [WithBuild, TasksOnly] -> Str
+	blueprint_roc = |platform_path, bundles, builds| {
 		urls = Str.join_with(bundles.map(|url| "\"${url}\""), ", ")
+		build = match builds {
+			WithBuild => ["	Build(\"offline\", [Use(\"dev\"), Run([\"roc-stable\", \"main.roc\", \"greeting.txt\"]), Output(\"greeting.txt\")]),"]
+			TasksOnly => []
+		}
 		Str.join_with(
 			[
 				"app [config] { pf: platform \"${platform_path}\" }",
@@ -65,10 +72,9 @@ RocPackagesTest := [].{
 				"	Task(\"version\", [Use(\"dev\"), Run([\"roc-stable\", \"version\"])]),",
 				"	Task(\"hello\", [Use(\"dev\"), Run([\"roc-stable\", \"main.roc\"])]),",
 				"	Task(\"plain\", [Use(\"plain\"), Run([\"hello\"])]),",
-				"	Build(\"offline\", [Use(\"dev\"), Run([\"roc-stable\", \"main.roc\", \"greeting.txt\"]), Output(\"greeting.txt\")]),",
-				"]",
-				"",
-			],
+			]
+				.concat(build)
+				.concat(["]", ""]),
 			"\n",
 		)
 	}
@@ -199,19 +205,18 @@ chmod! : Str, Str => Try({}, _)
 chmod! = |mode, target|
 	Cmd.new_str("chmod").args_str([mode, "--", target]).exec_cmd!().map_err(|_| ChmodFailed(target))
 
-## Whether Blueprint published this package: it copies read-only files from
-## the store, where Roc's own download leaves them writable.
-blueprint_published! : Str, Str => Bool
-blueprint_published! = |package_dir, name| {
-	entry = Path.utf8("${package_dir}/${name}/main.roc")
-	(Path.is_file!(entry) ?? False) and !(Path.is_writable!(entry) ?? True)
-}
+## Whether a package is complete in this cache: Roc reads its `main.roc`.
+## Blueprint's publication and Roc's own download leave the same files, so
+## which of them it was is known from what ran: a task that resolves no
+## package makes Roc download none.
+published! : Str, Str => Bool
+published! = |package_dir, name| Path.is_file!(Path.utf8("${package_dir}/${name}/main.roc")) ?? False
 
 published_among! : Str, List(Str) => List(Str)
 published_among! = |package_dir, names| {
 	var $found = []
 	for name in names {
-		if blueprint_published!(package_dir, name) {
+		if published!(package_dir, name) {
 			$found = $found.append(name)
 		}
 	}
@@ -292,13 +297,14 @@ scenarios! = |context| {
 
 	Path.create_all!(Path.utf8(project))?
 	platform_path = RocPackagesTest.relative(project, "${context.root}/blueprint-platform/main.roc")
-	Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), RocPackagesTest.blueprint_roc(platform_path, [RocPackagesTest.basic_cli, RocPackagesTest.http]))?
+	Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), RocPackagesTest.blueprint_roc(platform_path, [RocPackagesTest.basic_cli, RocPackagesTest.http], WithBuild))?
 	Path.write_utf8!(Path.utf8("${project}/main.roc"), RocPackagesTest.app_roc)?
 	_ = succeed!(context, cache, project, ["update"])?
 	lock = Path.read_utf8!(Path.utf8("${project}/Blueprint.lock"))?
+	# A build runs in the environment, so Nix locks both bundles for it.
 	check!(
 		lock.contains("tarball+${RocPackagesTest.basic_cli}") and lock.contains("tarball+${RocPackagesTest.http}"),
-		"Blueprint.lock does not pin both bundles",
+		"Blueprint.lock does not pin both bundles for the build",
 	)?
 	check!(names!(package_dir)?.is_empty(), "`blueprint update` wrote into the package cache")?
 
@@ -306,11 +312,12 @@ scenarios! = |context| {
 	# bundle. This task resolves no package, so Roc itself downloads nothing.
 	version = succeed!(context, cache, project, ["run", "version"])?
 	check!(version.stdout.contains(RocPackagesTest.roc_tag), "roc-stable is not ${RocPackagesTest.roc_tag}: ${version.stdout}")?
+	# The task's output is its own: nothing of the publication is in it.
+	check!(version.stdout.split_on("\n").keep_if(|line| !line.trim().is_empty()).len() == 1 and version.stderr.contains("fetching Roc package ${cli}"), "publishing wrote to the task's standard output, or did not say what it fetched:\n${version.stdout}${version.stderr}")?
 	first = names!(package_dir)?
 	check!(same_names(first, hashes), "expected exactly the two packages, found: ${Str.join_with(first, " ")}")?
 	check_published!(package_dir, cli)?
 	check_published!(package_dir, http)?
-	check!(blueprint_published!(package_dir, cli) and blueprint_published!(package_dir, http), "the published files are not read-only copies")?
 	hello = succeed!(context, cache, project, ["run", "hello"])?
 	check!(hello.stdout.trim() == RocPackagesTest.greeting, "the basic-cli app printed: ${hello.stdout}")?
 	Script.pass!("1. empty cache: published ${Str.join_with(first, " ")} as real directories; the app printed \"${hello.stdout.trim()}\"")?
@@ -347,7 +354,7 @@ scenarios! = |context| {
 	Path.delete_all!(Path.utf8("${cache}/roc"))?
 	restored = succeed!(context, cache, project, ["run", "hello"])?
 	check!(restored.stdout.trim() == RocPackagesTest.greeting, "after losing the cache the app printed: ${restored.stdout}")?
-	check!(blueprint_published!(package_dir, cli) and blueprint_published!(package_dir, http), "a lost cache was not published again")?
+	check!(published!(package_dir, cli) and published!(package_dir, http), "a lost cache was not published again")?
 	Script.pass!("   deleted cache: both packages published again; the app printed \"${restored.stdout.trim()}\"")?
 
 	# 4. A directory without a `main.roc` is incomplete: it is replaced.
@@ -357,7 +364,7 @@ scenarios! = |context| {
 	_ = succeed!(context, cache, project, ["run", "version"])?
 	check_published!(package_dir, http)?
 	replaced_names = names!("${package_dir}/${http}")?
-	check!(blueprint_published!(package_dir, http) and !replaced_names.contains("partial.roc"), "an incomplete directory was not replaced: ${Str.join_with(replaced_names, " ")}")?
+	check!(published!(package_dir, http) and !replaced_names.contains("partial.roc"), "an incomplete directory was not replaced: ${Str.join_with(replaced_names, " ")}")?
 	check_clean!(package_dir, hashes, "after replacing an incomplete directory")?
 	repaired = succeed!(context, cache, project, ["run", "hello"])?
 	check!(repaired.stdout.trim() == RocPackagesTest.greeting, "after the replacement the app printed: ${repaired.stdout}")?
@@ -376,7 +383,7 @@ scenarios! = |context| {
 	check!(stuck.code != 0 and stuck.stderr.contains("has no main.roc and cannot be replaced"), "an unreplaceable directory did not fail clearly (code ${stuck.code.to_str()}):\n${stuck.stderr}")?
 	check!(same_names(stuck_names, ["partial.roc"]), "the failed publication changed the directory: ${Str.join_with(stuck_names, " ")}")?
 	check_clean!(package_dir, hashes, "after a failed replacement")?
-	stuck_line = stuck.stderr.split_on("\n").keep_if(|line| line.starts_with("blueprint: ")).first() ?? ""
+	stuck_line = stuck.stderr.split_on("\n").keep_if(|line| line.starts_with("blueprint: ")).last() ?? ""
 	Script.pass!("5. read-only incomplete directory: exit ${stuck.code.to_str()}, nothing staged left; ${stuck_line.replace_each(context.work, "<work>")}")?
 
 	# An unwritable cache directory fails before anything is staged.
@@ -388,7 +395,7 @@ scenarios! = |context| {
 	after_refusal = names!(package_dir)?
 	check!(refused.code != 0 and refused.stderr.contains("cannot stage Roc package ${http}"), "an unwritable cache did not fail clearly (code ${refused.code.to_str()}):\n${refused.stderr}")?
 	check!(same_names(after_refusal, before_refusal) and !after_refusal.contains(http), "the failed publication wrote into the cache: ${Str.join_with(after_refusal, " ")}")?
-	refused_line = refused.stderr.split_on("\n").keep_if(|line| line.starts_with("blueprint: ")).first() ?? ""
+	refused_line = refused.stderr.split_on("\n").keep_if(|line| line.starts_with("blueprint: ")).last() ?? ""
 	Script.pass!("   unwritable cache directory: exit ${refused.code.to_str()}, cache unchanged; ${refused_line.replace_each(context.work, "<work>")}")?
 	recovered = succeed!(context, cache, project, ["run", "hello"])?
 	check!(recovered.stdout.trim() == RocPackagesTest.greeting, "after the failures the app printed: ${recovered.stdout}")?
@@ -440,7 +447,7 @@ scenarios! = |context| {
 	Path.create_all!(Path.utf8(partial))?
 	Path.write_utf8!(
 		Path.utf8("${partial}/Blueprint.roc"),
-		RocPackagesTest.blueprint_roc(RocPackagesTest.relative(partial, "${context.root}/blueprint-platform/main.roc"), [RocPackagesTest.basic_cli]),
+		RocPackagesTest.blueprint_roc(RocPackagesTest.relative(partial, "${context.root}/blueprint-platform/main.roc"), [RocPackagesTest.basic_cli], WithBuild),
 	)?
 	Path.write_utf8!(Path.utf8("${partial}/main.roc"), RocPackagesTest.app_roc)?
 	_ = succeed!(context, cache, partial, ["update"])?
@@ -450,6 +457,26 @@ scenarios! = |context| {
 		"a build missing the http bundle did not fail to resolve it (code ${unresolved.code.to_str()}):\n${unresolved.stderr}",
 	)?
 	Script.pass!("   the same build without the http bundle: exit ${unresolved.code.to_str()}, \"package download failed\"")?
+
+	# A project whose Roc packages only tasks use locks none of them: no
+	# build needs one from Nix, and a task downloads its own. The lock names
+	# no bundle, and the task still finds both in a cache of its own.
+	tasks_only = "${context.work}/tasks-only"
+	Path.create_all!(Path.utf8(tasks_only))?
+	Path.write_utf8!(
+		Path.utf8("${tasks_only}/Blueprint.roc"),
+		RocPackagesTest.blueprint_roc(RocPackagesTest.relative(tasks_only, "${context.root}/blueprint-platform/main.roc"), [RocPackagesTest.basic_cli, RocPackagesTest.http], TasksOnly),
+	)?
+	Path.write_utf8!(Path.utf8("${tasks_only}/main.roc"), RocPackagesTest.app_roc)?
+	tasks_cache = "${context.work}/tasks-cache"
+	_ = succeed!(context, tasks_cache, tasks_only, ["update"])?
+	tasks_lock = Path.read_utf8!(Path.utf8("${tasks_only}/Blueprint.lock"))?
+	check!(!tasks_lock.contains("tarball+") and !tasks_lock.contains(cli) and !tasks_lock.contains(http), "a project with no build locked a Roc bundle:\n${tasks_lock}")?
+	fetched = succeed!(context, tasks_cache, tasks_only, ["run", "version"])?
+	check!(fetched.stderr.contains("fetching Roc package ${cli} from ${RocPackagesTest.basic_cli}") and same_names(names!("${tasks_cache}/roc/packages")?, hashes), "a task did not download its own Roc packages:\n${fetched.stderr}")?
+	unlocked = succeed!(context, tasks_cache, tasks_only, ["run", "hello"])?
+	check!(unlocked.stdout.trim() == RocPackagesTest.greeting and !unlocked.stderr.contains("fetching Roc package"), "with no bundle locked the app printed: ${unlocked.stdout}${unlocked.stderr}")?
+	Script.pass!("   no build: Blueprint.lock names no bundle; the task downloaded both itself and the app printed \"${unlocked.stdout.trim()}\"")?
 
 	# 7. Nothing was published into the user's own cache.
 	ours_after = published_among!(real_packages, hashes)
@@ -474,4 +501,5 @@ expect !RocPackagesTest.within("/tmp/work/cache", "/home/me/.cache")
 
 expect leftover("blueprint-abc.x1y2z3.tmp") and leftover("abc.0123456789abcdef.tmp") and !leftover("abc") and !leftover("abc.deps.json")
 expect same_names(["a", "b"], ["b", "a"]) and !same_names(["a"], ["a", "b"])
-expect RocPackagesTest.blueprint_roc("../p/main.roc", ["https://e.test/a.tar.zst", "https://e.test/b.tar.zst"]).contains("RocPackages([\"https://e.test/a.tar.zst\", \"https://e.test/b.tar.zst\"])")
+expect RocPackagesTest.blueprint_roc("../p/main.roc", ["https://e.test/a.tar.zst", "https://e.test/b.tar.zst"], WithBuild).contains("RocPackages([\"https://e.test/a.tar.zst\", \"https://e.test/b.tar.zst\"])")
+expect RocPackagesTest.blueprint_roc("../p/main.roc", [], WithBuild).contains("Build(\"offline\"") and !RocPackagesTest.blueprint_roc("../p/main.roc", [], TasksOnly).contains("Build(")

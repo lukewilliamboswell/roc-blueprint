@@ -37,6 +37,9 @@ has already downloaded; it does not cut the network off.
 
 Every command runs with a private `XDG_CACHE_HOME` inside the temporary
 directory, so the Roc packages a task publishes never reach your own cache.
+`blueprint` downloads those bundles itself, once per run, from the releases
+their URLs name: they are a task's, not Nix's, to fetch. A build takes the
+same bundles from Nix, pinned and fetched in the first step.
 Only Nix's download cache there is yours, through a link, so that a source
 fetched once is not fetched again by every run. Remote builders are disabled.
 

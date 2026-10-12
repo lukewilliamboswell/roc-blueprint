@@ -33,10 +33,13 @@ In outline:
   flattens inheritance; a child replaces an inherited tool's options, and a
   tool an environment also has plain is rejected.
 * `roc_packages` — optional `{ environment, name, source }`: a Roc bundle's
-  content hash and the `build_sources` entry that fetches it. The platform
+  content hash and the `build_sources` entry that names its URL. The platform
   derives both from the bundle URL (`roc-<hash>`, `tarball+<url>`);
   environments sharing a bundle share one source. Validation flattens
-  inheritance, parent first.
+  inheritance, parent first. The Core fetches the bundles of a task or a
+  shell itself. A provider resolves and locks such a source only when a
+  build's environment has the package (`Project.resolved_build_sources`), so
+  Roc packages that tasks and shells alone use need no provider.
 * `programs` — optional `{ name, system, urls, unpack, path }`: a program
   downloaded for one System, under the command name `name`. `urls` is a
   nonempty list, the primary first and then alternates for the same bytes,
@@ -189,15 +192,13 @@ provider. It:
   applied to its options, rendered as data like `raw`, in shells and builds;
 * appends `Present` for `nix` to every step that starts it, with the reason,
   and none to a step that only generates files;
-* makes `roc_packages` available without a download. A shell or task step
-  carries a `RocPackages` operation naming the environment's bundles and a
-  `locate` argv (`nix eval --json` of the generated flake's
-  `blueprintRocPackages.<environment>` output, with the staged lock read-only),
-  which prints where each locked bundle is unpacked. The executor publishes the
-  missing ones into Roc's package cache and runs `locate` only when one is
-  missing. A build's specification instead lists the bundles and a `ln`, and
-  `blueprint __build-runner` links them into a cache inside the build directory
-  and sets `XDG_CACHE_HOME` for the build's command. There is no shell hook;
+* gives a build its environment's `roc_packages`, since a build has no
+  network: the build's specification lists the locked bundles and a `ln`, and
+  `blueprint __build-runner` links them into a cache inside the build
+  directory and sets `XDG_CACHE_HOME` for the build's command. A shell or a
+  task gets nothing of them from this provider: the Core's `RocBundles`
+  operation downloads the missing ones into Roc's package cache, with Nix or
+  without. There is no shell hook;
 * rejects unsupported Nix target declarations and restricts build requests to
   x86_64 Linux. Other supported output shapes are not execution evidence;
 * renders `raw` for backend `"nix"` at `shell:<alias>` and `flake` as data,
