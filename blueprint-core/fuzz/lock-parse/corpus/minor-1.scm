@@ -1,0 +1,8 @@
+((format ((major 1) (minor 1)))
+ (intent ((sources (((name "nix") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
+          (inputs ()) (build_sources ()) (overlays ())))
+ (sources (((name "nix") (provider "nix") (ref "github:NixOS/nixpkgs/nixos-unstable")
+            (rev "4975466d324710c576dc11ad614684e6bd8cad8e")
+            (digest "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5"))))
+ (hints (((provider "nix") (value (Attrs (((name "version") (value (Int 7)))))))))
+ (fetched ()))

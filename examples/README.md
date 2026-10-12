@@ -1,6 +1,6 @@
 # Examples
 
-These examples use the platform in this repository and Spec 2.6, not the latest
+These examples use the platform in this repository and Spec 2.7, not the latest
 published platform. Each directory keeps its
 `Blueprint.roc` and related files together.
 

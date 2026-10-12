@@ -342,6 +342,7 @@ sample_authority = Lock.to_str(
 		intent: Lock.empty_intent,
 		sources: [],
 		hints: [{ provider: "nix", value: Locks.to_value(LockJson.decode("{\"graph\":{\"nodes\":{\"default\":{\"locked\":{\"rev\":\"abc\"}}},\"version\":7}}") ?? LockJson.Null) }],
+		fetched: [],
 	},
 )
 

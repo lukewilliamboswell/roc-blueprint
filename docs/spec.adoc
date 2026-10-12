@@ -12,7 +12,7 @@ xref:architecture.adoc#terms[The architecture chapter] defines the terms.
 
 In outline:
 
-* `format` — `((major 2) (minor 6))`; see <<compatibility-of-the-formats>>.
+* `format` — `((major 2) (minor 7))`; see <<compatibility-of-the-formats>>.
 * `name`, `systems` (strings such as `"x86_64-linux"`).
 * `sources` — `{ name, provider }`, where provider is `Auto`,
   `NixPackages(Str)` or `GuixPackages(Str)`. Validation supplies
@@ -34,6 +34,16 @@ In outline:
   derives both from the bundle URL (`roc-<hash>`, `tarball+<url>`);
   environments sharing a bundle share one source. Validation flattens
   inheritance, parent first.
+* `programs` — optional `{ name, system, url, unpack, path }`: a program
+  downloaded from `url` for one System, under the command name `name`.
+  `unpack` is `File`, `TarGz`, `TarXz` or `Zip`; `path` is the program inside
+  the unpacked archive and empty for a `File`. A program with no entry for a
+  System is unavailable there. The Lock records the digest; the Spec never
+  does.
+* `environment_programs` — optional `{ environment, programs }`: the declared
+  programs an environment has on `PATH`, by name.
+* `expects` — optional `{ environment, programs }`: programs the machine must
+  already have on `PATH`. They are checked for, never installed.
 * `shells` — `{ name, environment }` aliases.
 * `tasks` — `{ name, environment, run }`, with nonempty executable argv.
 * `build_sources` — `{ name, ref }`, locked non-flake sources, separate from
@@ -46,7 +56,7 @@ In outline:
   wire field keeps the name `backend`).
 * `extensions` — `{ kind, name, value }`, blocks a provider may understand.
 * `requires` — features the config uses beyond the core (`"raw"`,
-  `"extensions"`, `"sources"`, `"builds"`, `"workflows"`, `"system-tools"`, `"commands"`, `"roc-packages"`, `"configured-tools"`), so an older `blueprint` can say what's missing.
+  `"extensions"`, `"sources"`, `"builds"`, `"workflows"`, `"system-tools"`, `"commands"`, `"roc-packages"`, `"configured-tools"`, `"programs"`, `"expects"`), so an older `blueprint` can say what's missing.
 
 `Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its S-expression encoder
 and parser are hand-written to avoid recursive-codec derivation problems.
@@ -68,15 +78,18 @@ probes the host or installs/fetches anything.
 == What the Lock holds
 
 `Blueprint.lock` is a `blueprint-core/Lock.roc` value in the same S-expression
-codec, with its own `format` (currently 1.0) and the same compatibility rules
+codec, with its own `format` (currently 1.1) and the same compatibility rules
 as the Spec. It holds `intent` (the parts of the Spec Resolve consumed: source
 and input declarations, build sources and per-environment overlay order), which
 the CLI records on `update` and compares before every other command, failing
 with what changed; `sources` (one provider-neutral `{ name, provider, ref,
 rev, digest }` per declared input; `digest` is `sha256:<hex>`: the Nix
 provider converts its NAR hashes for remote inputs, and local inputs carry
-Blueprint's own tree digest from core `Tree`) and provider-namespaced
-`hints`. The Nix provider's hint carries its declared input identity and the
+Blueprint's own tree digest from core `Tree`), provider-namespaced
+`hints`, and `fetched` (one `{ name, system, url, sha256, size }` per declared
+program and System: the SHA-256, in hex, and the length of what `url` served
+when it was resolved. Programs are not part of `intent`; each entry carries
+its URL, so a program whose URL changed is stale alone). The Nix provider's hint carries its declared input identity and the
 complete native lock graph; decoding rejects a lock whose Sources disagree with
 those pins, so hand edits to either side fail. The graph's root holds one edge
 that is no declared input: `nixpkgs`, following the package source

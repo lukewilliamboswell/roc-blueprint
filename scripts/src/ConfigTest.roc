@@ -39,11 +39,11 @@ ConfigTest := [].{
 	## A new optional field comes with a feature marker for older consumers.
 	markers : List((Str, List(Str)))
 	markers = [
-		("Builds", ["(minor 6)", "(requires (\"sources\" \"builds\"))", "(build_sources ", "(builds "]),
+		("Builds", ["(minor 7)", "(requires (\"sources\" \"builds\"))", "(build_sources ", "(builds "]),
 		(
 			"Workflows",
 			[
-				"(minor 6)",
+				"(minor 7)",
 				"(requires (\"builds\" \"workflows\"))",
 				"(workflows ",
 				"(RunTask \"check.all\" (\"\" \"two words\" \"\\\"quoted\\\"\" \"\$HOME\" \"line\\nbreak\" \"--flag\"))",

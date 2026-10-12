@@ -207,6 +207,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 				]),
 			},
 		],
+		fetched: [],
 	}
 
 	## One provider-neutral Source per declared input, in declaration order.

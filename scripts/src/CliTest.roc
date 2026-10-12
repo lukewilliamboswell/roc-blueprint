@@ -504,6 +504,7 @@ authority_sample = Lock.to_str(
 		intent: Lock.empty_intent,
 		sources: [],
 		hints: [{ provider: "nix", value: Locks.to_value(LockJson.decode("{\"graph\":${native_sample}}") ?? LockJson.Null) }],
+		fetched: [],
 	},
 )
 

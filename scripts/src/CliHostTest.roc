@@ -151,7 +151,7 @@ unresolved_lock! = |test, cwd| {
 	printed = CliHarness.blueprint!(test.bench, cwd, ["spec"], CliHarness.setting(test.env, [host]))?
 	CliHarness.exited!(printed, 0, "blueprint spec")?
 	match Spec.parse(printed.stdout) {
-		Ok(spec) => Path.write_utf8!(Path.utf8("${cwd}/Blueprint.lock"), Lock.to_str(Lock.{ format: Lock.current_format, intent: Lock.intent_of(spec), sources: [], hints: [] }))
+		Ok(spec) => Path.write_utf8!(Path.utf8("${cwd}/Blueprint.lock"), Lock.to_str(Lock.{ format: Lock.current_format, intent: Lock.intent_of(spec), sources: [], hints: [], fetched: [] }))
 		Err(_) => Script.fail!("blueprint spec did not print a Spec:\n${printed.stdout}")
 	}
 }

@@ -49,7 +49,7 @@ flake.nix                builds blueprint with the pinned Roc; the development s
 ----
 
 The local platform and CLI share `blueprint-core`, including
-`Project.validate`. The Spec wire format is major 2 (currently 2.6); published
+`Project.validate`. The Spec wire format is major 2 (currently 2.7); published
 major-1 bundles are not compatible. The architecture, terminology (Spec,
 Provider, Lock, stages) and invariants are defined in
 xref:architecture.adoc#purpose[the architecture chapter]; keep it in sync with changes.

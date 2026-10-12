@@ -17,6 +17,7 @@ import "../../blueprint-nix/tests/sample.spec.scm" as wire : Str
 import "../../blueprint-nix/tests/sample.golden.nix" as golden : Str
 import "inputs.lock" as native_lock : Str
 import "authority.lock" as authority : Str
+import "../../blueprint-core/fuzz/lock-parse/corpus/nix-authority.scm" as authority_0_5 : Str
 
 layout : Layout
 layout = Layout.{
@@ -65,6 +66,10 @@ expect {
 	encoded = Locks.encode(converted)
 	encoded == authority
 }
+
+# The same pins as blueprint 0.5 wrote them, in Lock format 1.0, are still
+# authority: they decode unchanged and are written back in the current format.
+expect authority_0_5.contains("(minor 0)") and Locks.decode(authority_0_5).map_ok(Locks.encode) == Ok(authority)
 
 # Inspection preserves the B1 golden; plans add stable, explicit input kinds.
 expect NixProvider.render(project(wire)?) == Ok(golden)
