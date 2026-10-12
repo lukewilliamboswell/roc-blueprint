@@ -45,6 +45,7 @@ run! = || {
 			work: directory,
 			subset: Full,
 			environment: [],
+			arguments: [],
 		},
 		in_batches!,
 	)

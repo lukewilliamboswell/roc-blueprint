@@ -120,20 +120,21 @@ ConfigTest := [].{
 	## Write the fixtures into `work`, check each, then run the ones whose Spec
 	## is compared. `platform` is a path relative to `work`, or a bundle URL.
 	## `drive!` runs a batch of compiler commands together and returns their
-	## outcomes in order; a caller serving a bundle serves it meanwhile.
-	run! : { roc : Str, platform_ref : Str, work : Str, subset : Subset, environment : List((Str, Str)) }, (List(Process.Job) => Try(List(Process.Outcome), _)) => Try({}, _)
+	## outcomes in order; a caller serving a bundle serves it meanwhile, and
+	## gives in `arguments` what the compiler needs to find the rest there.
+	run! : { roc : Str, platform_ref : Str, work : Str, subset : Subset, environment : List((Str, Str)), arguments : List(Str) }, (List(Process.Job) => Try(List(Process.Outcome), _)) => Try({}, _)
 	run! = |options, drive!| {
 		for (name, text) in sources(options.platform_ref) {
 			Path.write_utf8!(Path.utf8("${options.work}/${name}"), text)?
 		}
 		chosen = selected(options.subset)
-		compiler = |args| Process.with_env(Process.command(options.roc, args, options.work), options.environment)
+		compiler = |args, name| Process.with_env(Process.command(options.roc, args.concat(options.arguments).concat(["${name}.roc"]), options.work), options.environment)
 
-		checked = drive!(chosen.map(|fixture| compiler(["check", "${fixture.name}.roc"])))?
+		checked = drive!(chosen.map(|fixture| compiler(["check"], fixture.name)))?
 		report_checks!(chosen, checked)?
 
 		emitted = chosen.map(|fixture| fixture.name).keep_if(|name| emitted_names.contains(name))
-		ran = drive!(emitted.map(|name| compiler(["${name}.roc"])))?
+		ran = drive!(emitted.map(|name| compiler([], name)))?
 		specs = collect_specs!(emitted, ran, [])?
 		compare_specs!(emitted, specs)?
 

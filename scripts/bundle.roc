@@ -10,29 +10,27 @@ import cli.Path
 import cli.Stderr
 import src/Bundle
 
-## Bundle roc-blueprint-core or the roc-blueprint platform into `dist/`. Run
-## from the repository root; the platform needs the linker inputs installed by
-## `scripts/link_inputs.roc fetch`.
+## Bundle roc-blueprint-core and the roc-blueprint platform into `dist/`.
+## Run from the repository root; the platform needs the linker inputs
+## installed by `scripts/link_inputs.roc fetch`.
 ##
-##   scripts/bundle.roc core
-##       Bundle the core package.
+##   scripts/bundle.roc [VERSION]
+##       Bundle the core package, then the platform with its `core`
+##       dependency pointing at the URL that bundle will have in the release
+##       of VERSION, in the repository `GITHUB_REPOSITORY` names. With no
+##       VERSION this is a dry run of a version that is never released.
 ##
-##   scripts/bundle.roc platform [CORE_URL]
-##       Bundle the platform with its `core` dependency pointing at CORE_URL, a
-##       published roc-blueprint-core bundle (a release uses
-##       blueprint-platform/core-release). With no CORE_URL, the local
-##       blueprint-core/ is bundled and served from localhost.
-##
-## Each archive is written to `dist/<hash>.tar.zst` and listed in
-## `dist/bundles.txt`. A platform bundle is smoke-tested before this returns.
+## The platform's archive is `dist/<hash>.tar.zst` and the core package's
+## `dist/roc-blueprint-core-<hash>.tar.zst`; both are listed in
+## `dist/bundles.txt`. They are smoke-tested from localhost before this
+## returns.
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	result = match args.map(OsStr.display) {
-		["core"] => Bundle.core!(root!()?)
-		["platform"] => Bundle.platform!(root!()?, "")
-		["platform", core_url] => Bundle.platform!(root!()?, core_url)
+		[] => Bundle.run!(root!()?, Bundle.dry_run_version)
+		[version] => Bundle.run!(root!()?, version)
 		_ => {
-			_ = Stderr.line!("usage: scripts/bundle.roc core | platform [CORE_URL]")
+			_ = Stderr.line!("usage: scripts/bundle.roc [VERSION]")
 			return Err(Exit(2))
 		}
 	}

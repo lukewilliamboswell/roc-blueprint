@@ -353,12 +353,8 @@ packaged! = |context| {
 	_ = Path.delete_all!(Path.utf8(work))
 	result?
 
-	step!("Bundle core and the platform against it")?
-	# The pinned core release is checked by release.yml when a platform release
-	# is tagged. A change that adds a Spec field cannot pass that check until a
-	# core release containing the field is published, so it is not a
-	# per-commit gate.
-	script!(context, "bundle", ["platform"])
+	step!("Bundle core and the platform against it, as one release holds them")?
+	script!(context, "bundle", [])
 }
 
 ## A build observes its namespaces with `readlink`. The Nix package appends

@@ -1,13 +1,9 @@
 name: Release roc-blueprint
 
-# Push a tag like 0.1.0 to publish the roc-blueprint platform bundle and
-# prebuilt `blueprint` CLIs for x86_64 Linux, arm64 Linux and Apple Silicon macOS. All are
-# built on Linux; each is run on its own kind of machine before anything is
-# published.
-#
-# The platform depends on a published roc-blueprint-core release, whose bundle
-# URL is pinned in blueprint-platform/core-release (core has its own release
-# cycle; see release-core.yml).
+# Push a tag like 0.1.0 to publish the roc-blueprint platform bundle, the
+# roc-blueprint-core bundle it depends on, and prebuilt `blueprint` CLIs for
+# x86_64 Linux, arm64 Linux and Apple Silicon macOS. All are built on Linux;
+# each binary is run on its own kind of machine before anything is published.
 on:
   push:
     tags: ["[0-9]+.[0-9]+.[0-9]+*"]
@@ -21,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       bundle: ${{ steps.notes.outputs.bundle }}
+      core_bundle: ${{ steps.notes.outputs.core_bundle }}
       title: ${{ steps.notes.outputs.title }}
       prerelease: ${{ steps.notes.outputs.prerelease }}
     steps:
@@ -48,8 +45,10 @@ jobs:
         env:
           BLUEPRINT_PREBUILT: 1
 
-      - name: Bundle against the pinned core release
-        run: nix develop -c scripts/bundle.roc platform "$(cat blueprint-platform/core-release)"
+      # The platform bundle names the core bundle by the URL this release
+      # gives it, so both are bundled again for the tag.
+      - name: Bundle core and the platform for this release
+        run: nix develop -c scripts/bundle.roc "$GITHUB_REF_NAME"
 
       # Outside the dev shell: the binary must work with no Roc on PATH.
       - name: Smoke test the Linux binary
@@ -117,10 +116,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BUNDLE: ${{ needs.build.outputs.bundle }}
+          CORE_BUNDLE: ${{ needs.build.outputs.core_bundle }}
           TITLE: ${{ needs.build.outputs.title }}
           PRERELEASE: ${{ needs.build.outputs.prerelease }}
         run: >-
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
           --prerelease="$PRERELEASE" --title "$TITLE" --notes-file dist/notes.md
-          "dist/$BUNDLE" dist/blueprint-x86_64-linux dist/blueprint-aarch64-linux
+          "dist/$BUNDLE" "dist/$CORE_BUNDLE" dist/blueprint-x86_64-linux dist/blueprint-aarch64-linux
           dist/blueprint-aarch64-darwin dist/blueprint.sha256

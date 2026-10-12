@@ -12,9 +12,8 @@ import src/ReleaseNotes
 
 ## Write the notes of a GitHub release. Run from the repository root after
 ## `scripts/bundle.roc`, with `GITHUB_REPOSITORY` and `GITHUB_REF_NAME` set as
-## a workflow sets them: a tag `core-X.Y.Z` is a roc-blueprint-core release,
-## any other tag a platform release. When `GITHUB_OUTPUT` is set, the bundle's
-## file name, the release title and whether it is a pre-release are added to it.
+## a workflow sets them. When `GITHUB_OUTPUT` is set, the two bundles' file
+## names, the release title and whether it is a pre-release are added to it.
 ##
 ##   scripts/release_notes.roc dist/notes.md
 main! : List(OsStr) => Try({}, [Exit(I32)])

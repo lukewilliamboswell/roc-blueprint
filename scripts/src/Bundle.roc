@@ -1,3 +1,5 @@
+import cli.Env
+import cli.OsStr
 import cli.Path
 import cli.Stdout
 import ConfigTest
@@ -6,29 +8,67 @@ import Process
 import Script
 import Serve
 
-## Bundle roc-blueprint-core or the roc-blueprint platform into `dist/`, and
-## record each archive in `dist/bundles.txt` for the release workflows.
+## Bundle roc-blueprint-core and the roc-blueprint platform into `dist/`, and
+## record each archive in `dist/bundles.txt` for the release workflow.
 ##
-## The two have independent releases (tags `core-X.Y.Z` and `X.Y.Z`). They
-## must live under different tags: Roc identifies a package by its URL minus
-## the version and hash, so two bundles under one tag look like one package
-## with two hashes.
+## One release holds both. Roc identifies a package by its URL minus the
+## version and hash, so two archives named only by their hashes under one tag
+## would be one package with two hashes. The core archive is therefore
+## renamed with a prefix, which is part of that identity; the platform's keeps
+## the name `roc bundle` gave it.
 ##
 ## `roc bundle` only packs files below the entry point's directory, so the
 ## platform's development dependency `core: "../blueprint-core/main.roc"`
-## cannot be bundled as it is; a staged copy of the platform gets the core
-## bundle's URL instead.
+## cannot be bundled as it is; a staged copy of the platform gets the URL the
+## core bundle will have in the release of this version.
 ##
-## Every platform bundle is smoke-tested. This process serves it from
-## localhost under a release-like versioned path while the compiler checks
-## valid and invalid configurations and runs the all-settings example against
-## it, with a package cache of its own so the bundle is really downloaded.
+## Both bundles are smoke-tested before that release exists. This process
+## serves them from localhost at the paths the release will give them, while
+## the compiler, told to load the core bundle from here, checks valid and
+## invalid configurations and runs the all-settings example. Its package
+## cache is its own, so both bundles are really downloaded.
 Bundle := [].{
 	core_dir = "blueprint-core"
 	platform_dir = "blueprint-platform"
 
 	## What a staged platform's `core` dependency replaces.
 	development_core = "\"../blueprint-core/main.roc\""
+
+	## The version bundled when none is being released. Roc rejects 0.0.0.
+	dry_run_version = "0.0.1-dry-run"
+
+	## The repository whose releases hold the bundles, unless
+	## `GITHUB_REPOSITORY` names another.
+	default_repository = "lukewilliamboswell/roc-blueprint"
+
+	## What marks the core archive among a release's assets.
+	core_prefix = "roc-blueprint-core-"
+
+	## Where a release serves one of its assets, below the host.
+	release_path : Str, Str, Str -> Str
+	release_path = |repository, version, asset| "${repository}/releases/download/${version}/${asset}"
+
+	release_url : Str, Str, Str -> Str
+	release_url = |repository, version, asset| "https://github.com/${release_path(repository, version, asset)}"
+
+	## The compiler arguments that load `declared` from `served` instead.
+	replacing : Str, Str -> List(Str)
+	replacing = |declared, served| ["--replace-dep", declared, served]
+
+	## The archive `dist/bundles.txt` lists for a package.
+	archive : Str, Str -> Try(Str, [NotBundled(Str)])
+	archive = |list, name|
+		match list.split_on("\n").find_first(|line| line.starts_with("${name} ")) {
+			Ok(line) => Ok(line.drop_prefix("${name} "))
+			Err(_) => Err(NotBundled(name))
+		}
+
+	## The repository this run's bundles are released from.
+	repository! : () => Str
+	repository! = || {
+		named = Env.var_str!(OsStr.from_str("GITHUB_REPOSITORY")) ?? ""
+		if named.is_empty() default_repository else named
+	}
 
 	## The modules of a package directory: `main.roc`, then the rest by name.
 	modules : List(Str) -> List(Str)
@@ -76,21 +116,13 @@ Bundle := [].{
 	flake_core_modules = |flake|
 		flake.split_on("\n").map(|line| line.trim()).keep_if(|line| line.starts_with("./${core_dir}/") and line.ends_with(".roc")).map(|line| line.drop_prefix("./${core_dir}/"))
 
-	## Bundle the core package alone.
-	core! : Str => Try({}, _)
-	core! = |root| {
-		paths = prepare!(root)?
-		_ = bundle_core!(root, paths)?
-		written!(paths)
-	}
-
-	## Bundle the platform against a published core bundle at `core_url`, or,
-	## when that is empty, against the local core, bundled and served here.
-	platform! : Str, Str => Try({}, _)
-	platform! = |root, core_url| {
+	## Bundle the core package, then the platform against the URL that bundle
+	## will have in the release of `version`, and smoke-test the pair.
+	run! : Str, Str => Try({}, _)
+	run! = |root, version| {
 		paths = prepare!(root)?
 		server = Serve.open!()?
-		result = staged_platform!(root, paths, server, core_url)
+		result = staged_platform!(root, paths, server, { repository: repository!(), version })
 		_ = server.shut!()
 		_ = Path.delete_all!(Path.utf8(paths.stage))
 		result?
@@ -99,6 +131,14 @@ Bundle := [].{
 }
 
 Paths : { dist : Str, stage : Str, list : Str }
+
+## The release the bundles are made for.
+Release : { repository : Str, version : Str }
+
+## The bundles as this process serves them: the platform's URL here, both
+## archive names, and the compiler arguments that load the core bundle from
+## here too.
+Served : { platform_url : Str, platform_bundle : Str, core_bundle : Str, arguments : List(Str) }
 
 ## The double-quoted strings in a list literal's text.
 quoted : Str -> List(Str)
@@ -152,15 +192,12 @@ file_names! = |directory| {
 	Ok(Process.sorted($names))
 }
 
-## Run `roc bundle` on files of `directory` and return the archive's name.
-## `drive!` runs the compiler; a caller serving a bundle serves it meanwhile.
-bundle! : Str, List(Str), Paths, (List(Process.Job) => Try(List(Process.Outcome), _)) => Try(Str, _)
-bundle! = |directory, files, paths, drive!| {
-	job = Process.command(Process.roc!(), ["bundle"].concat(files).concat(["--output-dir", paths.dist]), directory)
-	outcome = match drive!([job])? {
-		[one] => one
-		_ => return Script.fail!("roc bundle did not report a result")
-	}
+## Run `roc bundle` on files of `directory`, with these environment
+## variables added, and return the archive's name.
+bundle! : Str, List(Str), Paths, List((Str, Str)) => Try(Str, _)
+bundle! = |directory, files, paths, environment| {
+	job = Process.with_env(Process.command(Process.roc!(), ["bundle"].concat(files).concat(["--output-dir", paths.dist]), directory), environment)
+	outcome = Process.capture!(job)?
 	if outcome.code != 0 {
 		return Script.fail!("${outcome.stdout}${outcome.stderr}\nroc bundle exited with code ${outcome.code.to_str()} in ${directory}")
 	}
@@ -174,7 +211,9 @@ bundle_core! : Str, Paths => Try(Str, _)
 bundle_core! = |root, paths| {
 	Script.info!("==>", "Bundling roc-blueprint-core")?
 	directory = "${root}/${Bundle.core_dir}"
-	name = bundle!(directory, Bundle.modules(file_names!(directory)?), paths, Process.together!)?
+	hashed = bundle!(directory, Bundle.modules(file_names!(directory)?), paths, [])?
+	name = "${Bundle.core_prefix}${hashed}"
+	Path.rename!(Path.utf8("${paths.dist}/${hashed}"), Path.utf8("${paths.dist}/${name}"))?
 	Script.info!("   ", name)?
 	record!(paths, "roc-blueprint-core", name)?
 	Ok(name)
@@ -190,15 +229,31 @@ copy! = |from, to, files| {
 	Ok({})
 }
 
-staged_platform! : Str, Paths, Serve, Str => Try({}, _)
-staged_platform! = |root, paths, idle, given_core_url| {
-	(server, core_url) = if given_core_url.is_empty() {
-		core = bundle_core!(root, paths)?
-		route = "0.0.1-smoke-core/${core}"
-		(idle.with_route(route, Path.read_bytes!(Path.utf8("${paths.dist}/${core}"))?), idle.url(route))
-	} else {
-		(idle, given_core_url)
-	}
+## A package cache of its own holding the core bundle and nothing else, under
+## the hash Roc looks a package up by. The caller's cache is neither read nor
+## written.
+seeded_cache! : Paths, Str => Try(Str, _)
+seeded_cache! = |paths, core| {
+	# `roc unbundle` checks an archive against the hash that is its whole name.
+	hashed = core.drop_prefix(Bundle.core_prefix)
+	unpacked = "${paths.stage}/core"
+	cache = "${paths.stage}/bundling-cache"
+	package_cache = "${cache}/roc/packages"
+	Path.create_all!(Path.utf8(unpacked))?
+	Path.create_all!(Path.utf8(package_cache))?
+	Path.copy!(Path.utf8("${paths.dist}/${core}"), Path.utf8("${unpacked}/${hashed}"))?
+	unbundled = Process.capture!(Process.command(Process.roc!(), ["unbundle", hashed], unpacked))?
+	Process.check!(unbundled.code == 0, "${unbundled.stdout}${unbundled.stderr}\nroc unbundle of the core bundle exited with code ${unbundled.code.to_str()}")?
+	Path.rename!(Path.utf8("${unpacked}/${hashed.drop_suffix(".tar.zst")}"), Path.utf8("${package_cache}/${hashed.drop_suffix(".tar.zst")}"))?
+	Ok(cache)
+}
+
+staged_platform! : Str, Paths, Serve, Release => Try({}, _)
+staged_platform! = |root, paths, idle, release| {
+	core = bundle_core!(root, paths)?
+	core_url = Bundle.release_url(release.repository, release.version, core)
+	core_route = Bundle.release_path(release.repository, release.version, core)
+	server = idle.with_route(core_route, Path.read_bytes!(Path.utf8("${paths.dist}/${core}"))?)
 
 	Script.info!("==>", "Building libhost.a")?
 	Process.passthrough!(Process.command("zig", ["build"], "${root}/${Bundle.platform_dir}"))?
@@ -223,19 +278,28 @@ staged_platform! = |root, paths, idle, given_core_url| {
 	if !Path.read_utf8!(entry)?.contains("core: \"${core_url}\"") {
 		return Script.fail!("failed to rewrite the core dependency")
 	}
-	platform_bundle = bundle!(staged, files, paths, |jobs| server.drive!(jobs))?
+	# `roc bundle` resolves the platform's dependencies, and the core URL does
+	# not exist yet. The compiler looks in its package cache before it
+	# downloads, so it gets a cache that already holds the core bundle.
+	platform_bundle = bundle!(staged, files, paths, [("XDG_CACHE_HOME", seeded_cache!(paths, core)?)])?
 	Script.info!("   ", platform_bundle)?
 	record!(paths, "roc-blueprint", platform_bundle)?
 
-	route = "0.0.1-smoke/${platform_bundle}"
+	route = Bundle.release_path(release.repository, release.version, platform_bundle)
 	serving = server.with_route(route, Path.read_bytes!(Path.utf8("${paths.dist}/${platform_bundle}"))?)
-	smoke!(root, paths, serving, serving.url(route), platform_bundle)
+	smoke!(
+		root,
+		paths,
+		serving,
+		{ platform_url: serving.url(route), platform_bundle, core_bundle: core, arguments: Bundle.replacing(core_url, serving.url(core_route)) },
+	)
 }
 
-## Check and run configurations against the served bundle. The compiler gets
-## an empty package cache, so it must download the bundle from this process.
-smoke! : Str, Paths, Serve, Str, Str => Try({}, _)
-smoke! = |root, paths, server, platform_url, platform_bundle| {
+## Check and run configurations against the served bundles. The compiler gets
+## an empty package cache, so it must download both from this process.
+smoke! : Str, Paths, Serve, Served => Try({}, _)
+smoke! = |root, paths, server, served| {
+	platform_url = served.platform_url
 	roc = Process.roc!()
 	cache = "${paths.stage}/cache"
 	environment = [("XDG_CACHE_HOME", cache)]
@@ -250,10 +314,13 @@ smoke! = |root, paths, server, platform_url, platform_bundle| {
 		first = server.drive!(jobs.take_first(1))?
 		Ok(first.concat(server.drive!(jobs.drop_first(1))?))
 	}
-	ConfigTest.run!({ roc, platform_ref: platform_url, work: config, subset: Smoke, environment }, serve_batches!)?
-	downloaded = "${cache}/roc/packages/${platform_bundle.drop_suffix(".tar.zst")}"
-	if !(Path.is_dir!(Path.utf8(downloaded)) ?? False) {
-		return Script.fail!("the compiler did not download the platform bundle into ${downloaded}")
+	ConfigTest.run!({ roc, platform_ref: platform_url, work: config, subset: Smoke, environment, arguments: served.arguments }, serve_batches!)?
+	# The cache names a package by its hash alone.
+	for bundle in [served.platform_bundle, served.core_bundle.drop_prefix(Bundle.core_prefix)] {
+		downloaded = "${cache}/roc/packages/${bundle.drop_suffix(".tar.zst")}"
+		if !(Path.is_dir!(Path.utf8(downloaded)) ?? False) {
+			return Script.fail!("the compiler did not download ${bundle} into ${downloaded}")
+		}
 	}
 
 	Script.info!("==>", "Smoke test: running examples/all-settings/Blueprint.roc against the platform bundle")?
@@ -263,12 +330,12 @@ smoke! = |root, paths, server, platform_url, platform_bundle| {
 		return Script.fail!("examples/all-settings/Blueprint.roc does not name the local platform")
 	}
 	Path.write_utf8!(Path.utf8("${example_dir}/Blueprint.roc"), example.replace_each(local_platform, "platform \"${platform_url}\""))?
-	compiler = |args| Process.with_env(Process.command(roc, args, example_dir), environment)
-	match server.drive!([compiler(["check", "Blueprint.roc"])])? {
+	compiler = |args| Process.with_env(Process.command(roc, args.concat(served.arguments).concat(["Blueprint.roc"]), example_dir), environment)
+	match server.drive!([compiler(["check"])])? {
 		[checked] => Process.check!(checked.code == 0, "${checked.stdout}${checked.stderr}\nroc check of the all-settings example exited with code ${checked.code.to_str()}")?
 		_ => return Script.fail!("roc check did not report a result")
 	}
-	match server.drive!([compiler(["Blueprint.roc"])])? {
+	match server.drive!([compiler([])])? {
 		[ran] => Process.check!(ran.code == 0 and ran.stdout.contains("(format ("), "${ran.stdout}${ran.stderr}\nthe all-settings example did not print a Spec (exit ${ran.code.to_str()})")?
 		_ => return Script.fail!("the all-settings example did not report a result")
 	}
@@ -300,3 +367,11 @@ expect Bundle.created("Created: /repo/dist/7ghFBPv8.tar.zst\nCompressed size: 28
 expect Bundle.created("error: something\n") == Err(NotCreated)
 
 expect Bundle.flake_core_modules("    ./blueprint-cli\n    ./blueprint-core/main.roc\n    ./blueprint-core/Spec.roc\n  ];\n") == ["main.roc", "Spec.roc"]
+
+expect Bundle.release_url("owner/repo", "0.5.0", "abc.tar.zst") == "https://github.com/owner/repo/releases/download/0.5.0/abc.tar.zst"
+expect Bundle.release_path("owner/repo", "0.5.0-rc1", "roc-blueprint-core-abc.tar.zst") == "owner/repo/releases/download/0.5.0-rc1/roc-blueprint-core-abc.tar.zst"
+expect Bundle.replacing("https://a", "http://127.0.0.1:1/a") == ["--replace-dep", "https://a", "http://127.0.0.1:1/a"]
+
+expect Bundle.archive("roc-blueprint-core roc-blueprint-core-AAA.tar.zst\nroc-blueprint BBB.tar.zst\n", "roc-blueprint") == Ok("BBB.tar.zst")
+expect Bundle.archive("roc-blueprint-core roc-blueprint-core-AAA.tar.zst\n", "roc-blueprint-core") == Ok("roc-blueprint-core-AAA.tar.zst")
+expect Bundle.archive("roc-blueprint-core AAA.tar.zst\n", "roc-blueprint") == Err(NotBundled("roc-blueprint"))

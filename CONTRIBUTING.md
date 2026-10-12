@@ -7,7 +7,6 @@ blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
   *.roc                  setting types, checked values, lowering to the Spec
   host/, build.zig       Zig host, built into targets/<target>/libhost.a
   targets/               linker inputs, none committed: libhost.a is built, the rest fetched (see its README)
-  core-release           (when present) the released core bundle URL a platform release uses
 blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
   Project.roc            pure normalization, references and provider capability checks
   fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip, lock-parse
@@ -26,7 +25,7 @@ examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
 scripts/                 Roc scripts, run from the repository root; their modules are in scripts/src/
   test.roc               everything CI checks, in groups; runs the test_*.roc suites
   link_inputs.roc        fetch or check the platform's linker inputs
-  bundle.roc             bundle core or the platform into dist/ and smoke-test the bundle
+  bundle.roc             bundle core and the platform into dist/ and smoke-test the pair
   build_release.roc      cross-build the CLI and its smoke-test program for each released system
   smoke_binary.roc       run a built CLI with no Roc and no Python of its own
   fuzz.roc               replay or fuzz the roc-fuzz targets
@@ -410,16 +409,14 @@ first needs no Spec change at all.
 
 ## Releasing
 
-roc-blueprint and roc-blueprint-core have independent release cycles.
+One release holds the platform bundle, the roc-blueprint-core bundle it
+depends on and the `blueprint` binaries.
 
-- **roc-blueprint-core:** push a tag like `core-X.Y.Z`. `release-core.yml` tests
-  and bundles `blueprint-core/` and publishes release `core-X.Y.Z` with the bundle.
-- **roc-blueprint:** put the core bundle URL the platform should use in
-  `blueprint-platform/core-release`, set `version` in `blueprint-cli/main.roc`
+- Set `version` in `blueprint-cli/main.roc`
   and `flake.nix` to the release, then push a tag like `X.Y.Z`. `release.yml`
   runs the tests, cross-builds the `blueprint` binaries on Linux with
   `scripts/build_release.roc`, runs each on its own kind of machine, and only
-  then publishes release `X.Y.Z` with the platform bundle, the binaries and
+  then publishes release `X.Y.Z` with the two bundles, the binaries and
   their sha256 sums. The machines that run the arm64 Linux and macOS binaries
   have Nix and deliberately no Roc, so `build_release.roc` also cross-builds
   `scripts/smoke_binary.roc` for each system and they run that
@@ -451,47 +448,45 @@ A tag with a `-` in it (e.g. `X.Y.Z-rc1`) is published as a pre-release.
 
 During development the platform uses `core: "../blueprint-core/main.roc"`. `roc bundle`
 only packs files below the entry point's directory, so `scripts/bundle.roc
-platform <core-url>` bundles a staged copy whose `core:` is the given URL. With
-no URL it bundles the local `blueprint-core/` and serves it from localhost.
-Either way it then serves the platform bundle itself, from a port the operating
-system assigns, while the compiler checks a few of the configuration fixtures
-and runs `examples/all-settings/Blueprint.roc` against it. The compiler gets an
-empty package cache for this, so it must download the bundle. The modules and
-linker inputs packed are those in the directories and in the `targets:` section
-of `blueprint-platform/main.roc`. There are two gates:
+[VERSION]` bundles the core package first, then a staged copy of the platform
+whose `core:` is the URL that core bundle will have in the release of
+`VERSION`. With no version it is a dry run of `0.0.1-dry-run`, which is never
+released.
 
-```sh
-scripts/bundle.roc platform
-scripts/bundle.roc platform "$(< blueprint-platform/core-release)"
-```
+Roc identifies a package by its URL minus the version and hash, so two
+archives named only by their hashes under one tag would look like one package
+served with two hashes. The core archive is therefore published as
+`roc-blueprint-core-<hash>.tar.zst`: the prefix is part of its identity. The
+platform's archive keeps the name `roc bundle` gave it, `<hash>.tar.zst`.
+
+The release does not exist while the bundles are tested, so the script serves
+both itself, from a port the operating system assigns, at the paths the
+release will give them. The compiler is told to load the core bundle from
+there (`--replace-dep`) while it checks a few of the configuration fixtures
+and runs `examples/all-settings/Blueprint.roc`. It gets an empty package cache
+for this, so it must download both bundles. The modules and linker inputs
+packed are those in the directories and in the `targets:` section of
+`blueprint-platform/main.roc`.
 
 Before bundling the platform, `scripts/bundle.roc` makes the check of
 `scripts/link_inputs.roc check`, so only linker inputs matching
 `link-inputs.lock.json` are packed. Their licences and `dependency.json`
 inventory go into the bundle under `linker-inputs/`, and
 `scripts/release_notes.roc` records the linker-input release and the lock's
-SHA-256 in the release notes. The notes of a platform release list what else it
+SHA-256 in the release notes. The notes list what else the release
 was built from: the Roc nightly and the Zig version, the roc-overlay revision
 and the hashes of the two compiler archives it supplied, the flake's nixpkgs
 revision, the core bundle, and the Roc packages compiled into the CLI as
 `roc deps blueprint-cli/main.roc` resolves them.
 
-`scripts/test.roc` runs the first on every commit. `release.yml` runs the second
-when a platform release is tagged, and the release fails if the pinned core
-cannot build the platform. A change that adds a Spec field therefore merges
-with the existing pin; publish a `core-X.Y.Z` release containing the field and
-update `core-release` before tagging the next platform release. Do not
-substitute a local URL for the release check.
-
-The two packages need separate tags: Roc identifies a package by its URL
-minus the version and hash, so two bundles under one tag look like one
-package served with two hashes.
+`scripts/test.roc` runs the dry run on every commit, and `release.yml` bundles
+again for the tag. A change that adds a Spec field needs nothing more: the
+core bundle carrying the field is released with the platform that uses it.
 
 To adopt a newer basic-cli release, change the URL in `blueprint-cli/main.roc`
 and `fixtures/consumer/main.roc`, then update the matching entry in `rocPackages`
 in `flake.nix` with the new URL and hash (`nix store prefetch-file <url>`). Add
-any new transitive dependency to the same list. Rerun `scripts/test.roc` and the
-pinned-core bundle gate.
+any new transitive dependency to the same list. Rerun `scripts/test.roc`.
 If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
 
 ## Upstream workarounds
