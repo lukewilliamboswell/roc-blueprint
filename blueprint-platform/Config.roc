@@ -2,6 +2,7 @@
 import EnvName
 import FlakeRef
 import InputName
+import ProgramName
 import System
 import TaskName
 import Tool
@@ -15,6 +16,12 @@ Config :: [].{
 	## "default" source is equivalent to `Packages("default", Auto)`.
 	## Overlay inputs apply only where an environment selects them.
 	## `Custom` and `Raw` retain consumer-specific extension data.
+	## `Fetch` declares a program by its command name and a recipe: a function
+	## from a System, such as "x86_64-linux", to where the program is
+	## downloaded from there (see `Download`). The recipe is asked once for
+	## each declared System while the configuration is checked, and only its
+	## answers reach the Spec. A name is declared once, and an environment has
+	## the program where it selects it with `Programs`.
 	Setting : [
 		Name(Str),
 		Systems(List(System)),
@@ -29,7 +36,21 @@ Config :: [].{
 		Workflow(WorkflowName, List(WorkflowStep)),
 		Custom(Str, Str, Val),
 		Raw(Str, Str, Val),
+		Fetch(ProgramName, (Str -> Download)),
 	]
+
+	## What a recipe answers for one System. `File(url)` is the program
+	## itself. `Archive(url, format, path)` is an archive that is unpacked
+	## whole, with the program at `path` inside it. `Unavailable` says the
+	## program does not exist for that System, which is an error only where a
+	## task needs it. `Invalid(message)` says the recipe was given something
+	## it cannot use, such as a malformed version: `roc check` reports the
+	## message, so a recipe never crashes. A URL is `https://<host>/<path>`
+	## with no credentials, query or fragment; `Blueprint.lock` records the
+	## SHA-256 of what it serves.
+	Download : [File(Str), Archive(Str, ArchiveFormat, Str), Unavailable, Invalid(Str)]
+
+	ArchiveFormat : [TarGz, TarXz, Zip]
 
 	## Workflows reference declarations; argv contains literal extra arguments.
 	WorkflowStep : [
@@ -53,7 +74,12 @@ Config :: [].{
 	## RocPackages occurs at most once and lists
 	## released Roc bundle URLs to lock, so Roc programs in the environment
 	## resolve them without downloading; an extending environment inherits them.
-	EnvironmentSetting : [Tools(List(Tool)), ToolsFor(System, List(Tool)), Command(Str, Tool), ToolWith(Tool, List((Str, Val))), RocPackages(List(Str)), Overlays(List(InputName)), Extend(EnvName)]
+	## Programs occurs at most once and selects programs `Fetch` declares, by
+	## name. Expect occurs at most once and names programs the machine must
+	## already have on PATH: they are checked for, never installed, and no
+	## version is asked of them. Both inherit parent first, and one name is
+	## only one of a program, an expected tool and a Command.
+	EnvironmentSetting : [Tools(List(Tool)), ToolsFor(System, List(Tool)), Command(Str, Tool), ToolWith(Tool, List((Str, Val))), RocPackages(List(Str)), Overlays(List(InputName)), Extend(EnvName), Programs(List(ProgramName)), Expect(List(ProgramName))]
 
 	## A shell is an alias for exactly one environment.
 	ShellSetting : [Use(EnvName)]

@@ -20,7 +20,7 @@ NixProvider :: [].{
 	provider : Provider
 	provider = Provider.{
 		name: "nix",
-		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools"],
+		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools", "programs", "expects"],
 		render: |spec| render(spec).map_ok(
 			|contents| [{ path: "flake.nix", contents }],
 		),
@@ -248,6 +248,16 @@ NixProvider :: [].{
 					])
 			}
 			Request.Workflow(_) => return Err("workflow must expand into atomic requests")
+		}
+		# Inspection renders what Nix supplies. Entering an environment is
+		# refused where the Core would have to add to it.
+		match $action {
+			Generate => {}
+			_ => {
+				for name in $names {
+					Project.provider_alone(project, name)?
+				}
+			}
 		}
 		inputs = Locks.inputs(project)?
 		remaining = charge_rendered(
@@ -3042,3 +3052,41 @@ expect {
 		},
 	)
 }
+
+# The project of TestData, whose one environment also fetches a program, and a
+# second environment that only expects a tool the machine has.
+fetching : Spec
+fetching = {
+	whole = TestData.project(TestData.data)
+	{
+		..whole,
+		requires_: whole.requires_.concat(["programs", "expects"]),
+		programs: [{ name: "tool", system: "x86_64-linux", url: "https://example.test/tool", unpack: File, path: "" }],
+		environment_programs: [{ environment: "builder", programs: ["tool"] }],
+		environments: whole.environments.append({ name: "plain", parents: [], tools: [], overlays: [] }).append({ name: "expecting", parents: ["plain"], tools: [], overlays: [] }),
+		expects: [{ environment: "expecting", programs: ["git"] }],
+		tasks: whole.tasks.append({ name: "plain", environment: "plain", run: ["true"] }).append({ name: "expecting", environment: "expecting", run: ["git", "status"] }),
+	}
+}
+
+# Nix renders its own part of every environment: what an environment fetches
+# or expects adds nothing to the flake.
+expect {
+	whole = TestData.project(TestData.data)
+	without = { ..fetching, requires_: whole.requires_, programs: [], environment_programs: [], expects: [] }
+	NixProvider.render(fetching).is_ok() and NixProvider.render(fetching) == NixProvider.render(without)
+		and NixProvider.preflight(fetching, Request.Generate, "x86_64-linux", TestData.layout) == Ok({})
+}
+
+# Entering such an environment through Nix alone would leave the program out,
+# so a shell, a task and a build of it are refused, whole and before any step.
+expect
+	[Request.Shell("default"), Request.Run("check", []), Request.Build("app"), Request.Run("expecting", [])].all(
+		|request|
+			match NixProvider.preflight(fetching, request, "x86_64-linux", TestData.layout) {
+				Err(message) => message.ends_with("has fetched programs or expected tools, which this blueprint reads but cannot yet run with")
+				Ok(_) => False
+			},
+	)
+		and NixProvider.preflight(fetching, Request.Run("check", []), "x86_64-linux", TestData.layout) == Err("environment builder has fetched programs or expected tools, which this blueprint reads but cannot yet run with")
+			and NixProvider.preflight(fetching, Request.Run("plain", []), "x86_64-linux", TestData.layout) == Ok({})

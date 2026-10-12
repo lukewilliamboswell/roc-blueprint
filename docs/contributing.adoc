@@ -24,7 +24,7 @@ blueprint-cli/           the blueprint CLI (basic-cli + weaver); as `blueprint _
 fixtures/consumer/       independent consumer of the Spec and Nix packages
 fixtures/overlays/       overlay flakes for scripts/test_scenarios.roc
 examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
-examples/composition/    imported pure module returning reusable task settings
+examples/composition/    imported pure modules: reusable task settings and a program's recipe
 examples/artifacts/      runnable source/dependency/workflow example and its Roc scripts
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
 scripts/                 Roc scripts, run from the repository root; their modules are in scripts/src/

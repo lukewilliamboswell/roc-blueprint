@@ -23,16 +23,22 @@
 ## `Custom` and `Raw` take a `Val`, written with bare tags: `Str`, `Int`,
 ## `Bool`, `List` and `Attrs` (a list of (name, value) pairs).
 ##
+## `Fetch` declares a program that is downloaded rather than installed by a
+## package provider: a command name and a function from the System to its
+## download, such as `Recipes.roc_nightly("nightly-2026-10-04-130536d")`. An
+## environment selects it with `Programs`, and names with `Expect` what the
+## machine must already have.
+##
 ## Every quoted value is checked as it compiles, through the `from_quote` of
-## `Tool`, `System`, `FlakeRef`, `InputName`, `EnvName`, `TaskName`, or
-## `WorkflowName`.
+## `Tool`, `System`, `FlakeRef`, `InputName`, `EnvName`, `TaskName`,
+## `WorkflowName`, or `ProgramName`.
 ## Whole-config rules, including missing names and duplicate shells, are
 ## also checked at compile time by lowering `config` to the rendered Spec.
 platform ""
 	requires {
 		config : List(Config.Setting)
 	}
-	exposes [Config, EnvName, FlakeRef, InputName, System, TaskName, Tool, Val, WorkflowName]
+	exposes [Config, EnvName, FlakeRef, InputName, ProgramName, Recipes, System, TaskName, Tool, Val, WorkflowName]
 	packages {
 		core: "../blueprint-core/main.roc",
 	}
@@ -56,6 +62,8 @@ import Tool
 import FlakeRef
 import EnvName
 import InputName
+import ProgramName
+import Recipes
 import System
 import TaskName
 import Val

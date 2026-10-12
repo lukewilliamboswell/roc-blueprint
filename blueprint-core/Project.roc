@@ -158,6 +158,41 @@ Project :: [].{
 	valid_ref : Str -> Bool
 	valid_ref = |url| clean(url) and ["github:", "gitlab:", "sourcehut:", "flake:", "git+", "path:", "file:", "https://", "http://", "tarball+"].any(|prefix| url.starts_with(prefix) and !url.drop_prefix(prefix).is_empty())
 
+	## A download URL names its bytes by itself: `https://<host>/<path>`, with
+	## no credentials, query or fragment, and no empty, `.` or `..` segment.
+	## `http://127.0.0.1`, with or without a port, is one too: nothing leaves
+	## the machine, and it is how a test serves a download.
+	valid_download_url : Str -> Bool
+	valid_download_url = |url| {
+		rest = if url.starts_with("https://") {
+			url.drop_prefix("https://")
+		} else if url.starts_with("http://127.0.0.1:") or url.starts_with("http://127.0.0.1/") {
+			url.drop_prefix("http://")
+		} else {
+			return False
+		}
+		if rest.to_utf8().any(|b| b <= 32 or b >= 127 or b == '@' or b == '?' or b == '#' or b == '\\') {
+			return False
+		}
+		match rest.split_on("/") {
+			[authority, .. as segments] => {
+				(host, port) = match authority.split_on(":") {
+					[name] => (name, "0")
+					[name, number] => (name, number)
+					_ => return False
+				}
+				label = |part| {
+					bytes = part.to_utf8()
+					!bytes.is_empty() and bytes.first() != Ok('-') and bytes.last() != Ok('-') and bytes.all(|b| letter(b) or (b >= '0' and b <= '9') or b == '-')
+				}
+				host.split_on(".").all(label)
+					and !port.is_empty() and port.to_utf8().len() <= 5 and port.to_utf8().all(|b| b >= '0' and b <= '9')
+						and !segments.is_empty() and segments.all(|part| !part.is_empty() and part != "." and part != "..")
+			}
+			_ => False
+		}
+	}
+
 	## Lexical containment only; the executor must also reject escaping symlinks.
 	## Spaces are valid path bytes. Empty, dot and parent segments are not.
 	valid_output : Str -> Bool
@@ -321,11 +356,50 @@ Project :: [].{
 				return Err("invalid input reference: ${input.name}")
 			}
 		}
+		if !(spec.programs.is_empty() and spec.environment_programs.is_empty()) and !spec.requires_.contains("programs") {
+			return Err("programs require feature: programs")
+		}
+		if !spec.expects.is_empty() and !spec.requires_.contains("expects") {
+			return Err("expected tools require feature: expects")
+		}
+		var $programs = []
+		for program in spec.programs {
+			if !valid_command_name(program.name) {
+				return Err("invalid program name: ${program.name}")
+			}
+			if !declared_systems.contains(program.system) {
+				return Err("undeclared system for program ${program.name}: ${program.system}")
+			}
+			key = (program.name, program.system)
+			if $programs.contains(key) {
+				return Err("DuplicateProgram: ${program.name} on ${program.system}")
+			}
+			$programs = $programs.append(key)
+			# `blueprint update <name>` names an input or a program, never both.
+			if sources.any(|s| s.name == program.name) or spec.inputs.any(|i| i.name == program.name) or spec.build_sources.any(|s| s.name == program.name) {
+				return Err("program ${program.name} has the name of a source or input")
+			}
+			if !valid_download_url(program.url) {
+				return Err("program ${program.name} on ${program.system}: \"${program.url}\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
+			}
+			match program.unpack {
+				File => if !program.path.is_empty() {
+					return Err("program ${program.name} on ${program.system}: a File is the program itself and has no path: ${program.path}")
+				}
+				_ => if !valid_output(program.path) {
+					return Err("program ${program.name} on ${program.system}: invalid path in its archive: ${program.path}")
+				}
+			}
+		}
+		check_selections(spec.environments, spec.environment_programs, "program", "DuplicatePrograms")?
+		check_selections(spec.environments, spec.expects, "expected tool", "DuplicateExpect")?
 		var $environments = []
 		var $system_tools = []
 		var $commands = []
 		var $configured_tools = []
 		var $roc_packages = []
+		var $environment_programs = []
+		var $expects = []
 		for env in spec.environments {
 			resolved = resolve(spec.environments, env.name, [])?
 			env_commands = resolve_commands(spec.environments, spec.commands, env.name, [])?
@@ -367,6 +441,32 @@ Project :: [].{
 				if !spec.inputs.any(|i| i.name == overlay and i.kind == Overlay) {
 					return Err("unknown overlay: ${overlay}")
 				}
+			}
+			env_programs = resolve_selections(spec.environments, spec.environment_programs, env.name, [])?
+			env_expects = resolve_selections(spec.environments, spec.expects, env.name, [])?
+			# One name on PATH has one origin: fetched, launched by a package
+			# provider, or the machine's own.
+			for name in env_programs {
+				if !spec.programs.any(|program| program.name == name) {
+					return Err("environment ${env.name} selects program ${name}, which no Fetch declares")
+				}
+				if env_expects.contains(name) {
+					return Err("environment ${env.name} has ${name} as both a program and an expected tool")
+				}
+				if env_commands.any(|entry| entry.name == name) {
+					return Err("environment ${env.name} has ${name} as both a program and a Command")
+				}
+			}
+			for name in env_expects {
+				if env_commands.any(|entry| entry.name == name) {
+					return Err("environment ${env.name} has ${name} as both an expected tool and a Command")
+				}
+			}
+			if !env_programs.is_empty() {
+				$environment_programs = $environment_programs.append({ environment: env.name, programs: env_programs })
+			}
+			if !env_expects.is_empty() {
+				$expects = $expects.append({ environment: env.name, programs: env_expects })
 			}
 			$environments = $environments.append(resolved)
 		}
@@ -418,7 +518,7 @@ Project :: [].{
 				return Err("empty Raw provider or target")
 			}
 		}
-		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
+		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: $environment_programs, expects: $expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
 	}
 
 	## Whole-project checks precede expansion, even for an empty request.
@@ -721,6 +821,59 @@ Project :: [].{
 			_ => Err("environment ${name} has several parents")
 		}
 	}
+
+	## What an environment selects by name, programs or expected tools: at
+	## most one list for each environment, of names a file on PATH can have.
+	check_selections : List(Spec.Environment), List({ environment : Str, programs : List(Str) }), Str, Str -> Try({}, Str)
+	check_selections = |environments, entries, kind, duplicate| {
+		var $seen = []
+		for entry in entries {
+			if !environments.any(|e| e.name == entry.environment) {
+				return Err("unknown environment for ${kind}: ${entry.environment}")
+			}
+			if $seen.contains(entry.environment) {
+				return Err("${duplicate}: environment ${entry.environment}")
+			}
+			$seen = $seen.append(entry.environment)
+			for name in entry.programs {
+				if !valid_command_name(name) {
+					return Err("invalid ${kind} name in environment ${entry.environment}: ${name}")
+				}
+			}
+		}
+		Ok({})
+	}
+
+	## Selected programs and expected tools inherit parent first. A name is
+	## one file on PATH, so a child repeating an inherited name adds nothing.
+	resolve_selections : List(Spec.Environment), List({ environment : Str, programs : List(Str) }), Str, List(Str) -> Try(List(Str), Str)
+	resolve_selections = |environments, entries, name, visiting| {
+		if visiting.contains(name) or visiting.len() >= 128 {
+			return Err("environment cycle or inheritance limit: ${name}")
+		}
+		env = environments.find_first(|e| e.name == name).map_err(|_| "unknown environment: ${name}")?
+		own = entries.find_first(|entry| entry.environment == name).map_ok(|entry| entry.programs) ?? []
+		match env.parents {
+			[] => Ok(unique(own))
+			[parent] => {
+				inherited = resolve_selections(environments, entries, parent, visiting.append(name))?
+				Ok(unique(inherited.concat(own)))
+			}
+			_ => Err("environment ${name} has several parents")
+		}
+	}
+
+	## Fetched programs and expected tools are the Core's to supply and check,
+	## not a provider's. A provider asked to realise a whole environment by
+	## itself refuses one that has either, rather than enter it without them.
+	## Takes a validated Spec.
+	provider_alone : Spec, Str -> Try({}, Str)
+	provider_alone = |project, name|
+		if project.environment_programs.any(|entry| entry.environment == name) or project.expects.any(|entry| entry.environment == name) {
+			Err("environment ${name} has fetched programs or expected tools, which this blueprint reads but cannot yet run with")
+		} else {
+			Ok({})
+		}
 
 	## Check only the requested environment's normalized dependency closure.
 	## This models Guix shell capability without implementing a Guix executor.
@@ -1477,3 +1630,162 @@ expect {
 expect Project.validate(workflow_fixture([{ name: "ci", steps: [RunTask("library", [])] }])) == Err("unknown task: library")
 expect Project.validate(workflow_fixture([{ name: "ci", steps: [BuildArtifact("missing")] }])) == Err("unknown build: missing")
 expect Project.validate(workflow_fixture([{ name: "ci", steps: [RunWorkflow("missing")] }])) == Err("unknown workflow: missing")
+
+# A download URL is https with a host and a path, and nothing that makes the
+# same bytes reachable under another name or with a secret.
+expect
+	[
+		"https://example.test/tool",
+		"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz",
+		"https://example.test:8443/a/b%20c/tool-1.0+x86_64.zip",
+		"https://xn--bcher-kva.example/tool",
+		"http://127.0.0.1:8080/tool",
+		"http://127.0.0.1/tool",
+	].all(Project.valid_download_url)
+expect
+	[
+		"",
+		"https://",
+		"https://example.test",
+		"https://example.test/",
+		"https:///tool",
+		"https://example.test/a/",
+		"https://example.test//tool",
+		"https://example.test/a/../tool",
+		"https://example.test/./tool",
+		"http://example.test/tool",
+		"http://localhost/tool",
+		"http://127.0.0.1.example.test/tool",
+		"http://127.0.0.10/tool",
+		"http://127.0.0.1",
+		"ftp://example.test/tool",
+		"file:///tmp/tool",
+		"path:./tool",
+		"https://user@example.test/tool",
+		"https://user:secret@example.test/tool",
+		"https://example.test/tool?token=1",
+		"https://example.test/tool#sha256",
+		"https://example.test/a b",
+		"https://example.test/tool\n",
+		"https://example.test\\tool",
+		"https://example.test:port/tool",
+		"https://example.test:123456/tool",
+		"https://example.test:/tool",
+		"https://-example.test/tool",
+		"https://example..test/tool",
+		"https://[::1]/tool",
+		"https://exämple.test/tool",
+		" https://example.test/tool",
+	].all(|url| !Project.valid_download_url(url))
+
+linux_tool : Spec.Program
+linux_tool = { name: "tool", system: "x86_64-linux", url: "https://example.test/tool-x86_64-linux", unpack: File, path: "" }
+
+linux_roc : Spec.Program
+linux_roc = { name: "roc-stable", system: "x86_64-linux", url: "https://example.test/roc.tar.gz", unpack: TarGz, path: "roc_nightly/roc" }
+
+# Two environments without tools or overlays, the second extending the first.
+fetching : Spec
+fetching = {
+	..fixture([{ ..base, tools: [], overlays: [] }, { name: "dev", parents: ["base"], tools: [], overlays: [] }]),
+	requires_: ["programs", "expects", "commands"],
+	systems: ["x86_64-linux", "aarch64-darwin"],
+	programs: [linux_tool, { ..linux_tool, system: "aarch64-darwin", url: "https://example.test/tool-aarch64-darwin" }, linux_roc],
+}
+
+# Selected programs and expected tools inherit parent first, each name once,
+# and an environment that ends with none has no entry. Normalizing again
+# changes nothing.
+expect {
+	spec = {
+		..fetching,
+		environment_programs: [{ environment: "dev", programs: ["tool", "roc-stable", "tool"] }, { environment: "base", programs: ["roc-stable"] }],
+		expects: [{ environment: "dev", programs: ["gh", "git", "gh"] }],
+	}
+	match Project.validate(spec) {
+		Ok(project) => project.environment_programs == [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["roc-stable", "tool"] }]
+			and project.expects == [{ environment: "dev", programs: ["gh", "git"] }]
+				and project.programs == spec.programs
+					and Project.validate(project) == Ok(project)
+						and Spec.parse(project.to_str()) == Ok(project)
+		Err(_) => False
+	}
+}
+
+# A declared program nothing selects is valid, and so is an empty selection.
+expect Project.validate(fetching).map_ok(|project| project.environment_programs) == Ok([])
+expect Project.validate({ ..fetching, environment_programs: [{ environment: "base", programs: [] }], expects: [{ environment: "base", programs: [] }] }).map_ok(|project| (project.environment_programs, project.expects)) == Ok(([], []))
+
+# An older consumer is told by name; without the marker the Spec is refused.
+expect
+	Project.validate({ ..fetching, requires_: ["expects"] }) == Err("programs require feature: programs") and
+		Project.validate({ ..fetching, programs: [], requires_: [], environment_programs: [{ environment: "base", programs: [] }] }) == Err("programs require feature: programs") and
+			Project.validate({ ..fetching, requires_: ["programs"], expects: [{ environment: "base", programs: ["git"] }] }) == Err("expected tools require feature: expects")
+
+# Each program is one download for one declared System, under a command name.
+expect
+	Project.validate({ ..fetching, programs: [linux_tool, linux_tool] }) == Err("DuplicateProgram: tool on x86_64-linux") and
+		Project.validate({ ..fetching, programs: [{ ..linux_tool, system: "riscv64-linux" }] }) == Err("undeclared system for program tool: riscv64-linux") and
+			Project.validate({ ..fetching, programs: [{ ..linux_tool, name: "bin/tool" }] }) == Err("invalid program name: bin/tool") and
+				Project.validate({ ..fetching, programs: [{ ..linux_tool, name: "-tool" }] }) == Err("invalid program name: -tool") and
+					Project.validate({ ..fetching, programs: [{ ..linux_tool, name: "" }] }) == Err("invalid program name: ")
+
+# The URL rule names the program, the System and the URL it refuses.
+expect
+	Project.validate({ ..fetching, programs: [{ ..linux_roc, system: "aarch64-darwin", url: "http://x/roc.tar.gz" }] }) == Err("program roc-stable on aarch64-darwin: \"http://x/roc.tar.gz\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment") and
+		Project.validate({ ..fetching, programs: [{ ..linux_tool, url: "https://token@example.test/tool" }] }).is_err() and
+			Project.validate({ ..fetching, programs: [{ ..linux_tool, url: "http://127.0.0.1:4000/tool" }] }).is_ok()
+
+# An archive names the program inside it; a File is the program.
+expect
+	Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive: ") and
+		Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "../roc" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive: ../roc") and
+			Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "/usr/bin/roc" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive: /usr/bin/roc") and
+				Project.validate({ ..fetching, programs: [{ ..linux_roc, unpack: Zip, path: "roc/roc.exe" }, { ..linux_tool, unpack: TarXz, path: "bin/tool" }] }).is_ok() and
+					Project.validate({ ..fetching, programs: [{ ..linux_tool, path: "tool" }] }) == Err("program tool on x86_64-linux: a File is the program itself and has no path: tool")
+
+# A program shares no name with a source, an input or a build source, so that
+# `blueprint update <name>` means one thing.
+expect
+	["nix", "default", "first", "data"].all(|name| Project.validate({ ..fetching, programs: [{ ..linux_tool, name }] }) == Err("program ${name} has the name of a source or input")) and
+		Project.validate({ ..fetching, requires_: ["programs", "sources"], build_sources: [{ name: "assets", ref: "path:./assets" }], programs: [{ ..linux_tool, name: "assets" }] }) == Err("program assets has the name of a source or input")
+
+# A selection names its environment once, with names a file on PATH can have.
+expect
+	Project.validate({ ..fetching, environment_programs: [{ environment: "missing", programs: ["tool"] }] }) == Err("unknown environment for program: missing") and
+		Project.validate({ ..fetching, expects: [{ environment: "missing", programs: ["git"] }] }) == Err("unknown environment for expected tool: missing") and
+			Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["tool"] }, { environment: "dev", programs: [] }] }) == Err("DuplicatePrograms: environment dev") and
+				Project.validate({ ..fetching, expects: [{ environment: "dev", programs: ["git"] }, { environment: "dev", programs: ["gh"] }] }) == Err("DuplicateExpect: environment dev") and
+					Project.validate({ ..fetching, expects: [{ environment: "dev", programs: ["git", "/usr/bin/gh"] }] }) == Err("invalid expected tool name in environment dev: /usr/bin/gh") and
+						Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["../tool"] }] }) == Err("invalid program name in environment dev: ../tool")
+
+# A selected program is a declared one, whichever environment selects it.
+expect
+	Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["roc-stable", "zig"] }] }) == Err("environment dev selects program zig, which no Fetch declares") and
+		Project.validate({ ..fetching, programs: [], environment_programs: [{ environment: "base", programs: ["roc-stable"] }] }) == Err("environment base selects program roc-stable, which no Fetch declares")
+
+# One name on PATH has one origin, in the environment and in what it inherits.
+expect {
+	command = { environment: "base", name: "roc-stable", tool: { source: "default", name: "rocpkgs.nightly" } }
+	Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["tool"] }], expects: [{ environment: "dev", programs: ["tool"] }] }) == Err("environment dev has tool as both a program and an expected tool") and
+		Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["tool"] }], expects: [{ environment: "base", programs: ["tool"] }] }) == Err("environment dev has tool as both a program and an expected tool") and
+			Project.validate({ ..fetching, commands: [command], environment_programs: [{ environment: "base", programs: ["roc-stable"] }] }) == Err("environment base has roc-stable as both a program and a Command") and
+				Project.validate({ ..fetching, commands: [command], environment_programs: [{ environment: "dev", programs: ["roc-stable"] }] }) == Err("environment dev has roc-stable as both a program and a Command") and
+					Project.validate({ ..fetching, commands: [command], expects: [{ environment: "dev", programs: ["roc-stable"] }] }) == Err("environment dev has roc-stable as both an expected tool and a Command") and
+					# A child's Command meets the tool its parent expects.
+						Project.validate({ ..fetching, commands: [{ ..command, environment: "dev" }], environment_programs: [{ environment: "base", programs: ["tool"] }], expects: [{ environment: "base", programs: ["roc-stable"] }] }) == Err("environment dev has roc-stable as both an expected tool and a Command") and
+						# Unrelated environments may take one name from different origins.
+							Project.validate({ ..fixture([{ ..base, tools: [], overlays: [] }, { name: "other", parents: [], tools: [], overlays: [] }]), requires_: ["programs", "expects", "commands"], programs: [linux_roc], commands: [{ ..command, environment: "other" }], environment_programs: [{ environment: "base", programs: ["roc-stable"] }] }).is_ok()
+}
+
+# A provider on its own enters no environment that fetches or expects, its own
+# or inherited; one that does neither is its to realise.
+expect {
+	project = Project.validate({ ..fetching, environment_programs: [{ environment: "base", programs: ["tool"] }] })?
+	Project.provider_alone(project, "base") == Err("environment base has fetched programs or expected tools, which this blueprint reads but cannot yet run with")
+		and Project.provider_alone(project, "dev").is_err()
+}
+expect {
+	project = Project.validate({ ..fetching, expects: [{ environment: "dev", programs: ["git"] }] })?
+	Project.provider_alone(project, "base") == Ok({}) and Project.provider_alone(project, "dev").is_err()
+}

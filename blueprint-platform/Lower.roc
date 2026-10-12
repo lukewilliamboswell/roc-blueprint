@@ -1,5 +1,6 @@
 # Authoring cardinality checks feed the shared whole-project validator.
 import Config
+import Recipes
 import Val
 import core.Spec
 import core.Project
@@ -18,6 +19,9 @@ Lower :: [].{
 		commands : List(Spec.Command),
 		configured_tools : List(Spec.ConfiguredTool),
 		roc_packages : List(Spec.RocPackage),
+		recipes : List(Recipe),
+		environment_programs : List(Spec.EnvironmentPrograms),
+		expects : List(Spec.Expects),
 		shells : List(Spec.Shell),
 		tasks : List(Spec.Task),
 		build_sources : List(Spec.BuildSource),
@@ -27,6 +31,10 @@ Lower :: [].{
 		raw : List(Spec.Raw),
 	}
 
+	## A declared program: its command name and the function that says, for a
+	## System, where it is downloaded from.
+	Recipe : { name : Str, recipe : (Str -> Config.Download) }
+
 	## Explicit target defaults; never inferred from the compiling host.
 	default_systems : List(Str)
 	default_systems = ["x86_64-linux", "aarch64-linux", "x86_64-darwin", "aarch64-darwin"]
@@ -34,7 +42,7 @@ Lower :: [].{
 	lower : List(Config.Setting) -> Try(Spec, Str)
 	lower = |settings| {
 		initial : Acc
-		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], configured_tools: [], roc_packages: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
+		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], configured_tools: [], roc_packages: [], recipes: [], environment_programs: [], expects: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
 		acc = settings.fold(Ok(initial), |result, setting| add(result?, setting))?
 		name = match acc.names {
 			[] => return Err("MissingName: declare Name once")
@@ -46,6 +54,7 @@ Lower :: [].{
 			[one] => one
 			_ => return Err("DuplicateSystems: declare Systems at most once")
 		}
+		programs = fetched(acc.recipes, Project.unique(systems))?
 		requires_ =
 			(if acc.extensions.is_empty() [] else ["extensions"])
 				.concat(if acc.raw.is_empty() [] else ["raw"])
@@ -56,6 +65,8 @@ Lower :: [].{
 				.concat(if acc.commands.is_empty() [] else ["commands"])
 				.concat(if acc.configured_tools.is_empty() [] else ["configured-tools"])
 				.concat(if acc.roc_packages.is_empty() [] else ["roc-packages"])
+				.concat(if programs.is_empty() and acc.environment_programs.is_empty() [] else ["programs"])
+				.concat(if acc.expects.is_empty() [] else ["expects"])
 		Project.validate(
 			Spec.{
 				format: Spec.current_format,
@@ -69,9 +80,9 @@ Lower :: [].{
 				commands: acc.commands,
 				configured_tools: acc.configured_tools,
 				roc_packages: acc.roc_packages,
-				programs: [],
-				environment_programs: [],
-				expects: [],
+				programs,
+				environment_programs: acc.environment_programs,
+				expects: acc.expects,
 				shells: acc.shells,
 				tasks: acc.tasks,
 				build_sources: acc.build_sources,
@@ -95,7 +106,7 @@ Lower :: [].{
 				lowered = environment(name.to_str(), inner)?
 				# Environments sharing a bundle share its one locked source.
 				new_sources = lowered.roc_sources.keep_if(|source| !acc.build_sources.contains(source))
-				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools), commands: acc.commands.concat(lowered.commands), configured_tools: acc.configured_tools.concat(lowered.configured_tools), roc_packages: acc.roc_packages.concat(lowered.roc_packages), build_sources: acc.build_sources.concat(new_sources) }
+				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools), commands: acc.commands.concat(lowered.commands), configured_tools: acc.configured_tools.concat(lowered.configured_tools), roc_packages: acc.roc_packages.concat(lowered.roc_packages), environment_programs: acc.environment_programs.concat(lowered.environment_programs), expects: acc.expects.concat(lowered.expects), build_sources: acc.build_sources.concat(new_sources) }
 			}
 			Shell(name, inner) => { ..acc, shells: acc.shells.append(shell(name.to_str(), inner)?) }
 			Task(name, inner) => { ..acc, tasks: acc.tasks.append(task(name.to_str(), inner)?) }
@@ -110,8 +121,49 @@ Lower :: [].{
 			}
 			Custom(kind, name, value) => { ..acc, extensions: acc.extensions.append({ kind, name, value: to_value(value) }) }
 			Raw(backend, target, value) => { ..acc, raw: acc.raw.append({ backend, target, value: to_value(value) }) }
+			Fetch(name, recipe) => { ..acc, recipes: acc.recipes.append({ name: name.to_str(), recipe }) }
 		}
 		Ok(next)
+	}
+
+	## Ask each recipe once for every declared System, in declaration order,
+	## and keep only its answers: the Spec holds data, never the function. A
+	## recipe's `Invalid` is the configuration's error. So is a program no
+	## declared System has, which nothing could ever run.
+	fetched : List(Recipe), List(Str) -> Try(List(Spec.Program), Str)
+	fetched = |recipes, systems| {
+		var $programs = []
+		var $names = []
+		for entry in recipes {
+			if $names.contains(entry.name) {
+				return Err("DuplicateFetch: ${entry.name}")
+			}
+			$names = $names.append(entry.name)
+			var $available = False
+			for system in systems {
+				match (entry.recipe)(system) {
+					File(url) => {
+						$available = True
+						$programs = $programs.append({ name: entry.name, system, url, unpack: File, path: "" })
+					}
+					Archive(url, format, path) => {
+						$available = True
+						unpack = match format {
+							TarGz => TarGz
+							TarXz => TarXz
+							Zip => Zip
+						}
+						$programs = $programs.append({ name: entry.name, system, url, unpack, path })
+					}
+					Unavailable => {}
+					Invalid(message) => return Err("Fetch ${entry.name}: ${message}")
+				}
+			}
+			if !$available {
+				return Err("Fetch ${entry.name}: its recipe answers Unavailable for every declared system (${Str.join_with(systems, ", ")})")
+			}
+		}
+		Ok($programs)
 	}
 
 	workflow_step : Config.WorkflowStep -> Spec.WorkflowStep
@@ -130,10 +182,10 @@ Lower :: [].{
 			From(GuixPackages(channel)) => GuixPackages(channel)
 		}
 
-	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command), configured_tools : List(Spec.ConfiguredTool), roc_packages : List(Spec.RocPackage), roc_sources : List(Spec.BuildSource) }, Str)
+	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command), configured_tools : List(Spec.ConfiguredTool), roc_packages : List(Spec.RocPackage), roc_sources : List(Spec.BuildSource), environment_programs : List(Spec.EnvironmentPrograms), expects : List(Spec.Expects) }, Str)
 	environment = |name, inner| {
 		draft = inner.fold(
-			{ tools: [], system_tools: [], commands: [], configured_tools: [], roc_urls: [], overlays: [], parents: [] },
+			{ tools: [], system_tools: [], commands: [], configured_tools: [], roc_urls: [], overlays: [], parents: [], programs: [], expects: [] },
 			|acc, setting|
 				match setting {
 					Tools(tools) => { ..acc, tools: acc.tools.append(tools.map(|tool| tool.to_spec())) }
@@ -143,6 +195,8 @@ Lower :: [].{
 					RocPackages(urls) => { ..acc, roc_urls: acc.roc_urls.append(urls) }
 					Overlays(overlays) => { ..acc, overlays: acc.overlays.append(overlays.map(|overlay| overlay.to_str())) }
 					Extend(parent) => { ..acc, parents: acc.parents.append(parent.to_str()) }
+					Programs(names) => { ..acc, programs: acc.programs.append(names.map(|program| program.to_str())) }
+					Expect(names) => { ..acc, expects: acc.expects.append(names.map(|program| program.to_str())) }
 				},
 		)
 		if draft.tools.len() > 1 {
@@ -166,7 +220,15 @@ Lower :: [].{
 		if draft.parents.len() > 1 {
 			return Err("DuplicateExtend: environment ${name}")
 		}
-		Ok({ environment: { name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] }, system_tools: draft.system_tools, commands: draft.commands, configured_tools: draft.configured_tools, roc_packages: $roc_packages, roc_sources: $roc_sources })
+		if draft.programs.len() > 1 {
+			return Err("DuplicatePrograms: environment ${name}")
+		}
+		if draft.expects.len() > 1 {
+			return Err("DuplicateExpect: environment ${name}")
+		}
+		# An empty list selects nothing, so it leaves no entry behind.
+		selection = |lists| lists.keep_if(|names| !names.is_empty()).map(|names| { environment: name, programs: names })
+		Ok({ environment: { name, parents: draft.parents, tools: draft.tools.first() ?? [], overlays: draft.overlays.first() ?? [] }, system_tools: draft.system_tools, commands: draft.commands, configured_tools: draft.configured_tools, roc_packages: $roc_packages, roc_sources: $roc_sources, environment_programs: selection(draft.programs), expects: selection(draft.expects) })
 	}
 
 	## A release bundle URL ends in `<content hash>.tar.zst`. The hash is the
@@ -318,3 +380,77 @@ expect Lower.lower([Name("invalid"), Environment("dev", [ToolWith("zig", []), To
 expect Lower.lower([Name("invalid"), Environment("dev", [Tools(["zig"]), ToolWith("zig", [])])]) == Err("tool is both plain and configured in environment dev: zig")
 expect Lower.lower([Name("invalid"), Environment("dev", [ToolWith("zig", [("a", Int(1)), ("a", Int(2))])])]) == Err("DuplicateOption: tool zig: a")
 expect Lower.lower([Name("plain"), Environment("dev", [])]).map_ok(|spec| spec.requires_.contains("roc-packages") or !spec.roc_packages.is_empty()) == Ok(False)
+
+# A recipe from a local function: the release's version is captured, and the
+# System decides what the program is called there, or that there is none.
+tool_release : Str -> (Str -> Config.Download)
+tool_release = |version|
+	|system|
+		match system {
+			"x86_64-linux" | "aarch64-darwin" => File("https://example.test/releases/${version}/tool-${system}")
+			"x86_64-windows" => Archive("https://example.test/releases/${version}/tool-windows.zip", Zip, "tool/tool.exe")
+			_ => Unavailable
+		}
+
+# Each recipe is asked once per declared System, in declaration order, and the
+# Spec holds its answers as data: one entry where the program exists and none
+# where it does not. Different recipes, capturing or not, share one list.
+expect match Lower.lower([
+	Name("fetching"),
+	Systems(["x86_64-linux", "aarch64-linux", "x86_64-windows"]),
+	Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")),
+	Fetch("tool", tool_release("1.2.0")),
+	Fetch("notes", |system| Archive("https://example.test/notes-${system}.tar.xz", TarXz, "notes/bin/notes")),
+	Environment("base", [Programs(["roc-stable"]), Expect(["git"])]),
+	Environment("dev", [Extend("base"), Programs(["tool", "roc-stable"]), Expect(["gh"])]),
+	Environment("plain", [Programs([]), Expect([])]),
+]) {
+	Ok(spec) => spec.requires_ == ["programs", "expects"]
+		and spec.programs == [
+			{ name: "roc-stable", system: "x86_64-linux", url: "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz", unpack: TarGz, path: "roc_nightly-linux_x86_64-2026-10-04-130536d/roc" },
+			{ name: "roc-stable", system: "aarch64-linux", url: "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_arm64-2026-10-04-130536d.tar.gz", unpack: TarGz, path: "roc_nightly-linux_arm64-2026-10-04-130536d/roc" },
+			{ name: "roc-stable", system: "x86_64-windows", url: "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-windows_x86_64-2026-10-04-130536d.zip", unpack: Zip, path: "roc_nightly-windows_x86_64-2026-10-04-130536d/roc.exe" },
+			{ name: "tool", system: "x86_64-linux", url: "https://example.test/releases/1.2.0/tool-x86_64-linux", unpack: File, path: "" },
+			{ name: "tool", system: "x86_64-windows", url: "https://example.test/releases/1.2.0/tool-windows.zip", unpack: Zip, path: "tool/tool.exe" },
+			{ name: "notes", system: "x86_64-linux", url: "https://example.test/notes-x86_64-linux.tar.xz", unpack: TarXz, path: "notes/bin/notes" },
+			{ name: "notes", system: "aarch64-linux", url: "https://example.test/notes-aarch64-linux.tar.xz", unpack: TarXz, path: "notes/bin/notes" },
+			{ name: "notes", system: "x86_64-windows", url: "https://example.test/notes-x86_64-windows.tar.xz", unpack: TarXz, path: "notes/bin/notes" },
+		]
+			# Validation gives the child its parent's selections first.
+			and spec.environment_programs == [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["roc-stable", "tool"] }]
+				and spec.expects == [{ environment: "base", programs: ["git"] }, { environment: "dev", programs: ["git", "gh"] }]
+	Err(_) => False
+}
+
+# A System declared twice is asked about once.
+expect Lower.lower([Name("fetching"), Systems(["x86_64-linux", "x86_64-linux"]), Fetch("tool", tool_release("1.2.0"))]).map_ok(|spec| spec.programs.len()) == Ok(1)
+
+# With no Systems setting the recipe answers for the default ones.
+expect Lower.lower([Name("fetching"), Fetch("tool", tool_release("1.2.0"))]).map_ok(|spec| spec.programs.map(|program| program.system)) == Ok(["x86_64-linux", "aarch64-darwin"])
+
+# A project that fetches nothing and expects nothing requires neither feature.
+expect Lower.lower([Name("plain"), Environment("dev", [Programs([]), Expect([])])]).map_ok(|spec| (spec.requires_, spec.environment_programs, spec.expects)) == Ok(([], [], []))
+expect Lower.lower([Name("expecting"), Environment("dev", [Expect(["git"])])]).map_ok(|spec| spec.requires_) == Ok(["expects"])
+
+# What a recipe calls invalid is the configuration's error, in its own words.
+expect Lower.lower([Name("invalid"), Fetch("roc-stable", Recipes.roc_nightly("v1.0"))]) == Err("Fetch roc-stable: \"v1.0\" is not a Roc nightly tag; expected nightly-YYYY-MM-DD-<commit>")
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux", "aarch64-darwin"]), Fetch("tool", |system| if system == "aarch64-darwin" Invalid("no build for ${system} since 2.0") else Unavailable)]) == Err("Fetch tool: no build for aarch64-darwin since 2.0")
+
+# A program no declared System has could never run.
+expect Lower.lower([Name("invalid"), Systems(["aarch64-linux", "riscv64-linux"]), Fetch("tool", tool_release("1.2.0"))]) == Err("Fetch tool: its recipe answers Unavailable for every declared system (aarch64-linux, riscv64-linux)")
+
+# A name is declared once, even by a recipe that would answer nothing.
+expect Lower.lower([Name("invalid"), Fetch("tool", tool_release("1.2.0")), Fetch("tool", tool_release("1.3.0"))]) == Err("DuplicateFetch: tool")
+expect Lower.lower([Name("invalid"), Fetch("tool", tool_release("1.2.0")), Fetch("tool", |_| Unavailable)]) == Err("DuplicateFetch: tool")
+
+expect Lower.lower([Name("invalid"), Environment("dev", [Programs([]), Programs([])])]) == Err("DuplicatePrograms: environment dev")
+expect Lower.lower([Name("invalid"), Environment("dev", [Expect(["git"]), Expect(["gh"])])]) == Err("DuplicateExpect: environment dev")
+
+# The shared validator sees what a recipe answered: a URL that is not a
+# download, a selection nothing declares, and one name with two origins.
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |system| File("http://example.test/tool-${system}"))]) == Err("program tool on x86_64-linux: \"http://example.test/tool-x86_64-linux\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment")
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| Archive("https://example.test/tool.tar.gz", TarGz, "../tool"))]) == Err("program tool on x86_64-linux: invalid path in its archive: ../tool")
+expect Lower.lower([Name("invalid"), Environment("dev", [Programs(["tool"])])]) == Err("environment dev selects program tool, which no Fetch declares")
+expect Lower.lower([Name("invalid"), Fetch("tool", tool_release("1.2.0")), Environment("dev", [Programs(["tool"]), Expect(["tool"])])]) == Err("environment dev has tool as both a program and an expected tool")
+expect Lower.lower([Name("invalid"), Fetch("tool", tool_release("1.2.0")), Environment("base", [Command("tool", "hello")]), Environment("dev", [Extend("base"), Programs(["tool"])])]) == Err("environment dev has tool as both a program and a Command")
+expect Lower.lower([Name("invalid"), Environment("dev", [Command("git", "git"), Expect(["git"])])]) == Err("environment dev has git as both an expected tool and a Command")

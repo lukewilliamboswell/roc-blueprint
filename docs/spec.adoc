@@ -43,7 +43,10 @@ In outline:
 * `environment_programs` — optional `{ environment, programs }`: the declared
   programs an environment has on `PATH`, by name.
 * `expects` — optional `{ environment, programs }`: programs the machine must
-  already have on `PATH`. They are checked for, never installed.
+  already have on `PATH`. They are checked for, never installed. Validation
+  flattens the inheritance of both, parent first and each name once, and
+  rejects a name an environment has from two of a program, an expected tool
+  and a command.
 * `shells` — `{ name, environment }` aliases.
 * `tasks` — `{ name, environment, run }`, with nonempty executable argv.
 * `build_sources` — `{ name, ref }`, locked non-flake sources, separate from
@@ -63,13 +66,17 @@ and parser are hand-written to avoid recursive-codec derivation problems.
 `requires` is reserved in Roc; the Roc field is `requires_`, and `Sexpr` drops
 a trailing `_` on the wire. There is no major-1 shell `packages` field.
 
-`Lower.lower` checks authoring-setting cardinality and calls `Project.validate`
-as a top-level constant. The CLI calls that same semantic validator after
+`Lower.lower` checks authoring-setting cardinality, asks each `Fetch` recipe
+once for every declared System and keeps its answers as `programs` (the
+function never reaches the Spec, and a recipe's `Invalid` is the
+configuration's error), then calls `Project.validate` as a top-level constant. The CLI calls that same semantic validator after
 `Spec.parse` and required-feature checks, so external Spec does not bypass reference
 or graph rules. `Spec.parse` rejects other majors before decoding nested records;
 parsing alone does not establish semantic validity.
 
-Static checks cover generic references, duplicates, inheritance cycles, argv
+Static checks cover generic references, duplicates, inheritance cycles, argv,
+download URLs (`https://<host>/<path>` with no credentials, query or
+fragment; `http://127.0.0.1` is accepted so that a test can serve one)
 and provider-specific tool grammar when a source is explicit. `Auto` grammar is
 checked after explicit provider selection, before staging effects. Package
 existence and target availability are Nix runtime checks. Core validation never

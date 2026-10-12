@@ -42,6 +42,9 @@ complete file with the current URL.
 | `Input(InputName, FlakeRef)`
 | Other flake input; not a tool source or overlay.
 
+| `Fetch(ProgramName, recipe)`
+| A program that is downloaded: its command name and a function from the System to `File(url)`, `Archive(url, format, path)`, `Unavailable` or `Invalid(message)`. Each name once. `Recipes.roc_nightly(tag)` is such a function.
+
 | `Environment(EnvName, List(EnvironmentSetting))`
 | Named tools and scoped overlays, optionally inherited.
 
@@ -71,8 +74,8 @@ complete file with the current URL.
 
 Inside an `Environment`, `Tools` and `Overlays` occur at most once, `ToolsFor`
 occurs at most once per System, `Command` occurs at most once per command
-name, `ToolWith` occurs at most once per tool, and `RocPackages` occurs at
-most once:
+name, `ToolWith` occurs at most once per tool, and `RocPackages`, `Programs`
+and `Expect` occur at most once each:
 
 [cols="3,4",options="header"]
 |===
@@ -94,18 +97,26 @@ most once:
 | `RocPackages(List(Str))`
 | Released Roc bundle URLs to lock, so Roc programs in the environment resolve them without downloading.
 
+| `Programs(List(ProgramName))`
+| The programs `Fetch` declares that the environment has on `PATH`, by name.
+
+| `Expect(List(ProgramName))`
+| Programs the machine must already have on `PATH`. They are checked for, never installed, and no version is asked of them.
+
 | `Overlays(List(InputName))`
 | Ordered selection of declared overlay names.
 
 | `Extend(EnvName)`
-| Inherit one environment's tools, overlays, commands, configured tools and Roc packages before appending this environment's selections.
+| Inherit one environment's tools, overlays, commands, configured tools, Roc packages, programs and expected tools before appending this environment's selections.
 |===
 
 Inheritance deduplicates by first occurrence, parent first. Omitted or empty
 `Tools`/`ToolsFor`/`Overlays` lists do not clear inherited values. A standalone environment
 has no overlays unless selected. `Run` must contain a nonempty executable;
 arguments remain separate strings, including extra CLI arguments after `--`.
-There is no `In` setting or implicit task environment.
+There is no `In` setting or implicit task environment. One name is only one
+of a program, an expected tool and a `Command` in an environment, including
+what it inherits.
 
 == Choose where tools come from
 

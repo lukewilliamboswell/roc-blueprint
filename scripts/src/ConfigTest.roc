@@ -3,6 +3,7 @@ import Process
 import Script
 import "../../examples/composition/Blueprint.roc" as composition_app : Str
 import "../../examples/composition/ProjectTasks.roc" as composition_tasks : Str
+import "../../examples/composition/Releases.roc" as composition_releases : Str
 
 ## Whole-config validation happens in `roc check`, against the local platform
 ## and against a served platform bundle.
@@ -31,7 +32,7 @@ ConfigTest := [].{
 	smoke_names = ["Valid", "MissingName", "UnknownSource", "BadWorkflowName", "Composed", "EquivalentComposition", "WorkflowExpansion"]
 
 	## Fixtures whose emitted Spec is compared or searched.
-	emitted_names = ["Valid", "Composed", "EquivalentComposition", "Builds", "ComposedBuilds", "Workflows", "ComposedWorkflows", "SystemTools", "Commands", "ConfiguredTools", "RocPackages"]
+	emitted_names = ["Valid", "Composed", "EquivalentComposition", "Builds", "ComposedBuilds", "Workflows", "ComposedWorkflows", "SystemTools", "Commands", "ConfiguredTools", "RocPackages", "Programs"]
 
 	## Settings composed from an imported module emit the same Spec as inline ones.
 	same_spec_pairs = [("Composed", "EquivalentComposition"), ("Builds", "ComposedBuilds"), ("Workflows", "ComposedWorkflows")]
@@ -68,12 +69,33 @@ ConfigTest := [].{
 				"(ref \"tarball+https://example.test/releases/download/1.0.0/abc123.tar.zst\")",
 			],
 		),
+		(
+			"Programs",
+			[
+				"(requires (\"programs\" \"expects\"))",
+				"(programs ",
+				"(environment_programs ",
+				"(expects ",
+				"(url \"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz\")",
+				"(unpack TarGz)",
+				"(path \"roc_nightly-windows_x86_64-2026-10-04-130536d/roc.exe\")",
+				"(unpack Zip)",
+				"(url \"https://example.test/releases/1.0/tool-x86_64-linux\")",
+				"(unpack File)",
+				"(programs (\"roc-stable\" \"tool\"))",
+				"(programs (\"git\" \"gh\"))",
+			],
+		),
 	]
 
+	## A fixture's app. One that names a recipe of the platform imports them.
 	app_source : Str, Str -> Str
-	app_source = |platform_ref, config| "app [config] { pf: platform \"${platform_ref}\" }\n\nconfig = ${config}\n"
+	app_source = |platform_ref, config| {
+		prelude = if config.contains("Recipes.") "import pf.Recipes\n\n" else ""
+		"app [config] { pf: platform \"${platform_ref}\" }\n\n${prelude}config = ${config}\n"
+	}
 
-	## Every file the fixtures need, by name: one app per fixture, the three
+	## Every file the fixtures need, by name: one app per fixture, the four
 	## imported modules and the apps that compose them.
 	sources : Str -> List((Str, Str))
 	sources = |platform_ref| {
@@ -86,6 +108,7 @@ ConfigTest := [].{
 				("ComposedWorkflows.roc", "${header}import ProjectWorkflows\nconfig = [${workflow_base}].concat(ProjectWorkflows.settings)\n"),
 				# The real imported-module example, against this platform.
 				("ProjectTasks.roc", composition_tasks),
+				("Releases.roc", composition_releases),
 				("Composed.roc", composition_app.replace_each("platform \"../../blueprint-platform/main.roc\"", "platform \"${platform_ref}\"")),
 			])
 	}
@@ -284,7 +307,7 @@ valid_fixtures = [
 	),
 	valid(
 		"EquivalentComposition",
-		\\[Name("composed"), Systems(["x86_64-linux"]), Environment("base", [Tools(["git"])]), Environment("dev", [Tools(["git", "python3"])]), Shell("default", [Use("dev")]), Task("fmt", [Use("dev"), Run(["python3", "--version"])]), Task("test", [Use("dev"), Run(["git", "--version"])]), Task("args", [Use("dev"), Run(["python3", "-c", "import json, sys; print(json.dumps(sys.argv[1:]))", "configured argument"])])]
+		\\[Name("composed"), Systems(["x86_64-linux"]), Fetch("blueprint", |system| File(Str.concat("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-", system))), Environment("base", [Tools(["git"])]), Environment("dev", [Tools(["git", "python3"])]), Environment("release", [Tools(["git", "python3"]), Programs(["blueprint"])]), Shell("default", [Use("dev")]), Task("fmt", [Use("dev"), Run(["python3", "--version"])]), Task("test", [Use("dev"), Run(["git", "--version"])]), Task("args", [Use("dev"), Run(["python3", "-c", "import json, sys; print(json.dumps(sys.argv[1:]))", "configured argument"])])]
 		,
 	),
 	valid(
@@ -305,6 +328,13 @@ valid_fixtures = [
 	valid(
 		"SystemTools",
 		\\[Name("systems"), Systems(["x86_64-linux", "aarch64-darwin"]), Environment("base", [Tools(["git"]), ToolsFor("x86_64-linux", ["wayland"])]), Environment("dev", [Extend("base"), ToolsFor("x86_64-linux", ["alsa-lib"])]), Shell("default", [Use("dev")])]
+		,
+	),
+	# Recipes from the platform and from a lambda, one of them unavailable on a
+	# declared system; selections and expectations inherit parent first.
+	valid(
+		"Programs",
+		\\[Name("programs"), Systems(["x86_64-linux", "x86_64-windows"]), Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")), Fetch("tool", |system| if system == "x86_64-linux" File(Str.concat("https://example.test/releases/1.0/tool-", system)) else Unavailable), Environment("base", [Programs(["roc-stable"]), Expect(["git"])]), Environment("dev", [Extend("base"), Programs(["tool", "roc-stable"]), Expect(["gh"])]), Task("check", [Use("dev"), Run(["scripts/check_all.roc"])])]
 		,
 	),
 	# Builds use ordinary typed settings, including forward dependencies.
@@ -419,6 +449,45 @@ lower_fixtures = [
 		,
 	),
 	rejected(
+		"DuplicateFetch",
+		"DuplicateFetch: tool",
+		\\[Name("invalid"), Fetch("tool", |_| File("https://example.test/tool")), Fetch("tool", |_| Unavailable)]
+		,
+	),
+	rejected(
+		"DuplicatePrograms",
+		"DuplicatePrograms: environment dev",
+		\\[Name("invalid"), Environment("dev", [Programs([]), Programs([])])]
+		,
+	),
+	rejected(
+		"DuplicateExpect",
+		"DuplicateExpect: environment dev",
+		\\[Name("invalid"), Environment("dev", [Expect(["git"]), Expect(["gh"])])]
+		,
+	),
+	# What a recipe calls invalid is reported in its own words, never a crash
+	# of the recipe. The compiler wraps a long message, so each of these is
+	# matched by its start; `Lower.roc` holds the whole text.
+	rejected(
+		"InvalidRecipe",
+		"Fetch roc-stable: \"v1.0\" is not a Roc nightly tag",
+		\\[Name("invalid"), Fetch("roc-stable", Recipes.roc_nightly("v1.0"))]
+		,
+	),
+	rejected(
+		"InvalidLocalRecipe",
+		"Fetch tool: no build for x86_64-linux",
+		\\[Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |system| Invalid(Str.concat("no build for ", system)))]
+		,
+	),
+	rejected(
+		"UnavailableEverywhere",
+		"Fetch roc-stable: its recipe answers Unavailable",
+		\\[Name("invalid"), Systems(["riscv64-linux"]), Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))]
+		,
+	),
+	rejected(
 		"MissingBuildUse",
 		"MissingUse",
 		\\[Name("bad"), Build("app", [Run(["true"]), Output("out")])]
@@ -520,10 +589,29 @@ quote_fixtures = [
 		\\[Name("bad"), Environment("bad/name", [])]
 		,
 	),
+	bad_quote(
+		"BadFetchName",
+		"is not a program name",
+		\\[Name("bad"), Fetch("bin/tool", |_| Unavailable)]
+		,
+	),
+	bad_quote(
+		"BadProgramsName",
+		"is not a program name",
+		\\[Name("bad"), Environment("dev", [Programs(["-tool"])])]
+		,
+	),
+	bad_quote(
+		"BadExpectName",
+		"is not a program name",
+		\\[Name("bad"), Environment("dev", [Expect(["/usr/bin/git"])])]
+		,
+	),
 ]
 
 ## Witnesses that the shared validator runs at compile time: one reference
-## rule, one graph rule, one argv rule, and two bounds on generated graphs.
+## rule, one graph rule, one argv rule, two bounds on generated graphs, and
+## what it makes of a recipe's answers.
 core_fixtures : List(ConfigTest.Fixture)
 core_fixtures = [
 	rejected(
@@ -536,6 +624,30 @@ core_fixtures = [
 		"BuildCycle",
 		"build cycle",
 		\\[Name("bad"), Environment("builder", []), Build("app", [Use("builder"), Needs(["library"]), Run(["true"]), Output("out")]), Build("library", [Use("builder"), Needs(["app"]), Run(["true"]), Output("out")])]
+		,
+	),
+	rejected(
+		"InsecureDownload",
+		"is not a download URL",
+		\\[Name("invalid"), Systems(["x86_64-linux"]), Fetch("tool", |_| File("http://example.test/tool"))]
+		,
+	),
+	rejected(
+		"UndeclaredProgram",
+		"selects program roc-stable",
+		\\[Name("invalid"), Environment("dev", [Programs(["roc-stable"])])]
+		,
+	),
+	rejected(
+		"ProgramAndCommand",
+		"has roc-stable as both",
+		\\[Name("invalid"), Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")), Environment("base", [Command("roc-stable", "rocpkgs.nightly")]), Environment("dev", [Extend("base"), Programs(["roc-stable"])])]
+		,
+	),
+	rejected(
+		"ProgramAndExpect",
+		"has tool as both a program",
+		\\[Name("invalid"), Fetch("tool", |_| File("https://example.test/tool")), Environment("dev", [Programs(["tool"]), Expect(["tool"])])]
 		,
 	),
 	rejected("WorkflowNul", "NUL in argv", "[${workflow_base}, Workflow(\"ci\", [RunTask(\"check.all\", [Str.from_utf8([0]) ?? \"\"])])]"),
@@ -580,8 +692,8 @@ accepted = { code: 0, stdout: "No errors found", stderr: "" }
 crashed : Str -> Process.Outcome
 crashed = |text| { code: 1, stdout: "", stderr: text }
 
-expect ConfigTest.fixtures.len() == 46
-expect ConfigTest.selected(Full).len() == 49 and ConfigTest.selected(Smoke).map(|fixture| fixture.name) == ["Valid", "EquivalentComposition", "MissingName", "BadWorkflowName", "UnknownSource", "WorkflowExpansion", "Composed"]
+expect ConfigTest.fixtures.len() == 60
+expect ConfigTest.selected(Full).len() == 63 and ConfigTest.selected(Smoke).map(|fixture| fixture.name) == ["Valid", "EquivalentComposition", "MissingName", "BadWorkflowName", "UnknownSource", "WorkflowExpansion", "Composed"]
 
 # Every name is used once, and every name another table mentions exists.
 expect {
@@ -596,8 +708,9 @@ expect ConfigTest.same_spec_pairs.all(|(left, right)| ConfigTest.emitted_names.c
 expect ConfigTest.markers.all(|(name, _)| ConfigTest.emitted_names.contains(name))
 
 expect ConfigTest.app_source("../pf/main.roc", "[Name(\"x\")]") == "app [config] { pf: platform \"../pf/main.roc\" }\n\nconfig = [Name(\"x\")]\n"
+expect ConfigTest.app_source("../pf/main.roc", "[Fetch(\"roc\", Recipes.roc_nightly(\"x\"))]") == "app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [Fetch(\"roc\", Recipes.roc_nightly(\"x\"))]\n"
 expect ConfigTest.sources("https://example.test/pf.tar.zst").all(|(_, text)| !text.contains("blueprint-platform/main.roc"))
-expect ConfigTest.sources("PLATFORM").keep_if(|(name, text)| name != "ProjectBuilds.roc" and name != "ProjectWorkflows.roc" and name != "ProjectTasks.roc" and !text.contains("platform \"PLATFORM\"")) == []
+expect ConfigTest.sources("PLATFORM").keep_if(|(name, text)| name != "ProjectBuilds.roc" and name != "ProjectWorkflows.roc" and name != "ProjectTasks.roc" and name != "Releases.roc" and !text.contains("platform \"PLATFORM\"")) == []
 
 # The fixture text keeps the escapes a Blueprint.roc would have.
 expect workflow_steps.contains("\"\\\"quoted\\\"\", \"\$HOME\", \"line\\nbreak\"")

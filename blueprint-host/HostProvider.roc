@@ -17,7 +17,7 @@ HostProvider :: [].{
 		name: "host",
 		# What a Blueprint.roc may require and still load here. Loading is not
 		# realising: `preflight` refuses what this provider cannot do.
-		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools"],
+		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools", "programs", "expects"],
 		render: |spec| {
 			_ = Project.validate(spec)?
 			Ok([])
@@ -241,6 +241,7 @@ HostProvider :: [].{
 			.map_err(|_| "unknown task: ${name}")?
 		argv = task.run.concat(extra)
 		Project.check_argv(argv, name)?
+		Project.provider_alone(project, task.environment)?
 		probes = environment_probes(project, task.environment, target)?
 		commands = environment_commands(project, task.environment, target, layout)?
 		bundles = environment_bundles(project, task.environment, target)?
@@ -738,3 +739,20 @@ expect
 		"x86_64-windows",
 	).map_ok(|probes| probes.map(|probe| probe.probe))
 		== Ok([["rustc", "--version"], ["cargo", "--version"]])
+
+# A fetched program or an expected tool is not this provider's to supply: a
+# task whose environment has one is refused, and its neighbours still run.
+expect {
+	fetching = {
+		..sample,
+		requires_: sample.requires_.concat(["programs", "expects"]),
+		programs: [{ name: "tool", system: "x86_64-windows", url: "https://example.test/tool.exe", unpack: File, path: "" }],
+		environments: sample.environments.append({ name: "fetching", parents: ["plain"], tools: [], overlays: [] }).append({ name: "expecting", parents: ["plain"], tools: [], overlays: [] }),
+		environment_programs: [{ environment: "fetching", programs: ["tool"] }],
+		expects: [{ environment: "expecting", programs: ["git"] }],
+		tasks: sample.tasks.append({ name: "fetch", environment: "fetching", run: ["tool"] }).append({ name: "expect", environment: "expecting", run: ["git", "status"] }),
+	}
+	planned(fetching, Request.Run("fetch", []), "x86_64-windows", windows) == Err("environment fetching has fetched programs or expected tools, which this blueprint reads but cannot yet run with")
+		and planned(fetching, Request.Run("expect", []), "x86_64-windows", windows) == Err("environment expecting has fetched programs or expected tools, which this blueprint reads but cannot yet run with")
+			and planned(fetching, Request.Run("hello", []), "x86_64-windows", windows).is_ok()
+}

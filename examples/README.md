@@ -6,7 +6,7 @@ published platform. Each directory keeps its
 
 - [all-settings](all-settings/Blueprint.roc): Auto and explicit Nix package
   sources, a named overlay scoped to `dev`, parent-first environment inheritance,
-  shell aliases, argv tasks, a locked Roc package and raw Nix settings. `ci` uses `base` without that
+  shell aliases, argv tasks, a locked Roc package, two fetched programs, an expected tool and raw Nix settings. `ci` uses `base` without that
   overlay. `scripts/test_scenarios.roc` runs this app through the CLI and
   `scripts/bundle.roc` against a platform bundle.
 - [composition](composition/Blueprint.roc): imports
@@ -16,6 +16,9 @@ published platform. Each directory keeps its
   Inherited `git` is deduplicated before child `python3`. These tasks print tool
   versions or JSON argv; they do not format files or run a test suite. No plugin registration,
   generated CLI, implicit tool installation or runtime code loading is involved.
+  It also imports [Releases.roc](composition/Releases.roc), a recipe: a function
+  from a release to where its `blueprint` is downloaded on each system, which
+  `Fetch` takes.
 - [artifacts](artifacts/Blueprint.roc): a complete local locked source,
   sandboxed library/app dependency pair, and typed task/build workflow.
   [Usage and output](artifacts/README.md) include explicit update and read-only
