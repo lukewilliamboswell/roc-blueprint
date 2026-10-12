@@ -421,16 +421,30 @@ context! = || {
 	})
 }
 
-## The configuration platform ships a host for these machines only.
-check_host! : () => Try({}, [UnsupportedHost])
-check_host! = ||
-	match Env.platform!() {
-		{ arch: X64, os: LINUX } => Ok({})
-		{ arch: AARCH64, os: LINUX } => Ok({})
-		{ arch: AARCH64, os: MACOS } => Ok({})
-		{ arch: X64, os: MACOS } => Ok({})
+## The System a machine is, when `blueprint` runs on it: the three a binary is
+## released for. Intel macOS is not one: current nixpkgs has dropped that
+## system, so no environment could be entered there. `x86_64-darwin` remains
+## a System a configuration may declare.
+supported_host : _ -> Try(Str, [UnsupportedHost])
+supported_host = |machine|
+	match machine {
+		{ arch: X64, os: LINUX } => Ok("x86_64-linux")
+		{ arch: AARCH64, os: LINUX } => Ok("aarch64-linux")
+		{ arch: AARCH64, os: MACOS } => Ok("aarch64-darwin")
 		_ => Err(UnsupportedHost)
 	}
+
+expect supported_host({ arch: X64, os: LINUX }) == Ok("x86_64-linux")
+expect supported_host({ arch: AARCH64, os: LINUX }) == Ok("aarch64-linux")
+expect supported_host({ arch: AARCH64, os: MACOS }) == Ok("aarch64-darwin")
+expect supported_host({ arch: X64, os: MACOS }) == Err(UnsupportedHost)
+expect supported_host({ arch: X64, os: WINDOWS }) == Err(UnsupportedHost)
+
+check_host! : () => Try({}, [UnsupportedHost])
+check_host! = || {
+	_ = host_system!()?
+	Ok({})
+}
 
 ## The System this machine realises by default. Unsupported hosts fall back
 ## to the Linux default and fail later in check_host!.
@@ -439,14 +453,7 @@ host_target! = || host_system!() ?? "x86_64-linux"
 
 ## The System this executable itself runs on.
 host_system! : () => Try(Str, [UnsupportedHost])
-host_system! = ||
-	match Env.platform!() {
-		{ arch: X64, os: LINUX } => Ok("x86_64-linux")
-		{ arch: AARCH64, os: LINUX } => Ok("aarch64-linux")
-		{ arch: AARCH64, os: MACOS } => Ok("aarch64-darwin")
-		{ arch: X64, os: MACOS } => Ok("x86_64-darwin")
-		_ => Err(UnsupportedHost)
-	}
+host_system! = || supported_host(Env.platform!())
 
 ## A build runs this executable as its builder, so it must be built for the
 ## System the build runs on.
@@ -1374,7 +1381,8 @@ describe = |err|
 	match err {
 		NoBlueprint => "there is no Blueprint.roc in the selected project root"
 		UnsupportedHost =>
-			"Blueprint.roc execution requires Linux or macOS on x86_64 or arm64; "
+			"blueprint runs on x86_64 Linux, arm64 Linux and Apple Silicon macOS; "
+				.concat("Intel macOS is not supported. ")
 				.concat("Systems/BLUEPRINT_TARGET describe outputs, ")
 				.concat("not compiler host support")
 		CompilerFailed(message) =>

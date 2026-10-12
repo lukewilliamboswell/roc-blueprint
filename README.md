@@ -58,8 +58,8 @@ nix run . -- --help           # the blueprint CLI, built with its pinned Roc com
 nix develop                   # the toolchain for working on this repository
 ```
 
-You can add `packages.x86_64-linux.blueprint` from this source flake to your
-own flake. Keep the CLI and configuration platform on the same compatible
+You can add `packages.<system>.blueprint` from this source flake to your
+own flake, for `x86_64-linux`, `aarch64-linux` or `aarch64-darwin`. Keep the CLI and configuration platform on the same compatible
 source snapshot. Build the platform host before running local examples; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -77,10 +77,10 @@ Do not assume a published release accepts this development API.
 
 `Systems` controls generated Nix output shapes; it neither installs platform
 host targets nor proves execution support. Configurations execute on x86_64
-Linux, arm64 Linux and Apple Silicon macOS. No Intel macOS binary is released:
-the platform has a host for it and the CLI evaluates configurations there, but
-entering an environment fails with current nixpkgs, which has dropped that
-system.
+Linux, arm64 Linux and Apple Silicon macOS. Intel macOS is not supported: no
+binary is released for it and `blueprint` refuses to run there, because current
+nixpkgs has dropped that system. `x86_64-darwin` remains a system a
+configuration may declare.
 Sandboxed builds remain x86_64 Linux only.
 
 ## Writing `Blueprint.roc`
