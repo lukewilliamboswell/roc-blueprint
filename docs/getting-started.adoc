@@ -1,0 +1,91 @@
+= Get started
+
+This chapter installs `blueprint`, writes a first `Blueprint.roc` and runs a
+task in the environment it describes.
+
+== Install blueprint
+
+You need https://nixos.org/download[Nix] with flakes enabled.
+
+Each https://github.com/lukewilliamboswell/roc-blueprint/releases[release] attaches a `blueprint` binary for x86_64 Linux,
+arm64 Linux and Apple Silicon macOS, named `blueprint-x86_64-linux`,
+`blueprint-aarch64-linux` and `blueprint-aarch64-darwin`, with their SHA-256
+sums in `blueprint.sha256`. Download the one for your system from the
+https://github.com/lukewilliamboswell/roc-blueprint/releases/latest[latest release], check it and put it on your `PATH`:
+
+[source,sh]
+----
+sha256sum --check --ignore-missing blueprint.sha256
+install -m 755 blueprint-x86_64-linux ~/.local/bin/blueprint
+----
+
+With Nix alone, run or install the same version from the flake:
+
+[source,sh]
+----
+nix run github:lukewilliamboswell/roc-blueprint/<version> -- --help
+nix profile install github:lukewilliamboswell/roc-blueprint/<version>
+----
+
+In GitHub Actions, the
+https://lukewilliamboswell.github.io/roc-automation/actions.html#setup-blueprint[`setup-blueprint`]
+action installs Nix and a release's binary and checks its sum.
+
+Loading a configuration runs one exact Roc nightly. The binary uses a `roc` on
+`PATH` when it is that nightly, and otherwise fetches it through Nix from a
+pinned roc-overlay revision. Set `ROC` to choose the executable yourself; it
+must be that same nightly.
+
+== Write a first Blueprint.roc
+
+Put this in `Blueprint.roc` at the root of your repository. The platform URL
+is the latest release's:
+
+include::generated/latest-release.adoc[]
+
+*Use each release's `blueprint` binary with that release's platform URL.* The
+two are built and tested together.
+
+The file declares two environments. `dev` extends `base`, so it has `git`,
+`zig`, the Roc nightly from the `roc` overlay, Python and SQLite. `ci` is a
+shell on `base` alone. Each task names its environment and an exact argument
+list.
+
+== Lock the inputs and run something
+
+[source,sh]
+----
+blueprint check          # validate Blueprint.roc; needs no lock
+blueprint update         # resolve every input and write Blueprint.lock
+blueprint shell          # enter the default shell's environment
+blueprint shell ci       # enter base, without the roc overlay
+blueprint run version    # run the task's command in dev
+blueprint --help         # list this project's shells and tasks
+----
+
+Only `blueprint update` reaches for new versions. Every other command uses the
+pins in `Blueprint.lock` and fails if they no longer match `Blueprint.roc`.
+`blueprint update roc` moves the input named `roc` and keeps every other pin.
+
+== Commit the lock, not the generated files
+
+Commit `Blueprint.roc` and `Blueprint.lock`. The lock is the authority: a
+versioned S-expression listing each pinned source and its digest.
+
+`blueprint` generates a flake under `.blueprint/` and writes a `.gitignore`
+there, so that directory never reaches a commit. If your repository already
+tracks `.blueprint/`, untrack it once:
+
+[source,sh]
+----
+git rm -r --cached .blueprint
+----
+
+== Where to go next
+
+* xref:configuration.adoc#top-level-settings[Write Blueprint.roc] describes
+  every setting.
+* xref:builds.adoc#declare-a-build[Build artifacts and run workflows]
+  covers sandboxed builds.
+* xref:examples.adoc#run-an-example[The examples] are complete
+  projects, attached to each release with that release's platform URL.

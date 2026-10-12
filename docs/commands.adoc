@@ -1,0 +1,77 @@
+= Run blueprint
+
+Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
+
+Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
+
+[cols="3,5",options="header"]
+|===
+| Command
+| Meaning
+
+| `blueprint` / `blueprint gen`
+| Generate `.blueprint/` from existing matching authoritative pins
+
+| `blueprint shell [NAME]`
+| Generate the selected alias's environment, then enter it (default alias `default`)
+
+| `blueprint run TASK [-- ARGS...]`
+| Generate the task's environment, then run its argv with extra arguments
+
+| `blueprint build NAME`
+| Snapshot and build an artifact plus dependencies; print its actual store path
+
+| `blueprint workflow NAME`
+| Execute an ordered task/build workflow, stopping on failure
+
+| `blueprint tasks`
+| List tasks and their environments
+
+| `blueprint update`
+| Explicitly initialize/update and atomically publish the authoritative lock
+
+| `blueprint update INPUT...`
+| Update only the named package sources, inputs or build sources, keeping every other pin of a lock that is current for `Blueprint.roc`. Local `path:` inputs are read again either way
+
+| `blueprint check`
+| Run the compiler check and validate all shell/task/build environments without requiring a lock
+
+| `blueprint spec` / `blueprint flake`
+| Print the Spec or the generated flake
+
+| `blueprint --help`
+| Project help; subcommand help lists tasks, aliases and builds
+|===
+
+== What each command validates
+
+Provider capability checks follow the requested environment closure; unrelated
+valid provider declarations do not block selected operations. Whole-project
+structural validation and required-feature checks still apply. Full rendering
+(`gen`, `update`, `check`, `flake`) checks all shell/task/build environments.
+
+== The lock and generated files
+
+* *Commit* `Blueprint.roc` and the authority (default `Blueprint.lock`, a
+  versioned S-expression listing each pinned source and its digest);
+  generated state (default `.blueprint/`) is not committed: `blueprint`
+  writes a `.gitignore` there that ignores everything in it. A lock written
+  by an older `blueprint` is refused; run `blueprint update`.
+* Normal `gen`, `shell`, `run`, `build` and `workflow` require matching pins and never
+  rewrite authority or independently update derived locks.
+* `nix develop` takes the bash it runs a shell or task with from a flake input
+  named `nixpkgs`, so the generated flake gives that name to the `default`
+  package source (or, without one, the first Nix package source declared) and
+  that bash is pinned by `Blueprint.lock` like every tool, unless the project
+  declares an input named `nixpkgs` itself.
+
+== Environment variables
+
+* *`BLUEPRINT_ROOT`* names the directory containing `Blueprint.roc`
+  (default: the current directory).
+* *`BLUEPRINT_WORKSPACE`*, *`BLUEPRINT_GENERATED_ROOT`*, *`BLUEPRINT_LOCK`*
+  choose caller paths; relative values resolve against the selected project
+  root, not the invocation directory. Out-of-tree generated roots are supported.
+* *`BLUEPRINT_TARGET`* selects a declared target (default: this machine's
+  System). *`ROC`* selects the compatible compiler; unset, it is found on
+  `PATH` or fetched.

@@ -1,7 +1,4 @@
-= Blueprint Architecture: Core Model
-:toc: macro
-:toclevels: 2
-:icons: font
+= Understand the architecture
 
 This page explains how Blueprint is designed and why. It is written for
 contributors and provider authors who already know what a development
@@ -12,8 +9,6 @@ judge whether a proposed change fits the architecture.
 
 This is an explanation of the intended design. It does not describe the
 progress of any particular implementation.
-
-toc::[]
 
 [[purpose]]
 == Why Blueprint has a core model
@@ -169,8 +164,8 @@ supply or receive trees. Each box is labelled with its layer, so the diagram
 does not depend on color.
 
 .Data flow through the Blueprint layers
-[source,mermaid]
-----
+[mermaid]
+....
 flowchart LR
     subgraph Intent["Intent (committed)"]
         BP["Blueprint"] -->|Evaluate| SPEC["Spec"]
@@ -206,7 +201,7 @@ flowchart LR
     LOCK -.-> REP
 
     CACHE[("Remote cache")] <-.->|substitute / push| TREE
-----
+....
 
 The Lock is the trust boundary. Everything to its left expresses and records
 decisions; everything to its right follows those decisions without making new

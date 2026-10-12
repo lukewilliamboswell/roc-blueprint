@@ -24,3 +24,5 @@ crash-*
 /docs/plans/
 blueprint-core/fuzz/*/lock-*
 __pycache__/
+.docs-out/
+/docs/generated/

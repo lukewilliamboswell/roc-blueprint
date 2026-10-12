@@ -32,7 +32,10 @@ scripts/                 Roc scripts, run from the repository root; their module
   release_notes.roc      render a release's notes from docs/releases/
   package_examples.roc   archive the examples with a release's platform URL
   test_release.roc       test that archive against the bundles, served from localhost
+  docs_snippet.roc       write the part of the manual that names the latest release
   test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
+docs/                    the manual: index.adoc includes one chapter per top-level .adoc file
+  releases/              each release's notes, included by releases.adoc
 link-inputs.lock.json    the linker-input release the platform links, pinned by content
 flake.nix                builds blueprint with the pinned Roc; the development shell; the release cross-compiler
 ```

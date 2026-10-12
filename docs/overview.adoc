@@ -1,0 +1,80 @@
+= What Blueprint is
+
+image::blueprint-gemini-gen.jpeg[Blueprint illustration of robotic arms,560,align=center]
+
+A project's `Blueprint.roc` is a Roc program that describes:
+
+* *environments*: named sets of tools, which may extend one another;
+* *shells* and *tasks*: an environment to enter, or an exact command to run
+  in one;
+* *builds*: sandboxed commands that produce an artifact from declared inputs;
+* *workflows*: ordered sequences of tasks and builds.
+
+The `blueprint` command reads that file and carries it out. Every tool comes
+from a pinned source recorded in `Blueprint.lock`, which the project commits,
+so a contributor's machine and a CI runner get the same environment.
+
+== What you write and what checks it
+
+`Blueprint.roc` is an ordinary Roc application on the roc-blueprint platform.
+Its one value, `config`, is a list of settings, so configurations compose
+with ordinary Roc lists, functions and imports.
+
+Roc checks quoted values and whole-configuration rules during
+`roc check Blueprint.roc`: missing names, duplicate declarations, unknown
+references and inheritance cycles are compile-time errors. An editor shows
+them as you type. Checking needs a Roc nightly the platform release was built
+for; each release's notes name it. A source declared with an explicit provider
+also gets that provider's tool-name grammar checked; an `Auto` source defers
+that check until a provider is selected. Whether a package exists is decided
+by Nix, not by Roc.
+
+== How it works
+
+The platform lowers and validates the whole configuration, then prints it as
+a *Spec*, a provider-neutral S-expression (format 2.5). The `blueprint`
+command runs Roc to get that Spec, validates it again through the same shared
+rules, selects the Nix provider, and owns every file write, the lock and
+execution. The core package and the Nix renderer are pure: they discover
+nothing about the host and perform no effects.
+xref:architecture.adoc#purpose[The architecture chapter] explains the model
+and the rules that keep it independent of any one package ecosystem.
+
+== Where it runs
+
+[cols="2,3",options="header"]
+|===
+| System
+| Support
+
+| x86_64 Linux
+| Everything, including sandboxed builds.
+
+| arm64 Linux
+| Shells, tasks and workflows of tasks. No sandboxed builds.
+
+| Apple Silicon macOS
+| Shells, tasks and workflows of tasks. No sandboxed builds.
+
+| Intel macOS
+| Not supported. `blueprint` stops with a message naming the supported
+  systems. Current nixpkgs has dropped the system, so an environment could
+  not be entered there.
+|===
+
+A `blueprint` binary is released for each supported system. It needs
+https://nixos.org/download[Nix] with flakes enabled, and nothing else: no Roc
+and no Python.
+
+`Systems` in a configuration declares which targets the generated Nix outputs
+have. It does not install anything and is not evidence that a target runs:
+`x86_64-darwin` may still be listed there.
+
+== What it does not do
+
+* Nix is the only provider that renders and executes. A source may state Guix
+  intent, and its compatibility is validated, but there is no Guix renderer or
+  executor.
+* There is no parallel workflow scheduler: steps run in order.
+* Tasks and the evaluation of `Blueprint.roc` are not sandboxed; only builds
+  are.

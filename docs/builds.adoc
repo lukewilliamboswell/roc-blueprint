@@ -1,0 +1,74 @@
+= Build artifacts and run workflows
+
+A `Build` runs one command in a sandbox and keeps one declared output. A
+`Workflow` runs tasks and builds in order. Sandboxed builds run on x86_64
+Linux only.
+
+== Declare a build
+
+Inside `config`, with `scripts/build.roc` in the project and the `scripts`
+environment of xref:configuration.adoc#roc-packages[Lock the Roc packages scripts use]:
+
+[source,roc]
+----
+Source("assets", "path:./assets"),
+Build("app", [
+	Use("scripts"),
+	Inputs(["assets"]),
+	Run(["roc-stable", "scripts/build.roc"]),
+	Output("dist/app"),
+]),
+----
+
+`Run` is any argv; nothing about a build requires Roc. Roc takes the first
+`--` of its arguments for itself, so pass a script its own arguments after
+one: `Run(["roc-stable", "scripts/build.roc", "--", "--release"])`.
+
+== What a build sees and produces
+
+Run `blueprint update`, then `blueprint build app`. The printed store path is
+resolved by Nix and contains exactly the declared file or directory. Missing
+outputs fail. `Needs(["library"])` adds build dependencies; cycles fail during
+configuration validation. Sources live under `$BLUEPRINT_INPUTS/<name>` and
+needed artifacts under `$BLUEPRINT_ARTIFACTS/<name>`, both read-only and separate
+from the writable project copy.
+
+Each build snapshots current project files, including untracked/task-generated
+files, excluding VCS metadata, caller-generated roots, authority and all local
+input trees. Nix makes that copy directly from the project, so a file is
+executable in a build only when its owner may execute it. Changing a locked
+local source requires explicit update. Initial
+source/output policy rejects symlinks and special files. Only local x86_64 Linux
+sandboxed execution is verified; tasks/config compilation are not sandboxed.
+A build's `PATH` holds exactly the tools its environment declares. Earlier
+versions also put `python3`, coreutils and `bash` there, so a build that ran
+`sh`, `cp`, `mkdir` or `python3` without declaring it now fails with `build
+command not found`, or inside its own script when that script calls one: add
+the tool (`bash`, `coreutils`, `python3`) to the environment's `Tools`. A build
+also no longer sees the variables Nix's `stdenv` used to export. A tool may
+give what it runs more than the build was given: the Roc compiler's package
+puts coreutils and a C compiler on the `PATH` of a script it runs.
+The `blueprint` executable is itself each build's builder inside the sandbox,
+so `blueprint build` refuses to run unless that executable is an x86_64 Linux
+one.
+See the https://github.com/lukewilliamboswell/roc-blueprint/blob/main/examples/artifacts/README.md[complete runnable example],
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/builds/README.md[real build fixture].
+
+== Order tasks and builds in a workflow
+
+Inside `config`, referring to existing tasks and builds:
+
+[source,roc]
+----
+Workflow("ci", [RunTask("check", ["--verbose"]), BuildArtifact("app"), RunWorkflow("verify")]),
+Workflow("verify", [RunTask("version", [])]),
+----
+
+`blueprint workflow ci` plans the complete dependency/capability/layout/lock
+closure before executing any task. Steps run in order and stop on the first
+failure. Repeated explicit tasks and builds repeat; every build snapshots current
+project files and rebuilds its dependency graph from that snapshot. Nix may reuse
+unchanged inputs, but Blueprint never caches artifact results across tasks.
+Locked sources are verified again; task edits to them require explicit update.
+Cycles and excessive depth/expansion fail during configuration validation.
+See the https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/workflows/README.md[real workflow fixture].
