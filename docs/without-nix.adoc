@@ -17,10 +17,10 @@ import pf.Recipes
 config = [
 	Name("my-package"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))]),
 		Expect(["git"]),
 		RocPackages([
-			"https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+			"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 			"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 		]),
 	]),
@@ -208,10 +208,10 @@ whatever the project expects:
   bsdtar, as on macOS; GNU tar does not read a zip.
 
 | `ln`
-| The symbolic links of a step's `bin` directory.
+| The symbolic links of a step's `bin` directory on Linux and macOS.
 
 | `chmod`
-| Making a downloaded `File` executable and a tree's files read-only.
+| Making a downloaded `File` executable and a tree's files read-only on Linux and macOS.
 |===
 
 == What still needs Nix
@@ -228,16 +228,16 @@ whatever the project expects:
 
 == Windows
 
-`blueprint` recognises x86_64 Windows as a system it runs on, and the parts of
-this chapter have their Windows forms in the code: the store is under
-`LOCALAPPDATA` when `XDG_CACHE_HOME` is unset, `Recipes.roc_nightly` answers
-with the nightly's zip and `roc.exe`, and a task whose command is a `.roc`
-file is started through the environment's `roc-stable`, because Windows does
-not read a script's first line.
+The release includes `blueprint-x86_64-windows.exe` and the platform's
+`x64win` target. The `no-nix` CI job checks fetching the compiler, writing a
+lock, reporting requirements, and building and running a basic-cli program.
 
-None of it can be used on Windows: no Windows binary of `blueprint` is
-released, the platform has no Windows target, and nothing has run there. A
-step's links are made with `ln -s` and a file is made executable with
-`chmod`, neither of which Windows has.
-xref:maintaining.adoc#what-remains-for-windows[What remains for Windows] lists
-what is missing.
+The store uses `LOCALAPPDATA` when `XDG_CACHE_HOME` is unset.
+`Recipes.roc_nightly` selects the nightly's zip and `roc.exe`; the Windows
+`tar` reads zip archives. Fetched programs are exposed with hard links, or
+copies when the store is on another drive, and need no `ln` or `chmod`.
+
+Windows does not execute a script's shebang. Name its interpreter in the task:
+`Run(["roc-stable", "hello.roc"])`. Nix tools and sandboxed builds remain
+unavailable. CI checks Windows Server; Windows 10 and 11 desktop installations
+have not been verified here.

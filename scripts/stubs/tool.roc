@@ -1,6 +1,6 @@
 #!/usr/bin/env roc
 app [main!] {
-	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 	nix: "../../blueprint-nix/main.roc",
 }
 
@@ -67,10 +67,10 @@ act! = |role, args| {
 			real = variable!("STUB_REAL_ROC")?
 			# There is no exec here: the compiler is a child with this process's
 			# streams, and its status becomes this process's.
-			ran = Cmd.new_str(real).args(args).stdin(Inherit).stdout(Inherit).stderr(Inherit).run!()
+			ran = Cmd.new(OsStr.from_str(real)).args(args).stdin(Inherit).stdout(Inherit).stderr(Inherit).run!()
 			match ran {
-				Ok({ status: Exited(code), .. }) => Ok(code)
-				Ok({ status: Signaled(signal), .. }) => Ok(128 + signal)
+				Ok(Cmd.Output.{ status: Exited(code), .. }) => Ok(code)
+				Ok(Cmd.Output.{ status: Signaled(signal), .. }) => Ok(128 + signal)
 				Err(_) => Err("could not run ${real}")
 			}
 		}
@@ -146,9 +146,9 @@ entered! : List(Str) => Try(I32, Str)
 entered! = |argv|
 	match argv {
 		["--command", program, .. as rest] =>
-			match Cmd.new_str(program).args_str(rest).stdin(Inherit).stdout(Inherit).stderr(Inherit).run!() {
-				Ok({ status: Exited(code), .. }) => Ok(code)
-				Ok({ status: Signaled(signal), .. }) => Ok(128 + signal)
+			match Cmd.new(OsStr.from_str(program)).args(rest.map(OsStr.from_str)).stdin(Inherit).stdout(Inherit).stderr(Inherit).run!() {
+				Ok(Cmd.Output.{ status: Exited(code), .. }) => Ok(code)
+				Ok(Cmd.Output.{ status: Signaled(signal), .. }) => Ok(128 + signal)
 				Err(_) => Err("could not run ${program}")
 			}
 
@@ -180,7 +180,7 @@ record! = |directory, argv| {
 	self = Path.canonicalize!(Path.utf8("/proc/self")).map_ok(Path.display).map_err(|_| "cannot read /proc/self")?
 	pid = self.split_on("/").last() ?? ""
 	Path.create_all!(Path.utf8(directory)).map_err(|_| "cannot create ${directory}")?
-	file = "${directory}/${StubTool.record_file(Utc.now!(), pid)}"
+	file = "${directory}/${StubTool.record_file(Utc.now!().to_nanos_since_epoch(), pid)}"
 	Path.write_utf8!(Path.utf8(file), StubTool.record(argv)).map_err(|_| "cannot write ${file}")
 }
 

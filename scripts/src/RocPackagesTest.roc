@@ -1,3 +1,4 @@
+import cli.Utc
 import cli.Cmd
 import cli.Env
 import cli.OsStr
@@ -14,13 +15,13 @@ import Script
 ## creates, so the Roc package cache it publishes into, breaks and repairs is
 ## never the user's.
 RocPackagesTest := [].{
-	basic_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst"
+	basic_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst"
 
 	## basic-cli depends on this; a project must list it too.
 	http = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"
 
 	## An explicit nightly, so the compiler resolving these bundles is known.
-	roc_tag = "nightly-2026-10-04-130536d"
+	roc_tag = "nightly-2026-10-13-b17d287"
 
 	greeting = "Hello from locked packages"
 
@@ -110,7 +111,7 @@ RocPackagesTest := [].{
 		work = Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-roc-packages-")?)?
 		result = scenarios!({ root: Path.to_str(Path.canonicalize!(root)?)?, blueprint, work: Path.to_str(work)? })
 		# A failed scenario may have left a directory read-only.
-		_ = Cmd.new_str("chmod").args_str(["-R", "u+w", "--"]).arg(Path.to_os_str(work)).exec_cmd!()
+		_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--"].map(OsStr.from_str)).arg(Path.to_os_str(work)).exec!()
 		_ = Path.delete_all!(work)
 		result
 	}
@@ -125,17 +126,17 @@ Outcome : { code : I32, stdout : Str, stderr : Str }
 blueprint! : Context, Str, Str, List(Str) => Try(Outcome, _)
 blueprint! = |context, cache, project, args| {
 	Stdout.line!("RUN  blueprint ${Str.join_with(args, " ")}")?
-	ran = Cmd.new(Path.to_os_str(context.blueprint)).args_str(args)
+	ran = Cmd.new(Path.to_os_str(context.blueprint)).args(args.map(OsStr.from_str))
 		.cwd(Path.utf8(project))
-		.env_str("XDG_CACHE_HOME", cache)
+		.env(OsStr.from_str("XDG_CACHE_HOME"), OsStr.from_str(cache))
 		.run!()
 	match ran {
-		Ok({ status, stdout_bytes, stderr_bytes }) => {
-			code = match status {
+		Ok(output) => {
+			code = match output.status {
 				Exited(exit_code) => exit_code
 				Signaled(signal) => 128 + signal
 			}
-			Ok({ code, stdout: Str.from_utf8_lossy(stdout_bytes), stderr: Str.from_utf8_lossy(stderr_bytes) })
+			Ok({ code, stdout: Str.from_utf8_lossy(output.stdout_bytes), stderr: Str.from_utf8_lossy(output.stderr_bytes) })
 		}
 		Err(_) => Script.fail!("could not run ./blueprint ${Str.join_with(args, " ")}")
 	}
@@ -195,7 +196,7 @@ check_published! = |package_dir, name| {
 
 ## When a package directory and its entry point were last changed. Publishing
 ## again would replace the directory, so equal stamps mean nothing was written.
-stamp! : Str, Str => Try((U128, U128), _)
+stamp! : Str, Str => Try((Utc, Utc), _)
 stamp! = |package_dir, name| {
 	directory = Path.utf8("${package_dir}/${name}")
 	Ok((Path.time_modified!(directory)?, Path.time_modified!(Path.join(directory, "main.roc"))?))
@@ -203,7 +204,7 @@ stamp! = |package_dir, name| {
 
 chmod! : Str, Str => Try({}, _)
 chmod! = |mode, target|
-	Cmd.new_str("chmod").args_str([mode, "--", target]).exec_cmd!().map_err(|_| ChmodFailed(target))
+	Cmd.new(OsStr.from_str("chmod")).args([mode, "--", target].map(OsStr.from_str)).exec!().map_err(|_| ChmodFailed(target))
 
 ## Whether a package is complete in this cache: Roc reads its `main.roc`.
 ## Blueprint's publication and Roc's own download leave the same files, so
@@ -252,20 +253,20 @@ runner! = |context, directory, extra| {
 	)
 	Path.write_utf8!(Path.utf8("${directory}/spec.json"), spec)?
 	Stdout.line!("RUN  blueprint __build-runner ${directory}/spec.json")?
-	ran = Cmd.new(Path.to_os_str(context.blueprint)).args_str(["__build-runner", "${directory}/spec.json"])
+	ran = Cmd.new(Path.to_os_str(context.blueprint)).args(["__build-runner", "${directory}/spec.json"].map(OsStr.from_str))
 		.cwd(Path.utf8(top))
 		.clear_envs()
-		.env_str("PATH", search)
-		.env_str("out", "${directory}/out")
+		.env(OsStr.from_str("PATH"), OsStr.from_str(search))
+		.env(OsStr.from_str("out"), OsStr.from_str("${directory}/out"))
 		.run!()
 	match ran {
-		Ok({ status, stdout_bytes, stderr_bytes }) => {
-			code = match status {
+		Ok(output) => {
+			code = match output.status {
 				Exited(exit_code) => exit_code
 				Signaled(signal) => 128 + signal
 			}
 			recorded = Path.read_utf8!(Path.utf8("${directory}/out")) ?? ""
-			Ok({ outcome: { code, stdout: Str.from_utf8_lossy(stdout_bytes), stderr: Str.from_utf8_lossy(stderr_bytes) }, top, recorded })
+			Ok({ outcome: { code, stdout: Str.from_utf8_lossy(output.stdout_bytes), stderr: Str.from_utf8_lossy(output.stderr_bytes) }, top, recorded })
 		}
 		Err(_) => Script.fail!("could not run ./blueprint __build-runner")
 	}
@@ -488,7 +489,7 @@ scenarios! = |context| {
 	Script.pass!("7. ${real_packages}: nothing published or staged there")
 }
 
-expect RocPackagesTest.hash(RocPackagesTest.basic_cli) == "AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH"
+expect RocPackagesTest.hash(RocPackagesTest.basic_cli) == "Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af"
 expect RocPackagesTest.relative("/tmp/work/project", "/home/me/repo/blueprint-platform/main.roc") == "../../../home/me/repo/blueprint-platform/main.roc"
 expect RocPackagesTest.relative("/repo/tests/project", "/repo/blueprint-platform/main.roc") == "../../blueprint-platform/main.roc"
 expect RocPackagesTest.relative("/repo", "/repo/blueprint-platform/main.roc") == "blueprint-platform/main.roc"

@@ -48,6 +48,28 @@ LinkInputs := [].{
 		"targets/arm64musl/libc.a",
 		"targets/arm64musl/libzigc.a",
 		"targets/arm64musl/libcompiler_rt.a",
+		"targets/x64win/msvc_runtime.lib",
+		"targets/x64win/advapi32.lib",
+		"targets/x64win/api-ms-win-crt-conio-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-convert-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-environment-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-filesystem-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-heap-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-locale-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-math-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-multibyte-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-private-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-process-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-runtime-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-stdio-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-string-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-time-l1-1-0.lib",
+		"targets/x64win/api-ms-win-crt-utility-l1-1-0.lib",
+		"targets/x64win/kernel32.lib",
+		"targets/x64win/ntdll.lib",
+		"targets/x64win/shell32.lib",
+		"targets/x64win/user32.lib",
+
 	]
 
 	max_manifest : U64
@@ -415,7 +437,7 @@ match_manifest = |lock_text, encoded| match LinkInputs.parse_lock(lock_text) {
 		}
 }
 
-committed_manifest = "{\"assets\":{\"all\":{\"asset\":\"link-inputs-all.tar\",\"sha256\":\"e54e6ed10fd433f55c9ab9d1b8ff346739b5c9d21f24c833cd0be4785393aef4\",\"size\":7004160}},\"kind\":\"roc-zig-link-inputs\",\"schema_version\":1,\"source\":{\"input_fingerprint\":\"5d5376f62958ab464f51b5facd3b78c7cb2605273b1e7b732e44a7df8e16ddff\",\"ref\":\"refs/heads/adopt/content-addressed-linker-inputs\",\"repository\":\"lukewilliamboswell/roc-platform-template-zig\",\"sha\":\"4051337809b72aedddf87dbcf7d885cdbcf13309\",\"workflow\":\"lukewilliamboswell/roc-platform-template-zig/.github/workflows/linker-inputs.yml\"}}"
+committed_manifest = "{\"assets\":{\"all\":{\"asset\":\"link-inputs-all.tar\",\"sha256\":\"a057de193f8c1f6e7f3bfc6f1999853e6c2a868567913af9384d7ecb99c5462a\",\"size\":8253440}},\"kind\":\"roc-zig-link-inputs\",\"schema_version\":1,\"source\":{\"input_fingerprint\":\"a0a3a4bd00e19228089ae1fcab72f5760e75d373a994db82c391f27560283001\",\"ref\":\"refs/heads/windows-startup-inputs\",\"repository\":\"lukewilliamboswell/roc-platform-template-zig\",\"sha\":\"5db8f9b9e661f5cbde0254d3520366ef4eab8bd4\",\"workflow\":\"lukewilliamboswell/roc-platform-template-zig/.github/workflows/linker-inputs.yml\"}}"
 
 # The committed lock is valid, and each identity it carries is checked.
 expect lock_error(committed_lock) == "accepted"
@@ -424,15 +446,15 @@ expect lock_error(Str.replace_each(committed_lock, "\"targets\"", "\"artifacts\"
 expect lock_error(Str.replace_each(committed_lock, "\"schema_version\": 1", "\"schema_version\": 2")) == "unsupported schema_version or kind"
 # A release that is not named after the pinned manifest is refused, whichever
 # of the two was edited.
-expect lock_error(Str.replace_each(committed_lock, "link-inputs-sha256-2d", "link-inputs-sha256-3d")) == "release must be link-inputs-sha256-<manifest.sha256>"
-expect lock_error(Str.replace_each(committed_lock, "\"sha256\": \"2d", "\"sha256\": \"3d")) == "release must be link-inputs-sha256-<manifest.sha256>"
-expect lock_error(Str.replace_each(committed_lock, "\"sha256\": \"e54e", "\"sha256\": \"E54E")) == "targets.all must be link-inputs-all.tar with a SHA-256 and a size"
-expect lock_error(Str.replace_each(committed_lock, "\"size\": 7004160", "\"size\": 0")) == "targets.all must be link-inputs-all.tar with a SHA-256 and a size"
+expect lock_error(Str.replace_each(committed_lock, "link-inputs-sha256-28", "link-inputs-sha256-38")) == "release must be link-inputs-sha256-<manifest.sha256>"
+expect lock_error(Str.replace_each(committed_lock, "\"sha256\": \"28", "\"sha256\": \"38")) == "release must be link-inputs-sha256-<manifest.sha256>"
+expect lock_error(Str.replace_each(committed_lock, "\"sha256\": \"a057", "\"sha256\": \"A057")) == "targets.all must be link-inputs-all.tar with a SHA-256 and a size"
+expect lock_error(Str.replace_each(committed_lock, "\"size\": 8253440", "\"size\": 0")) == "targets.all must be link-inputs-all.tar with a SHA-256 and a size"
 expect lock_error(Str.replace_each(committed_lock, "\"repository\": \"lukewilliamboswell/roc-platform-template-zig\",\n  \"release\"", "\"repository\": \"../elsewhere\",\n  \"release\"")) == "repository must be a GitHub owner/name"
 
 # The release manifest must pin the same archive as the lock.
 expect manifest_error(committed_manifest) == "accepted"
-expect manifest_error(Str.replace_each(committed_manifest, "e54e", "f54e")) == "assets disagree with the lock's targets"
-expect manifest_error(Str.replace_each(committed_manifest, "7004160", "7004161")) == "assets disagree with the lock's targets"
-expect manifest_error(Str.replace_each(committed_manifest, "4051337", "5051337")) == "source disagrees with the lock"
+expect manifest_error(Str.replace_each(committed_manifest, "a057", "b057")) == "assets disagree with the lock's targets"
+expect manifest_error(Str.replace_each(committed_manifest, "8253440", "8253441")) == "assets disagree with the lock's targets"
+expect manifest_error(Str.replace_each(committed_manifest, "5db8f9b", "6db8f9b")) == "source disagrees with the lock"
 expect manifest_error("[]") == "not a linker-input release manifest"

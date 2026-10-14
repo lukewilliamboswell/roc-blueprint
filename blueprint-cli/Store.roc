@@ -173,15 +173,13 @@ Store := [].{
 		})
 	}
 
-	## Bytes are read in bounded chunks; an empty chunk is the end of the file.
+	## Bytes are read in bounded chunks until the reader reports EndOfInput.
 	file_digest! : Str => Try(Crypto.SHA256.Digest, _)
 	file_digest! = |file| {
 		reader = File.open_reader_with_capacity!(Path.utf8(file), 65536)?
 		var $hasher = Crypto.SHA256.Hasher.empty()
-		var $chunk = reader.read_up_to!(65536)?
-		while !$chunk.is_empty() {
-			$hasher = $hasher.write($chunk)
-			$chunk = reader.read_up_to!(65536)?
+		for! chunk in reader.chunks() {
+			$hasher = $hasher.write(chunk?)
 		}
 		Ok($hasher.finish())
 	}
@@ -248,11 +246,10 @@ Store := [].{
 		reader = File.open_reader_with_capacity!(Path.utf8(file), 65536).map_err(|_| NotHeld)?
 		var $hasher = Crypto.SHA256.Hasher.empty()
 		var $size = 0
-		var $chunk = reader.read_up_to!(65536).map_err(|_| NotHeld)?
-		while !$chunk.is_empty() {
-			$hasher = $hasher.write($chunk)
-			$size = $size + $chunk.len()
-			$chunk = reader.read_up_to!(65536).map_err(|_| NotHeld)?
+		for! result in reader.chunks() {
+			chunk = result.map_err(|_| NotHeld)?
+			$hasher = $hasher.write(chunk)
+			$size = $size + chunk.len()
 		}
 		if $hasher.finish().to_hex() == sha256 Ok({ sha256, size: $size }) else Err(NotHeld)
 	}
@@ -260,9 +257,20 @@ Store := [].{
 	## Put `target` on a run's PATH as `name`: a symbolic link in `bin`, so
 	## that a program finds what is beside its real path.
 	expose! : Str, Str, Str => Try({}, Str)
-	expose! = |bin, name, target|
-		Cmd.new_str("ln").args_str(["-s", target, "${bin}/${name}"]).exec_cmd!()
-			.map_err(|_| "could not link ${name} to ${target} in ${bin}")
+	expose! = |bin, name, target| {
+		if Env.platform!().os == WINDOWS {
+			# A hard link needs no symlink privileges. Copy across volumes.
+			source = Path.utf8(target)
+			destination = Path.utf8("${bin}/${name}.exe")
+			match source.hard_link!(destination) {
+				Ok({}) => Ok({})
+				Err(_) => source.copy!(destination).map_err(|_| "could not expose ${name} from ${target} in ${bin}")
+			}
+		} else {
+			Cmd.new("ln").args(["-s", target, "${bin}/${name}"].map(OsStr.from_str)).exec!()
+				.map_err(|_| "could not link ${name} to ${target} in ${bin}")
+		}
+	}
 }
 
 digest : Str -> Bool
@@ -392,7 +400,9 @@ tree! = |store, program| {
 		match program.unpack {
 			File => {
 				Path.utf8(artifact).copy!(Path.utf8("${tree}/program")).map_err(|_| "cannot copy ${program.name} within ${store}")?
-				run!("chmod", ["0555", "${tree}/program"], "make ${program.name} executable")?
+				if Env.platform!().os != WINDOWS {
+					run!("chmod", ["0555", "${tree}/program"], "make ${program.name} executable")?
+				}
 			}
 			_ => {
 				names = listed!(["-tf", artifact], program.name)?
@@ -405,7 +415,7 @@ tree! = |store, program| {
 				}
 				# Files are read-only; directories stay writable, so that the
 				# tree can still be deleted.
-				for batch in files.chunks_of(256) {
+				for batch in (if Env.platform!().os == WINDOWS [] else files).chunks_of(256) {
 					run!("chmod", ["a-w"].concat(batch), "make the files of ${program.name} read-only")?
 				}
 			}
@@ -425,13 +435,12 @@ tree! = |store, program| {
 ## A listing `tar` prints of an archive.
 listed! : List(Str), Str => Try(Str, Str)
 listed! = |args, name|
-	Cmd.new_str("tar").args_str(args).exec_output!()
-		.map_ok(|output| output.stdout_utf8)
+	Cmd.new("tar").args(args.map(OsStr.from_str)).capture!()
 		.map_err(|_| "`tar ${Str.join_with(args, " ")}` could not list the archive for ${name}")
 
 run! : Str, List(Str), Str => Try({}, Str)
 run! = |program, args, purpose|
-	Cmd.new_str(program).args_str(args).exec_cmd!().map_err(|_| "could not ${purpose}: `${program}` failed")
+	Cmd.new(OsStr.from_str(program)).args(args.map(OsStr.from_str)).exec!().map_err(|_| "could not ${purpose}: `${program}` failed")
 
 ## Every regular file below a directory. Anything that is not a file, a
 ## directory or a link is named as the error.

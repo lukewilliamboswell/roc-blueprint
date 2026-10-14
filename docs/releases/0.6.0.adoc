@@ -46,7 +46,7 @@ config = [
 	Name("my-package"),
 	Environment("dev", [
 		Programs([
-			Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d")),
+			Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287")),
 			Fetch("blueprint-0-5", Recipes.file("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-{system}")),
 		]),
 	]),
@@ -161,10 +161,10 @@ config = [
 	Overlay("roc", "github:roc-lang/roc-overlay"),
 	Environment("dev", [
 		Overlays(["roc"]),
-		Command("roc-stable", "rocpkgs.nightly-2026-10-04-130536d"),
+		Command("roc-stable", "rocpkgs.nightly-2026-10-13-b17d287"),
 		Tools(["git", "gh"]),
 		RocPackages([
-			"https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+			"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 			"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 		]),
 	]),
@@ -183,10 +183,10 @@ import pf.Recipes
 config = [
 	Name("my-package"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))]),
 		Expect(["git", "gh"]),
 		RocPackages([
-			"https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+			"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 			"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 		]),
 	]),
@@ -206,7 +206,7 @@ config = [
 	Overlay("zig", "github:mitchellh/zig-overlay"),
 	Environment("dev", [
 		Overlays(["roc", "zig"]),
-		Command("roc-stable", "rocpkgs.nightly-2026-10-04-130536d"),
+		Command("roc-stable", "rocpkgs.nightly-2026-10-13-b17d287"),
 		Tools(["git", "zigpkgs.\"0.16.0\""]),
 	]),
 	Task("check", [Use("dev"), Run(["scripts/check_all.roc"])]),
@@ -228,7 +228,7 @@ config = [
 	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 	Overlay("zig", "github:mitchellh/zig-overlay"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))]),
 		Expect(["git"]),
 	]),
 	Environment("host", [
@@ -327,8 +327,9 @@ core: "{core-url}"
 
 * The Nix-free path is run in CI on x86_64 Linux, arm64 Linux and Apple
   Silicon macOS. It was developed and measured on x86_64 Linux.
-* Windows cannot use this release: no Windows binary is attached and the
-  platform has no Windows target.
+* Windows x86_64 has a binary and platform target. The Nix-free CI smoke
+  test fetches Roc, updates a lock and runs a basic-cli program. Invoke
+  script interpreters explicitly; Nix tools and builds remain unavailable.
 * `tar`, `ln` and `chmod` must be on `PATH` to unpack and link a fetched
   program. A `Zip` archive unpacks only where `tar` is bsdtar.
 * A `Fetch` gives one command. An archive that holds several programs needs

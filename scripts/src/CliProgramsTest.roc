@@ -87,7 +87,7 @@ run! = |test, server, cwd, args, status, overrides| {
 
 job : Test, Str, List(Str), List((Str, Str)) -> Process.Job
 job = |test, cwd, args, overrides| {
-	cmd: Cmd.new_str(test.bench.blueprint).args_str(args).cwd(Path.utf8(cwd)).clear_envs().envs(CliHarness.setting(test.env, overrides)),
+	cmd: Cmd.new(OsStr.from_str(test.bench.blueprint)).args(args.map(OsStr.from_str)).cwd(Path.utf8(cwd)).clear_envs().envs(CliHarness.setting(test.env, overrides)),
 	label: "blueprint ${Str.join_with(args, " ")}",
 }
 

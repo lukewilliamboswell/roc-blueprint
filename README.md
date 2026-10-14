@@ -23,7 +23,7 @@ import pf.Recipes
 config = [
 	Name("my-project"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-04-130536d"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))]),
 		Expect(["git"]),
 	]),
 	Shell("default", [Use("dev")]),

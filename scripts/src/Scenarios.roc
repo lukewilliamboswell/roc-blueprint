@@ -1,3 +1,4 @@
+import cli.OsStr
 import cli.Cmd
 import cli.Env
 import cli.Path
@@ -504,7 +505,7 @@ Scenarios := [].{
 		toolchains = { zig: pinned!(flake_lock, "zig-overlay", "flake.lock")?, rust: rust_overlay }
 		result = each!(context, scenarios(packages_ref, overlay_ref, roc, toolchains), 0)
 		# A scenario leaves its lock read-only.
-		_ = Cmd.new_str("chmod").args_str(["-R", "u+w", "--", work]).exec_cmd!()
+		_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--", work].map(OsStr.from_str)).exec!()
 		_ = Path.delete_all!(Path.utf8(work))
 		result
 	}
@@ -564,7 +565,7 @@ replace! = |file, text| {
 
 chmod! : Str, Str => Try({}, _)
 chmod! = |mode, target|
-	Cmd.new_str("chmod").args_str([mode, "--", target]).exec_cmd!().map_err(|_| ChmodFailed(target))
+	Cmd.new(OsStr.from_str("chmod")).args([mode, "--", target].map(OsStr.from_str)).exec!().map_err(|_| ChmodFailed(target))
 
 ## Run each step in order. `lock` is the authority a fresh project was given;
 ## it must read the same after every step. An example has none to compare.

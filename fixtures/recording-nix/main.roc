@@ -1,4 +1,4 @@
-app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst" }
+app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst" }
 
 import cli.Cmd
 import cli.Env
@@ -31,7 +31,7 @@ record_and_run! : List(OsStr) => Try(I32, _)
 record_and_run! = |args| {
 	events = Path.from_os_str(Env.var!("NIX_RECORDER_EVENTS")?)
 	real = Env.var!("NIX_RECORDER_REAL")?
-	name = "${stamp(Utc.now!())}-${Random.seed_u64!()?.to_str()}.nix"
+	name = "${stamp(Utc.now!().to_nanos_since_epoch())}-${Random.seed_u64!()?.to_str()}.nix"
 	Path.write_bytes!(Path.join(events, name), args.fold([], |bytes, arg| bytes.concat(arg.to_bytes()).append(0)))?
 	ran = Cmd.new(real).arg("--offline").args(args)
 		.stdin(Inherit)
@@ -45,7 +45,7 @@ record_and_run! = |args| {
 }
 
 ## Nanoseconds since the epoch, padded so that names sort as numbers do.
-stamp : U128 -> Str
+stamp : I128 -> Str
 stamp = |nanos| {
 	digits = nanos.to_str()
 	"${Str.repeat("0", 24 - digits.to_utf8().len())}${digits}"

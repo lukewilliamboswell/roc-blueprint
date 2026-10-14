@@ -17,7 +17,7 @@ import Script
 Assets := [].{
 
 	## The binaries, in the order `blueprint.sha256` lists them.
-	binaries = ["blueprint-x86_64-linux", "blueprint-aarch64-linux", "blueprint-aarch64-darwin"]
+	binaries = ["blueprint-x86_64-linux", "blueprint-aarch64-linux", "blueprint-aarch64-darwin", "blueprint-x86_64-windows.exe"]
 
 	checksums = "blueprint.sha256"
 
@@ -126,11 +126,11 @@ sums_sample = Str.join_with(Assets.binaries.map(|name| Release.checksum_line(nam
 
 names_sample = Assets.inventory({ version: "0.5.0", platform_bundle: "Abc.tar.zst", core_bundle: "roc-blueprint-core-Def.tar.zst" })
 
-expect names_sample == ["Abc.tar.zst", "blueprint-aarch64-darwin", "blueprint-aarch64-linux", "blueprint-x86_64-linux", "blueprint.sha256", "roc-blueprint-0.5.0.pdf", "roc-blueprint-core-Def.tar.zst", "roc-blueprint-docs-0.5.0.zip", "roc-blueprint-examples-0.5.0.zip"]
+expect names_sample == ["Abc.tar.zst", "blueprint-aarch64-darwin", "blueprint-aarch64-linux", "blueprint-x86_64-linux", "blueprint-x86_64-windows.exe", "blueprint.sha256", "roc-blueprint-0.5.0.pdf", "roc-blueprint-core-Def.tar.zst", "roc-blueprint-docs-0.5.0.zip", "roc-blueprint-examples-0.5.0.zip"]
 
 # The contract is these names, whatever systems the build script lists.
-expect Assets.binaries == Release.systems.map(|released| "blueprint-${released.system}")
-expect Assets.binaries == ["blueprint-x86_64-linux", "blueprint-aarch64-linux", "blueprint-aarch64-darwin"] and Assets.checksums == "blueprint.sha256"
+expect Assets.binaries == Release.systems.map(|released| Release.binary_name("blueprint", released.system))
+expect Assets.binaries == ["blueprint-x86_64-linux", "blueprint-aarch64-linux", "blueprint-aarch64-darwin", "blueprint-x86_64-windows.exe"] and Assets.checksums == "blueprint.sha256"
 
 expect Assets.contract_problem(names_sample, sums_sample) == ""
 expect Assets.contract_problem(names_sample.keep_if(|name| name != "blueprint-aarch64-linux"), sums_sample) == "the release must hold blueprint-aarch64-linux"

@@ -57,7 +57,7 @@ SmokeBinary := [].{
 	## The Roc packages of the script the Nix-free project runs: basic-cli
 	## and the package it depends on.
 	roc_packages = [
-		"https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+		"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 		"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	]
 
@@ -98,7 +98,7 @@ SmokeBinary := [].{
 				"		Expect([\"git\"]),",
 				"		RocPackages([${Str.join_with(roc_packages.map(|url| "\"${url}\""), ", ")}]),",
 				"	]),",
-				"	Task(\"script\", [Use(\"dev\"), Run([\"./hello.roc\"])]),",
+				"	Task(\"script\", [Use(\"dev\"), Run([\"roc-stable\", \"hello.roc\"])]),",
 				"]",
 				"",
 			],
@@ -195,7 +195,7 @@ SmokeBinary := [].{
 
 	## Whether a program started under this name is the stand-in Python.
 	is_python : Str -> Bool
-	is_python = |program| (program.split_on("/").last() ?? "") == "python3"
+	is_python = |program| (Process.portable(program).split_on("/").last() ?? "").drop_suffix(".exe") == "python3"
 
 	## Whether this program is being run by `roc` from its source: the
 	## executable is then the compiler's temporary host, named after the
@@ -218,11 +218,11 @@ SmokeBinary := [].{
 	## Smoke-test the binary at `binary`, from the repository root.
 	run! : Str, Mode => Try({}, _)
 	run! = |binary, mode| {
-		root = Path.to_str(Path.canonicalize!(Env.cwd!()?)?)?
-		blueprint = Path.to_str(Path.canonicalize!(Path.utf8(binary))?)?
+		root = Process.portable(Path.to_str(Path.canonicalize!(Env.cwd!()?)?)?)
+		blueprint = Process.portable(Path.to_str(Path.canonicalize!(Path.utf8(binary))?)?)
 		# macOS temporary directories sit behind a symlink; the relative
 		# platform path must be computed from the real location.
-		work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-smoke-")?)?)?
+		work = Process.portable(Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-smoke-")?)?)?)
 		result = smoke!(root, blueprint, work, mode)
 		_ = Path.delete_all!(Path.utf8(work))
 		result
@@ -251,7 +251,9 @@ smoke! = |root, blueprint, work, mode| {
 			Path.write_utf8!(Path.utf8("${project}/hello.roc"), SmokeBinary.linked_script)?
 		}
 	}
-	Cmd.new_str("chmod").args_str(["+x", "${project}/hello.roc"]).exec_cmd!().map_err(|_| ChmodFailed)?
+	if Env.platform!().os != WINDOWS {
+		Cmd.new("chmod").args(["+x", "${project}/hello.roc"].map(OsStr.from_str)).exec!().map_err(|_| ChmodFailed)?
+	}
 
 	# Leave no Roc for the binary to find.
 	search = Process.search_path!()
@@ -288,9 +290,14 @@ smoke! = |root, blueprint, work, mode| {
 			[] => return Script.fail!("there is no `false` on PATH to stand in for python3")
 		}
 	}
-	Cmd.new_str("ln").args_str(["-s", target, "${stand_in}/python3"]).exec_cmd!().map_err(|_| LinkFailed)?
-	probe = Process.command("${stand_in}/python3", ["--version"], project)
-	probed = Process.capture!({ ..probe, cmd: probe.cmd.clear_envs().envs_str([(SmokeBinary.witness_variable, witness)]) })?
+	python_path = "${stand_in}/python3${if Env.platform!().os == WINDOWS ".exe" else ""}"
+	if Env.platform!().os == WINDOWS {
+		Path.utf8(target).copy!(Path.utf8(python_path)).map_err(|_| LinkFailed)?
+	} else {
+		Cmd.new("ln").args(["-s", target, python_path].map(OsStr.from_str)).exec!().map_err(|_| LinkFailed)?
+	}
+	probe = Process.command(python_path, ["--version"], project)
+	probed = Process.capture!({ ..probe, cmd: probe.cmd.clear_envs().envs([(SmokeBinary.witness_variable, witness)].map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) })?
 	if probed.code == 0 or (records and !(Path.is_file!(Path.utf8(witness)) ?? False)) {
 		return Script.fail!("the stand-in python3 does not fail and record its use (exit ${probed.code.to_str()})")
 	}
@@ -306,10 +313,10 @@ smoke! = |root, blueprint, work, mode| {
 	}
 	kept = ["ROC", "PATH"].concat(private.map(|(name, _)| name))
 	inherited = Env.dict!().map(|(name, value)| (OsStr.display(name), OsStr.display(value))).keep_if(|(name, _)| !kept.contains(name))
-	variables = inherited.concat(private).concat([("PATH", Str.join_with([stand_in].concat(without_roc), ":")), (SmokeBinary.witness_variable, witness)])
+	variables = inherited.concat(private).concat([("PATH", Str.join_with([stand_in].concat(without_roc), if Env.platform!().os == WINDOWS ";" else ":")), (SmokeBinary.witness_variable, witness)])
 	binary = |args| {
 		job = Process.command(blueprint, args, project)
-		{ ..job, cmd: job.cmd.clear_envs().envs_str(variables) }
+		{ ..job, cmd: job.cmd.clear_envs().envs(variables.map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) }
 	}
 
 	# Every command reads Blueprint.roc first, so this one fetches the
@@ -379,11 +386,11 @@ expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).starts_
 expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly\")")
 
 sample_pins : SmokeBinary.References
-sample_pins = { source: "github:NixOS/nixpkgs/abc", overlay: "github:roc-lang/roc-overlay/def", compiler: "rocpkgs.nightly-2026-10-04-130536d" }
+sample_pins = { source: "github:NixOS/nixpkgs/abc", overlay: "github:roc-lang/roc-overlay/def", compiler: "rocpkgs.nightly-2026-10-13-b17d287" }
 
 # The pinned project names a revision or tag for everything it resolves.
 expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\"))),\n\tOverlay(\"roc\", \"github:roc-lang/roc-overlay/def\"),\n")
-expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly-2026-10-04-130536d\")")
+expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly-2026-10-13-b17d287\")")
 
 lock_sample : Str, Str, Str -> Str
 lock_sample = |node, repo, rev| "{\n  \"nodes\": {\n    \"${node}\": {\n      \"locked\": {\n        \"narHash\": \"sha256-AAAA\",\n        \"owner\": \"o\",\n        \"repo\": \"${repo}\",\n        \"rev\": \"${rev}\",\n        \"type\": \"github\"\n      }\n    }\n  }\n}\n"
@@ -414,8 +421,8 @@ expect [[], ["--floating"], ["--no-nix"], ["--pinned", "blueprint"], ["blueprint
 # The Nix-free project names no package source, overlay or tool of one: its
 # compiler is a fetched program and git is the machine's.
 expect {
-	text = SmokeBinary.no_nix_roc("../pf/main.roc", "nightly-2026-10-04-130536d")
-	text.starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tEnvironment(\"dev\", [\n\t\tPrograms([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-10-04-130536d\"))]),\n\t\tExpect([\"git\"]),\n\t\tRocPackages([\"https://github.com/roc-lang/basic-cli/")
+	text = SmokeBinary.no_nix_roc("../pf/main.roc", "nightly-2026-10-13-b17d287")
+	text.starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tEnvironment(\"dev\", [\n\t\tPrograms([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-10-13-b17d287\"))]),\n\t\tExpect([\"git\"]),\n\t\tRocPackages([\"https://github.com/roc-lang/basic-cli/")
 		and ["NixPackages", "Overlay(", "Tools(", "Command(", "#"].all(|part| !text.contains(part))
 }
 expect SmokeBinary.linked_script.starts_with("#!/usr/bin/env roc-stable\napp [main!] { cli: platform \"https://github.com/roc-lang/basic-cli/releases/download/")

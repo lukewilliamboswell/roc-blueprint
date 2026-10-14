@@ -6,6 +6,7 @@ each target's inputs from `targets/<target>/`, as listed in `../main.roc`:
 | Target               | Built here (`zig build`) | Fetched                                              |
 |----------------------|--------------------------|------------------------------------------------------|
 | x64musl, arm64musl   | `libhost.a`              | `crt1.o`, `libc.a`, `libzigc.a`, `libcompiler_rt.a`  |
+| x64win              | `host.lib`               | `msvc_runtime.lib` and Windows import libraries       |
 | arm64mac, x64mac     | `libhost.a`              | none                                                 |
 
 None of these files is committed. The fetched ones come from an immutable

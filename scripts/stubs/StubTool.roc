@@ -50,7 +50,7 @@ StubTool := [].{
 	## A record's file name: the time in nanoseconds, padded so that names sort
 	## in the order the invocations started, then the process identifier. Two
 	## processes therefore never write the same file.
-	record_file : U128, Str -> Str
+	record_file : I128, Str -> Str
 	record_file = |nanos, pid| {
 		digits = nanos.to_str()
 		width = digits.to_utf8().len()
@@ -140,7 +140,7 @@ expect StubTool.role("/tmp/work/bin/roc-record") == Ok(RocRecord)
 expect StubTool.role("nix") == Ok(Nix)
 expect StubTool.role("/tmp/work/bin/roc") == Err(UnknownRole("roc"))
 expect StubTool.names.all(|name| StubTool.role("/bin/${name}").is_ok())
-expect StubTool.role("/project/.blueprint/host/commands/roc-stable/nightly-2026-10-04-130536d/bin/roc-stable") == Ok(RocStable)
+expect StubTool.role("/project/.blueprint/host/commands/roc-stable/nightly-2026-10-13-b17d287/bin/roc-stable") == Ok(RocStable)
 
 expect StubTool.record(["develop", "two words", "line\nbreak", "a'b\"c", ""]) == "[\"develop\",\"two words\",\"line\\u000abreak\",\"a'b\\\"c\",\"\"]\n"
 expect StubTool.parse_record(StubTool.record(["develop", "two words", "line\nbreak", "a'b\"c", ""])) == Ok(["develop", "two words", "line\nbreak", "a'b\"c", ""])

@@ -151,6 +151,7 @@ jobs:
             dist/
             blueprint-platform/targets/*/*.a
             blueprint-platform/targets/*/crt1.o
+            blueprint-platform/targets/*/*.lib
           if-no-files-found: error
 
   # Each binary runs where it must work, and the examples archive is tested
@@ -164,6 +165,7 @@ jobs:
           - { runner: ubuntu-latest, system: x86_64-linux, archive: true }
           - { runner: ubuntu-24.04-arm, system: aarch64-linux, archive: true }
           - { runner: macos-latest, system: aarch64-darwin, archive: true }
+          - { runner: windows-latest, system: x86_64-windows, archive: false }
     name: Test on ${{ matrix.system }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -177,6 +179,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Nix
+        if: runner.os != 'Windows'
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -185,9 +188,15 @@ jobs:
 
       # No Roc here: the smoke test is a program the build job cross-built.
       - name: Smoke test the binary
+        if: runner.os != 'Windows'
         run: |
           chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
           dist/smoke-${{ matrix.system }} dist/blueprint-${{ matrix.system }}
+
+      - name: Smoke test Windows without Nix
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./dist/smoke-x86_64-windows.exe --no-nix ./dist/blueprint-x86_64-windows.exe
 
       # The compiler and then this binary load each archived example from the
       # two bundles, served from localhost with an empty package cache.
@@ -217,10 +226,10 @@ jobs:
         working-directory: dist/release
         run: |
           set -euo pipefail
-          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint.sha256; do
+          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-windows.exe blueprint.sha256; do
             test -f "$name"
           done
-          test "$(find . -type f -name 'blueprint*' | wc -l)" = 4
+          test "$(find . -type f -name 'blueprint*' | wc -l)" = 5
           sha256sum -c blueprint.sha256
           test "$(LC_ALL=C ls)" = "$(cat ../release-assets.txt)"
 

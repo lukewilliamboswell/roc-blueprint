@@ -16,14 +16,9 @@ Member :: { path : Str }.{
 			Ok(Member.{ path: raw })
 		}
 
-	from_interpolation : Str, Iter((Str, Str)) -> Member
-	from_interpolation = |first, rest| {
-		var $text = first
-		for (value, segment) in rest {
-			$text = "${$text}${value}${segment}"
-		}
-		Member.{ path: $text }
-	}
+	from_interpolation : List(Str) -> Try((List(Str) -> Member), [InvalidInterpolation(Str)])
+	from_interpolation = |segments|
+		Str.from_interpolation(segments).map_ok(|assemble| |values| Member.{ path: assemble(values) })
 
 	to_str : Member -> Str
 	to_str = |value| value.path

@@ -91,7 +91,7 @@ archive by hash, so its sandboxed build needs no network.
 [source,sh]
 ----
 scripts/link_inputs.roc fetch             # the musl runtime files the platform links
-(cd blueprint-platform && zig build)      # targets/<target>/libhost.a for all four hosts
+(cd blueprint-platform && zig build)      # libhost.a or host.lib for all five hosts
 roc test blueprint-core/main.roc      # Spec round trips and format tests
 roc test blueprint-cli/main.roc             # the CLI's, the Nix provider's and every core expect
 roc build blueprint-cli/main.roc --output=./blueprint

@@ -356,7 +356,7 @@ packaged! = |context| {
 	step!("Nix flake: the packaged blueprint builds an artifact with nothing but Nix on PATH")?
 	work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-packaged-")?)?)?
 	result = packaged_build!(context, package_path, work)
-	_ = Cmd.new_str("chmod").args_str(["-R", "u+w", "--", work]).exec_cmd!()
+	_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--", work].map(OsStr.from_str)).exec!()
 	_ = Path.delete_all!(Path.utf8(work))
 	result?
 
@@ -381,7 +381,7 @@ packaged_build! = |context, package_path, work| {
 		[directory, ..] => "${directory}/nix"
 		[] => return Script.fail!("nix is not on PATH")
 	}
-	Cmd.new_str("ln").args_str(["-s", nix, "${only_nix}/nix"]).exec_cmd!().map_err(|_| LinkFailed)?
+	Cmd.new(OsStr.from_str("ln")).args(["-s", nix, "${only_nix}/nix"].map(OsStr.from_str)).exec!().map_err(|_| LinkFailed)?
 
 	packages_ref = match FlakeLock.locked(read!(context, "fixtures/consumer/inputs.lock")?, "nixpkgs") {
 		Ok(pin) => FlakeLock.ref(pin)
@@ -394,7 +394,7 @@ packaged_build! = |context, package_path, work| {
 	inherited = Env.dict!().map(|(name, value)| (OsStr.display(name), OsStr.display(value))).keep_if(|(name, _)| name != "ROC" and name != "PATH")
 	confined = |program, args, extra| {
 		job = Process.command(program, args, project)
-		{ ..job, cmd: job.cmd.clear_envs().envs_str(inherited.concat([("PATH", only_nix)]).concat(extra)) }
+		{ ..job, cmd: job.cmd.clear_envs().envs(inherited.concat([("PATH", only_nix)]).concat(extra).map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) }
 	}
 	wrapped = "${package_path}/bin/blueprint"
 	_ = Process.succeed!(confined(wrapped, ["update"], []))?

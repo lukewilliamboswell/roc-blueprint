@@ -18,14 +18,9 @@ Url :: { text : Str }.{
 			Err(BadQuotedBytes("\"${raw}\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment"))
 		}
 
-	from_interpolation : Str, Iter((Str, Str)) -> Url
-	from_interpolation = |first, rest| {
-		var $text = first
-		for (value, segment) in rest {
-			$text = "${$text}${value}${segment}"
-		}
-		Url.{ text: $text }
-	}
+	from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+	from_interpolation = |segments|
+		Str.from_interpolation(segments).map_ok(|assemble| |values| Url.{ text: assemble(values) })
 
 	## A URL assembled from text that is checked elsewhere. The whole
 	## configuration is validated after lowering, this URL with it.

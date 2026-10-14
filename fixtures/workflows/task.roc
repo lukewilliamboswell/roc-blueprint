@@ -1,4 +1,4 @@
-app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst" }
+app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst" }
 
 import cli.OsStr
 import cli.Path
@@ -35,7 +35,7 @@ run! = |args| {
 	}
 	event = argv.fold([], |bytes, arg| bytes.concat(arg.to_bytes()).append(0))
 	# The caller-owned log is outside the project, so logging cannot bust caches.
-	Path.write_bytes!(Path.join(events, "${stamp(Utc.now!())}-${Random.seed_u64!()?.to_str()}.task"), event)?
+	Path.write_bytes!(Path.join(events, "${stamp(Utc.now!().to_nanos_since_epoch())}-${Random.seed_u64!()?.to_str()}.task"), event)?
 	Stdout.line!("task ${hex(event)}")?
 	match argv.map(OsStr.display) {
 		["record", ..] => {}
@@ -58,7 +58,7 @@ run! = |args| {
 }
 
 ## Nanoseconds since the epoch, padded so that names sort as numbers do.
-stamp : U128 -> Str
+stamp : I128 -> Str
 stamp = |nanos| {
 	digits = nanos.to_str()
 	"${Str.repeat("0", 24 - digits.to_utf8().len())}${digits}"

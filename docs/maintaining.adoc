@@ -83,12 +83,12 @@ The required checks are listed under
 <<repository-settings-the-workflows-rely-on>>. Keep their names aligned with
 the workflows when changing CI.
 
-The October 4 nightly (`nightly-2026-10-04-130536d`) rejects redundant type
-exposes, so it needs the basic-cli 0.24.0 release and roc-fuzz 0.4.3.
+basic-cli 0.26.0-rc2 requires the October 12 nightly or later. This repository
+pins `nightly-2026-10-13-b17d287` for the product and scripts, with roc-fuzz 0.4.3.
 
 The complete suite requires x86_64 Linux and a running Nix daemon; the
 development shell supplies the rest. `zig build` builds the platform host for
-all four targets, so on Apple Silicon macOS the CLI's tests, the native CLI and
+all five targets, so on Apple Silicon macOS the CLI's tests, the native CLI and
 the evaluation of a `Blueprint.roc` work too. Sandboxed builds, and so the
 `scenarios`, `builds` and `package` groups, remain x86_64 Linux only.
 
@@ -161,7 +161,7 @@ which resolves what a new user's project would: a branch of nixpkgs, the
 overlay's default branch and its newest nightly.
 With `--no-nix` the same program writes a project that takes nothing from
 Nix and requires a machine that has none; the `no-nix` job of `ci.yml` runs
-it on all three systems (see
+it on all four released systems (see
 xref:contributing.adoc#the-job-with-no-nix[The job with no Nix]).
 
 `build_release.roc` takes its compiler from the flake: `nix build .#roc-cross`
@@ -170,7 +170,7 @@ is the x86_64 Linux compiler archive of the nightly in
 `darwin/` sysroot of the Apple Silicon archive beside it, which Roc needs to
 link macOS programs. Both are fetched by the URL and hash the locked
 roc-overlay records. The package is not in the development shell, so only a
-release build downloads the macOS archive. The three CLI binaries are compiled
+release build downloads the macOS archive. The four CLI binaries are compiled
 at the same time, each about 2.3 GB at its peak.
 
 A binary downloads the compiler named in `blueprint-cli/compiler-version`
@@ -251,11 +251,11 @@ The names of the binaries and of their checksum file are a contract.
 roc-automation's
 https://lukewilliamboswell.github.io/roc-automation/actions.html#setup-blueprint[`setup-blueprint`]
 action downloads `blueprint-x86_64-linux`, `blueprint-aarch64-linux` and
-`blueprint-aarch64-darwin` from the release a caller names, exactly as
+`blueprint-aarch64-darwin`, plus `blueprint-x86_64-windows.exe`, from the release a caller names, exactly as
 published, and callers copy the SHA-256 values from `blueprint.sha256`.
 Renaming an asset, archiving the binaries or changing the checksum file breaks
 every caller. `scripts/release_assets.roc` fails the build unless exactly
-those four names are present, and the publish job checks again before it
+those five names are present, and the publish job checks again before it
 uploads. A binary for another system is an addition; it does not change these.
 
 The platform bundle is the one `.tar.zst` asset named by its hash alone, and
@@ -295,46 +295,25 @@ https://github.com/lukewilliamboswell/roc-blueprint/issues/40[Issue #40] asks
 for `blueprint run` on Windows. What needs nothing from upstream is in place:
 a task whose environment has no Nix tool runs with no provider, from fetched
 programs, expected tools and Roc packages, and the planner, the store's
-location and `Recipes.roc_nightly` have their Windows forms. All of it is
-tested on Linux and macOS only. No Windows binary is built or released, and
-the platform has no Windows target, so a Windows user cannot run any of it.
+location and `Recipes.roc_nightly` have their Windows forms. The Windows target and release binary are built in CI; the Nix-free
+smoke test runs on Linux, macOS and Windows.
 
-TODO(#40): a binary and a platform target wait on three things upstream.
+The upstream prerequisites are now released: basic-cli 0.26.0-rc2 supplies
+its Windows MSVC host and runtime, the pinned Roc nightly links from listed
+inputs, and the locked roc-platform-template-zig release supplies this
+platform's startup and import libraries.
 
-* roc-overlay must package a nightly at or after `nightly-2026-10-11-7d256b9`,
-  the first that links a Windows program from the inputs a platform lists and
-  so can cross-link one on Linux, without the Windows SDK.
-* basic-cli must release a version whose `x64win` target lists a startup
-  object and a C runtime, which that nightly requires. The CLI is a basic-cli
-  program and does not link for Windows without it.
-* roc-platform-template-zig must publish a linker-inputs release with the
-  Windows startup inputs, for this repository's own Zig host.
+`zig build` builds `targets/x64win/host.lib`; the platform bundle carries it
+and the verified Windows linker inputs. `scripts/build_release.roc` builds
+`blueprint-x86_64-windows.exe` and its smoke program. The `no-nix` CI job runs
+that program on `windows-latest`, fetching the compiler, updating a lock,
+reporting requirements and building and running a basic-cli program twice.
+Windows skips `chmod` and exposes fetched programs with hard links, falling
+back to a copy across volumes. Archives use the machine's bsdtar.
 
-When they exist, in one pull request:
-
-. Move the product compiler to that nightly, as <<move-a-compiler>> describes,
-  with the basic-cli release and `link-inputs.lock.json`.
-. Add the platform's `x64win` target: `blueprint-platform/build.zig`, the
-  `targets:` section of `blueprint-platform/main.roc`, and the bundle and
-  artifact globs, which must learn `host.lib`.
-. Cross-build `blueprint-x86_64-windows.exe` in `scripts/src/Release.roc`.
-. Add a `.gitattributes` that keeps line endings as they are committed.
-. Add a `windows-latest` leg to the `no-nix` job, which runs the cross-built
-  binary on a project that fetches its compiler.
-. Attach the binary to the release and add its line to `blueprint.sha256`.
-  The existing asset names do not change.
-. Check each claim of
-  xref:without-nix.adoc#windows[the Windows section of Work without Nix] on
-  that runner, and rewrite it as what works.
-
-Known limits of what is in place, to settle then:
-
-* A fetched program is exposed with `ln -s` and made executable with `chmod`,
-  and an archive is listed and unpacked with the `tar` on `PATH`. Windows
-  needs a hard link or a copy in place of the symbolic link, nothing in place
-  of `chmod`, and its own bsdtar, which reads a zip.
-* The archive check reads `tar -tvf` in the form GNU tar and bsdtar print on
-  Linux and macOS; the form on Windows is unverified.
+The full Nix suites remain Linux-only. Windows 10 and 11 desktop execution
+has not been verified here; the CI runner checks Windows Server. Tasks must
+invoke their interpreter explicitly, for example `Run(["roc-stable", "hello.roc"])`.
 
 == Upstream workarounds still in place
 

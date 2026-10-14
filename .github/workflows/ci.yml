@@ -50,6 +50,7 @@ jobs:
             dist/smoke-*
             blueprint-platform/targets/*/*.a
             blueprint-platform/targets/*/crt1.o
+            blueprint-platform/targets/*/*.lib
           if-no-files-found: error
 
       # Outside the dev shell: the binary must work with no Roc on PATH. A
@@ -175,6 +176,7 @@ jobs:
           - { runner: ubuntu-latest, system: x86_64-linux }
           - { runner: ubuntu-24.04-arm, system: aarch64-linux }
           - { runner: macos-latest, system: aarch64-darwin }
+          - { runner: windows-latest, system: x86_64-windows }
     name: no-nix (${{ matrix.system }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -190,9 +192,15 @@ jobs:
           name: blueprint-binaries
 
       - name: Update, fetch, link and run with no Nix on the machine
+        if: runner.os != 'Windows'
         run: |
           chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
           dist/smoke-${{ matrix.system }} --no-nix dist/blueprint-${{ matrix.system }}
+
+      - name: Update, fetch, link and run on Windows without Nix
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./dist/smoke-x86_64-windows.exe --no-nix ./dist/blueprint-x86_64-windows.exe
 
   # The one required check: green only when every job above succeeded.
   test:

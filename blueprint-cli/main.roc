@@ -7,7 +7,7 @@ app [main!] {
 	core: "../blueprint-core/main.roc",
 	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	nix: "../blueprint-nix/main.roc",
-	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
 }
 
@@ -289,8 +289,8 @@ run! = |command, loaded, context| {
 check! : Try(Spec, _), Context => Try({}, _)
 check! = |loaded, ctx| {
 	check_host!()?
-	Cmd.new_str(roc!(ctx)?).args_str(["check", "Blueprint.roc"])
-		.cwd(path(ctx.layout.project_root)).exec_cmd!()
+	Cmd.new(OsStr.from_str(roc!(ctx)?)).args(["check", "Blueprint.roc"].map(OsStr.from_str))
+		.cwd(path(ctx.layout.project_root)).exec!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	_ = rendered(loaded?)?
 	Stdout.line!("Blueprint.roc is valid")
@@ -304,10 +304,10 @@ evaluate! = |ctx| {
 		return Err(NoBlueprint)
 	}
 	check_host!()?
-	output = Cmd.new_str(roc!(ctx)?).args_str(["Blueprint.roc"])
-		.cwd(path(root)).exec_output!()
+	output = Cmd.new(OsStr.from_str(roc!(ctx)?)).args(["Blueprint.roc"].map(OsStr.from_str))
+		.cwd(path(root)).capture!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
-	spec = Spec.parse(output.stdout_utf8).map_err(|err| BadSpec(err))?
+	spec = Spec.parse(output).map_err(|err| BadSpec(err))?
 	current_platform(spec)?
 	missing = spec.unsupported_features(providers.fold(Realise.features, |all, provider| all.concat(provider.features)))
 	if !missing.is_empty() {
@@ -341,14 +341,15 @@ exec! : List(Str), Str => Try({}, _)
 exec! = |argv, root|
 	match argv {
 		[program, .. as args] =>
-			Cmd.new_str(program)
-				.args_str(args)
+			Cmd.new(OsStr.from_str(program))
+				.args(args.map(OsStr.from_str))
 				.cwd(path(root))
-				.exec_cmd!()
+				.exec!()
 				.map_err(
 					|err|
 						match err {
-							ExecCmdFailed({ exit_code, .. }) => CommandFailed(argv, exit_code)
+							BadExitStatus(Cmd.Output.{ status: Exited(code), .. }) => CommandFailed(argv, code)
+							BadExitStatus(Cmd.Output.{ status: Signaled(signal), .. }) => CommandFailed(argv, 128 + signal)
 							other => other
 						},
 				)
@@ -371,15 +372,16 @@ exec_within! = |argv, root, directories| {
 		.map_err(|Unsearchable(directory)| Refused("${directory} cannot be an entry of PATH"))?
 	match argv {
 		[program, .. as args] =>
-			Cmd.new_str(program)
-				.args_str(args)
+			Cmd.new(OsStr.from_str(program))
+				.args(args.map(OsStr.from_str))
 				.cwd(path(root))
-				.env_str("PATH", search)
-				.exec_cmd!()
+				.env(OsStr.from_str("PATH"), OsStr.from_str(search))
+				.exec!()
 				.map_err(
 					|err|
 						match err {
-							ExecCmdFailed({ exit_code, .. }) => CommandFailed(argv, exit_code)
+							BadExitStatus(Cmd.Output.{ status: Exited(code), .. }) => CommandFailed(argv, code)
+							BadExitStatus(Cmd.Output.{ status: Signaled(signal), .. }) => CommandFailed(argv, 128 + signal)
 							other => other
 						},
 				)
@@ -419,25 +421,25 @@ roc! = |_ctx| {
 				cwd = Env.cwd!()?.to_str()?
 				"${cwd}/${override}"
 			} else override
-			output = Cmd.new_str(compiler).args_str(["version"]).exec_output!()
+			output = Cmd.new(OsStr.from_str(compiler)).args(["version"].map(OsStr.from_str)).capture!()
 				.map_err(
 					|err| CompilerFailed(
 						"could not probe ${compiler}: ${Str.inspect(err)}",
 					),
 				)?
-			if output.stdout_utf8.trim() != expected {
+			if output.trim() != expected {
 				return Err(
 					CompilerFailed(
 						"incompatible ROC executable ${compiler}: "
-							.concat("expected ${expected}; got ${output.stdout_utf8.trim()}"),
+							.concat("expected ${expected}; got ${output.trim()}"),
 					),
 				)
 			}
 			Ok(compiler)
 		}
 		Err(_) => {
-			on_path = Cmd.new_str("roc").args_str(["version"]).exec_output!()
-				.map_ok(|output| output.stdout_utf8.trim() == expected) ?? False
+			on_path = Cmd.new(OsStr.from_str("roc")).args(["version"].map(OsStr.from_str)).capture!()
+				.map_ok(|output| output.trim() == expected) ?? False
 			if on_path {
 				return Ok("roc")
 			}
@@ -692,15 +694,9 @@ expect
 ## the calling process. basic-cli cannot read a link itself.
 observe_namespace! : Str, Str => Try(Str, Str)
 observe_namespace! = |readlink, name| {
-	output = Cmd.new_str(readlink).args_str(["/proc/self/ns/${name}"]).exec_output!()
-		.map_err(
-			|err|
-				match err {
-					NonZeroExitCode({ exit_code, .. }) => "readlink exited with code ${exit_code.to_str()}"
-					_ => "could not run readlink"
-				},
-		)?
-	Ok(output.stdout_utf8.drop_suffix("\n"))
+	output = Cmd.new(OsStr.from_str(readlink)).args(["/proc/self/ns/${name}"].map(OsStr.from_str)).capture!()
+		.map_err(|_| "could not run readlink")?
+	Ok(output.drop_suffix("\n"))
 }
 
 namespace! : Str => Try(Str, _)
@@ -785,7 +781,7 @@ run_build! = |file| {
 	work.create_dir!()?
 	copy_tree!(source, work)?
 	# Store files are read-only; the project copy is the build's to change.
-	Cmd.new_str(spec.chmod).args_str(["-R", "u+w", "--"]).arg(work.to_os_str()).exec_cmd!()?
+	Cmd.new(OsStr.from_str(spec.chmod)).args(["-R", "u+w", "--"].map(OsStr.from_str)).arg(work.to_os_str()).exec!()?
 	home = top.join("blueprint-home")
 	home.create_dir!()?
 	cache = roc_build_cache!(spec.roc_packages, spec.ln, top)?
@@ -793,11 +789,11 @@ run_build! = |file| {
 		[] => return Err(Invalid("empty build command"))
 		[program, .. as rest] => {
 			# A bare program name resolves against the PATH given here.
-			base = Cmd.new_str(program).args_str(rest).cwd(work)
-				.env_str("PATH", spec.path)
+			base = Cmd.new(OsStr.from_str(program)).args(rest.map(OsStr.from_str)).cwd(work)
+				.env(OsStr.from_str("PATH"), OsStr.from_str(spec.path))
 				.env(OsStr.from_str("HOME"), home.to_os_str())
-				.env_str("BLUEPRINT_INPUTS", spec.inputs)
-				.env_str("BLUEPRINT_ARTIFACTS", spec.artifacts)
+				.env(OsStr.from_str("BLUEPRINT_INPUTS"), OsStr.from_str(spec.inputs))
+				.env(OsStr.from_str("BLUEPRINT_ARTIFACTS"), OsStr.from_str(spec.artifacts))
 			# Only the user command sees the cache, and only when there is one.
 			command = match cache {
 				Private(directory) => base.env(OsStr.from_str("XDG_CACHE_HOME"), directory.to_os_str())
@@ -805,11 +801,11 @@ run_build! = |file| {
 			}
 			ran = command.stdout(Inherit).stderr(Inherit).run!()
 			match ran {
-				Ok({ status: Exited(0), .. }) => {}
-				Ok({ status: Exited(code), .. }) => return Err(Exited(code))
-				Ok({ status: Signaled(signal), .. }) => return Err(Exited(128 + signal))
-				Err(IO(NotFound)) => return Err(Invalid("build command not found: ${program}"))
-				Err(IO(err)) => return Err(Invalid("cannot run ${program}: ${Str.inspect(err)}"))
+				Ok(Cmd.Output.{ status: Exited(0), .. }) => {}
+				Ok(Cmd.Output.{ status: Exited(code), .. }) => return Err(Exited(code))
+				Ok(Cmd.Output.{ status: Signaled(signal), .. }) => return Err(Exited(128 + signal))
+				Err(CmdErr(StartFailed(NotFound, _))) => return Err(Invalid("build command not found: ${program}"))
+				Err(CmdErr(StartFailed(err, _))) => return Err(Invalid("cannot run ${program}: ${Str.inspect(err)}"))
 				Err(_) => return Err(Invalid("cannot run ${program}"))
 			}
 		}
@@ -877,9 +873,9 @@ roc_build_cache! = |declared, ln, top| {
 		if !(path(bundle.path).join("main.roc").is_file!() ?? False) {
 			return Err(Invalid("Roc package ${bundle.name} has no main.roc"))
 		}
-		Cmd.new_str(program).args_str(["-s", "--", bundle.path])
+		Cmd.new(OsStr.from_str(program)).args(["-s", "--", bundle.path].map(OsStr.from_str))
 			.arg(directory.join(bundle.name).to_os_str())
-			.exec_cmd!()
+			.exec!()
 			.map_err(|_| Invalid("cannot link Roc package ${bundle.name}"))?
 	}
 	Ok(Private(cache))
@@ -965,8 +961,8 @@ check_inputs! = |readlink, farm| {
 		if !(entry.is_sym_link!()?) {
 			return Err(Invalid("expected generated source link: ${entry.display()}"))
 		}
-		target = Cmd.new_str(readlink).args_str(["-n", "--"]).arg(entry.to_os_str())
-			.exec_output_bytes!()
+		target = Cmd.new(OsStr.from_str(readlink)).args(["-n", "--"].map(OsStr.from_str)).arg(entry.to_os_str())
+			.run!().map_err(|err| Invalid(Str.inspect(err)))?.require_success()
 			.map_err(|_| Invalid("cannot read generated source link: ${entry.display()}"))?
 			.stdout_bytes
 		# Follow exactly the planner's farm link. safe_tree! rejects a symlink
@@ -1216,13 +1212,19 @@ start! = |step, names, bin, layout| {
 			}
 			exec_within!([shell], layout.project_root, directories)
 		}
-		_ => exec_within!(started(step.argv, names, bin), layout.project_root, directories).map_err(
-			|err|
-				match (step.action, err) {
-					(Run(name), CommandFailed(_, code)) => TaskFailed(name, code)
-					_ => err
-				},
-		)
+		_ => {
+			argv = match step.argv {
+				[program, .. as rest] if Env.platform!().os == WINDOWS and names.contains(program) => ["${bin}/${program}.exe"].concat(rest)
+				_ => started(step.argv, names, bin)
+			}
+			exec_within!(argv, layout.project_root, directories).map_err(
+				|err|
+					match (step.action, err) {
+						(Run(name), CommandFailed(_, code)) => TaskFailed(name, code)
+						_ => err
+					},
+			)
+		}
 	}
 }
 
@@ -1362,7 +1364,7 @@ publish_roc_bundles! = |bundles, ctx| {
 			child(fresh, file).write_bytes!(bytes).map_err(|_| RocPackagesFailed("cannot write Roc package ${bundle.name} in ${fresh.display()}"))?
 			# What the compiler says while unpacking is kept off the standard
 			# output, which is the task's own.
-			_ = Cmd.new_str(compiler).args_str(["unbundle", file]).cwd(fresh).exec_output!()
+			_ = Cmd.new(OsStr.from_str(compiler)).args(["unbundle", file].map(OsStr.from_str)).cwd(fresh).run!()?.require_success()
 				.map_err(|_| RocPackagesFailed("Roc package ${bundle.name} from ${bundle.url} is not the bundle its name is the hash of: `roc unbundle` refused it; nothing was published"))?
 			publish_roc_package!(cache, bundle.name, child(fresh, bundle.name))
 		}
@@ -1464,12 +1466,12 @@ report_build! = |plan, name, root| {
 		.map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
 	match plan.argv {
 		[program, .. as args] => {
-			result = Cmd.new_str(program).args_str(args).cwd(path(root))
-				.stderr(Inherit).exec_output!()?
-			Stdout.write!(result.stdout_utf8)?
+			result = Cmd.new(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(root))
+				.stderr(Inherit).capture!()?
+			Stdout.write!(result)?
 			Stderr.line!(
 				"built ${artifact.name}: ${artifact.installable} -> "
-					.concat(result.stdout_utf8.trim()),
+					.concat(result.trim()),
 			)
 		}
 		[] => Err(RenderFailed("build plan has no command"))
@@ -1936,14 +1938,11 @@ describe = |err, provider|
 		FetchFailed(msg) => msg
 		BadSpec(MissingRequiredField("format")) => "Blueprint.roc uses an older roc-blueprint platform that this blueprint can't read; update the platform URL in its app header to a current release"
 		BadSpec(MissingRequiredField(field)) => "the Spec from Blueprint.roc is missing ${field}"
-		NonZeroExitCode({ command, exit_code, stderr_utf8_lossy, .. }) =>
-			"`${command}` exited with code ${I32.to_str(exit_code)}:\n"
-				.concat(stderr_utf8_lossy)
+		BadExitStatus(Cmd.Output.{ command, status, stderr_bytes, .. }) =>
+			"`${command}` failed (${Str.inspect(status)}):\n".concat(Str.from_utf8_lossy(stderr_bytes))
 		TaskFailed(name, code) => "task ${name} exited with code ${code.to_str()}"
 		UnknownTask(name, known) => "no task named \"${name}\"; Blueprint.roc defines: ${Str.join_with(known, ", ")}"
 		UnknownShell(name, known) => "no shell named \"${name}\"; Blueprint.roc defines: ${Str.join_with(known, ", ")}"
-		ExecFailed({ command, exit_code }) => "`${command}` exited with code ${I32.to_str(exit_code)}"
 		CommandFailed(argv, code) => "`${Str.join_with(argv, " ")}` exited with code ${code.to_str()}"
-		ExecCmdFailed({ command, exit_code }) => "`${command}` exited with code ${exit_code.to_str()}"
 		other => Str.inspect(other)
 	}

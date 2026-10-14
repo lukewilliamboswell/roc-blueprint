@@ -1,4 +1,4 @@
-app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst" }
+app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst" }
 
 import cli.Cmd
 import cli.Env
@@ -40,7 +40,7 @@ main! = |args| {
 terminate! : () => Try({}, _)
 terminate! = || {
 	own = Path.read_utf8!("/proc/self/stat")?.split_on(" ").first() ?? ""
-	Cmd.new("kill").args(["-TERM", OsStr.from_str(own)]).exec_cmd!()?
+	Cmd.new("kill").args(["-TERM", OsStr.from_str(own)]).exec!()?
 	Err(Failed("SIGTERM did not end this process"))
 }
 
@@ -53,7 +53,7 @@ direct_out! = || {
 replace_workspace! : () => Try({}, _)
 replace_workspace! = || {
 	Path.rename!(Env.cwd!()?, "../moved")?
-	Cmd.new("ln").args(["-s", "moved", "../blueprint-work"]).exec_cmd!()?
+	Cmd.new("ln").args(["-s", "moved", "../blueprint-work"]).exec!()?
 	Path.write_utf8!("../moved/output", "moved")
 }
 

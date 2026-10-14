@@ -427,8 +427,8 @@ reject_unsafe_fetched_sources! = |suite, base, payload| {
 ## This process's namespace, as a build's witness would name it.
 namespace! : Str => Try(Str, _)
 namespace! = |name| {
-	output = Cmd.new("readlink").args(["/proc/self/ns/${name}"]).exec_output!().map_err(|_| ToolFailed("readlink /proc/self/ns/${name}"))?
-	Ok(output.stdout_utf8.drop_suffix("\n"))
+	output = Cmd.new("readlink").args(["/proc/self/ns/${name}"]).run!()?.require_success().map_err(|_| ToolFailed("readlink /proc/self/ns/${name}"))?
+	Ok(output.stdout_utf8_lossy().drop_suffix("\n"))
 }
 
 ## Execute the real runner on the host; it must never reach the user's Run.

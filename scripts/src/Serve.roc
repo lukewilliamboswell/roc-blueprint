@@ -1,3 +1,4 @@
+import cli.Duration
 import cli.Cmd
 import cli.Tcp
 import Process
@@ -16,7 +17,7 @@ Serve := { listener : Tcp.Listener, port : U16, routes : List(Route) }.{
 	## Listen on 127.0.0.1 with nothing to serve yet.
 	open! : () => Try(Serve, _)
 	open! = || {
-		listener = Tcp.listen!("127.0.0.1", 0, io_timeout_ms)?
+		listener = Tcp.listen!("127.0.0.1", 0, Duration.millis(io_timeout_ms))?
 		port = listener.local_port!()?
 		Ok(Serve.{ listener, port, routes: [] })
 	}
@@ -51,12 +52,12 @@ Serve := { listener : Tcp.Listener, port : U16, routes : List(Route) }.{
 		match children {
 			[] => Ok(finished)
 			[first, .. as rest] =>
-				match first.try_wait!() {
-					Ok([]) => {
+				match first.poll!() {
+					Ok(Running) => {
 						answer_one!(self)?
 						until_exit!(self, children, finished)
 					}
-					Ok([output, ..]) => until_exit!(self, rest, finished.append(Process.outcome(output)))
+					Ok(Finished(output)) => until_exit!(self, rest, finished.append(Process.outcome(output)))
 					Err(_) => Script.fail!("could not wait for a child process")
 				}
 		}
@@ -108,9 +109,9 @@ max_header_lines = 100
 ## Wait briefly for one connection and answer it; return if none arrives.
 answer_one! : Serve => Try({}, _)
 answer_one! = |server|
-	match server.listener.accept!(accept_timeout_ms) {
+	match server.listener.accept!({ accept_timeout: After(Duration.millis(accept_timeout_ms)), io_timeout: Duration.millis(io_timeout_ms) }) {
 		Ok(stream) => {
-			line = stream.read_line!(max_line_bytes, io_timeout_ms) ?? ""
+			line = stream.with_line_limit(max_line_bytes).read_line!() ?? ""
 			skip_headers!(stream, max_header_lines)
 			found = match Serve.requested(line) {
 				Ok(path) => server.routes.find_first(|route| route.path == path).map_err(|_| NotServed)
@@ -120,26 +121,26 @@ answer_one! = |server|
 			_ = respond!(stream, found)
 			Ok({})
 		}
-		Err(TcpListenErr(TimedOut)) => Ok({})
+		Err(TcpErr(TimedOut)) => Ok({})
 		Err(_) => Script.fail!("the bundle server could not accept a connection")
 	}
 
-respond! : Tcp.Stream, Try(Serve.Route, [NotServed]) => Try({}, _)
+respond! : Tcp.Connection, Try(Serve.Route, [NotServed]) => Try({}, _)
 respond! = |stream, found|
 	match found {
 		Ok(route) => {
-			stream.write_utf8!(Serve.headed(route.status, route.bytes.len(), route.location), io_timeout_ms)?
-			stream.write!(route.bytes, body_timeout_ms)
+			stream.write_utf8!(Serve.headed(route.status, route.bytes.len(), route.location))?
+			stream.with_timeout(Duration.millis(body_timeout_ms)).write_bytes!(route.bytes)
 		}
-		Err(NotServed) => stream.write_utf8!(Serve.head("404 Not Found", 0), io_timeout_ms)
+		Err(NotServed) => stream.write_utf8!(Serve.head("404 Not Found", 0))
 	}
 
 ## Read the request's remaining header lines, so the response is not written
 ## to a client that is still sending.
-skip_headers! : Tcp.Stream, U64 => {}
+skip_headers! : Tcp.Connection, U64 => {}
 skip_headers! = |stream, remaining|
 	if remaining > 0 {
-		match stream.read_line!(max_line_bytes, io_timeout_ms) {
+		match stream.with_line_limit(max_line_bytes).read_line!() {
 			Ok(line) => if line.trim().is_empty() {} else skip_headers!(stream, remaining - 1)
 			Err(_) => {}
 		}
