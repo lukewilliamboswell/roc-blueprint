@@ -289,7 +289,7 @@ run! = |command, loaded, context| {
 check! : Try(Spec, _), Context => Try({}, _)
 check! = |loaded, ctx| {
 	check_host!()?
-	Cmd.new(OsStr.from_str(roc!(ctx)?)).args(["check", "Blueprint.roc"].map(OsStr.from_str))
+	native_command!(OsStr.from_str(roc!(ctx)?)).args(["check", "Blueprint.roc"].map(OsStr.from_str))
 		.cwd(path(ctx.layout.project_root)).exec!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	_ = rendered(loaded?)?
@@ -304,7 +304,7 @@ evaluate! = |ctx| {
 		return Err(NoBlueprint)
 	}
 	check_host!()?
-	output = Cmd.new(OsStr.from_str(roc!(ctx)?)).args(["Blueprint.roc"].map(OsStr.from_str))
+	output = native_command!(OsStr.from_str(roc!(ctx)?)).args(["Blueprint.roc"].map(OsStr.from_str))
 		.cwd(path(root)).capture!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = Spec.parse(output).map_err(|err| BadSpec(err))?
@@ -336,12 +336,31 @@ rendered = |spec| {
 	Ok($files)
 }
 
+## Roc's Windows package roots must use the same separators as the paths it
+## resolves. Keep our portable paths internally, and pass native cache/home
+## variables to child programs so a URL package stays within its root.
+native_command! : OsStr => Cmd
+native_command! = |program| {
+	var $command = Cmd.new(program)
+	if Env.platform!().os == WINDOWS {
+		for name in ["XDG_CACHE_HOME", "LOCALAPPDATA", "HOME"] {
+			match Env.var_str!(OsStr.from_str(name)) {
+				Ok(value) => {
+					$command = $command.env(OsStr.from_str(name), OsStr.from_str(value.replace_each("/", "\\")))
+				}
+				Err(_) => {}
+			}
+		}
+	}
+	$command
+}
+
 ## Run an argv from the provider.
 exec! : List(Str), Str => Try({}, _)
 exec! = |argv, root|
 	match argv {
 		[program, .. as args] =>
-			Cmd.new(OsStr.from_str(program))
+			native_command!(OsStr.from_str(program))
 				.args(args.map(OsStr.from_str))
 				.cwd(path(root))
 				.exec!()
@@ -372,7 +391,7 @@ exec_within! = |argv, root, directories| {
 		.map_err(|Unsearchable(directory)| Refused("${directory} cannot be an entry of PATH"))?
 	match argv {
 		[program, .. as args] =>
-			Cmd.new(OsStr.from_str(program))
+			native_command!(OsStr.from_str(program))
 				.args(args.map(OsStr.from_str))
 				.cwd(path(root))
 				.env(OsStr.from_str("PATH"), OsStr.from_str(search))
@@ -421,7 +440,7 @@ roc! = |_ctx| {
 				cwd = Env.cwd!()?.to_str()?
 				"${cwd}/${override}"
 			} else override
-			output = Cmd.new(OsStr.from_str(compiler)).args(["version"].map(OsStr.from_str)).capture!()
+			output = native_command!(OsStr.from_str(compiler)).args(["version"].map(OsStr.from_str)).capture!()
 				.map_err(
 					|err| CompilerFailed(
 						"could not probe ${compiler}: ${Str.inspect(err)}",
@@ -438,7 +457,7 @@ roc! = |_ctx| {
 			Ok(compiler)
 		}
 		Err(_) => {
-			on_path = Cmd.new(OsStr.from_str("roc")).args(["version"].map(OsStr.from_str)).capture!()
+			on_path = native_command!(OsStr.from_str("roc")).args(["version"].map(OsStr.from_str)).capture!()
 				.map_ok(|output| output.trim() == expected) ?? False
 			if on_path {
 				return Ok("roc")
@@ -694,7 +713,7 @@ expect
 ## the calling process. basic-cli cannot read a link itself.
 observe_namespace! : Str, Str => Try(Str, Str)
 observe_namespace! = |readlink, name| {
-	output = Cmd.new(OsStr.from_str(readlink)).args(["/proc/self/ns/${name}"].map(OsStr.from_str)).capture!()
+	output = native_command!(OsStr.from_str(readlink)).args(["/proc/self/ns/${name}"].map(OsStr.from_str)).capture!()
 		.map_err(|_| "could not run readlink")?
 	Ok(output.drop_suffix("\n"))
 }
@@ -781,7 +800,7 @@ run_build! = |file| {
 	work.create_dir!()?
 	copy_tree!(source, work)?
 	# Store files are read-only; the project copy is the build's to change.
-	Cmd.new(OsStr.from_str(spec.chmod)).args(["-R", "u+w", "--"].map(OsStr.from_str)).arg(work.to_os_str()).exec!()?
+	native_command!(OsStr.from_str(spec.chmod)).args(["-R", "u+w", "--"].map(OsStr.from_str)).arg(work.to_os_str()).exec!()?
 	home = top.join("blueprint-home")
 	home.create_dir!()?
 	cache = roc_build_cache!(spec.roc_packages, spec.ln, top)?
@@ -789,7 +808,7 @@ run_build! = |file| {
 		[] => return Err(Invalid("empty build command"))
 		[program, .. as rest] => {
 			# A bare program name resolves against the PATH given here.
-			base = Cmd.new(OsStr.from_str(program)).args(rest.map(OsStr.from_str)).cwd(work)
+			base = native_command!(OsStr.from_str(program)).args(rest.map(OsStr.from_str)).cwd(work)
 				.env(OsStr.from_str("PATH"), OsStr.from_str(spec.path))
 				.env(OsStr.from_str("HOME"), home.to_os_str())
 				.env(OsStr.from_str("BLUEPRINT_INPUTS"), OsStr.from_str(spec.inputs))
@@ -873,7 +892,7 @@ roc_build_cache! = |declared, ln, top| {
 		if !(path(bundle.path).join("main.roc").is_file!() ?? False) {
 			return Err(Invalid("Roc package ${bundle.name} has no main.roc"))
 		}
-		Cmd.new(OsStr.from_str(program)).args(["-s", "--", bundle.path].map(OsStr.from_str))
+		native_command!(OsStr.from_str(program)).args(["-s", "--", bundle.path].map(OsStr.from_str))
 			.arg(directory.join(bundle.name).to_os_str())
 			.exec!()
 			.map_err(|_| Invalid("cannot link Roc package ${bundle.name}"))?
@@ -961,7 +980,7 @@ check_inputs! = |readlink, farm| {
 		if !(entry.is_sym_link!()?) {
 			return Err(Invalid("expected generated source link: ${entry.display()}"))
 		}
-		target = Cmd.new(OsStr.from_str(readlink)).args(["-n", "--"].map(OsStr.from_str)).arg(entry.to_os_str())
+		target = native_command!(OsStr.from_str(readlink)).args(["-n", "--"].map(OsStr.from_str)).arg(entry.to_os_str())
 			.run!().map_err(|err| Invalid(Str.inspect(err)))?.require_success()
 			.map_err(|_| Invalid("cannot read generated source link: ${entry.display()}"))?
 			.stdout_bytes
@@ -1364,7 +1383,7 @@ publish_roc_bundles! = |bundles, ctx| {
 			child(fresh, file).write_bytes!(bytes).map_err(|_| RocPackagesFailed("cannot write Roc package ${bundle.name} in ${fresh.display()}"))?
 			# What the compiler says while unpacking is kept off the standard
 			# output, which is the task's own.
-			_ = Cmd.new(OsStr.from_str(compiler)).args(["unbundle", file].map(OsStr.from_str)).cwd(fresh).run!()?.require_success()
+			_ = native_command!(OsStr.from_str(compiler)).args(["unbundle", file].map(OsStr.from_str)).cwd(fresh).run!()?.require_success()
 				.map_err(|_| RocPackagesFailed("Roc package ${bundle.name} from ${bundle.url} is not the bundle its name is the hash of: `roc unbundle` refused it; nothing was published"))?
 			publish_roc_package!(cache, bundle.name, child(fresh, bundle.name))
 		}
@@ -1466,7 +1485,7 @@ report_build! = |plan, name, root| {
 		.map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
 	match plan.argv {
 		[program, .. as args] => {
-			result = Cmd.new(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(root))
+			result = native_command!(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(root))
 				.stderr(Inherit).capture!()?
 			Stdout.write!(result)?
 			Stderr.line!(
