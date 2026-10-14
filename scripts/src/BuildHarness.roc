@@ -1,3 +1,4 @@
+import cli.Duration
 import cli.Cmd
 import cli.Env
 import cli.OsStr
@@ -62,7 +63,7 @@ BuildHarness := [].{
 	## Set to `1` to keep a passing run's temporary directory.
 	keep_variable = "BLUEPRINT_TEST_KEEP_TMP"
 
-	basic_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst"
+	basic_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst"
 
 	## `to` as seen from the directory `from`; both absolute. Roc refuses an
 	## absolute platform path.
@@ -161,7 +162,7 @@ BuildHarness := [].{
 					Script.info!("KEPT", "${name} fixture and logs: ${suite.work}")
 				} else {
 					# The authority and some fixture directories are read-only.
-					_ = Cmd.new("chmod").args(["-R", "u+w", "--", OsStr.from_str(suite.work)]).exec_cmd!()
+					_ = Cmd.new("chmod").args(["-R", "u+w", "--", OsStr.from_str(suite.work)]).exec!()
 					_ = Path.delete_all!(Path.utf8(suite.work))
 					Ok({})
 				}
@@ -174,8 +175,10 @@ BuildHarness := [].{
 	}
 
 	## Fetch and realise every pinned input, with the network, through the real
-	## Nix. This is the only step that may download: every later call goes
-	## through the recording `nix`, which adds `--offline`. Each reference is the
+	## Nix. This is the only step in which Nix may download: every later call
+	## goes through the recording `nix`, which adds `--offline`. The Roc
+	## bundles a task runs on are not Nix's to fetch: `blueprint` downloads
+	## them itself, once, into the suite's own package cache. Each reference is the
 	## one the fixtures use, and must still name the bytes the pins record.
 	warm! : Suite => Try({}, _)
 	warm! = |suite| {
@@ -203,12 +206,12 @@ BuildHarness := [].{
 	build_tool! : Suite, Str, Str => Try({}, _)
 	build_tool! = |suite, source, output| {
 		Stdout.line!("RUN  roc build ${source}")?
-		built = Cmd.new_str(suite.roc).args_str(["build", "${suite.root}/${source}", "--output=${output}"])
+		built = Cmd.new(OsStr.from_str(suite.roc)).args(["build", "${suite.root}/${source}", "--output=${output}"].map(OsStr.from_str))
 			.cwd(Path.utf8(suite.root))
 			.run!()
 		match built {
-			Ok({ status: Exited(0), .. }) => Ok({})
-			Ok({ stderr_bytes, stdout_bytes, .. }) => Script.fail!("could not build ${source}:\n${Str.from_utf8_lossy(stdout_bytes)}${Str.from_utf8_lossy(stderr_bytes)}")
+			Ok(Cmd.Output.{ status: Exited(0), .. }) => Ok({})
+			Ok(Cmd.Output.{ stderr_bytes, stdout_bytes, .. }) => Script.fail!("could not build ${source}:\n${Str.from_utf8_lossy(stdout_bytes)}${Str.from_utf8_lossy(stderr_bytes)}")
 			Err(_) => Script.fail!("could not run ${suite.roc} to build ${source}")
 		}
 	}
@@ -364,11 +367,11 @@ BuildHarness := [].{
 
 	mode! : Str, Path => Try({}, _)
 	mode! = |bits, file|
-		Cmd.new("chmod").args([OsStr.from_str(bits), "--", Path.to_os_str(file)]).exec_cmd!().map_err(|_| ToolFailed("chmod ${bits} ${Path.display(file)}"))
+		Cmd.new("chmod").args([OsStr.from_str(bits), "--", Path.to_os_str(file)]).exec!().map_err(|_| ToolFailed("chmod ${bits} ${Path.display(file)}"))
 
 	tool! : Str, List(Str) => Try({}, _)
 	tool! = |program, args|
-		Cmd.new_str(program).args_str(args).exec_cmd!().map_err(|_| ToolFailed("${program} ${Str.join_with(args, " ")}"))
+		Cmd.new(OsStr.from_str(program)).args(args.map(OsStr.from_str)).exec!().map_err(|_| ToolFailed("${program} ${Str.join_with(args, " ")}"))
 
 	## Where a program is, searching `PATH` as a shell would.
 	which! : Str => Try(Str, _)
@@ -385,7 +388,7 @@ BuildHarness := [].{
 	## A loopback listener on a port the operating system chooses.
 	listen! : () => Try({ listener : Tcp.Listener, port : U16 }, _)
 	listen! = || {
-		listener = Tcp.listen!("127.0.0.1", 0, 5_000)?
+		listener = Tcp.listen!("127.0.0.1", 0, Duration.seconds(5))?
 		Ok({ listener, port: listener.local_port!()? })
 	}
 }
@@ -438,22 +441,22 @@ walk! = |directory, prefix| {
 ## Inode, modification time to the nanosecond and mode of each file, in order.
 stat! : List(Str) => Try(List(Str), _)
 stat! = |paths| {
-	output = Cmd.new("stat").args(["-c", "%i %.9Y %f", "--"]).args_str(paths).exec_output!()
+	output = Cmd.new("stat").args(["-c", "%i %.9Y %f", "--"]).args(paths.map(OsStr.from_str)).run!()?.require_success()
 		.map_err(|_| ToolFailed("stat ${Str.join_with(paths, " ")}"))?
-	Ok(output.stdout_utf8.split_on("\n").keep_if(|line| !line.is_empty()))
+	Ok(output.stdout_utf8_lossy().split_on("\n").keep_if(|line| !line.is_empty()))
 }
 
 ## The real Nix, unrecorded and with the network, for `warm!` alone.
 real_nix! : BuildHarness.Suite, List(Str) => Try(BuildHarness.Outcome, _)
 real_nix! = |suite, args| {
-	ran = Cmd.new_str(suite.nix).args_str(args).cwd(Path.utf8(suite.caller)).clear_envs().envs(suite.variables).timeout_ms(1_800_000).run!()
+	ran = Cmd.new(OsStr.from_str(suite.nix)).args(args.map(OsStr.from_str)).cwd(Path.utf8(suite.caller)).clear_envs().envs(suite.variables).timeout(Duration.millis(1_800_000)).run!()
 	match ran {
 		Ok(output) => Ok(outcome(output, []))
 		Err(_) => Script.fail!("could not run ${suite.nix} ${Str.join_with(args, " ")}")
 	}
 }
 
-outcome : Cmd.RunOutput, List(Str) -> BuildHarness.Outcome
+outcome : Cmd.Output, List(Str) -> BuildHarness.Outcome
 outcome = |output, requests| {
 	code = match output.status {
 		Exited(exit_code) => exit_code
@@ -471,14 +474,14 @@ prepared = |suite, invocation| {
 		[first, .. as others] => (first, others)
 		[] => ("", [])
 	}
-	command = Cmd.new_str(program).args_str(rest)
+	command = Cmd.new(OsStr.from_str(program)).args(rest.map(OsStr.from_str))
 		.cwd(Path.utf8(invocation.cwd))
 		.clear_envs()
 		.envs(kept)
-		.envs_str(invocation.extra)
+		.envs(invocation.extra.map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value))))
 		.stdout(Capture)
 		.stderr(Capture)
-		.timeout_ms(300_000)
+		.timeout(Duration.millis(300_000))
 	if invocation.stdin.is_empty() command.stdin(Null) else command.stdin(Bytes(invocation.stdin))
 }
 
@@ -487,10 +490,13 @@ prepared = |suite, invocation| {
 ## turns between asking whether the command has finished and accepting.
 serve_while! : Cmd, BuildHarness.Service => Try(BuildHarness.Outcome, _)
 serve_while! = |command, service| {
-	if service == NoService {
+	if match service {
+		NoService => True
+		_ => False
+	} {
 		return match command.run!() {
 			Ok(output) => Ok(outcome(output, []))
-			Err(Timeout(_)) => Script.fail!("timed out: ${Cmd.to_str(command)}")
+			Err(CmdErr(TimedOut(_))) => Script.fail!("timed out: ${Cmd.to_str(command)}")
 			Err(_) => Script.fail!("could not run: ${Cmd.to_str(command)}")
 		}
 	}
@@ -498,7 +504,10 @@ serve_while! = |command, service| {
 	var $requests = []
 	var $finished = []
 	while $finished.is_empty() {
-		$finished = child.try_wait!().map_err(|_| WaitFailed(Cmd.to_str(command)))?
+		$finished = match child.poll!().map_err(|_| WaitFailed(Cmd.to_str(command)))? {
+			Running => []
+			Finished(output) => [output]
+		}
 		if $finished.is_empty() {
 			$requests = $requests.concat(serve_once!(service)?)
 		}
@@ -516,33 +525,33 @@ serve_once! = |service|
 	match service {
 		NoService => Ok([])
 		Echo(listener, token) =>
-			match listener.accept!(100) {
+			match listener.accept!({ accept_timeout: After(Duration.millis(100)), io_timeout: Duration.seconds(5) }) {
 				Ok(stream) => {
 					# Return the token only to a peer that already holds it.
-					if stream.read_exactly!(token.len(), 5_000) == Ok(token) {
-						_ = stream.write!(token, 5_000)
+					if stream.read_exactly!(token.len()) == Ok(token) {
+						_ = stream.write_bytes!(token)
 					}
 					Ok([])
 				}
-				Err(TcpListenErr(TimedOut)) => Ok([])
+				Err(TcpErr(TimedOut)) => Ok([])
 				Err(_) => Script.fail!("the echo listener failed")
 			}
 
 		Http(listener, directory) =>
-			match listener.accept!(100) {
+			match listener.accept!({ accept_timeout: After(Duration.millis(100)), io_timeout: Duration.seconds(5) }) {
 				Ok(stream) => serve_file!(stream, directory)
-				Err(TcpListenErr(TimedOut)) => Ok([])
+				Err(TcpErr(TimedOut)) => Ok([])
 				Err(_) => Script.fail!("the HTTP listener failed")
 			}
 	}
 
 ## Answer one HTTP request for a file of `directory`, then close.
-serve_file! : Tcp.Stream, Str => Try(List(Str), _)
+serve_file! : Tcp.Connection, Str => Try(List(Str), _)
 serve_file! = |stream, directory| {
-	request = stream.read_line!(8_192, 5_000) ?? ""
+	request = stream.with_line_limit(8_192).read_line!() ?? ""
 	var $header = request
 	while $header.trim() != "" {
-		$header = stream.read_line!(8_192, 5_000) ?? ""
+		$header = stream.with_line_limit(8_192).read_line!() ?? ""
 	}
 	(method, target) = match request.trim().split_on(" ") {
 		[first, second, ..] => (first, second)
@@ -553,14 +562,14 @@ serve_file! = |stream, directory| {
 	plain = !name.is_empty() and !name.contains("/") and !name.starts_with(".")
 	if plain and (method == "GET" or method == "HEAD") and (Path.is_file!(file) ?? Bool.False) {
 		body = Path.read_bytes!(file)?
-		_ = stream.write_utf8!(http_head("200 OK", body.len()), 5_000)
+		_ = stream.write_utf8!(http_head("200 OK", body.len()))
 		if method == "GET" {
-			_ = stream.write!(body, 30_000)
+			_ = stream.with_timeout(Duration.seconds(30)).write_bytes!(body)
 			return Ok([target])
 		}
 		Ok([])
 	} else {
-		_ = stream.write_utf8!(http_head("404 Not Found", 0), 5_000)
+		_ = stream.write_utf8!(http_head("404 Not Found", 0))
 		Ok([])
 	}
 }

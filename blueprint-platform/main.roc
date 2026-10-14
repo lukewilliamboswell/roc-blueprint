@@ -9,30 +9,38 @@
 ## config = [
 ## 	Name("my-project"),
 ## 	Systems(["x86_64-linux", "aarch64-darwin"]),
+## 	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 ## 	Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
-## 	Environment("dev", [Tools(["git", "python3", "stable#nodejs"])]),
+## 	Environment("dev", [Tools(["nix#git", "nix#python3", "stable#nodejs"])]),
 ## 	Shell("default", [Use("dev")]),
 ## 	Task("test", [Use("dev"), Run(["python3", "-m", "pytest"])]),
 ## 	Raw("nix", "shell:default", Attrs([("shellHook", Str("echo hi"))])),
 ## ]
 ## ```
 ##
-## Unqualified tools use the "default" source, implicitly Auto; a consumer
-## chooses the provider. "source#name" selects another declared source.
+## A tool is "source#name" for a source declared with `Packages`; no source
+## is implied, and a project with no such tool declares none.
 ## Environments own tools and scoped overlays; shells and tasks use them.
 ## `Custom` and `Raw` take a `Val`, written with bare tags: `Str`, `Int`,
 ## `Bool`, `List` and `Attrs` (a list of (name, value) pairs).
 ##
+## An environment's `Programs` are downloaded rather than installed by a
+## package provider: each is `Fetch` of a command name and a function from the
+## System to its download, such as
+## `Recipes.roc_nightly("nightly-2026-10-04-130536d")`. `Expect` names what
+## the machine must already have.
+##
 ## Every quoted value is checked as it compiles, through the `from_quote` of
-## `Tool`, `System`, `FlakeRef`, `InputName`, `EnvName`, `TaskName`, or
-## `WorkflowName`.
+## `Tool`, `System`, `FlakeRef`, `InputName`, `EnvName`, `TaskName`,
+## `WorkflowName`, `ProgramName`, `Url`, `UrlTemplate`, `Member`, or
+## `NightlyTag`.
 ## Whole-config rules, including missing names and duplicate shells, are
 ## also checked at compile time by lowering `config` to the rendered Spec.
 platform ""
 	requires {
 		config : List(Config.Setting)
 	}
-	exposes [Config, EnvName, FlakeRef, InputName, System, TaskName, Tool, Val, WorkflowName]
+	exposes [Config, EnvName, FlakeRef, InputName, Member, NightlyTag, ProgramName, Recipes, System, TaskName, Tool, Url, UrlTemplate, Val, WorkflowName]
 	packages {
 		core: "../blueprint-core/main.roc",
 	}
@@ -46,6 +54,7 @@ platform ""
 		x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a", "libzigc.a", "libcompiler_rt.a"] },
 		arm64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a", "libzigc.a", "libcompiler_rt.a"] },
 		arm64mac: { inputs: ["libhost.a", app] },
+		x64win: { inputs: ["host.lib", app, "msvc_runtime.lib", "advapi32.lib", "api-ms-win-crt-conio-l1-1-0.lib", "api-ms-win-crt-convert-l1-1-0.lib", "api-ms-win-crt-environment-l1-1-0.lib", "api-ms-win-crt-filesystem-l1-1-0.lib", "api-ms-win-crt-heap-l1-1-0.lib", "api-ms-win-crt-locale-l1-1-0.lib", "api-ms-win-crt-math-l1-1-0.lib", "api-ms-win-crt-multibyte-l1-1-0.lib", "api-ms-win-crt-private-l1-1-0.lib", "api-ms-win-crt-process-l1-1-0.lib", "api-ms-win-crt-runtime-l1-1-0.lib", "api-ms-win-crt-stdio-l1-1-0.lib", "api-ms-win-crt-string-l1-1-0.lib", "api-ms-win-crt-time-l1-1-0.lib", "api-ms-win-crt-utility-l1-1-0.lib", "kernel32.lib", "ntdll.lib", "shell32.lib", "user32.lib"] },
 		x64mac: { inputs: ["libhost.a", app] },
 	}
 
@@ -56,7 +65,13 @@ import Tool
 import FlakeRef
 import EnvName
 import InputName
+import Member
+import NightlyTag
+import ProgramName
+import Recipes
 import System
+import Url
+import UrlTemplate
 import TaskName
 import Val
 import WorkflowName

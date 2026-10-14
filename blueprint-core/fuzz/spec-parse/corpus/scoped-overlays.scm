@@ -1,7 +1,7 @@
 ; Explicit ordered stacks inherit; an empty child stack does not clear them.
 ((format ((major 2) (minor 0))) (name "scoped-overlays")
  (systems ("x86_64-linux"))
- (sources (((name "default") (provider Auto))))
+ (sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
  (inputs (((name "base") (kind Overlay) (url "path:./overlays/base"))
    ((name "patch") (kind Overlay) (url "path:./overlays/patch"))))
  (environments (

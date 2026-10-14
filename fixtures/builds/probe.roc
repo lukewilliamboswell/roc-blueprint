@@ -1,5 +1,7 @@
-app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst" }
+app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst" }
 
+import cli.IOErr
+import cli.Duration
 import cli.OsStr
 import cli.Path
 import cli.Stderr
@@ -52,11 +54,11 @@ probe! = |sandbox| {
 		Err(other) => return Err(Failed("reading the host marker failed for another reason: ${Str.inspect(other)}"))
 	}
 
-	match Tcp.connect!("127.0.0.1", settings.port, 2_000) {
+	match Tcp.connect!("127.0.0.1", settings.port, { connect_timeout: Duration.seconds(2), io_timeout: Duration.seconds(5) }) {
 		Ok(stream) => {
 			require(!sandbox, "SANDBOX FAILURE: host TCP listener reachable")?
-			stream.write!(expected, 5_000)?
-			echoed = stream.read_exactly!(expected.len(), 5_000).map_err(|_| Failed("the host listener accepted a connection and did not return its token"))?
+			stream.write_bytes!(expected)?
+			echoed = stream.read_exactly!(expected.len()).map_err(|_| Failed("the host listener accepted a connection and did not return its token"))?
 			require(echoed == expected, "the host listener returned other bytes")?
 		}
 		Err(refusal) => {
@@ -78,16 +80,16 @@ probe! = |sandbox| {
 ## refused (an isolated loopback has no such listener), denied, timed out, or
 ## no route. basic-cli has no tag for "network unreachable" and "host
 ## unreachable", so those arrive as the text of the operating system's error.
-unreachable : Tcp.ConnectErr -> Bool
+unreachable : [TcpErr(IOErr)] -> Bool
 unreachable = |refusal|
 	match refusal {
-		ConnectionRefused => Bool.True
-		PermissionDenied => Bool.True
-		TimedOut => Bool.True
-		Unrecognized(text) => text.ends_with("NetworkUnreachable") or text.ends_with("HostUnreachable")
+		TcpErr(ConnectionRefused) => Bool.True
+		TcpErr(PermissionDenied) => Bool.True
+		TcpErr(TimedOut) => Bool.True
+		TcpErr(Other(text)) => text.ends_with("NetworkUnreachable") or text.ends_with("HostUnreachable")
 		_ => Bool.False
 	}
 
-expect unreachable(ConnectionRefused) and unreachable(TimedOut) and unreachable(PermissionDenied)
-expect unreachable(Unrecognized("ErrorKind::NetworkUnreachable")) and unreachable(Unrecognized("ErrorKind::HostUnreachable"))
-expect !unreachable(AddrNotAvailable) and !unreachable(Unsupported) and !unreachable(Unrecognized("ErrorKind::InvalidInput"))
+expect unreachable(TcpErr(ConnectionRefused)) and unreachable(TcpErr(TimedOut)) and unreachable(TcpErr(PermissionDenied))
+expect unreachable(TcpErr(Other("ErrorKind::NetworkUnreachable"))) and unreachable(TcpErr(Other("ErrorKind::HostUnreachable")))
+expect !unreachable(TcpErr(AddrNotAvailable)) and !unreachable(TcpErr(Unsupported)) and !unreachable(TcpErr(Other("ErrorKind::InvalidInput")))

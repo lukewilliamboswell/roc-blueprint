@@ -50,6 +50,7 @@ jobs:
             dist/smoke-*
             blueprint-platform/targets/*/*.a
             blueprint-platform/targets/*/crt1.o
+            blueprint-platform/targets/*/*.lib
           if-no-files-found: error
 
       # Outside the dev shell: the binary must work with no Roc on PATH. A
@@ -157,11 +158,55 @@ jobs:
           nix build .#blueprint
           result/bin/blueprint --version
 
+  # A project that takes nothing from Nix, on machines that have none: no step
+  # here installs Nix, and the smoke program refuses to start when `nix` is on
+  # PATH. The binary fetches its compiler, writes the lock, says the project's
+  # tasks need no provider, and builds, links and runs a basic-cli script with
+  # the fetched compiler, which it must download once and not again. This is
+  # the only job that links with a fetched `roc` on macOS, where the compiler
+  # needs the `darwin` directory of its archive beside it.
+  no-nix:
+    permissions:
+      contents: read
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, system: x86_64-linux }
+          - { runner: ubuntu-24.04-arm, system: aarch64-linux }
+          - { runner: macos-latest, system: aarch64-darwin }
+          - { runner: windows-latest, system: x86_64-windows }
+    name: no-nix (${{ matrix.system }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The binaries, and the platform hosts the project's Blueprint.roc is
+      # evaluated against: this checkout's platform, as built in this run.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: blueprint-binaries
+
+      - name: Update, fetch, link and run with no Nix on the machine
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
+          dist/smoke-${{ matrix.system }} --no-nix dist/blueprint-${{ matrix.system }}
+
+      - name: Update, fetch, link and run on Windows without Nix
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./dist/smoke-x86_64-windows.exe --no-nix ./dist/blueprint-x86_64-windows.exe
+
   # The one required check: green only when every job above succeeded.
   test:
     permissions: {}
     if: always()
-    needs: [build, checks, cli, binaries]
+    needs: [build, checks, cli, binaries, no-nix]
     runs-on: ubuntu-latest
     steps:
       - name: Every job succeeded

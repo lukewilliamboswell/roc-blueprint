@@ -1,3 +1,4 @@
+import cli.OsStr
 import cli.Cmd
 import cli.Env
 import cli.Path
@@ -134,10 +135,10 @@ Scenarios := [].{
 							"	Overlay(\"first\", \"path:./first\"),",
 							"	Overlay(\"patch\", \"path:./patch\"),",
 							"	Overlay(\"unused\", \"path:./unused\"),",
-							"	Environment(\"base\", [Tools([\"fixtureTool\"]), Overlays([\"first\"])]),",
-							"	Environment(\"patched\", [Extend(\"base\"), Tools([\"fixtureTool\"]), Overlays([\"first\", \"patch\"])]),",
-							"	Environment(\"reverse\", [Tools([\"fixtureTool\"]), Overlays([\"patch\", \"first\"])]),",
-							"	Environment(\"plain\", [Tools([\"fixtureTool\"])]),",
+							"	Environment(\"base\", [Tools([\"default#fixtureTool\"]), Overlays([\"first\"])]),",
+							"	Environment(\"patched\", [Extend(\"base\"), Tools([\"default#fixtureTool\"]), Overlays([\"first\", \"patch\"])]),",
+							"	Environment(\"reverse\", [Tools([\"default#fixtureTool\"]), Overlays([\"patch\", \"first\"])]),",
+							"	Environment(\"plain\", [Tools([\"default#fixtureTool\"])]),",
 							"	Task(\"base\", [Use(\"base\"), Run([\"fixture-tool\"])]),",
 							"	Task(\"patched\", [Use(\"patched\"), Run([\"fixture-tool\"])]),",
 							"	Task(\"reverse\", [Use(\"reverse\"), Run([\"fixture-tool\"])]),",
@@ -176,10 +177,10 @@ Scenarios := [].{
 							"	Systems([\"x86_64-linux\", \"aarch64-darwin\"]),",
 							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
 							"	Packages(\"stable\", From(NixPackages(\"${packages_ref}\"))),",
-							"	Environment(\"base\", [Tools([\"git\"]), ToolsFor(\"x86_64-linux\", [\"wayland\"])]),",
+							"	Environment(\"base\", [Tools([\"default#git\"]), ToolsFor(\"x86_64-linux\", [\"default#wayland\"])]),",
 							"	Environment(\"dev\", [Extend(\"base\")]),",
 							"	Environment(\"scoped\", [ToolsFor(\"x86_64-linux\", [\"stable#wayland\"])]),",
-							"	Environment(\"unscoped\", [Tools([\"linuxHeaders\"])]),",
+							"	Environment(\"unscoped\", [Tools([\"default#linuxHeaders\"])]),",
 							"	Shell(\"default\", [Use(\"dev\")]),",
 							"	Shell(\"scoped\", [Use(\"scoped\")]),",
 							"	Shell(\"unscoped\", [Use(\"unscoped\")]),",
@@ -215,8 +216,8 @@ Scenarios := [].{
 							"	Systems([\"x86_64-linux\", \"aarch64-darwin\"]),",
 							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
 							"	Overlay(\"roc\", \"${overlay_ref}\"),",
-							"	Environment(\"base\", [Command(\"greet\", \"hello\")]),",
-							"	Environment(\"dev\", [Extend(\"base\"), Overlays([\"roc\"]), Command(\"roc-stable\", \"rocpkgs.nightly\")]),",
+							"	Environment(\"base\", [Command(\"greet\", \"default#hello\")]),",
+							"	Environment(\"dev\", [Extend(\"base\"), Overlays([\"roc\"]), Command(\"roc-stable\", \"default#rocpkgs.nightly\")]),",
 							"	Shell(\"default\", [Use(\"dev\")]),",
 							"	Task(\"greet\", [Use(\"dev\"), Run([\"greet\"])]),",
 							"	Task(\"version\", [Use(\"dev\"), Run([\"roc-stable\", \"version\"])]),",
@@ -235,7 +236,7 @@ Scenarios := [].{
 				Cli(["run", "greet"], Says("Hello, world!")),
 				# The steps after this run from the lock a named update published.
 				UpdateInputs(["roc"]),
-				Cli(["update", "rocpkgs"], FailsWith("no input named rocpkgs")),
+				Cli(["update", "rocpkgs"], FailsWith("no input or program named rocpkgs")),
 				Cli(["run", "version"], LineStarts("Roc compiler version ")),
 				Cli(["run", "script"], Says("Hello from a roc-stable script")),
 				Launchers("path", ["greet", "roc-stable"]),
@@ -258,7 +259,7 @@ Scenarios := [].{
 							"	Systems([\"x86_64-linux\", \"aarch64-darwin\"]),",
 							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
 							"	Overlay(\"roc\", \"${overlay_ref}\"),",
-							"	Environment(\"dev\", [Overlays([\"roc\"]), Command(\"roc-stable\", \"rocpkgs.${roc.compiler}\"), RocPackages([\"${roc.basic_cli}\"])]),",
+							"	Environment(\"dev\", [Overlays([\"roc\"]), Command(\"roc-stable\", \"default#rocpkgs.${roc.compiler}\"), RocPackages([\"${roc.basic_cli}\"])]),",
 							"	Task(\"check\", [Use(\"dev\"), Run([\"scripts/check_all.roc\"])]),",
 							"]",
 							"",
@@ -289,8 +290,8 @@ Scenarios := [].{
 							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
 							"	Overlay(\"zig\", \"${toolchains.zig}\"),",
 							"	Overlay(\"rust\", \"${toolchains.rust}\"),",
-							"	Environment(\"zig\", [Overlays([\"zig\"]), Tools([\"zigpkgs.\\\"0.16.0\\\"\"])]),",
-							"	Environment(\"rust\", [Overlays([\"rust\"]), Tools([\"rust-bin.stable.\\\"1.95.0\\\".default\"])]),",
+							"	Environment(\"zig\", [Overlays([\"zig\"]), Tools([\"default#zigpkgs.\\\"0.16.0\\\"\"])]),",
+							"	Environment(\"rust\", [Overlays([\"rust\"]), Tools([\"default#rust-bin.stable.\\\"1.95.0\\\".default\"])]),",
 							"	Shell(\"rust\", [Use(\"rust\")]),",
 							"	Task(\"zig\", [Use(\"zig\"), Run([\"zig\", \"version\"])]),",
 							"]",
@@ -324,9 +325,9 @@ Scenarios := [].{
 							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
 							"	Overlay(\"configurable\", \"path:./configurable\"),",
 							"	Overlay(\"rust\", \"${toolchains.rust}\"),",
-							"	Environment(\"base\", [Overlays([\"configurable\"]), ToolWith(\"configurableTool\", [(\"targets\", List([Str(\"a\")]))])]),",
-							"	Environment(\"dev\", [Extend(\"base\"), ToolWith(\"configurableTool\", [(\"targets\", List([Str(\"b\"), Str(\"c d\")])), (\"extensions\", List([Str(\"src\")]))])]),",
-							"	Environment(\"rust\", [Overlays([\"rust\"]), ToolWith(\"rust-bin.stable.\\\"1.95.0\\\".default\", [(\"targets\", List([Str(\"x86_64-unknown-linux-musl\"), Str(\"aarch64-unknown-linux-musl\")])), (\"extensions\", List([Str(\"rust-src\")]))])]),",
+							"	Environment(\"base\", [Overlays([\"configurable\"]), ToolWith(\"default#configurableTool\", [(\"targets\", List([Str(\"a\")]))])]),",
+							"	Environment(\"dev\", [Extend(\"base\"), ToolWith(\"default#configurableTool\", [(\"targets\", List([Str(\"b\"), Str(\"c d\")])), (\"extensions\", List([Str(\"src\")]))])]),",
+							"	Environment(\"rust\", [Overlays([\"rust\"]), ToolWith(\"default#rust-bin.stable.\\\"1.95.0\\\".default\", [(\"targets\", List([Str(\"x86_64-unknown-linux-musl\"), Str(\"aarch64-unknown-linux-musl\")])), (\"extensions\", List([Str(\"rust-src\")]))])]),",
 							"	Shell(\"rust\", [Use(\"rust\")]),",
 							"	Task(\"base\", [Use(\"base\"), Run([\"configurable-tool\"])]),",
 							"	Task(\"dev\", [Use(\"dev\"), Run([\"configurable-tool\"])]),",
@@ -504,7 +505,7 @@ Scenarios := [].{
 		toolchains = { zig: pinned!(flake_lock, "zig-overlay", "flake.lock")?, rust: rust_overlay }
 		result = each!(context, scenarios(packages_ref, overlay_ref, roc, toolchains), 0)
 		# A scenario leaves its lock read-only.
-		_ = Cmd.new_str("chmod").args_str(["-R", "u+w", "--", work]).exec_cmd!()
+		_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--", work].map(OsStr.from_str)).exec!()
 		_ = Path.delete_all!(Path.utf8(work))
 		result
 	}
@@ -564,7 +565,7 @@ replace! = |file, text| {
 
 chmod! : Str, Str => Try({}, _)
 chmod! = |mode, target|
-	Cmd.new_str("chmod").args_str([mode, "--", target]).exec_cmd!().map_err(|_| ChmodFailed(target))
+	Cmd.new(OsStr.from_str("chmod")).args([mode, "--", target].map(OsStr.from_str)).exec!().map_err(|_| ChmodFailed(target))
 
 ## Run each step in order. `lock` is the authority a fresh project was given;
 ## it must read the same after every step. An example has none to compare.

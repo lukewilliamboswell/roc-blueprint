@@ -1,6 +1,6 @@
 ((format ((major 2) (minor 0))) (name "aliases")
  (systems ("x86_64-linux"))
- (sources (((name "default") (provider Auto))))
+ (sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
  (environments (
    ((name "base") (parents ()) (tools ()) (overlays ()))
    ((name "dev") (parents ("base")) (overlays ())

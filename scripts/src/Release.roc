@@ -17,15 +17,17 @@ Release := [].{
 	## A released system: Nix's name for it and Roc's target.
 	System : { system : Str, target : Str }
 
-	## TODO(#40): no Windows binary is built, though the CLI can run tasks
-	## there. It waits on a compiler and a basic-cli release that cross-link
-	## one; see "What remains for Windows" in docs/maintaining.adoc.
+	## Cross-built binaries, including the Windows MSVC host.
 	systems : List(System)
 	systems = [
 		{ system: "x86_64-linux", target: "x64musl" },
 		{ system: "aarch64-linux", target: "arm64musl" },
 		{ system: "aarch64-darwin", target: "arm64mac" },
+		{ system: "x86_64-windows", target: "x64win" },
 	]
+
+	binary_name : Str, Str -> Str
+	binary_name = |name, system| "${name}-${system}${if system == "x86_64-windows" ".exe" else ""}"
 
 	## The program each system's binary is built from, and its name in `dist/`.
 	programs = [{ source: "blueprint-cli/main.roc", name: "blueprint" }, { source: "scripts/smoke_binary.roc", name: "smoke" }]
@@ -42,7 +44,7 @@ Release := [].{
 	files = |name, directory|
 		programs.keep_if(|program| program.name == name).fold(
 			[],
-			|listed, program| listed.concat(systems.map(|released| { source: program.source, target: released.target, output: "${directory}/${program.name}-${released.system}" })),
+			|listed, program| listed.concat(systems.map(|released| { source: program.source, target: released.target, output: "${directory}/${binary_name(program.name, released.system)}" })),
 		)
 
 	## The flake package that is the compiler for every target: the x86_64
@@ -93,7 +95,7 @@ build! = |root, roc| {
 
 	var $sums = ""
 	for released in Release.systems {
-		name = "blueprint-${released.system}"
+		name = Release.binary_name("blueprint", released.system)
 		$sums = $sums.concat(Release.checksum_line(name, Path.read_bytes!(Path.utf8("${dist}/${name}"))?))
 	}
 	Path.write_utf8!(Path.utf8("${dist}/blueprint.sha256"), $sums)?
@@ -101,7 +103,7 @@ build! = |root, roc| {
 }
 
 ## Build these files at the same time. A compilation of the CLI is
-## single-threaded for most of its run and peaks at about 2.3 GB, so three fit
+## single-threaded for most of its run and peaks at about 2.3 GB, so four fit
 ## a 4-core, 16 GB machine.
 ##
 ## The compiler occasionally fails with an unexplained internal error and
@@ -135,15 +137,16 @@ finish_each! = |files, jobs, outcomes|
 
 # The format of `sha256sum`: digest, two spaces, name.
 expect Release.checksum_line("blueprint-x86_64-linux", "abc".to_utf8()) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  blueprint-x86_64-linux\n"
-expect Release.systems.map(|released| released.system) == ["x86_64-linux", "aarch64-linux", "aarch64-darwin"]
+expect Release.systems.map(|released| released.system) == ["x86_64-linux", "aarch64-linux", "aarch64-darwin", "x86_64-windows"]
 
 expect Release.build_args("blueprint-cli/main.roc", "x64musl", "dist/blueprint-x86_64-linux") == ["build", "blueprint-cli/main.roc", "--target=x64musl", "--output=dist/blueprint-x86_64-linux"]
 
 # Each program is built for every released system, in the systems' order.
-expect Release.files("blueprint", "dist").map(|file| file.output) == ["dist/blueprint-x86_64-linux", "dist/blueprint-aarch64-linux", "dist/blueprint-aarch64-darwin"]
+expect Release.files("blueprint", "dist").map(|file| file.output) == ["dist/blueprint-x86_64-linux", "dist/blueprint-aarch64-linux", "dist/blueprint-aarch64-darwin", "dist/blueprint-x86_64-windows.exe"]
 expect Release.files("smoke", "/repo/dist") == [
 	{ source: "scripts/smoke_binary.roc", target: "x64musl", output: "/repo/dist/smoke-x86_64-linux" },
 	{ source: "scripts/smoke_binary.roc", target: "arm64musl", output: "/repo/dist/smoke-aarch64-linux" },
 	{ source: "scripts/smoke_binary.roc", target: "arm64mac", output: "/repo/dist/smoke-aarch64-darwin" },
+	{ source: "scripts/smoke_binary.roc", target: "x64win", output: "/repo/dist/smoke-x86_64-windows.exe" },
 ]
 expect Release.programs.map(|program| program.name) == ["blueprint", "smoke"] and Release.files("other", "dist").is_empty()

@@ -4,4 +4,6 @@ Each release has its notes in `docs/releases/`, newest first. Releases before
 0.5.0 have theirs on the
 https://github.com/lukewilliamboswell/roc-blueprint/releases[releases page].
 
+include::releases/0.6.0.adoc[leveloffset=+1]
+
 include::releases/0.5.0.adoc[leveloffset=+1]

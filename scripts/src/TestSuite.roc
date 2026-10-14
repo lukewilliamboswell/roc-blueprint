@@ -40,7 +40,7 @@ TestSuite := [].{
 				"	Name(\"packaged\"),",
 				"	Systems([\"x86_64-linux\"]),",
 				"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
-				"	Environment(\"builder\", [Tools([\"coreutils\"])]),",
+				"	Environment(\"builder\", [Tools([\"default#coreutils\"])]),",
 				"	Build(\"copy\", [Use(\"builder\"), Run([\"cp\", \"message.txt\", \"copied.txt\"]), Output(\"copied.txt\")]),",
 				"]",
 				"",
@@ -212,9 +212,8 @@ static! = |context| {
 	cli_source = read!(context, "blueprint-cli/main.roc")?
 	problem!(StaticChecks.provider_contract_problem(cli_source))?
 
-	step!("The fetched compiler comes from the locked roc-overlay revision")?
-	problem!(StaticChecks.overlay_problem(read!(context, "flake.lock")?, read!(context, "blueprint-nix/NixProvider.roc")?))?
-	problem!(StaticChecks.host_compiler_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-host/HostProvider.roc")?))?
+	step!("The CLI records a download of its compiler for every system it runs on")?
+	problem!(StaticChecks.bootstrap_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-cli/Bootstrap.roc")?))?
 
 	step!("The scripts run on roc-stable, pin its nightly, and nothing else selects a compiler")?
 	flake = read!(context, "flake.nix")?
@@ -300,8 +299,8 @@ cli! = |context| {
 	step!("Staged isolation witness, build runner path and refusals")?
 	script!(context, "test_isolation", [])?
 
-	step!("The host provider: what it refuses, and tasks from a lock the Nix provider wrote")?
-	script!(context, "test_host", [])
+	step!("Fetched programs and expected tools: the store, the links, and Nix only where a tool needs it")?
+	script!(context, "test_programs", [])
 }
 
 ## The real-Nix suites are two groups of about the same length, so that CI
@@ -346,8 +345,8 @@ packaged! = |context| {
 	Process.check!(StaticChecks.constant(flake, "version") == Ok(reported), "the packaged blueprint reports version ${reported}, not the version in flake.nix")?
 
 	step!("Nix flake: every system's outputs evaluate (no build)")?
-	# The flake exposes the systems a binary is released for.
-	for released in Release.systems {
+	# Nix outputs cover the Unix release systems; Windows uses the binary.
+	for released in Release.systems.keep_if(|released| released.target != "x64win") {
 		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#packages.${released.system}.blueprint.drvPath"], context.root))?
 		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#devShells.${released.system}.default.drvPath"], context.root))?
 	}
@@ -357,7 +356,7 @@ packaged! = |context| {
 	step!("Nix flake: the packaged blueprint builds an artifact with nothing but Nix on PATH")?
 	work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-packaged-")?)?)?
 	result = packaged_build!(context, package_path, work)
-	_ = Cmd.new_str("chmod").args_str(["-R", "u+w", "--", work]).exec_cmd!()
+	_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--", work].map(OsStr.from_str)).exec!()
 	_ = Path.delete_all!(Path.utf8(work))
 	result?
 
@@ -382,7 +381,7 @@ packaged_build! = |context, package_path, work| {
 		[directory, ..] => "${directory}/nix"
 		[] => return Script.fail!("nix is not on PATH")
 	}
-	Cmd.new_str("ln").args_str(["-s", nix, "${only_nix}/nix"]).exec_cmd!().map_err(|_| LinkFailed)?
+	Cmd.new(OsStr.from_str("ln")).args(["-s", nix, "${only_nix}/nix"].map(OsStr.from_str)).exec!().map_err(|_| LinkFailed)?
 
 	packages_ref = match FlakeLock.locked(read!(context, "fixtures/consumer/inputs.lock")?, "nixpkgs") {
 		Ok(pin) => FlakeLock.ref(pin)
@@ -395,7 +394,7 @@ packaged_build! = |context, package_path, work| {
 	inherited = Env.dict!().map(|(name, value)| (OsStr.display(name), OsStr.display(value))).keep_if(|(name, _)| name != "ROC" and name != "PATH")
 	confined = |program, args, extra| {
 		job = Process.command(program, args, project)
-		{ ..job, cmd: job.cmd.clear_envs().envs_str(inherited.concat([("PATH", only_nix)]).concat(extra)) }
+		{ ..job, cmd: job.cmd.clear_envs().envs(inherited.concat([("PATH", only_nix)]).concat(extra).map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) }
 	}
 	wrapped = "${package_path}/bin/blueprint"
 	_ = Process.succeed!(confined(wrapped, ["update"], []))?

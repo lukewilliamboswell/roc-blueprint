@@ -124,6 +124,24 @@ raw = {
 	value: value(4),
 }.Fuzz
 
+# Every way a download is unpacked, with arbitrary names, paths and URL lists.
+program : Fuzz.Generator(Spec.Program)
+program = Fuzz.map(
+	{ kind: Fuzz.u8_in(0, 3), name: Fuzz.str, system: Fuzz.str, urls: Fuzz.list(Fuzz.str, 3), path: Fuzz.str }.Fuzz,
+	|r| {
+		name: r.name,
+		system: r.system,
+		urls: r.urls,
+		unpack: match r.kind {
+			0 => File
+			1 => TarGz
+			2 => TarXz
+			_ => Zip
+		},
+		path: r.path,
+	},
+)
+
 spec_generator : Fuzz.Generator(Spec)
 spec_generator = Fuzz.map(
 	{
@@ -138,6 +156,9 @@ spec_generator = Fuzz.map(
 		commands: Fuzz.list({ environment: Fuzz.str, name: Fuzz.str, tool }.Fuzz, 3),
 		configured_tools: Fuzz.list({ environment: Fuzz.str, tool, options: value(3) }.Fuzz, 3),
 		roc_packages: Fuzz.list({ environment: Fuzz.str, name: Fuzz.str, source: Fuzz.str }.Fuzz, 3),
+		programs: Fuzz.list(program, 4),
+		environment_programs: Fuzz.list({ environment: Fuzz.str, programs: Fuzz.list(Fuzz.str, 3) }.Fuzz, 3),
+		expects: Fuzz.list({ environment: Fuzz.str, programs: Fuzz.list(Fuzz.str, 3) }.Fuzz, 3),
 		shells: Fuzz.list(shell, 3),
 		tasks: Fuzz.list(task, 3),
 		build_sources: Fuzz.list(build_source, 3),
@@ -158,6 +179,9 @@ spec_generator = Fuzz.map(
 		commands: r.commands,
 		configured_tools: r.configured_tools,
 		roc_packages: r.roc_packages,
+		programs: r.programs,
+		environment_programs: r.environment_programs,
+		expects: r.expects,
 		shells: r.shells,
 		tasks: r.tasks,
 		build_sources: r.build_sources,

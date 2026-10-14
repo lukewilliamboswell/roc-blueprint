@@ -8,9 +8,11 @@ projects with that release's platform URL, as they were tested for it, and the
 Spec each one prints.
 
 all-settings::
-Auto and explicit Nix package sources, a named overlay scoped to `dev`,
-parent-first environment inheritance, shell aliases, argument-list tasks, a
-locked Roc package and raw Nix settings. `ci` uses `base` without the overlay.
+Two Nix package sources, each tool written with its source, a named overlay
+scoped to `dev`, parent-first environment inheritance, shell aliases,
+argument-list tasks, a Roc package, two fetched programs
+(`Recipes.roc_nightly` and `Recipes.file`), an expected tool and raw Nix
+settings. `ci` uses `base` without the overlay.
 
 composition::
 Imports `ProjectTasks.roc`, whose pure
@@ -19,7 +21,11 @@ and `args` tasks. The application concatenates them into `config`; all use
 `dev` directly. Inherited `git` is deduplicated before the child's `python3`.
 The tasks print tool versions or their arguments as JSON; they do not format
 files or run a test suite. No plugin registration, generated command line,
-implicit tool installation or runtime code loading is involved.
+implicit tool installation or runtime code loading is involved. It also
+imports `Releases.roc`, whose `blueprint : Str -> (System -> Config.Download)`
+is a recipe written by hand: given a release, a function from the System to
+where that release's `blueprint` is downloaded, or `Unavailable`, which a
+`Fetch` in `Programs` takes.
 
 artifacts::
 A complete local locked source, a sandboxed library and application that
@@ -47,8 +53,11 @@ blueprint run args -- 'two words' '' '--literal'
 ----
 
 Only an explicit `update` creates or changes `Blueprint.lock`. `gen`, `shell`,
-`run`, `build` and `workflow` require matching pins and leave the lock as it
-is; the generated `.blueprint/flake.lock` is derived from it.
+`run`, `build` and `workflow` require a lock that matches and leave it as it
+is; the generated `.blueprint/flake.lock` is derived from it. Every example
+declares a Nix package source, so `blueprint update` needs Nix in each;
+xref:without-nix.adoc#a-project-that-never-starts-nix[Work without Nix] has a
+project that needs none.
 
 In a checkout of the repository the examples need the platform host built
 first; see xref:contributing.adoc#build-and-test[Build and test].

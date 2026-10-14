@@ -13,25 +13,17 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	is_eq : _
 
 	Input : { name : Str, ref : Str, kind : Str, flake : Bool }
-	default_nixpkgs : Str
-	default_nixpkgs = "github:NixOS/nixpkgs/nixos-unstable"
 
 	## All supported declarations have stable, user-named root inputs. Foreign
-	## package providers stay outside Nix, not silently rewritten as nixpkgs.
+	## package providers stay outside Nix, not silently rewritten as nixpkgs,
+	## and so does a source that names no package set: nothing is resolved
+	## that the project did not declare.
 	inputs : Spec -> Try(List(Input), Str)
 	inputs = |spec| {
 		var $inputs = []
 		for source in spec.sources {
 			match source.provider {
-				GuixPackages(_) => {}
-				Auto => {
-					$inputs = $inputs.append({
-						name: source.name,
-						ref: default_nixpkgs,
-						kind: "auto",
-						flake: True,
-					})
-				}
+				GuixPackages(_) | Auto => {}
 				NixPackages(ref) => {
 					$inputs = $inputs.append({
 						name: source.name,
@@ -50,7 +42,8 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 				kind: if input.kind == Overlay "overlay" else "flake",
 			})
 		}
-		for source in spec.build_sources {
+		# The bundle of a Roc package no build uses is the Core's to fetch.
+		for source in Project.resolved_build_sources(spec) {
 			$inputs = $inputs.append({
 				name: source.name,
 				ref: normalize_ref(source.ref)?,
@@ -73,18 +66,16 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	shell_alias = "nixpkgs"
 
 	## The package source the alias follows, among the inputs a flake declares:
-	## `default` when it is a Nix package source, otherwise the first Nix
-	## package source declared. The alias is one name for the whole flake, so
-	## it cannot follow each environment's own source. A flake that declares
-	## any input called `nixpkgs` keeps that input, and one without a Nix
-	## package source has nothing to follow.
+	## the first Nix package source declared, whatever it is called. The alias
+	## is one name for the whole flake, so it cannot follow each environment's
+	## own source. A flake that declares any input called `nixpkgs` keeps that
+	## input, and one without a Nix package source has nothing to follow.
 	shell_source : List({ name : Str, kind : Str }) -> Try(Str, [NoAlias])
 	shell_source = |declared| {
 		if declared.any(|input| input.name == shell_alias) {
 			return Err(NoAlias)
 		}
-		sources_ = declared.keep_if(|input| input.kind == "auto" or input.kind == "packages")
-		chosen = sources_.find_first(|input| input.name == "default") ?? (sources_.first().map_err(|_| NoAlias)?)
+		chosen = declared.find_first(|input| input.kind == "packages").map_err(|_| NoAlias)?
 		Ok(chosen.name)
 	}
 
@@ -207,6 +198,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 				]),
 			},
 		],
+		fetched: [],
 	}
 
 	## One provider-neutral Source per declared input, in declaration order.
@@ -1030,8 +1022,8 @@ expect match locked_fixture {
 	Err(_) => False
 }
 
-# What Nix writes since the generated flake gives the default source the
-# name `nixpkgs`: one more root edge, which follows it.
+# What Nix writes since the generated flake gives its first Nix source the
+# name `nixpkgs` as well: one more root edge, which follows it.
 aliased_fixture : Str
 aliased_fixture = native_fixture.replace_each("\"default\": \"default\"", "\"default\": \"default\", \"nixpkgs\": [\"default\"]")
 
@@ -1088,10 +1080,16 @@ expect match aliased_locks {
 	Err(_) => False
 }
 
+# Only what the project declares for Nix is an input: a Guix channel is not,
+# and neither is a source that names no package set. Nothing stands in for a
+# source that is not declared.
+expect Locks.inputs({ ..TestData.project(TestData.data), sources: [{ name: "channel", provider: GuixPackages("channels") }, { name: "unnamed", provider: Auto }] }).map_ok(|inputs| inputs.map(|input| input.name)) == Ok(["assets"])
+expect Locks.inputs(TestData.project(TestData.data)).map_ok(|inputs| inputs.map(|input| (input.name, input.kind))) == Ok([("default", "packages"), ("assets", "source")])
+
 # A project with an input of its own called nixpkgs has an ordinary pinned
 # edge of that name. Nothing follows, and a follows edge there is refused.
 expect {
-	project = TestData.project({ ..TestData.data, sources: [{ name: "default", provider: Auto }, { name: "nixpkgs", provider: Auto }] })
+	project = TestData.project({ ..TestData.data, sources: [{ name: "default", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }, { name: "nixpkgs", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] })
 	own = native_fixture.replace_each("\"default\": \"default\"", "\"default\": \"default\", \"nixpkgs\": \"default\"")
 	match with_assets(Locks.from_nix(project, TestData.layout, own)) {
 		Ok(locks) => match Locks.derive(locks, project, TestData.layout) {

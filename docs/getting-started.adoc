@@ -1,11 +1,10 @@
 = Get started
 
-This chapter installs `blueprint`, writes a first `Blueprint.roc` and runs a
-task in the environment it describes.
+This chapter installs `blueprint`, writes a first `Blueprint.roc` that needs
+nothing but the binary, runs a task in the environment it describes, and then
+adds a tool from Nix.
 
 == Install blueprint
-
-You need https://nixos.org/download[Nix] with flakes enabled.
 
 Each https://github.com/lukewilliamboswell/roc-blueprint/releases[release] attaches a `blueprint` binary for x86_64 Linux,
 arm64 Linux and Apple Silicon macOS, named `blueprint-x86_64-linux`,
@@ -19,7 +18,11 @@ sha256sum --check --ignore-missing blueprint.sha256
 install -m 755 blueprint-x86_64-linux ~/.local/bin/blueprint
 ----
 
-With Nix alone, run or install the same version from the flake:
+That is all the first project below needs. https://nixos.org/download[Nix]
+with flakes enabled is needed for the tools a project takes from a Nix
+package source and for its sandboxed builds, and for nothing else:
+`blueprint requirements` says which of a project's tasks need it. Where Nix
+is installed, the same version also runs from the flake:
 
 [source,sh]
 ----
@@ -32,9 +35,10 @@ https://lukewilliamboswell.github.io/roc-automation/actions.html#setup-blueprint
 action installs Nix and a release's binary and checks its sum.
 
 Loading a configuration runs one exact Roc nightly. The binary uses a `roc` on
-`PATH` when it is that nightly, and otherwise fetches it through Nix from a
-pinned roc-overlay revision. Set `ROC` to choose the executable yourself; it
-must be that same nightly.
+`PATH` when it is that nightly, and otherwise downloads it from its release,
+checks it against a digest the binary records, and keeps it in its store of
+downloads. Set `ROC` to choose the executable yourself; it must be that same
+nightly.
 
 == Write a first Blueprint.roc
 
@@ -46,35 +50,77 @@ include::generated/latest-release.adoc[]
 *Use each release's `blueprint` binary with that release's platform URL.* The
 two are built and tested together.
 
-The file declares two environments. `dev` extends `base`, so it has `git`,
-`zig`, the Roc nightly from the `roc` overlay, Python and SQLite. `ci` is a
-shell on `base` alone. Each task names its environment and an exact argument
-list.
+The file declares one environment, `dev`. It has two commands:
 
-== Lock the inputs and run something
+* `roc-stable` is *fetched*: `Recipes.roc_nightly` says where that Roc
+  nightly is downloaded from on each system, and `Blueprint.lock` will hold
+  the digest of each download.
+* `git` is *expected*: the machine must already have it. `blueprint` checks
+  for it and installs nothing.
+
+Each task names its environment and an exact argument list.
+
+== Lock the downloads and run something
 
 [source,sh]
 ----
 blueprint check          # validate Blueprint.roc; needs no lock
-blueprint update         # resolve every input and write Blueprint.lock
-blueprint shell          # enter the default shell's environment
-blueprint shell ci       # enter base, without the roc overlay
+blueprint update         # record every download's digest in Blueprint.lock
 blueprint run version    # run the task's command in dev
+blueprint shell          # enter dev: your own shell, with roc-stable on PATH
+blueprint requirements   # what each task needs of the machine
 blueprint --help         # list this project's shells and tasks
 ----
 
-Only `blueprint update` reaches for new versions. Every other command uses the
-pins in `Blueprint.lock` and fails if they no longer match `Blueprint.roc`.
-`blueprint update roc` moves the input named `roc` and keeps every other pin.
+`blueprint update` is the only command that decides anything: it downloads
+the compiler for your system, hashes it, and writes the digest for every
+system to `Blueprint.lock`. Every other command uses that file and fails if
+it no longer matches `Blueprint.roc`. `blueprint run` then downloads nothing:
+the compiler is kept in a per-user store and checked against the lock on
+every use.
+
+None of this starts Nix, and `blueprint requirements` says so:
+
+[source]
+----
+system x86_64-linux
+providers: none
+task version [dev]: programs roc-stable; expects git
+task status [dev]: programs roc-stable; expects git
+----
+
+== Add a tool from Nix
+
+A tool that should be installed, rather than fetched as one program or
+expected of the machine, comes from a Nix package source. Declare the source,
+and write each tool with the source's name. Inside `config`:
+
+[source,roc]
+----
+Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
+Environment("native", [Tools(["nix#zig", "nix#pkg-config"])]),
+Task("zig-version", [Use("native"), Run(["zig", "version"])]),
+----
+
+To give `native` the fetched compiler and `git` as well, start its settings
+with `Extend("dev")`.
+
+The project now declares something Nix resolves, so `blueprint update` needs
+Nix: it pins the source's revision in the same `Blueprint.lock`. After that,
+only what uses the source starts Nix. `blueprint run zig-version` does;
+`blueprint run version` still does not, on a machine with Nix or without.
+`blueprint update nix` moves that one source and keeps every other pin and
+digest.
 
 == Commit the lock, not the generated files
 
 Commit `Blueprint.roc` and `Blueprint.lock`. The lock is the authority: a
-versioned S-expression listing each pinned source and its digest.
+versioned S-expression listing each download with its digest and each pinned
+source with its revision.
 
-`blueprint` generates a flake under `.blueprint/` and writes a `.gitignore`
-there, so that directory never reaches a commit. If your repository already
-tracks `.blueprint/`, untrack it once:
+`blueprint` keeps what it generates under `.blueprint/` and writes a
+`.gitignore` there, so that directory never reaches a commit. If your
+repository already tracks `.blueprint/`, untrack it once:
 
 [source,sh]
 ----
@@ -85,6 +131,8 @@ git rm -r --cached .blueprint
 
 * xref:configuration.adoc#top-level-settings[Write Blueprint.roc] describes
   every setting.
+* xref:without-nix.adoc#the-store-of-downloads[Work without Nix] says where
+  downloads are kept and what a project without Nix can do.
 * xref:builds.adoc#declare-a-build[Build artifacts and run workflows]
   covers sandboxed builds.
 * xref:examples.adoc#run-an-example[The examples] are complete

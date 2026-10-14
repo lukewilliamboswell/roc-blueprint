@@ -12,8 +12,8 @@ roc check Blueprint.roc
 ```
 
 `update` explicitly initializes `Blueprint.lock` (or deliberately updates it).
-Normal builds/workflows preserve that authority. The implicit default package
-source is Auto; the reference Nix consumer selects nixpkgs.
+Normal builds/workflows preserve that authority. The `nix` package source
+is declared in `Blueprint.roc`, and each tool names it.
 
 The task and both builds are Roc scripts in `scripts/`, run as
 `roc-stable scripts/<name>.roc`. The `dev` environment declares that one

@@ -1,11 +1,11 @@
-import FlakeLock
+
 
 ## Checks of the repository's own text that need no compiler and no Nix. Each
 ## returns what is wrong, or "" when nothing is.
 StaticChecks := [].{
 
 	## The Roc source directories `roc fmt --check` covers.
-	formatted = ["blueprint-core", "blueprint-platform", "blueprint-nix", "blueprint-host", "blueprint-cli", "fixtures", "examples"]
+	formatted = ["blueprint-core", "blueprint-platform", "blueprint-nix", "blueprint-cli", "fixtures", "examples"]
 
 	## The directories `roc-stable fmt --check` covers instead. `roc fmt`
 	## rewrites a header's `roc` field to the nightly that runs it, so the
@@ -23,14 +23,14 @@ StaticChecks := [].{
 	}
 
 	## docs/architecture.adoc invariant 7: the CLI reaches a provider through
-	## the Provider contract alone. Its source imports one module of each
-	## provider, names each once, where the provider is selected, and never
+	## the Provider contract alone. Its source imports one module of the
+	## provider, names it once, where the providers are listed, and never
 	## runs a provider's tool itself.
 	provider_contract_problem : Str -> Str
 	provider_contract_problem = |cli_source| {
-		imported = cli_source.split_on("\n").keep_if(|line| line.starts_with("import nix.") or line.starts_with("import host."))
+		imported = cli_source.split_on("\n").keep_if(|line| line.starts_with("import nix."))
 		references = provider_references(cli_source)
-		if imported != ["import host.HostProvider", "import nix.NixProvider"] or references != ["HostProvider", "NixProvider"] {
+		if imported != ["import nix.NixProvider"] or references != ["NixProvider"] {
 			"blueprint-cli/main.roc must use only provider.* (found: ${Str.join_with(imported, ", ")} / ${Str.join_with(references, ", ")})"
 		} else if cli_source.contains("\"nix\"") {
 			"blueprint-cli/main.roc must not run provider tools itself"
@@ -39,9 +39,8 @@ StaticChecks := [].{
 		}
 	}
 
-	## Every use of a member of a provider module: an identifier `Locks` or
-	## `HostProvider`, or one starting `Nix` and made of letters, followed by a
-	## dot.
+	## Every use of a member of a provider module: the identifier `Locks`, or
+	## one starting `Nix` and made of letters, followed by a dot.
 	provider_references : Str -> List(Str)
 	provider_references = |source| {
 		bytes = source.to_utf8()
@@ -62,26 +61,17 @@ StaticChecks := [].{
 		$found
 	}
 
-	## The compiler a released binary fetches comes from the roc-overlay
-	## revision the flake locks: `roc_overlay` in the Nix provider is that
-	## revision's reference with its content hash.
-	overlay_problem : Str, Str -> Str
-	overlay_problem = |flake_lock, provider_source|
-		match FlakeLock.locked(flake_lock, "roc-overlay") {
-			Err(NoPin(_)) => "flake.lock has no GitHub pin for roc-overlay"
-			Ok(pin) => {
-				expected = FlakeLock.ref_with_hash(pin)
-				if constant(provider_source, "roc_overlay") == Ok(expected) "" else "update roc_overlay in NixProvider.roc to ${expected}"
-			}
-		}
+	## The Systems `blueprint` runs on (`supported_host` in the CLI).
+	host_systems = ["x86_64-linux", "aarch64-linux", "aarch64-darwin", "x86_64-windows"]
 
-	## Where there is no Nix, the host provider fetches that compiler from its
-	## release, by a digest recorded for each nightly. There must be one for
-	## the nightly the CLI evaluates with.
-	host_compiler_problem : Str, Str -> Str
-	host_compiler_problem = |compiler_version, provider_source| {
+	## With no compatible compiler at hand, the CLI downloads the nightly it
+	## evaluates with by a digest it records itself. There must be an entry
+	## for that nightly on every System it runs on.
+	bootstrap_problem : Str, Str -> Str
+	bootstrap_problem = |compiler_version, bootstrap_source| {
 		tag = compiler_version.trim()
-		if provider_source.contains("{ tag: \"${tag}\", system: \"x86_64-windows\", sha256: \"") "" else "record the SHA-256 of each ${tag} compiler archive in compilers in blueprint-host/HostProvider.roc"
+		missing = host_systems.keep_if(|system| !bootstrap_source.contains("\t\t\ttag: \"${tag}\",\n\t\t\tsystem: \"${system}\",\n"))
+		if missing.is_empty() "" else "record the download of the ${tag} compiler for ${Str.join_with(missing, ", ")} in compilers in blueprint-cli/Bootstrap.roc"
 	}
 
 	## The scripts run on `roc-stable`, which the flake names as `rocStableTag`.
@@ -213,37 +203,17 @@ letter : U8 -> Bool
 letter = |byte| (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z')
 
 provider_module : Str -> Bool
-provider_module = |name| name == "Locks" or name == "HostProvider" or (name.starts_with("Nix") and name.to_utf8().all(letter))
+provider_module = |name| name == "Locks" or (name.starts_with("Nix") and name.to_utf8().all(letter))
 
 cli_sample =
 	\\import core.Provider
-	\\import host.HostProvider
 	\\import nix.NixProvider
 	\\
-	\\provider_for : [Host, Nix] -> Provider
-	\\provider_for = |choice|
-	\\	match choice {
-	\\		Host => HostProvider.provider
-	\\		Nix => NixProvider.provider
-	\\	}
+	\\providers : List(Provider)
+	\\providers = [NixProvider.provider]
 	\\
-	\\main! = |_| provider_for(Nix).plan("nix develop")
+	\\main! = |_| Realise.plan("nix develop", providers)
 	\\
-
-lock_sample =
-	\\{
-	\\  "nodes": {
-	\\    "roc-overlay": {
-	\\      "locked": {
-	\\        "narHash": "sha256-R4Zj+8w/E1L=",
-	\\        "owner": "roc-lang",
-	\\        "repo": "roc-overlay",
-	\\        "rev": "fb02fef7",
-	\\        "type": "github"
-	\\      }
-	\\    }
-	\\  }
-	\\}
 
 workflow_sample =
 	\\permissions: {}
@@ -262,31 +232,23 @@ expect StaticChecks.tracked_binaries_problem("") == "" and StaticChecks.tracked_
 expect StaticChecks.tracked_binaries_problem("targets/x64musl/libc.a\ntargets/x64musl/crt1.o\n") == "object files, archives and import libraries must not be committed:\ntargets/x64musl/libc.a\ntargets/x64musl/crt1.o"
 
 expect StaticChecks.provider_contract_problem(cli_sample) == ""
-expect StaticChecks.provider_references(cli_sample) == ["HostProvider", "NixProvider"]
+expect StaticChecks.provider_references(cli_sample) == ["NixProvider"]
 
 # A second use of the provider module, or any use of its internals, is refused.
-expect StaticChecks.provider_contract_problem("${cli_sample}other = NixProvider.render\n") == "blueprint-cli/main.roc must use only provider.* (found: import host.HostProvider, import nix.NixProvider / HostProvider, NixProvider, NixProvider)"
-expect StaticChecks.provider_contract_problem("${cli_sample}other = HostProvider.plan\n") != ""
-expect StaticChecks.provider_contract_problem(cli_sample.replace_each("import host.HostProvider\n", "")) != ""
+expect StaticChecks.provider_contract_problem("${cli_sample}other = NixProvider.render\n") == "blueprint-cli/main.roc must use only provider.* (found: import nix.NixProvider / NixProvider, NixProvider)"
 expect StaticChecks.provider_contract_problem("${cli_sample}import nix.Locks\n") != ""
 expect StaticChecks.provider_contract_problem("${cli_sample}decoded = Locks.decode(text)\n") != ""
 expect StaticChecks.provider_contract_problem(cli_sample.replace_each("import nix.NixProvider\n", "")) != ""
 expect StaticChecks.provider_contract_problem(cli_sample.replace_each("NixProvider.provider", "provider_from_elsewhere")) != ""
-expect StaticChecks.provider_contract_problem(cli_sample.replace_each("HostProvider.provider", "provider_from_elsewhere")) != ""
 expect StaticChecks.provider_contract_problem("${cli_sample}run = Cmd.new(\"nix\")\n") == "blueprint-cli/main.roc must not run provider tools itself"
 
 # Only an identifier of its own followed by a dot is a reference.
 expect StaticChecks.provider_references("x = MyNixProvider.y\nz = NixProvider\nw = Nix2.v\nu = unLocks.t\n") == []
-expect StaticChecks.provider_references("a = Locks.decode\nb = NixProvider.plan(Nix.x)\nc = HostProvider.plan\nd = Host.x") == ["Locks", "NixProvider", "Nix", "HostProvider"]
+expect StaticChecks.provider_references("a = Locks.decode\nb = NixProvider.plan(Nix.x)\nc = HostProvider.plan\nd = Host.x") == ["Locks", "NixProvider", "Nix"]
 expect StaticChecks.provider_references("Locks.") == ["Locks"]
 
-expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-lang/roc-overlay/fb02fef7?narHash=sha256-R4Zj%2B8w%2FE1L%3D\"\n") == ""
-expect StaticChecks.overlay_problem(lock_sample, "\troc_overlay = \"github:roc-lang/roc-overlay/00000000?narHash=sha256-R4Zj%2B8w%2FE1L%3D\"\n") == "update roc_overlay in NixProvider.roc to github:roc-lang/roc-overlay/fb02fef7?narHash=sha256-R4Zj%2B8w%2FE1L%3D"
-expect StaticChecks.overlay_problem(lock_sample, "nothing here") != ""
-expect StaticChecks.overlay_problem("{}", "roc_overlay = \"x\"") == "flake.lock has no GitHub pin for roc-overlay"
-
-expect StaticChecks.host_compiler_problem("nightly-2026-10-04-130536d\n", "\t\t{ tag: \"nightly-2026-10-04-130536d\", system: \"x86_64-windows\", sha256: \"1f5a\" },\n") == ""
-expect StaticChecks.host_compiler_problem("nightly-2026-10-11-7d256b9\n", "\t\t{ tag: \"nightly-2026-10-04-130536d\", system: \"x86_64-windows\", sha256: \"1f5a\" },\n") == "record the SHA-256 of each nightly-2026-10-11-7d256b9 compiler archive in compilers in blueprint-host/HostProvider.roc"
+expect StaticChecks.bootstrap_problem("nightly-1\n", StaticChecks.host_systems.map(|system| "\t\t\ttag: \"nightly-1\",\n\t\t\tsystem: \"${system}\",\n").fold("", Str.concat)) == ""
+expect StaticChecks.bootstrap_problem("nightly-2\n", "\t\t\ttag: \"nightly-1\",\n\t\t\tsystem: \"x86_64-linux\",\n\t\t\ttag: \"nightly-2\",\n\t\t\tsystem: \"x86_64-linux\",\n") == "record the download of the nightly-2 compiler for aarch64-linux, aarch64-darwin, x86_64-windows in compilers in blueprint-cli/Bootstrap.roc"
 
 pin_sample = "scripts/test.roc:\troc: \"nightly-1\",\n"
 

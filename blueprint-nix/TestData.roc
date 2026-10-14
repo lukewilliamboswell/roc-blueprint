@@ -56,7 +56,7 @@ TestData :: [].{
 	data : Data
 	data = {
 		systems: ["x86_64-linux"],
-		sources: [],
+		sources: [{ name: "default", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }],
 		inputs: [],
 		environments: [builder],
 		shells: [{ name: "default", environment: "builder" }],
@@ -119,6 +119,9 @@ TestData :: [].{
 		commands: [],
 		configured_tools: [],
 		roc_packages: [],
+		programs: [],
+		environment_programs: [],
+		expects: [],
 		shells: t.shells,
 		tasks: t.tasks,
 		build_sources: t.build_sources,

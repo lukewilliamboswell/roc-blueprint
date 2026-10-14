@@ -6,6 +6,7 @@ import core.Request
 import core.Layout
 import core.Steps
 import core.Provider
+import core.Realise
 import Locks
 import LockJson
 
@@ -21,9 +22,17 @@ NixProvider :: [].{
 	provider = Provider.{
 		name: "nix",
 		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools"],
-		render: |spec| render(spec).map_ok(
-			|contents| [{ path: "flake.nix", contents }],
-		),
+		realises,
+		render: |spec| {
+			# A project with no Nix source has no flake: there is nothing of
+			# it for Nix to build.
+			project = Project.validate(spec)?
+			if project.sources.any(|source| realises(source.provider)) {
+				render(project).map_ok(|contents| [{ path: "flake.nix", contents }])
+			} else {
+				Ok([])
+			}
+		},
 		preflight,
 		realise: |spec, request, target, layout, text| {
 			lock = Locks.from_lock(text).map_err(|m| InvalidLock(m))?
@@ -34,8 +43,17 @@ NixProvider :: [].{
 			locks = Locks.from_nix(spec, layout, text)?
 			Ok(Locks.to_lock(locks.with_trees(layout, trees)?))
 		},
-		compiler: |tag, _target, _layout| Ok(Printed(["nix", "build", "--no-link", "--print-out-paths", "${roc_overlay}#\"${tag}\""])),
 	}
+
+	## Nix supplies a source that names a Nix package set, and no other: a
+	## Guix channel is not its to realise, and neither is a source that names
+	## no set, which nothing declares any longer.
+	realises : Spec.Provider -> Bool
+	realises = |source|
+		match source {
+			NixPackages(_) => True
+			Auto | GuixPackages(_) => False
+		}
 
 	## `nix flake update` resolves every input of the staged flake. Given
 	## names it resolves those and keeps the rest of the lock beside the flake,
@@ -47,14 +65,16 @@ NixProvider :: [].{
 		locals = local_checks(spec, target, layout)?
 		native_lock = "${layout.generated_root}/flake.lock"
 		flake = ["--flake", "path:${layout.generated_root}"]
+		# The machine must have Nix itself: nothing installs it.
+		present = [{ program: "nix", because: resolving(Project.validate(spec)?) }]
 		match update {
-			All => Ok({ files, locals, argv: ["nix", "flake", "update"].concat(flake), native_lock })
+			All => Ok({ present, files, locals, argv: ["nix", "flake", "update"].concat(flake), native_lock })
 			Named(names, lock) => {
 				project = Project.validate(spec)?
 				declared = Locks.inputs(project)?
 				unknown = names.keep_if(|name| !declared.any(|input| input.name == name))
 				if !unknown.is_empty() {
-					return Err("no input named ${Str.join_with(unknown, ", ")}; Blueprint.roc declares ${Str.join_with(declared.map(|input| input.name), ", ")}")
+					return Err(Realise.unknown_names(unknown, declared.map(|input| input.name), Project.unique(project.programs.map(|program| program.name))))
 				}
 				derived = Locks.derive(Locks.from_lock(lock)?, project, layout)?
 				# Nix leaves a lock it has nothing to change in as it found it,
@@ -63,6 +83,7 @@ NixProvider :: [].{
 				kept = LockJson.encode(LockJson.sorted(LockJson.decode(derived.contents)?))
 				local = declared.keep_if(|input| input.ref.starts_with("path:") and !names.contains(input.name)).map(|input| input.name)
 				Ok({
+					present,
 					files: files.append({ path: native_lock, contents: kept }),
 					locals,
 					argv: ["nix", "flake", "update"].concat(names).concat(local).concat(flake),
@@ -72,14 +93,16 @@ NixProvider :: [].{
 		}
 	}
 
-	## The roc-overlay revision that packages the compiler evaluating
-	## Blueprint.roc. scripts/test.roc keeps it equal to flake.lock, so the
-	## fetched compiler is the one this CLI was built and tested with.
-	roc_overlay : Str
-	roc_overlay = "github:roc-lang/roc-overlay/fb02fef7a45ddf115f558c8eaf32bd1ce2f9912f?narHash=sha256-R4ZjP2ceAyOyllFY%2B8wE1LLFVV4qvjw2yix57tzu6g0%3D"
-
-	default_nixpkgs : Str
-	default_nixpkgs = Locks.default_nixpkgs
+	## Why an update starts Nix, for whoever finds it missing: the first
+	## thing the project declares that only Nix resolves.
+	resolving : Spec -> Str
+	resolving = |project|
+		match (project.sources.find_first(|source| realises(source.provider)), project.inputs.first(), Project.resolved_build_sources(project).first()) {
+			(Ok(source), _, _) => "Blueprint.roc declares the Nix source ${source.name}, which Nix resolves"
+			(Err(_), Ok(input), _) => "Blueprint.roc declares the input ${input.name}, which Nix resolves"
+			(Err(_), Err(_), Ok(source)) => "Blueprint.roc declares the source ${source.name}, which Nix locks"
+			(Err(_), Err(_), Err(_)) => "blueprint update resolves pins with Nix"
+		}
 
 	## Rendering supports these target shapes, not cross-compilation or a host
 	## support claim. Nix itself rejects tools unavailable on a declared target.
@@ -110,7 +133,7 @@ NixProvider :: [].{
 		argv : List(Str),
 		contents : Str,
 		action : [Generate, Shell(Str), Run(Str), Build(Str)],
-		roc_packages : List(Spec.RocPackage),
+		needs_nix : Str,
 	}
 
 	## The most text a workflow's distinct requests may render together, flakes
@@ -189,9 +212,7 @@ NixProvider :: [].{
 		read_only = ["--no-update-lock-file", "--no-write-lock-file"]
 		match request {
 			Request.Generate => {
-				$names = project.shells.map(|s| s.environment)
-					.concat(project.tasks.map(|t| t.environment))
-					.concat(project.builds.map(|b| b.environment))
+				$names = whole(project)
 				for build in project.builds {
 					if !$builds.any(|selected| selected.name == build.name) {
 						for dependency in Project.build_closure(project, build.name)? {
@@ -280,13 +301,20 @@ NixProvider :: [].{
 			}
 			_ => {}
 		}
-		# Only a shell or task runs Roc on the host; a build has its own cache.
-		entered = match $action {
-			Shell(_) | Run(_) => $names
-			_ => []
+		# Why this step starts Nix, for whoever finds it missing. Generating
+		# files starts nothing.
+		needs_nix = match $action {
+			Generate => ""
+			Build(name) => "build ${name} runs in the Nix sandbox"
+			Shell(_) | Run(_) => {
+				environment = $names.first() ?? ""
+				match Project.environment_use(project, environment, target).map_ok(|use| use.tools.first()) {
+					Ok(Ok(tool)) => "environment ${environment} takes ${tool.source}#${tool.name} from the Nix source ${tool.source}"
+					_ => "environment ${environment} is entered through Nix"
+				}
+			}
 		}
-		roc_packages = project.roc_packages.keep_if(|entry| entered.contains(entry.environment))
-		Ok({ project, inputs, builds: $builds, argv: $argv, contents, action: $action, roc_packages })
+		Ok({ project, inputs, builds: $builds, argv: $argv, contents, action: $action, needs_nix })
 	}
 
 	## Derive executable data only after complete structure, selected capability,
@@ -320,20 +348,9 @@ NixProvider :: [].{
 	## An isolation observation belongs to one explicit build, never an artifact name.
 	## Recheck supplied local pins on every step, including after source-editing tasks.
 	materialize_plan = |selected, target, layout, derived| {
-		{ builds, argv, contents, action, roc_packages, .. } = selected
+		{ builds, argv, contents, action, needs_nix, .. } = selected
 		base_ref = "path:${layout.generated_root}"
 		var $operations = derived.operations
-		match roc_packages.first() {
-			Ok(first) => {
-				$operations = $operations.append(
-					RocPackages({
-						names: roc_packages.map(|entry| entry.name),
-						locate: locate_roc_packages(layout, first.environment),
-					}),
-				)
-			}
-			Err(_) => {}
-		}
 		match action {
 			Build(_) => {
 				$operations = $operations.append(Isolation({ mnt: caller_mnt, net: caller_net }))
@@ -346,6 +363,10 @@ NixProvider :: [].{
 				path: "${layout.generated_root}/flake.lock",
 				contents: derived.contents,
 			})
+		# The machine must have Nix itself: nothing installs it.
+		if !needs_nix.is_empty() {
+			$operations = $operations.append(Present([{ program: "nix", because: needs_nix }]))
+		}
 		{
 			action,
 			files,
@@ -361,23 +382,6 @@ NixProvider :: [].{
 			),
 		}
 	}
-
-	## Where one environment's locked Roc bundles are unpacked, as JSON. The
-	## staged lock pins every input and may not change, so this reads exactly
-	## the trees the Lock names and fetches one only if it is not yet present.
-	locate_roc_packages : Layout, Str -> List(Str)
-	locate_roc_packages = |layout, environment| [
-		"nix",
-		"eval",
-		"--json",
-		"--no-update-lock-file",
-		"--no-write-lock-file",
-		"path:${layout.generated_root}#${roc_packages_output}.${environment}",
-	]
-
-	## The flake output `locate_roc_packages` evaluates, per environment.
-	roc_packages_output : Str
-	roc_packages_output = "blueprintRocPackages"
 
 	## Placeholders the executor replaces with the caller's namespace identities
 	## and its own executable path when it stages a build's files (see
@@ -429,9 +433,7 @@ NixProvider :: [].{
 		project = Project.validate(spec)?
 		check_layout(project, target, layout)?
 		inputs = Locks.inputs(project)?
-		names = project.shells.map(|s| s.environment)
-			.concat(project.tasks.map(|t| t.environment))
-			.concat(project.builds.map(|b| b.environment))
+		names = whole(project)
 		contents = render_selected(
 			project,
 			names,
@@ -488,10 +490,7 @@ NixProvider :: [].{
 	render = |spec| {
 		project = Project.validate(spec)?
 		_ = Locks.inputs(project)?
-		names = project.shells.map(|s| s.environment)
-			.concat(project.tasks.map(|t| t.environment))
-			.concat(project.builds.map(|b| b.environment))
-		render_selected(project, names, project.builds, Unplanned, None, Unlimited)
+		render_selected(project, whole(project), project.builds, Unplanned, None, Unlimited)
 	}
 
 	## A Shell/Run consumer selects one environment before staging any effects.
@@ -544,7 +543,8 @@ NixProvider :: [].{
 	],
 	RenderBudget -> Try(Str, Str)
 	render_selected = |input_spec, names, builds, copied, staging, budget| {
-		missing = input_spec.unsupported_features(provider.features)
+		# What the Core plans itself is not this provider's to refuse.
+		missing = input_spec.unsupported_features(provider.features.concat(Realise.features))
 		if !missing.is_empty() {
 			return Err("unsupported features: ${Str.join_with(missing, ", ")}")
 		}
@@ -570,6 +570,12 @@ NixProvider :: [].{
 		}
 		environments = spec.environments.keep_if(|e| names.contains(e.name))
 		shells = spec.shells.keep_if(|s| names.contains(s.environment))
+		builder = builder_source(spec)
+		for environment in environments {
+			if source_names(environment, spec.system_tools, spec.commands, spec.configured_tools, builder).is_empty() {
+				return Err("environment ${environment.name} has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
+			}
+		}
 		# Validate all Raw declarations, even aliases outside this request.
 		# Only selected aliases are emitted; flake-level data is always retained.
 		var $shell_raw = []
@@ -595,7 +601,7 @@ NixProvider :: [].{
 		check_attr_names(
 			"the raw flake outputs",
 			$flake_raw.map(|a| a.name),
-			["devShells", "packages", roc_packages_output],
+			["devShells", "packages"],
 		)?
 		for shell in spec.shells {
 			if shell.name.starts_with("blueprint-env-") {
@@ -626,12 +632,12 @@ NixProvider :: [].{
 		match staging {
 			None => {
 				for source in spec.sources.keep_if(
-					|s| environments.any(|e| source_names(e, spec.system_tools, spec.commands, spec.configured_tools).contains(s.name)),
+					|s| environments.any(|e| source_names(e, spec.system_tools, spec.commands, spec.configured_tools, builder).contains(s.name)),
 				) {
 					url = match source.provider {
-						Auto => default_nixpkgs
 						NixPackages(ref) => ref
 						GuixPackages(_) => return Err("Nix cannot use Guix source ${source.name}")
+						Auto => return Err("Nix cannot use source ${source.name}, which names no package set")
 					}
 					$declared = $declared.append({ name: source.name, kind: "packages" })
 					$rendered = append_rendered(
@@ -649,7 +655,7 @@ NixProvider :: [].{
 						"    ${quote(input.name)}.url = ${quote(input.url)};\n",
 					)?
 				}
-				for source in spec.build_sources {
+				for source in Project.resolved_build_sources(spec) {
 					$declared = $declared.append({ name: source.name, kind: "source" })
 					$rendered = append_rendered(
 						$rendered,
@@ -685,7 +691,7 @@ NixProvider :: [].{
 		for environment in environments {
 			$rendered = append_rendered(
 				$rendered,
-				render_environment_definition(environment, spec.system_tools, spec.commands, spec.configured_tools),
+				render_environment_definition(environment, spec.system_tools, spec.commands, spec.configured_tools, builder),
 			)?
 		}
 		$rendered = append_rendered(
@@ -726,10 +732,6 @@ NixProvider :: [].{
 			$rendered = append_rendered($rendered, "        };\n")?
 		}
 		$rendered = append_rendered($rendered, "      };\n")?
-		$rendered = append_rendered(
-			$rendered,
-			render_roc_packages(environments.map(|e| e.name), spec.roc_packages),
-		)?
 		if !builds.is_empty() {
 			$rendered = append_rendered($rendered, render_source(copied))?
 			for system in spec.systems {
@@ -742,7 +744,7 @@ NixProvider :: [].{
 						.map_err(|_| "unknown build environment")?
 					$rendered = append_rendered(
 						$rendered,
-						render_build(build, env, spec.system_tools, spec.commands, spec.configured_tools, spec.roc_packages, system),
+						render_build(build, env, spec.system_tools, spec.commands, spec.configured_tools, spec.roc_packages, system, builder),
 					)?
 				}
 				$rendered = append_rendered(
@@ -772,14 +774,41 @@ NixProvider :: [].{
 		Err(NoAlias) => ""
 	}
 
-	## mkShell comes from the first tool's source, keeping unrelated providers
-	## outside the request. Empty environments use the default source instead.
-	source_names : Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool) -> List(Str)
-	source_names = |environment, system_tools, commands, configured| {
+	## The environments a rendering of the whole project holds: those of its
+	## shells, tasks and builds. In a project with no Nix source, a shell's or
+	## a task's environment that has no tool of a Nix source is left out,
+	## with its shells: nothing of it is Nix's, and the Core enters it without
+	## Nix. That is the case of a project whose only business with Nix is an
+	## input or a build source to lock. A build's environment always stays,
+	## so that a build Nix cannot build is refused by name.
+	whole : Spec -> List(Str)
+	whole = |project| {
+		builder = builder_source(project)
+		buildable = |name|
+			project.environments.find_first(|e| e.name == name)
+				.map_ok(|e| !source_names(e, project.system_tools, project.commands, project.configured_tools, builder).is_empty()) ?? True
+		project.shells.map(|s| s.environment)
+			.concat(project.tasks.map(|t| t.environment))
+			.keep_if(buildable)
+			.concat(project.builds.map(|b| b.environment))
+	}
+
+	## What builds an environment that has no tool of its own to take a
+	## builder from: the first Nix source the project declares, in the order
+	## of Blueprint.roc, whatever it is called. Empty when there is none, and
+	## then such an environment cannot be rendered.
+	builder_source : Spec -> List(Str)
+	builder_source = |spec| spec.sources.keep_if(|source| realises(source.provider)).take_first(1).map(|source| source.name)
+
+	## The sources an environment imports. mkShell, and a build's sandbox
+	## tools, come from the first: the source of the environment's first
+	## tool, on any System, which keeps unrelated providers outside the
+	## request. An environment with no tool at all uses `builder` instead
+	## (see `builder_source`).
+	source_names : Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Str) -> List(Str)
+	source_names = |environment, system_tools, commands, configured, builder| {
 		all_tools = environment.tools.concat(system_tools.keep_if(|entry| entry.environment == environment.name).fold([], |tools, entry| tools.concat(entry.tools))).concat(commands.keep_if(|entry| entry.environment == environment.name).map(|entry| entry.tool)).concat(configured.keep_if(|entry| entry.environment == environment.name).map(|entry| entry.tool))
-		# With no shared tools, the default source builds the shell even on
-		# Systems where none of the scoped tools apply.
-		initial = if environment.tools.is_empty() ["default"] else []
+		initial = if all_tools.is_empty() builder else []
 		all_tools.map(|t| t.source).fold(
 			initial,
 			|seen, name|
@@ -804,10 +833,11 @@ NixProvider :: [].{
 	configured_package = |entry|
 		"(sets.${quote(entry.tool.source)}.${attr_path(tool_path(entry.tool.name))}.override ${value_to_nix(entry.options)})"
 
-	render_environment_definition : Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool) -> Str
-	render_environment_definition = |environment, system_tools, commands, configured| {
-		sources = source_names(environment, system_tools, commands, configured)
-		primary = sources.first() ?? "default"
+	render_environment_definition : Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Str) -> Str
+	render_environment_definition = |environment, system_tools, commands, configured, builder| {
+		sources = source_names(environment, system_tools, commands, configured, builder)
+		# `render_selected` has refused an environment with no source.
+		primary = sources.first() ?? ""
 		overlays = environment.overlays.map(
 			|name| "inputs.${quote(name)}.overlays.default",
 		)
@@ -901,8 +931,8 @@ NixProvider :: [].{
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
 	## The builder is `blueprint __build-runner`, with no shell around it. Its
 	## own tools are absolute paths; argv and metadata enter through JSON.
-	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Spec.RocPackage), Str -> Str
-	render_build = |build, environment, system_tools, commands, configured, roc_packages, system| {
+	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Spec.RocPackage), Str, List(Str) -> Str
+	render_build = |build, environment, system_tools, commands, configured, roc_packages, system, builder| {
 		# A build has no network, so the runner gives Roc a cache of its own
 		# holding these. Other builds' derivations stay as they were.
 		bundles = roc_packages.keep_if(|entry| entry.environment == environment.name).map(roc_package_location)
@@ -914,8 +944,8 @@ NixProvider :: [].{
 				"              ln = \"\${pkgs.coreutils}/bin/ln\";",
 			]
 		}
-		sources = source_names(environment, system_tools, commands, configured)
-		primary = sources.first() ?? "default"
+		sources = source_names(environment, system_tools, commands, configured, builder)
+		primary = sources.first() ?? ""
 		overlays = environment.overlays.map(
 			|name| "inputs.${quote(name)}.overlays.default",
 		)
@@ -982,23 +1012,6 @@ NixProvider :: [].{
 	roc_package_location : Spec.RocPackage -> Str
 	roc_package_location = |entry|
 		"{ name = ${quote(entry.name)}; path = inputs.${quote(entry.source)}.outPath; }"
-
-	## The output a shell or task consumer evaluates to find an environment's
-	## locked bundles. Absent unless a selected environment has Roc packages.
-	render_roc_packages : List(Str), List(Spec.RocPackage) -> Str
-	render_roc_packages = |environments, roc_packages| {
-		entries = environments.keep_if(|name| roc_packages.any(|entry| entry.environment == name)).map(
-			|name| {
-				bundles = roc_packages.keep_if(|entry| entry.environment == name).map(roc_package_location)
-				"        ${quote(name)} = [ ${Str.join_with(bundles, " ")} ];"
-			},
-		)
-		if entries.is_empty() {
-			""
-		} else {
-			lines(["      ${roc_packages_output} = {"]).concat(lines(entries)).concat(lines(["      };"]))
-		}
-	}
 
 	raw_attrs : Spec.Raw -> Try(List({ name : Str, value : Value }), Str)
 	raw_attrs = |r| match r.value {
@@ -1109,10 +1122,15 @@ TestSpec : {
 base : Spec.Environment
 base = { name: "dev", parents: [], tools: [], overlays: [] }
 
+## The one source most fixtures take their tools and their builder from. Its
+## name is not special: it is declared, like any other.
+unstable : Spec.Source
+unstable = { name: "default", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }
+
 simple : TestSpec
 simple = {
 	systems: ["x86_64-linux"],
-	sources: [],
+	sources: [unstable],
 	inputs: [],
 	environments: [base],
 	shells: [{ name: "default", environment: "dev" }],
@@ -1134,6 +1152,9 @@ mk = |t| Spec.{
 	commands: [],
 	configured_tools: [],
 	roc_packages: [],
+	programs: [],
+	environment_programs: [],
+	expects: [],
 	shells: t.shells,
 	tasks: t.tasks,
 	build_sources: [],
@@ -1160,20 +1181,45 @@ foreign = {
 mixed : TestSpec
 mixed = {
 	..simple,
-	sources: [{ name: "guix", provider: GuixPackages("channels") }],
+	sources: [unstable, { name: "guix", provider: GuixPackages("channels") }],
 	environments: [base, foreign],
 }
 
-# An omitted package source supplies mkShell from the provider's default.
+# An environment with no tool takes mkShell from the first Nix source the
+# project declares, whatever that is called.
 expect match NixProvider.render(mk(simple)) {
 	Ok(text) => text.contains(
 		"\"default\".url = \"github:NixOS/nixpkgs/nixos-unstable\";",
-	)
+	) and text.contains("in extra: sets.\"default\".mkShell")
+	Err(_) => False
+}
+expect match NixProvider.render(mk({ ..simple, sources: [{ name: "guix", provider: GuixPackages("channels") }, stable, unstable] })) {
+	Ok(text) => text.contains("\"stable\".url = \"github:NixOS/nixpkgs/nixos-24.05\";") and text.contains("in extra: sets.\"stable\".mkShell") and !text.contains("\"default\".url")
 	Err(_) => False
 }
 
+# With no Nix source declared there is nothing to build such an environment
+# with, and nothing is invented: asked for it alone, the provider refuses,
+# and it has no file to show for the project.
+expect NixProvider.render_environment(mk({ ..simple, sources: [] }), "dev") == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
+expect NixProvider.render_environment(mk({ ..simple, sources: [{ name: "guix", provider: GuixPackages("channels") }] }), "dev") == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
+
+# A rendering of the whole of such a project leaves the environment and its
+# shell out: what remains is what Nix has to lock, here an overlay. A build
+# is never left out: Nix cannot build it, and that is said.
+expect {
+	locking = mk({ ..simple, sources: [], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }], tasks: [{ name: "check", environment: "dev", run: ["true"] }] })
+	building = { ..locking, requires_: ["builds"], builds: [{ name: "app", environment: "dev", inputs: [], needs: [], run: ["true"], output: "out" }] }
+	NixProvider.whole(locking) == [] and NixProvider.whole(mk(simple)) == ["dev"] and NixProvider.whole(building) == ["dev"]
+		and NixProvider.render(locking).map_ok(|text| text.contains("mkShell") or text.contains("\"default\"")) == Ok(False)
+			and NixProvider.update_files(locking, "x86_64-linux", TestData.layout).map_ok(|files| files.map(|file| file.contents.contains("\"roc\" = { url = \"github:roc-lang/roc-overlay\"; flake = true; };"))) == Ok([True])
+				and NixProvider.render(building) == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
+}
+expect (NixProvider.provider.render)(mk({ ..simple, sources: [] })) == Ok([]) and (NixProvider.provider.render)(mk(simple)).map_ok(|files| files.map(|file| file.path)) == Ok(["flake.nix"])
+expect NixProvider.builder_source(mk({ ..simple, sources: [{ name: "guix", provider: GuixPackages("channels") }, stable, unstable] })) == ["stable"] and NixProvider.builder_source(mk({ ..simple, sources: [] })) == []
+
 # `nix develop` takes its own bash from the input named nixpkgs: the flake
-# gives that name to the default source, after the inputs it declares.
+# gives that name to its first Nix source, after the inputs it declares.
 expect match NixProvider.render(mk(simple)) {
 	Ok(text) => text.contains(
 		"  inputs = {\n    \"default\".url = \"github:NixOS/nixpkgs/nixos-unstable\";\n    \"nixpkgs\".follows = \"default\";\n  };\n",
@@ -1190,21 +1236,22 @@ alias_lines = |t| Ok(NixProvider.render(mk(t))?.split_on("\n").keep_if(|line| li
 stable : Spec.Source
 stable = { name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }
 
-# `default` is followed wherever it is declared; without it, the first
-# rendered package source is. An overlay or other input is never followed.
+# The first rendered package source is followed, in the order of
+# Blueprint.roc and whatever its name: one called `default` is not preferred.
+# An overlay or other input is never followed.
 expect {
 	both = {
 		..simple,
-		sources: [stable, { name: "default", provider: Auto }],
+		sources: [stable, unstable],
 		inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }],
-		environments: [{ ..alias_environment("dev", ["stable", "default"]), overlays: ["roc"] }],
+		environments: [{ ..alias_environment("dev", ["default", "stable"]), overlays: ["roc"] }],
 	}
 	only_named = {
 		..simple,
 		sources: [stable, { name: "older", provider: NixPackages("github:NixOS/nixpkgs/nixos-23.11") }],
 		environments: [alias_environment("dev", ["older", "stable"])],
 	}
-	alias_lines(both) == Ok(["    \"nixpkgs\".follows = \"default\";"])
+	alias_lines(both) == Ok(["    \"nixpkgs\".follows = \"stable\";"])
 		and alias_lines(only_named) == Ok(["    \"nixpkgs\".follows = \"stable\";"])
 }
 
@@ -1213,7 +1260,7 @@ expect {
 expect {
 	project = mk({
 		..simple,
-		sources: [stable],
+		sources: [stable, unstable],
 		environments: [alias_environment("dev", ["stable"]), alias_environment("plain", ["default"])],
 		shells: [{ name: "default", environment: "dev" }, { name: "plain", environment: "plain" }],
 	})
@@ -1227,7 +1274,7 @@ expect {
 expect {
 	as_source = {
 		..simple,
-		sources: [{ name: "nixpkgs", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		sources: [unstable, { name: "nixpkgs", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
 		environments: [alias_environment("dev", ["default", "nixpkgs"])],
 	}
 	as_overlay = {
@@ -1241,9 +1288,9 @@ expect {
 			and alias_lines(as_input) == Ok(["    \"nixpkgs\".url = \"github:example/flake\";"])
 }
 
-# The rule itself: package sources only, `default` first, none when the name
-# is taken or there is no Nix package source.
-expect Locks.shell_source([{ name: "assets", kind: "source" }, { name: "stable", kind: "packages" }, { name: "default", kind: "auto" }]) == Ok("default")
+# The rule itself: package sources only, the first declared, none when the
+# name is taken or there is no Nix package source.
+expect Locks.shell_source([{ name: "assets", kind: "source" }, { name: "stable", kind: "packages" }, { name: "default", kind: "packages" }]) == Ok("stable")
 expect Locks.shell_source([{ name: "roc", kind: "overlay" }, { name: "stable", kind: "packages" }, { name: "older", kind: "packages" }]) == Ok("stable")
 expect Locks.shell_source([{ name: "default", kind: "packages" }, { name: "nixpkgs", kind: "source" }]) == Err(NoAlias)
 expect Locks.shell_source([{ name: "default", kind: "overlay" }, { name: "utils", kind: "flake" }, { name: "assets", kind: "source" }]) == Err(NoAlias)
@@ -1352,20 +1399,21 @@ expect {
 	}
 }
 
-# Scoped-only environments still have a shell builder on other Systems.
+# Scoped-only environments still have a shell builder on other Systems: the
+# source of their first tool, not the project's first source.
 expect {
 	project = {
 		..mk(simple),
 		systems: ["x86_64-linux", "aarch64-darwin"],
-		sources: [{ name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		sources: [unstable, stable],
 		environments: [{ ..base, tools: [] }],
 		requires_: ["system-tools"],
 		system_tools: [{ environment: "dev", system: "x86_64-linux", tools: [{ source: "stable", name: "jq" }] }],
 	}
 	match NixProvider.render(project) {
-		Ok(text) => text.contains("\"default\" = import inputs.\"default\"") and
+		Ok(text) => !text.contains("\"default\" = import inputs.\"default\"") and
 			text.contains("\"stable\" = import inputs.\"stable\"") and
-				text.contains("in extra: sets.\"default\".mkShell")
+				text.contains("in extra: sets.\"stable\".mkShell")
 		Err(_) => False
 	}
 }
@@ -1428,15 +1476,11 @@ expect NixProvider.render({ ..mk(simple), configured_tools: [{ environment: "dev
 expect {
 	entry = { environment: "builder", tool: { source: "default", name: "zig" }, options: Value.Attrs([{ name: "debug", value: Value.Bool(True) }]) }
 	build = { name: "app", environment: "builder", inputs: [], needs: [], run: ["true"], output: "out" }
-	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [], overlays: [] }, [], [], [entry, { ..entry, environment: "other" }], [], "x86_64-linux")
+	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [], overlays: [] }, [], [], [entry, { ..entry, environment: "other" }], [], "x86_64-linux", [])
 	rendered.split_on("(sets.\"default\".\"zig\".override { \"debug\" = true; })").len() == 2
 }
 
-# The evaluating compiler is fetched by tag from the pinned overlay revision.
-expect (NixProvider.provider.compiler)("nightly-2026-10-04-130536d", "x86_64-linux", Layout.{ project_root: "/project", workspace: "/project/.blueprint", generated_root: "/project/.blueprint", lock_path: "/project/Blueprint.lock" }) == Ok(Printed(["nix", "build", "--no-link", "--print-out-paths", "${NixProvider.roc_overlay}#\"nightly-2026-10-04-130536d\""]))
-expect NixProvider.roc_overlay.starts_with("github:roc-lang/roc-overlay/") and NixProvider.roc_overlay.contains("?narHash=sha256-")
-
-# Auto tool syntax is checked for the selected provider before any effects.
+# A tool name that is not a Nix attribute path is refused before any effects.
 expect NixProvider.render(
 	mk({
 		..simple,
@@ -1591,7 +1635,7 @@ expect {
 	project = TestData.project(TestData.data)
 	lock = Locks.to_lock(plan_locks?)
 	renamed = { ..project, build_sources: [{ name: "other", ref: "path:./assets" }] }
-	(NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, Named(["assets", "nope"], lock)) == Err("no input named nope; Blueprint.roc declares default, assets")
+	(NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, Named(["assets", "nope"], lock)) == Err("no input or program named nope; Blueprint.roc declares the inputs default, assets and no program")
 		and (NixProvider.provider.resolve)(renamed, "x86_64-linux", TestData.layout, Named(["other"], lock)).is_err()
 }
 
@@ -1690,6 +1734,7 @@ expect match plan_fixture(Request.Build("app")) {
 			net: "@blueprint-caller-net-namespace@",
 		}),
 		Runner({ executable: "@blueprint-caller-executable@", system: "x86_64-linux" }),
+		Present([{ program: "nix", because: "build app runs in the Nix sandbox" }]),
 	] and plan.files.map(|file| file.path) == [
 		"/generated/flake.nix",
 		"/generated/flake.lock",
@@ -1829,7 +1874,7 @@ expect match plan_fixture(
 		"--flag",
 		"a\nb",
 	] and plan.artifacts.is_empty()
-		and plan.operations.len() == 1 and plan.files.len() == 2
+		and plan.operations == [VerifyTree({ path: "/project/assets", digest: assets_tree }), Present([{ program: "nix", because: "environment builder takes default#python3 from the Nix source default" }])] and plan.files.len() == 2
 	_ => False
 }
 
@@ -1848,11 +1893,11 @@ expect match plan_fixture(Request.Shell("default")) {
 
 # A staged plan declares every input, so its alias does not depend on the
 # request: a task in an environment that uses only `stable` still follows
-# `default`, and the working lock carries the matching edge.
+# the project's first source, and the working lock carries the matching edge.
 expect {
 	data = {
 		..TestData.data,
-		sources: [stable, { name: "default", provider: Auto }],
+		sources: [unstable, stable],
 		environments: [TestData.builder, alias_environment("pinned", ["stable"])],
 		tasks: TestData.data.tasks.append({ name: "pinned", environment: "pinned", run: ["git"] }),
 	}
@@ -1864,13 +1909,14 @@ expect {
 	locks = resolved(project, native)?
 	plan = NixProvider.plan(project, Request.Run("pinned", []), "x86_64-linux", TestData.layout, locks)?
 	match plan.steps.first().map_ok(|step| step.files) {
-		Ok([flake, lock]) => flake.contents.contains("    \"default\" = { url = \"github:NixOS/nixpkgs/nixos-unstable\"; flake = true; };\n    \"assets\" = { url = \"path:/project/assets\"; flake = false; };\n    \"nixpkgs\".follows = \"default\";\n  };\n")
+		Ok([flake, lock]) => flake.contents.contains("    \"stable\" = { url = \"github:NixOS/nixpkgs/nixos-24.05\"; flake = true; };\n    \"assets\" = { url = \"path:/project/assets\"; flake = false; };\n    \"nixpkgs\".follows = \"default\";\n  };\n")
 			and lock.path == "/generated/flake.lock" and lock.contents.contains("\"nixpkgs\":[\"default\"]")
 		_ => False
 	}
 }
-# Roc packages: `packages` locks one bundle, `scripts` inherits it and adds
-# another, and `builder` has none.
+# Roc packages: `packages` has one bundle, `scripts` inherits it and adds
+# another, and a build runs in `scripts`. `reports` has a third, which only a
+# task uses, and `builder` has none.
 roc_project : Spec
 roc_project = {
 	..TestData.project({
@@ -1879,13 +1925,15 @@ roc_project = {
 			TestData.builder,
 			{ name: "packages", parents: [], tools: [], overlays: [] },
 			{ name: "scripts", parents: ["packages"], tools: [], overlays: [] },
+			{ name: "reports", parents: [], tools: [], overlays: [] },
 		],
 		shells: [{ name: "default", environment: "builder" }, { name: "scripts", environment: "scripts" }],
-		tasks: TestData.data.tasks.append({ name: "script", environment: "scripts", run: ["roc", "main.roc"] }),
+		tasks: TestData.data.tasks.concat([{ name: "script", environment: "scripts", run: ["roc", "main.roc"] }, { name: "report", environment: "reports", run: ["roc", "report.roc"] }]),
 		build_sources: [
 			{ name: "assets", ref: "path:./assets" },
 			{ name: "roc-abc", ref: "tarball+https://example.test/abc.tar.zst" },
 			{ name: "roc-def", ref: "tarball+https://example.test/def.tar.zst" },
+			{ name: "roc-ghi", ref: "tarball+https://example.test/ghi.tar.zst" },
 		],
 		builds: [TestData.library, { ..TestData.library, name: "script", environment: "scripts" }],
 		requires_: ["sources", "builds", "roc-packages"],
@@ -1893,6 +1941,7 @@ roc_project = {
 	roc_packages: [
 		{ environment: "packages", name: "abc", source: "roc-abc" },
 		{ environment: "scripts", name: "def", source: "roc-def" },
+		{ environment: "reports", name: "ghi", source: "roc-ghi" },
 	],
 }
 
@@ -1907,66 +1956,34 @@ roc_plan = |request| {
 	NixProvider.plan(roc_project, request, "x86_64-linux", TestData.layout, locks)
 }
 
-roc_packages_output : Str
-roc_packages_output = Str.join_with(
-	[
-		"      blueprintRocPackages = {",
-		"        \"scripts\" = [ { name = \"abc\"; path = inputs.\"roc-abc\".outPath; } { name = \"def\"; path = inputs.\"roc-def\".outPath; } ];",
-		"      };",
-		"",
-	],
-	"\n",
-)
+# Nix locks a bundle only for a build, which has no network: the two a build's
+# environment has are inputs, and the one a task alone uses is not. Nothing
+# is resolved, staged or evaluated for that one.
+expect Locks.inputs(roc_project).map_ok(|inputs| inputs.map(|input| input.name)) == Ok(["default", "assets", "roc-abc", "roc-def"])
 
-# A task or shell whose environment has Roc packages publishes them after its
-# verified files are staged: every inherited bundle, located from the staged
-# lock alone.
-expect {
-	publish = RocPackages({
-		names: ["abc", "def"],
-		locate: [
-			"nix",
-			"eval",
-			"--json",
-			"--no-update-lock-file",
-			"--no-write-lock-file",
-			"path:/generated#blueprintRocPackages.scripts",
-		],
-	})
-	verify = VerifyTree({ path: "/project/assets", digest: assets_tree })
-	match (roc_plan(Request.Run("script", ["extra"])), roc_plan(Request.Shell("scripts"))) {
-		(Ok({ steps: [task] }), Ok({ steps: [shell] })) =>
-			task.operations == [verify, publish] and shell.operations == [verify, publish]
-				and task.argv.take_last(3) == ["roc", "main.roc", "extra"]
-					and task.files.first().map_ok(|file| file.contents.contains(roc_packages_output)) == Ok(True)
-						and shell.files.first().map_ok(|file| file.contents.contains(roc_packages_output)) == Ok(True)
-		_ => False
-	}
-}
-
-# An environment without Roc packages costs nothing: no operation, and no
-# output in its flake, even though the project locks bundles for another.
-expect [Request.Run("check", []), Request.Shell("default")].all(
+# A task or a shell is given nothing of its Roc packages by this provider:
+# the Core fetches them, the same with or without Nix. The step has no
+# operation for them, its flake no output for them, and no input for a bundle
+# no build uses.
+expect [Request.Run("script", ["extra"]), Request.Shell("scripts"), Request.Run("report", []), Request.Run("check", []), Request.Shell("default")].all(
 	|request|
 		match roc_plan(request) {
-			Ok({ steps: [plan] }) => plan.operations == [VerifyTree({ path: "/project/assets", digest: assets_tree })]
-				and plan.files.first().map_ok(|file| file.contents.contains("blueprintRocPackages") or file.contents.contains("roc_packages")) == Ok(False)
+			Ok({ steps: [plan] }) => {
+				flake = plan.files.first().map_ok(|file| file.contents) ?? ""
+				plan.operations.take_first(1) == [VerifyTree({ path: "/project/assets", digest: assets_tree })] and plan.operations.len() == 2
+					and !flake.contains("blueprintRocPackages") and !flake.contains("roc_packages") and !flake.contains("roc-ghi")
+						and flake.contains("    \"roc-abc\" = { url = \"tarball+https://example.test/abc.tar.zst\"; flake = false; };\n")
+			}
 			_ => False
 		},
 )
+expect roc_plan(Request.Run("script", ["extra"])).map_ok(|plan| plan.steps.map(|step| step.argv.take_last(3))) == Ok([["roc", "main.roc", "extra"]])
 
-# A build publishes nothing on the host. Its specification names the bundles
-# and the `ln` that links them into the build's own cache, and a build whose
-# environment has none keeps the specification it always had.
-expect match (roc_plan(Request.Build("script")), roc_plan(Request.Build("library")), roc_plan(Request.Generate)) {
-	(Ok({ steps: [script] }), Ok({ steps: [library] }), Ok({ steps: [generate] })) => {
-		host_only = |step| !step.operations.any(
-			|operation|
-				match operation {
-					RocPackages(_) => True
-					_ => False
-				},
-		)
+# A build's specification names its environment's bundles and the `ln` that
+# links them into the build's own cache, and a build whose environment has
+# none keeps the specification it always had.
+expect match (roc_plan(Request.Build("script")), roc_plan(Request.Build("library"))) {
+	(Ok({ steps: [script] }), Ok({ steps: [library] })) => {
 		with_packages = Str.join_with(
 			[
 				"              chmod = \"\${pkgs.coreutils}/bin/chmod\";",
@@ -1979,27 +1996,24 @@ expect match (roc_plan(Request.Build("script")), roc_plan(Request.Build("library
 		)
 		without = "              chmod = \"\${pkgs.coreutils}/bin/chmod\";\n            };\n"
 		contents = |step| step.files.first().map_ok(|file| file.contents) ?? ""
-		host_only(script) and host_only(library) and host_only(generate)
-			and contents(script).contains(with_packages) and !contents(script).contains(without)
-				and contents(library).contains(without) and !contents(library).contains("roc_packages")
-					and !contents(library).contains("bin/ln")
+		contents(script).contains(with_packages) and !contents(script).contains(without)
+			and contents(library).contains(without) and !contents(library).contains("roc_packages")
+				and !contents(library).contains("bin/ln")
 	}
 	_ => False
 }
 
-# Inspection renders the locked bundles and every environment's output.
+# Inspection renders the bundles a build locks, and no output of its own for
+# Roc packages.
 expect match NixProvider.render(roc_project) {
 	Ok(text) => text.contains("    \"roc-abc\" = { url = \"tarball+https://example.test/abc.tar.zst\"; flake = false; };\n")
-		and text.contains(roc_packages_output)
+		and !text.contains("blueprintRocPackages") and !text.contains("roc-ghi")
 			and !text.contains("shellHook")
 	Err(_) => False
 }
 
-# The output name belongs to the provider.
-expect {
-	raw = { backend: "nix", target: "flake", value: Value.Attrs([{ name: "blueprintRocPackages", value: Value.Int(1) }]) }
-	rejects({ ..simple, requires_: ["raw"], raw: [raw] }, "which the Nix provider writes itself")
-}
+# A project whose Roc packages no build uses asks Nix for none of them.
+expect Locks.inputs({ ..roc_project, builds: [TestData.library] }).map_ok(|inputs| inputs.map(|input| input.name)) == Ok(["default", "assets"])
 
 # Generate produces no provider command or observation and never writes authority.
 expect match plan_fixture(Request.Generate) {
@@ -2100,7 +2114,7 @@ expect {
 	}
 	data = {
 		..TestData.data,
-		sources: [{ name: "guix", provider: GuixPackages("channels") }],
+		sources: [unstable, { name: "guix", provider: GuixPackages("channels") }],
 		environments: [TestData.builder, foreign_builder],
 		builds: [
 			TestData.application,
@@ -2129,7 +2143,7 @@ expect {
 
 # Reordering declarations preserves authority identity; overlay order does not.
 expect {
-	url = Locks.default_nixpkgs
+	url = "github:NixOS/nixpkgs/nixos-unstable"
 	data = {
 		..TestData.data,
 		inputs: [
@@ -2719,7 +2733,7 @@ expect {
 expect {
 	data = {
 		..TestData.workflow_data,
-		sources: [{ name: "guix", provider: GuixPackages("channels") }],
+		sources: [unstable, { name: "guix", provider: GuixPackages("channels") }],
 		environments: [TestData.builder, foreign],
 		tasks: TestData.data.tasks.append(
 			{ name: "foreign", environment: "foreign", run: ["python"] },
@@ -2769,7 +2783,7 @@ expect {
 expect {
 	project = TestData.project({
 		..TestData.workflow_data,
-		sources: [{ name: "guix", provider: GuixPackages("channels") }],
+		sources: [unstable, { name: "guix", provider: GuixPackages("channels") }],
 		environments: [TestData.builder, foreign],
 		builds: [
 			TestData.application,
@@ -2913,7 +2927,7 @@ expect ["empty", "nothing"].all(
 expect {
 	project = TestData.project({
 		..TestData.workflow_data,
-		sources: [{ name: "guix", provider: GuixPackages("channels") }],
+		sources: [unstable, { name: "guix", provider: GuixPackages("channels") }],
 		environments: [TestData.builder, foreign],
 	})
 	locks = resolved(project, native_lock)?
@@ -3038,4 +3052,61 @@ expect {
 			).is_err()
 		},
 	)
+}
+
+# The project of TestData, whose one environment also fetches a program.
+fetching : Spec
+fetching = {
+	whole = TestData.project(TestData.data)
+	{
+		..whole,
+		requires_: whole.requires_.concat(["programs", "expects"]),
+		programs: [{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool"], unpack: File, path: "" }],
+		environment_programs: [{ environment: "builder", programs: ["tool"] }],
+		expects: [{ environment: "builder", programs: ["git"] }],
+	}
+}
+
+# Nix renders and plans its own part of an environment: what the environment
+# fetches or expects is the Core's, and adds nothing to the flake or the plan.
+expect {
+	whole = TestData.project(TestData.data)
+	locks = plan_locks?
+	NixProvider.render(fetching).is_ok() and NixProvider.render(fetching) == NixProvider.render(whole)
+		and [Request.Shell("default"), Request.Run("check", []), Request.Generate].all(
+			|request| NixProvider.plan(fetching, request, "x86_64-linux", TestData.layout, locks).map_ok(|steps| steps.steps) == NixProvider.plan(whole, request, "x86_64-linux", TestData.layout, locks).map_ok(|steps| steps.steps),
+		)
+}
+
+# A step that starts Nix says that the machine must have it, and why, so that
+# one without it is told before anything happens. Generating files starts
+# nothing.
+expect {
+	locks = plan_locks?
+	last = |request| NixProvider.plan(TestData.project(TestData.data), request, "x86_64-linux", TestData.layout, locks).map_ok(|steps| steps.steps.map(|step| step.operations.last()))
+	last(Request.Run("check", [])) == Ok([Ok(Present([{ program: "nix", because: "environment builder takes default#python3 from the Nix source default" }]))])
+		and last(Request.Build("app")).map_ok(|steps| steps.last()) == Ok(Ok(Ok(Present([{ program: "nix", because: "build app runs in the Nix sandbox" }]))))
+			and NixProvider.plan(TestData.project(TestData.data), Request.Generate, "x86_64-linux", TestData.layout, locks).map_ok(
+				|steps| steps.steps.any(
+					|step| step.operations.any(
+						|operation|
+							match operation {
+								Present(_) => True
+								_ => False
+							},
+					),
+				),
+			) == Ok(False)
+}
+
+expect NixProvider.realises(NixPackages("github:NixOS/nixpkgs/nixos-unstable")) and !NixProvider.realises(GuixPackages("https://git.savannah.gnu.org/git/guix.git")) and !NixProvider.realises(Auto)
+expect (NixProvider.provider.realises)(NixPackages("github:NixOS/nixpkgs/nixos-unstable")) and !(NixProvider.provider.realises)(Auto)
+
+# An update says the machine must have Nix, and why: the first thing declared
+# that only Nix resolves. A named update asks the same.
+expect {
+	project = TestData.project(TestData.data)
+	(NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, All).map_ok(|resolution| resolution.present) == Ok([{ program: "nix", because: "Blueprint.roc declares the Nix source default, which Nix resolves" }])
+		and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }) == "Blueprint.roc declares the input roc, which Nix resolves"
+			and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [] }) == "Blueprint.roc declares the source assets, which Nix locks"
 }

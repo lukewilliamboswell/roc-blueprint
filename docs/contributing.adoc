@@ -14,6 +14,7 @@ blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
   targets/               linker inputs, none committed: libhost.a is built, the rest fetched (see its README)
 blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
   Project.roc            pure normalization, references and provider capability checks
+  Realise.roc            pure planning of a request: what the Core supplies, and what it asks of a provider
   fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip, lock-parse
 blueprint-nix/           importable pure Nix provider (depends only on blueprint-core)
   NixProvider.roc        shared pure request planning and flake rendering
@@ -21,10 +22,13 @@ blueprint-nix/           importable pure Nix provider (depends only on blueprint
   tests/                 Spec fixtures and golden flakes
 blueprint-cli/           the blueprint CLI (basic-cli + weaver); as `blueprint __build-runner`
                          it is also each build's in-derivation argv/output/isolation check
+  Store.roc, Download.roc  the per-user store of downloads and the HTTPS client that fills it
+  Bootstrap.roc          the recorded download of the compiler that reads a Blueprint.roc
+  Published.roc          what a release publishes as the digest of an asset, asked by update
 fixtures/consumer/       independent consumer of the Spec and Nix packages
 fixtures/overlays/       overlay flakes for scripts/test_scenarios.roc
 examples/all-settings/   environments, sources, scoped overlays, tasks and Raw
-examples/composition/    imported pure module returning reusable task settings
+examples/composition/    imported pure modules: reusable task settings and a program's recipe
 examples/artifacts/      runnable source/dependency/workflow example and its Roc scripts
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
 scripts/                 Roc scripts, run from the repository root; their modules are in scripts/src/
@@ -32,7 +36,7 @@ scripts/                 Roc scripts, run from the repository root; their module
   link_inputs.roc        fetch or check the platform's linker inputs
   bundle.roc             bundle core and the platform into dist/ and smoke-test the pair
   build_release.roc      cross-build the CLI and its smoke-test program for each released system
-  smoke_binary.roc       run a built CLI with no Roc and no Python of its own
+  smoke_binary.roc       run a built CLI with no Roc and no Python of its own; with --no-nix, with no Nix either
   fuzz.roc               replay or fuzz the roc-fuzz targets
   release_notes.roc      render a release's notes from docs/releases/
   package_examples.roc   archive the examples with a release's platform URL
@@ -49,7 +53,7 @@ flake.nix                builds blueprint with the pinned Roc; the development s
 ----
 
 The local platform and CLI share `blueprint-core`, including
-`Project.validate`. The Spec wire format is major 2 (currently 2.6); published
+`Project.validate`. The Spec wire format is major 2 (currently 2.7); published
 major-1 bundles are not compatible. The architecture, terminology (Spec,
 Provider, Lock, stages) and invariants are defined in
 xref:architecture.adoc#purpose[the architecture chapter]; keep it in sync with changes.
@@ -87,7 +91,7 @@ archive by hash, so its sandboxed build needs no network.
 [source,sh]
 ----
 scripts/link_inputs.roc fetch             # the musl runtime files the platform links
-(cd blueprint-platform && zig build)      # targets/<target>/libhost.a for all four hosts
+(cd blueprint-platform && zig build)      # libhost.a or host.lib for all five hosts
 roc test blueprint-core/main.roc      # Spec round trips and format tests
 roc test blueprint-cli/main.roc             # the CLI's, the Nix provider's and every core expect
 roc build blueprint-cli/main.roc --output=./blueprint
@@ -112,10 +116,12 @@ https://github.com/lukewilliamboswell/roc-blueprint/blob/main/blueprint-platform
 
 `scripts/test.roc` is the full CI entry point. Its groups are `static`
 (formatting; no tracked object file, archive or import library; the CLI's use of
-the Provider contract; `roc_overlay` against `flake.lock`; each workflow's
+the Provider contract; the compiler downloads `Bootstrap.roc` records, one
+for each system the CLI runs on; each workflow's
 permissions and checkouts; the release notes chapter against the notes files;
 the flake's list of core modules and its version), `unit` (the platform's, the scripts', the CLI's
-and the consumer's `expect`s and the configuration fixtures), `cli`,
+and the consumer's `expect`s, the configuration fixtures and the Roc the
+manual shows), `cli`,
 `scenarios` (`test_scenarios.roc`, `test_roc_packages.roc` and the golden
 flakes parsed by Nix), `builds` (`test_builds.roc` and `test_workflows.roc`),
 `package` (the flake's package and development shell, the packaged CLI building
@@ -139,6 +145,10 @@ surfaces at compile time, and that settings composed from an imported module
 emit the same Spec as inline ones. Every other rule of `Project.validate` has an
 `expect` in `blueprint-core/Project.roc`. The bundle gate repeats a few of the
 fixtures against the served platform, plus the all-settings example.
+It then compiles the manual's Roc (`scripts/src/DocSnippets.roc`): every
+`[source,roc]` block of `docs/` and `docs/releases/`, and the first program of
+the Get started chapter, against the platform in the working tree; see
+<<write-the-manual>>.
 `scripts/test_cli.roc` exercises the built CLI with and without a
 configuration, checks validation and help/version handling, and records Nix
 argv to verify shell selection and task arguments without entering a shell.
@@ -185,17 +195,41 @@ Roc scripts run as `roc-stable` through `RocPackages`. Their inputs are pinned
 in `fixtures/consumer/inputs.lock` and `fixtures/roc-inputs.lock.json`; one
 first step fetches them and every later Nix call is recorded and run with
 `--offline`. See https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/builds/README.md[fixtures/builds/README.md].
-`scripts/test_update.roc` checks local-source preflight, authority observation and
-concurrent publication. `scripts/test_isolation.roc` checks what a build stages
+`scripts/test_update.roc` checks local-source preflight, authority observation,
+concurrent publication, named updates and what a lock from blueprint 0.5 is
+told. `scripts/test_isolation.roc` checks what a build stages
 about its caller: the namespace identities, the CLI's own path as the runner,
 and the refusals when either cannot be used. Both put a failing
 `python3` on `PATH`: the CLI itself must not use a host Python.
-`scripts/test_host.roc` runs the provider Windows uses, on this machine:
-`BLUEPRINT_PROVIDER=host` selects it in place of Nix, and takes no other
-value. curl, tar, `roc-stable` and zig are stubs, so it shows the order of
-effects, each argv, what is refused and that a token is never an argument or
-printed. It shows nothing about Windows itself; see
-xref:maintaining.adoc#what-remains-for-windows[What remains for Windows].
+`scripts/test_programs.roc` runs projects whose environments fetch programs
+and expect tools of the machine. Nothing selects how they run but their own
+`Blueprint.roc`: one with no Nix tool must never start the `nix` stub. The
+downloads come from a server the script runs on the loopback address, the
+store is a directory of the test's own, and the lock entries are written by
+the test. It checks what is kept in the store and under which names, that a
+second run makes no request, that a stored artifact with other bytes is
+removed with its tree and fetched again, two runs at once from an empty store,
+every refusal (a missing expected program, a program the lock does not hold or
+holds under other URLs, another length or digest, each URL's failure, an
+archive with a link out of its tree), the caller's own shell, and parity: the
+same task with one Nix tool added prints the same from the same store file,
+and only then starts Nix. Its last cases let `blueprint update` write the
+lock: with no `nix` on `PATH` for a project that only fetches, with nothing
+asked when nothing changed, for a named program alone, after a URL list
+changed, and for release assets. A download URL must be `+https://+`, with one
+exception made for these tests: `+http://127.0.0.1:<port>/+`, which no other
+machine can serve. A loopback URL of the shape
+`/<owner>/<repo>/releases/download/<tag>/<asset>` is a release asset, and the
+same server describes its release at `/repos/<owner>/<repo>/releases/tags/<tag>`,
+as GitHub's API does for a GitHub URL. That is the whole seam: no variable
+or flag redirects the question. Through it a digest computed here is compared
+with a published one, another system's is recorded unfetched, a published
+digest that differs stops the update, a question that is refused or answered
+with something else leaves every digest computed and says so once, and a
+download missing for one system says how to declare that.
+It ends with `blueprint requirements`, asked with no `nix`, no lock, an empty
+store and no server: the report is the same, a declared and unused Nix source
+requires no provider, and nothing is written.
 These are Roc scripts, run from the repository root with `./blueprint`
 built; `ROC` names the compiler. They replace every tool the CLI runs with one
 program, `scripts/stubs/tool.roc`, which each test builds once and installs
@@ -207,14 +241,52 @@ header lists what each name does. `scripts/src/CliHarness.roc` holds what the
 three tests share.
 `scripts/test_roc_packages.roc` is a Roc script, like `link_inputs.roc`. It
 runs the real CLI and Nix with a Roc package cache of its own in a temporary
-directory, and refuses to run if that directory lies inside `~/.cache`. It
-checks publication into an empty cache, that a second run writes nothing, that
-an existing package is left alone and an incomplete one replaced, that failures
-leave nothing behind, and that a sandboxed build resolves its bundles with no
-network while the same build without one of them does not.
+directory, and refuses to run if that directory lies inside `~/.cache`. A
+task's bundles are downloaded by `blueprint` itself from the releases their
+URLs name. It checks publication into an empty cache, that a second run
+writes nothing, that an existing package is left alone and an incomplete one
+replaced, that failures leave nothing behind, that a project with no build
+locks no bundle and its task still downloads them, and that a sandboxed build
+resolves its bundles from the lock with no network while the same build
+without one of them does not.
 Normal execution tests explicitly initialize authority with `update` first.
 The complete artifacts example is executed in a temporary copy by
 the workflow suite (`scripts/test_workflows.roc`).
+
+== The job with no Nix
+
+Every suite above runs where Nix is installed, and replaces it with a stub
+where it must not be started. One job of `.github/workflows/ci.yml` runs on
+machines that have no Nix at all: `no-nix`, on `ubuntu-latest`,
+`ubuntu-24.04-arm` and `macos-latest`, with the binaries and platform hosts
+the `build` job produced and no step that installs anything. It runs
+`dist/smoke-<system> --no-nix dist/blueprint-<system>`, the `NoNix` mode of
+`scripts/src/SmokeBinary.roc`, which:
+
+* refuses to start when `nix` is on `PATH`, and leaves no `roc` there;
+* writes a project whose compiler is
+  `Programs([Fetch("roc-stable", Recipes.roc_nightly(...))])` of the nightly
+  in `blueprint-cli/compiler-version`, with `Expect(["git"])` and the Roc
+  packages of a basic-cli script, against this checkout's platform;
+* gives the binary a store and a Roc package cache of its own, empty;
+* runs `blueprint update` and requires that the compiler was fetched exactly
+  once, for reading `Blueprint.roc` and as `roc-stable` together;
+* requires that `blueprint requirements --json` names no provider;
+* runs the script as a task, which the fetched compiler builds, links and
+  runs. On macOS that is the test that `roc` finds the `darwin` directory of
+  its archive through the link it is started by;
+* runs the task again and requires that nothing is downloaded, and that no
+  flake was generated.
+
+It reaches GitHub for the nightly and the Roc packages, and asks GitHub's API
+once for the nightly's published digests; a refusal there is a notice, not a
+failure. To run it on a machine that has Nix, hide Nix from `PATH`:
+
+[source,sh]
+----
+roc build scripts/smoke_binary.roc --output=/tmp/smoke
+env PATH=/usr/bin:/bin /tmp/smoke --no-nix ./blueprint
+----
 
 == Write the manual
 
@@ -237,6 +309,23 @@ python3 ../roc-automation/actions/build-docs/build_docs.py --workspace . --pdf-f
 
 The site is `.docs-out/site/` and the PDF `.docs-out/roc-blueprint.pdf`;
 neither is committed.
+
+The manual describes the tool as it is: one recommended way to do each thing,
+in the present tense. What changed between versions belongs in the release
+notes, and what is unfinished in an issue.
+
+The Roc in the manual is compiled by `scripts/test.roc unit`, so a block must
+be one of four things:
+
+* a whole `Blueprint.roc`, starting `app [`, whose platform is written as a
+  placeholder;
+* settings as they stand inside `config`, complete enough to check by
+  themselves: an environment a task uses is in the block. A tool of the
+  source `nix` may be written without the `Packages("nix", ...)` line;
+* `[source,roc,snippet=refused]`, settings the compiler must refuse, for a
+  mistake the text explains;
+* `[source,roc,snippet=unchecked]`, which is not compiled: use it only for a
+  line of some other program or for settings that cannot stand alone.
 
 * Each chapter opens with one `= Title` and is also rendered as a page of its
   own, so it cannot rely on attributes set in `index.adoc`.

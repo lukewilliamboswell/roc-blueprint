@@ -26,12 +26,17 @@ CliTest := [].{
 		result
 	}
 
+	## The package source those settings take their one tool from.
+	source : Str
+	source = "Packages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),"
+
 	## The settings most cases start from: one environment, two shells, a task.
 	valid : Str
 	valid = Str.join_with(
 		[
 			"	Name(\"argument-test\"),",
-			"	Environment(\"ci\", [Tools([\"git\"])]),",
+			"	${source}",
+			"	Environment(\"ci\", [Tools([\"default#git\"])]),",
 			"	Shell(\"default\", [Use(\"ci\")]),",
 			"	Shell(\"ci\", [Use(\"ci\")]),",
 			"	Task(\"echo-args\", [Run([\"printf\", \"%s\\n\", \"configured argument\"]), Use(\"ci\")]),",
@@ -59,15 +64,16 @@ CliTest := [].{
 	wire : Str
 	wire =
 		\\((format ((major 2) (minor 0))) (name "wire")
+		\\ (requires ("explicit-sources"))
 		\\ (systems ("x86_64-linux"))
-		\\ (sources (((name "default") (provider Auto))))
+		\\ (sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
 		\\ (environments (((name "ci") (parents ()) (tools ()) (overlays ()))))
 		\\ (shells (((name "default") (environment "ci"))))
 		\\ (tasks (((name "echo-args") (environment "ci") (run ("true"))))))
 
 	## The same Spec with a workflow, in the minor that introduced them.
 	workflow_wire : Str
-	workflow_wire = "${wire.replace_each("(minor 0)", "(minor 2)").drop_suffix(")")}(requires (\"workflows\")) (workflows (((name \"ci\") (steps ((RunTask \"echo-args\" ())))))))"
+	workflow_wire = "${wire.replace_each("(minor 0)", "(minor 2)").replace_each("(requires (\"explicit-sources\"))", "(requires (\"explicit-sources\" \"workflows\"))").drop_suffix(")")}(workflows (((name \"ci\") (steps ((RunTask \"echo-args\" ())))))))"
 }
 
 Test : { bench : CliHarness.Bench, env : List((OsStr, OsStr)), pin : Str }
@@ -228,11 +234,10 @@ cases! = |bench| {
 	Script.pass!("ROC missing, incompatible or failing: refused before any evaluation, naming ${pin}; help and version still work")?
 
 	# Without ROC, a compatible roc on PATH is used as it is. An incompatible
-	# or absent one makes the CLI fetch the pinned compiler through the provider.
-	fetched = "${work}/fetched-compiler"
-	Path.create_all!(Path.utf8("${fetched}/bin"))?
-	CliHarness.tool!(["ln", "-s", "--", record, "${fetched}/bin/roc"])?
-	for case in [{ name: "path", roc: record }, { name: "fetched", roc: probe }, { name: "absent", roc: "" }] {
+	# or absent one makes the CLI take the pinned compiler from its own store
+	# of downloads. No provider is asked for it: here there is nowhere to keep
+	# a store, so the run stops there, before any request leaves the machine.
+	for case in [{ name: "path", roc: record }, { name: "other", roc: probe }, { name: "absent", roc: "" }] {
 		cwd = isolated!(test, "compiler-${case.name}")?
 		settings!(test, cwd, CliTest.valid)?
 		on_path = "${cwd}/path-bin"
@@ -241,20 +246,26 @@ cases! = |bench| {
 			CliHarness.tool!(["ln", "-s", "--", case.roc, "${on_path}/roc"])?
 		}
 		env = CliHarness.setting(
-			CliHarness.unsetting(test.env, ["ROC"]),
+			# The compiler on PATH needs its own cache; the others never start.
+			CliHarness.unsetting(test.env, if case.name == "path" ["ROC"] else ["ROC", "HOME", "XDG_CACHE_HOME"]),
 			[
 				("PATH", "${on_path}:${bench.bin}:/usr/bin:/bin"),
 				("STUB_PROBE_VERSION", "Roc compiler version other-nightly"),
-				("STUB_NIX_OUT", fetched),
 			],
 		)
 		outcome = CliHarness.blueprint!(bench, cwd, ["spec"], env)?
-		CliHarness.exited!(outcome, 0, "spec without ROC, compiler ${case.name}")?
-		CliHarness.contains!(outcome.stdout, "(name ", "spec without ROC, compiler ${case.name}")?
-		builds = CliHarness.calls!("${cwd}/nix-calls")?.keep_if(|call| call.first() == Ok("build"))
-		CliHarness.check!(fetch_matches(case.name == "path", builds, pin), "without ROC and with compiler ${case.name}, the provider was asked to build ${Str.inspect(builds)}")?
+		what = "spec without ROC, compiler ${case.name}"
+		if case.name == "path" {
+			CliHarness.exited!(outcome, 0, what)?
+			CliHarness.contains!(outcome.stdout, "(name ", what)?
+		} else {
+			CliHarness.exited!(outcome, 1, what)?
+			CliHarness.contains!(outcome.stderr, "could not fetch Roc ${pin}: neither XDG_CACHE_HOME nor HOME names an absolute directory to keep downloads in", what)?
+			CliHarness.contains!(outcome.stderr, "set ROC", what)?
+		}
+		CliHarness.same_calls!(CliHarness.calls!("${cwd}/nix-calls")?, [], "${what} started the provider")?
 	}
-	Script.pass!("ROC unset: a compatible roc on PATH is used; otherwise one provider build of roc-overlay#\"${pin}\"")?
+	Script.pass!("ROC unset: a compatible roc on PATH is used; otherwise the pinned ${pin} comes from the store of downloads, and no provider is asked")?
 
 	# ROC is invocation-relative even when BLUEPRINT_ROOT selects elsewhere.
 	elsewhere = isolated!(test, "compiler-relative-root")?
@@ -306,7 +317,7 @@ cases! = |bench| {
 	# target that only the provider can refuse.
 	settings!(test, work, "${CliTest.valid}	Custom(\"services\", \"demo\", Str(\"value\")),\n")?
 	CliHarness.contains!(run!(test, work, ["check"], 1, [])?, "needs features: extensions", "check with a Custom setting")?
-	settings!(test, work, "	Environment(\"ci\", [Tools([\"git\"])]),\n	Shell(\"default\", [Use(\"ci\")]),\n")?
+	settings!(test, work, "	${CliTest.source}\n	Environment(\"ci\", [Tools([\"default#git\"])]),\n	Shell(\"default\", [Use(\"ci\")]),\n")?
 	CliHarness.contains!(run!(test, work, ["check"], 1, [])?, "MissingName", "check without a Name")?
 	settings!(test, work, "${CliTest.valid}	Raw(\"nix\", \"unknown\", Attrs([])),\n")?
 	CliHarness.contains!(run!(test, work, ["check"], 1, [])?, "unknown raw nix target", "check with an unknown Raw target")?
@@ -317,7 +328,11 @@ cases! = |bench| {
 	rejected = [
 		{ name: "major-3", text: CliTest.wire.replace_each("(major 2)", "(major 3)"), diagnostic: "Spec format 3.0" },
 		{ name: "workflow-tag", text: CliTest.workflow_wire.replace_each("RunTask \"echo-args\" ()", "FutureStep \"echo-args\""), diagnostic: "could not read the Spec from Blueprint.roc" },
-		{ name: "requires", text: "${CliTest.wire.drop_suffix(")")}(requires (\"future-operation\")))", diagnostic: "needs features: future-operation" },
+		{ name: "requires", text: CliTest.wire.replace_each("(requires (\"explicit-sources\"))", "(requires (\"explicit-sources\" \"future-operation\"))"), diagnostic: "needs features: future-operation" },
+		# A Spec as a platform from before 0.6.0 prints it: it does not say its
+		# sources are all declared, and is told which platform to move to.
+		{ name: "old-platform", text: CliTest.wire.replace_each("(requires (\"explicit-sources\"))", "(requires ())"), diagnostic: "Blueprint.roc uses a roc-blueprint platform older than 0.6.0; update the platform URL in its app header and see docs/releases/0.6.0" },
+		{ name: "old-platform-auto", text: CliTest.wire.replace_each(" (requires (\"explicit-sources\"))\n", "").replace_each("(provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\"))", "(provider Auto)"), diagnostic: "platform older than 0.6.0" },
 		{ name: "reference", text: CliTest.wire.replace_each("(environment \"ci\")", "(environment \"missing\")"), diagnostic: "unknown environment: missing" },
 	]
 	for case in rejected {
@@ -342,19 +357,38 @@ cases! = |bench| {
 	Script.pass!("untrusted wire Spec: other major, unknown step, unknown feature and dangling reference refused before any effect; a future minor is read, with its workflow steps")?
 
 	# Request checks precede every Nix, workspace and lock effect. These use
-	# the real compiler: Auto grammar is deliberately checked after selection.
+	# the real compiler. Every source says what it is, so a tool's name is held
+	# to its source's grammar as the configuration is read, and a source that
+	# names no package set is told what to write.
 	incompatible = [
-		{ name: "source", command: ["shell", "ci"], tool: "git", declaration: "Packages(\"default\", From(GuixPackages(\"current\"))),", diagnostic: "source default requires Guix, not Nix" },
-		{ name: "auto-grammar", command: ["run", "echo-args"], tool: "python@3.12:out", declaration: "Packages(\"default\", Auto),", diagnostic: "invalid Nix tool: python@3.12:out" },
+		{ name: "source", command: ["shell", "ci"], tool: "default#git", declaration: "Packages(\"default\", From(GuixPackages(\"current\"))),", diagnostic: "environment ci takes tools from the source default (GuixPackages), which no provider of this blueprint supplies" },
+		{ name: "grammar", command: ["run", "echo-args"], tool: "default#python@3.12:out", declaration: CliTest.source, diagnostic: "invalid Nix tool: python@3.12:out" },
+		{ name: "auto", command: ["run", "echo-args"], tool: "default#git", declaration: "Packages(\"default\", Auto),", diagnostic: "the Auto source was removed in 0.6; name the package set, as in From(NixPackages(" },
 	]
 	for case in incompatible {
 		cwd = isolated!(test, "request-${case.name}")?
-		settings!(test, cwd, "${CliTest.valid.replace_each("Tools([\"git\"])", "Tools([\"${case.tool}\"])")}	${case.declaration}\n")?
+		settings!(test, cwd, "${CliTest.valid.replace_each("Tools([\"default#git\"])", "Tools([\"${case.tool}\"])").replace_each("\t${CliTest.source}\n", "")}	${case.declaration}\n")?
 		output = run!(test, cwd, case.command, 1, [])?
 		CliHarness.contains!(output, case.diagnostic, "blueprint ${Str.join_with(case.command, " ")} with an incompatible ${case.name}")?
 		untouched!(cwd)?
 	}
 	Script.pass!("a request the Nix provider cannot serve is refused before any provider, workspace or lock effect")?
+
+	# A project that declares no package source has nothing of the provider's:
+	# no file to show, and none implied. A tool that names a source there is
+	# refused as the configuration is read, and so is a name with no source.
+	sourceless = isolated!(test, "sourceless")?
+	settings!(test, sourceless, "	Name(\"sourceless\"),\n	Environment(\"ci\", [Expect([\"git\"])]),\n	Task(\"echo-args\", [Use(\"ci\"), Run([\"true\"])]),\n")?
+	shown = run!(test, sourceless, ["flake"], 0, [])?
+	CliHarness.contains!(shown, "nothing is generated for this project: it declares no source that nix supplies", "flake with no package source")?
+	CliHarness.check!(!shown.contains("devShells") and !shown.contains("nixpkgs"), "flake with no package source printed a flake:\n${shown}")?
+	CliHarness.contains!(run!(test, sourceless, ["check"], 0, [])?, "Blueprint.roc is valid", "check with no package source")?
+	settings!(test, sourceless, "	Name(\"sourceless\"),\n	Environment(\"ci\", [Tools([\"default#git\"])]),\n")?
+	CliHarness.contains!(run!(test, sourceless, ["check"], 1, [])?, "unknown source: default; Blueprint.roc declares no", "check with a tool of an undeclared source")?
+	settings!(test, sourceless, "	Name(\"sourceless\"),\n	${CliTest.source}\n	Environment(\"ci\", [Tools([\"git\"])]),\n")?
+	CliHarness.contains!(run!(test, sourceless, ["check"], 1, [])?, "names no package source", "check with a tool that names no source")?
+	untouched!(sourceless)?
+	Script.pass!("no package source: nothing is generated or implied; a tool of an undeclared source, and a tool with no source, are refused as the configuration is read")?
 
 	# An unselected Guix environment, even one with a shell alias, must not
 	# contaminate a Nix task's requested dependency closure.
@@ -465,18 +499,6 @@ cases! = |bench| {
 	Script.pass!("CLI compiler/loader, validation and stubbed process-boundary tests passed")
 }
 
-## What the provider was asked to build for a compiler: nothing when the one
-## on PATH is compatible, otherwise the pinned release from roc-overlay, once.
-fetch_matches : Bool, List(List(Str)), Str -> Bool
-fetch_matches = |on_path, builds, pin|
-	match builds {
-		[] => on_path
-		[["build", "--no-link", "--print-out-paths", installable]] =>
-			!on_path and installable.starts_with("github:roc-lang/roc-overlay/") and installable.ends_with("#\"${pin}\"")
-
-		_ => False
-	}
-
 expect CliTest.blueprint_roc("../p/main.roc", "	Name(\"x\"),\n") == "app [config] { pf: platform \"../p/main.roc\" }\nconfig = [\n	Name(\"x\"),\n]\n"
 expect CliTest.valid.contains("Run([\"printf\", \"%s\\n\", \"configured argument\"])")
 
@@ -484,14 +506,7 @@ expect CliTest.develop("/p", "ci", []) == ["develop", "--no-update-lock-file", "
 expect CliTest.develop("/p", "blueprint-env-ci", ["printf", ""]) == ["develop", "--no-update-lock-file", "--no-write-lock-file", "path:/p/.blueprint#devShells.x86_64-linux.blueprint-env-ci", "--command", "printf", ""]
 
 expect CliTest.wire.starts_with("((format ((major 2) (minor 0))) (name \"wire\")\n") and CliTest.wire.ends_with("(run (\"true\"))))))")
-expect CliTest.workflow_wire.ends_with("(run (\"true\")))))(requires (\"workflows\")) (workflows (((name \"ci\") (steps ((RunTask \"echo-args\" ())))))))")
-
-expect fetch_matches(True, [], "nightly-x") and !fetch_matches(False, [], "nightly-x")
-expect fetch_matches(False, [["build", "--no-link", "--print-out-paths", "github:roc-lang/roc-overlay/abc?narHash=sha256-x#\"nightly-x\""]], "nightly-x")
-expect !fetch_matches(True, [["build", "--no-link", "--print-out-paths", "github:roc-lang/roc-overlay/abc#\"nightly-x\""]], "nightly-x")
-expect !fetch_matches(False, [["build", "--no-link", "--print-out-paths", "github:other/overlay#\"nightly-x\""]], "nightly-x")
-expect !fetch_matches(False, [["build", "--no-link", "--print-out-paths", "github:roc-lang/roc-overlay/abc#\"nightly-y\""]], "nightly-x")
-expect !fetch_matches(False, [["build", "github:roc-lang/roc-overlay/abc#\"nightly-x\""]], "nightly-x")
+expect CliTest.workflow_wire.ends_with("(run (\"true\")))))(workflows (((name \"ci\") (steps ((RunTask \"echo-args\" ())))))))") and CliTest.workflow_wire.contains("(requires (\"explicit-sources\" \"workflows\"))")
 
 native_sample : Str
 native_sample =
@@ -504,6 +519,7 @@ authority_sample = Lock.to_str(
 		intent: Lock.empty_intent,
 		sources: [],
 		hints: [{ provider: "nix", value: Locks.to_value(LockJson.decode("{\"graph\":${native_sample}}") ?? LockJson.Null) }],
+		fetched: [],
 	},
 )
 

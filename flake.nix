@@ -42,7 +42,7 @@
           # The compiler the scripts in scripts/ run on, under the command name
           # `roc-stable` alone. It moves only by a reviewed edit here, so the
           # scripts keep working while the product moves to a newer nightly.
-          rocStableTag = "nightly-2026-10-04-130536d";
+          rocStableTag = "nightly-2026-10-13-b17d287";
           rocStable = pkgs.runCommand "roc-stable-${rocStableTag}" { } ''
             mkdir -p "$out/bin"
             ln -s ${lib.getExe roc-overlay.packages.${system}.${rocStableTag}} "$out/bin/roc-stable"
@@ -82,7 +82,7 @@
               {
                 src = pkgs.fetchurl {
                   url = "https://github.com/roc-lang/nightlies/releases/download/${rocTag}/roc_nightly-source-${lib.removePrefix "nightly-" rocTag}.tar.gz";
-                  hash = "sha256-Vd0k9zRAgzt5uD5Z9ER1xqCJ9k2tPa6F50k24ASHvkI=";
+                  hash = "sha256-uNTP4YnmjnySqKGedH9fQjnVhWr7nLeqkhjs78J56YY=";
                 };
               }
               ''
@@ -97,8 +97,8 @@
           # up as "package download failed" in `nix build .#blueprint`.
           rocPackages = [
             {
-              url = "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst";
-              hash = "sha256-UN3FXbkwjWFcgDSif53HGC1ml2SEsdHEbi2ea82cFgw=";
+              url = "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst";
+              hash = "sha256-V3jm3ANU1ef7Wwcl7/jgTaPI1lYEnGO0PjzCdevvr4s=";
             }
             {
               url = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst";
@@ -131,13 +131,12 @@
 
           blueprint = pkgs.stdenv.mkDerivation {
             pname = "blueprint";
-            version = "0.5.0";
+            version = "0.6.0-rc1";
             src = lib.fileset.toSource {
               root = ./.;
               fileset = lib.fileset.unions [
                 ./blueprint-cli
                 ./blueprint-nix
-                ./blueprint-host
                 ./blueprint-core/main.roc
                 ./blueprint-core/Spec.roc
                 ./blueprint-core/Project.roc
@@ -147,6 +146,7 @@
                 ./blueprint-core/Sexpr.roc
                 ./blueprint-core/Value.roc
                 ./blueprint-core/Provider.roc
+                ./blueprint-core/Realise.roc
                 ./blueprint-core/Lock.roc
                 ./blueprint-core/Tree.roc
               ];

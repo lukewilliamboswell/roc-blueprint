@@ -3,7 +3,8 @@ import Spec
 import Value
 
 ## Shared pure semantic boundary. Validation observes neither PATH nor the host.
-## It normalizes defaults and inheritance, and is safe to repeat on emitted Spec.
+## It normalizes inheritance, adds nothing that was not declared, and is safe
+## to repeat on emitted Spec.
 Project :: [].{
 	ProviderName : [Nix, Guix]
 
@@ -50,11 +51,12 @@ Project :: [].{
 	clean : Str -> Bool
 	clean = |text| !text.is_empty() and text.to_utf8().all(|b| b > 32 and b != 127)
 
-	## Generic syntax only. Provider grammar is checked once intent is known.
+	## A tool is written `<source>#<name>`: the package source it comes from
+	## is always named, and no source is implied. Generic syntax only; the
+	## source's own grammar for the name is checked once its kind is known.
 	tool : Str -> Try(Spec.Tool, Str)
 	tool = |text| {
 		(source, name) = match text.split_on("#") {
-			[suffix] => ("default", suffix)
 			[prefix, suffix] => (prefix, suffix)
 			_ => return Err("invalid tool reference: ${text}")
 		}
@@ -158,6 +160,41 @@ Project :: [].{
 	valid_ref : Str -> Bool
 	valid_ref = |url| clean(url) and ["github:", "gitlab:", "sourcehut:", "flake:", "git+", "path:", "file:", "https://", "http://", "tarball+"].any(|prefix| url.starts_with(prefix) and !url.drop_prefix(prefix).is_empty())
 
+	## A download URL names its bytes by itself: `https://<host>/<path>`, with
+	## no credentials, query or fragment, and no empty, `.` or `..` segment.
+	## `http://127.0.0.1`, with or without a port, is one too: nothing leaves
+	## the machine, and it is how a test serves a download.
+	valid_download_url : Str -> Bool
+	valid_download_url = |url| {
+		rest = if url.starts_with("https://") {
+			url.drop_prefix("https://")
+		} else if url.starts_with("http://127.0.0.1:") or url.starts_with("http://127.0.0.1/") {
+			url.drop_prefix("http://")
+		} else {
+			return False
+		}
+		if rest.to_utf8().any(|b| b <= 32 or b >= 127 or b == '@' or b == '?' or b == '#' or b == '\\') {
+			return False
+		}
+		match rest.split_on("/") {
+			[authority, .. as segments] => {
+				(host, port) = match authority.split_on(":") {
+					[name] => (name, "0")
+					[name, number] => (name, number)
+					_ => return False
+				}
+				label = |part| {
+					bytes = part.to_utf8()
+					!bytes.is_empty() and bytes.first() != Ok('-') and bytes.last() != Ok('-') and bytes.all(|b| letter(b) or (b >= '0' and b <= '9') or b == '-')
+				}
+				host.split_on(".").all(label)
+					and !port.is_empty() and port.to_utf8().len() <= 5 and port.to_utf8().all(|b| b >= '0' and b <= '9')
+						and !segments.is_empty() and segments.all(|part| !part.is_empty() and part != "." and part != "..")
+			}
+			_ => False
+		}
+	}
+
 	## Lexical containment only; the executor must also reject escaping symlinks.
 	## Spaces are valid path bytes. Empty, dot and parent segments are not.
 	valid_output : Str -> Bool
@@ -227,13 +264,15 @@ Project :: [].{
 		check_names(spec.environments.map(|e| e.name), "Environment")?
 		check_names(spec.shells.map(|s| s.name), "Shell")?
 		check_names(spec.tasks.map(|t| t.name), "Task")?
-		sources = if spec.sources.any(|s| s.name == "default") spec.sources else [{ name: "default", provider: Auto }].concat(spec.sources)
+		sources = spec.sources
 		for source in sources {
 			if spec.inputs.any(|i| i.name == source.name) {
 				return Err("DuplicateInput: ${source.name}")
 			}
 			match source.provider {
-				Auto => {}
+				# The tag is still read, so that a Spec or a Lock from before
+				# sources were explicit says this instead of failing to parse.
+				Auto => return Err("source ${source.name} is Auto, which names no package set; declare the set it takes its tools from")
 				NixPackages(url) => if !valid_ref(url) {
 					return Err("invalid Nix source: ${source.name}")
 				}
@@ -321,11 +360,63 @@ Project :: [].{
 				return Err("invalid input reference: ${input.name}")
 			}
 		}
+		if !(spec.programs.is_empty() and spec.environment_programs.is_empty()) and !spec.requires_.contains("programs") {
+			return Err("programs require feature: programs")
+		}
+		if !spec.expects.is_empty() and !spec.requires_.contains("expects") {
+			return Err("expected tools require feature: expects")
+		}
+		var $programs = []
+		for program in spec.programs {
+			if !valid_command_name(program.name) {
+				return Err("invalid program name: ${program.name}")
+			}
+			if !declared_systems.contains(program.system) {
+				return Err("undeclared system for program ${program.name}: ${program.system}")
+			}
+			key = (program.name, program.system)
+			if $programs.contains(key) {
+				return Err("DuplicateProgram: ${program.name} on ${program.system}")
+			}
+			$programs = $programs.append(key)
+			# `blueprint update <name>` names an input or a program, never both.
+			if sources.any(|s| s.name == program.name) or spec.inputs.any(|i| i.name == program.name) or spec.build_sources.any(|s| s.name == program.name) {
+				return Err("program ${program.name} has the name of a source or input")
+			}
+			if program.urls.is_empty() {
+				return Err("program ${program.name} on ${program.system} has no URL")
+			}
+			# Alternates serve the same bytes, so each is held to the same rule.
+			# A long value stands on a line of its own in a message: the
+			# compiler wraps what it reports and would break one in two.
+			var $urls = []
+			for url in program.urls {
+				if !valid_download_url(url) {
+					return Err("program ${program.name} on ${program.system} has a URL that is not a download URL; expected https://<host>/<path> with no credentials, query or fragment:\n    ${url}")
+				}
+				if $urls.contains(url) {
+					return Err("program ${program.name} on ${program.system} names a URL twice:\n    ${url}")
+				}
+				$urls = $urls.append(url)
+			}
+			match program.unpack {
+				File => if !program.path.is_empty() {
+					return Err("program ${program.name} on ${program.system}: a File is the program itself and has no path:\n    ${program.path}")
+				}
+				_ => if !valid_output(program.path) {
+					return Err("program ${program.name} on ${program.system}: invalid path in its archive:\n    ${program.path}")
+				}
+			}
+		}
+		check_selections(spec.environments, spec.environment_programs, "program", "DuplicatePrograms")?
+		check_selections(spec.environments, spec.expects, "expected tool", "DuplicateExpect")?
 		var $environments = []
 		var $system_tools = []
 		var $commands = []
 		var $configured_tools = []
 		var $roc_packages = []
+		var $environment_programs = []
+		var $expects = []
 		for env in spec.environments {
 			resolved = resolve(spec.environments, env.name, [])?
 			env_commands = resolve_commands(spec.environments, spec.commands, env.name, [])?
@@ -343,7 +434,7 @@ Project :: [].{
 			all_tools = plain_tools.concat(env_commands.map(|entry| entry.tool)).concat(env_configured.map(|entry| entry.tool))
 			for t in all_tools {
 				parsed = tool("${t.source}#${t.name}")?
-				source = sources.find_first(|s| s.name == parsed.source).map_err(|_| "unknown source: ${t.source}")?
+				source = sources.find_first(|s| s.name == parsed.source).map_err(|_| unknown_source(sources, t.source))?
 				match source.provider {
 					Auto => {}
 					NixPackages(_) => {
@@ -367,6 +458,32 @@ Project :: [].{
 				if !spec.inputs.any(|i| i.name == overlay and i.kind == Overlay) {
 					return Err("unknown overlay: ${overlay}")
 				}
+			}
+			env_programs = resolve_selections(spec.environments, spec.environment_programs, env.name, [])?
+			env_expects = resolve_selections(spec.environments, spec.expects, env.name, [])?
+			# One name on PATH has one origin: fetched, launched by a package
+			# provider, or the machine's own.
+			for name in env_programs {
+				if !spec.programs.any(|program| program.name == name) {
+					return Err("environment ${env.name} selects program ${name}, which no Fetch declares")
+				}
+				if env_expects.contains(name) {
+					return Err("environment ${env.name} has ${name} as both a program and an expected tool")
+				}
+				if env_commands.any(|entry| entry.name == name) {
+					return Err("environment ${env.name} has ${name} as both a program and a Command")
+				}
+			}
+			for name in env_expects {
+				if env_commands.any(|entry| entry.name == name) {
+					return Err("environment ${env.name} has ${name} as both an expected tool and a Command")
+				}
+			}
+			if !env_programs.is_empty() {
+				$environment_programs = $environment_programs.append({ environment: env.name, programs: env_programs })
+			}
+			if !env_expects.is_empty() {
+				$expects = $expects.append({ environment: env.name, programs: env_expects })
 			}
 			$environments = $environments.append(resolved)
 		}
@@ -418,8 +535,19 @@ Project :: [].{
 				return Err("empty Raw provider or target")
 			}
 		}
-		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
+		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: $environment_programs, expects: $expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
 	}
+
+	## A tool names a source the project does not declare. The sources it
+	## does declare are listed, so the mistake is seen at once: a misspelt
+	## name, or none declared at all.
+	unknown_source : List(Spec.Source), Str -> Str
+	unknown_source = |sources, name|
+		if sources.is_empty() {
+			"unknown source: ${name}; Blueprint.roc declares no package source"
+		} else {
+			"unknown source: ${name}; Blueprint.roc declares ${Str.join_with(sources.map(|source| source.name), ", ")}"
+		}
 
 	## Whole-project checks precede expansion, even for an empty request.
 	## Only atomic typed steps escape; repeated effects stay repeated.
@@ -722,6 +850,138 @@ Project :: [].{
 		}
 	}
 
+	## What an environment selects by name, programs or expected tools: at
+	## most one list for each environment, of names a file on PATH can have.
+	check_selections : List(Spec.Environment), List({ environment : Str, programs : List(Str) }), Str, Str -> Try({}, Str)
+	check_selections = |environments, entries, kind, duplicate| {
+		var $seen = []
+		for entry in entries {
+			if !environments.any(|e| e.name == entry.environment) {
+				return Err("unknown environment for ${kind}: ${entry.environment}")
+			}
+			if $seen.contains(entry.environment) {
+				return Err("${duplicate}: environment ${entry.environment}")
+			}
+			$seen = $seen.append(entry.environment)
+			for name in entry.programs {
+				if !valid_command_name(name) {
+					return Err("invalid ${kind} name in environment ${entry.environment}: ${name}")
+				}
+			}
+		}
+		Ok({})
+	}
+
+	## Selected programs and expected tools inherit parent first. A name is
+	## one file on PATH, so a child repeating an inherited name adds nothing.
+	resolve_selections : List(Spec.Environment), List({ environment : Str, programs : List(Str) }), Str, List(Str) -> Try(List(Str), Str)
+	resolve_selections = |environments, entries, name, visiting| {
+		if visiting.contains(name) or visiting.len() >= 128 {
+			return Err("environment cycle or inheritance limit: ${name}")
+		}
+		env = environments.find_first(|e| e.name == name).map_err(|_| "unknown environment: ${name}")?
+		own = entries.find_first(|entry| entry.environment == name).map_ok(|entry| entry.programs) ?? []
+		match env.parents {
+			[] => Ok(unique(own))
+			[parent] => {
+				inherited = resolve_selections(environments, entries, parent, visiting.append(name))?
+				Ok(unique(inherited.concat(own)))
+			}
+			_ => Err("environment ${name} has several parents")
+		}
+	}
+
+	## What one environment needs on one System, by who supplies it. `tools`
+	## are a package provider's: the environment's own, those it declares for
+	## this System, and the tools behind its commands and configured tools.
+	## `programs` are the selected programs that exist for the System, and
+	## `unavailable` the names of those that do not. `expects` are the
+	## programs the machine must have. `bundles` are its Roc packages, each
+	## with the URL its bundle is downloaded from.
+	Use : {
+		tools : List(Spec.Tool),
+		programs : List(Spec.Program),
+		unavailable : List(Str),
+		expects : List(Str),
+		bundles : List({ name : Str, url : Str }),
+	}
+
+	## Takes a validated Spec, whose inheritance is already flattened. It
+	## observes nothing: whether a tool or a URL exists is found out later.
+	environment_use : Spec, Str, Str -> Try(Use, Str)
+	environment_use = |project, name, system| {
+		environment = project.environments.find_first(|e| e.name == name).map_err(|_| "unknown environment: ${name}")?
+		tools = unique(
+			environment.tools
+				.concat(project.system_tools.keep_if(|entry| entry.environment == name and entry.system == system).fold([], |all, entry| all.concat(entry.tools)))
+				.concat(project.commands.keep_if(|entry| entry.environment == name).map(|entry| entry.tool))
+				.concat(project.configured_tools.keep_if(|entry| entry.environment == name).map(|entry| entry.tool)),
+		)
+		selected = project.environment_programs.find_first(|entry| entry.environment == name).map_ok(|entry| entry.programs) ?? []
+		var $programs = []
+		var $unavailable = []
+		for program in selected {
+			match project.programs.find_first(|entry| entry.name == program and entry.system == system) {
+				Ok(entry) => {
+					$programs = $programs.append(entry)
+				}
+				Err(_) => {
+					$unavailable = $unavailable.append(program)
+				}
+			}
+		}
+		var $bundles = []
+		for entry in project.roc_packages.keep_if(|declared| declared.environment == name) {
+			source = project.build_sources.find_first(|declared| declared.name == entry.source)
+				.map_err(|_| "unknown source of Roc package ${entry.name}: ${entry.source}")?
+			url = source.ref.drop_prefix("tarball+")
+			# The name is the hash of the bundle's bytes, which is what makes
+			# a download of it checkable.
+			if !valid_name(entry.name) or !source.ref.starts_with("tarball+https://") or !url.ends_with("/${entry.name}.tar.zst") {
+				return Err("Roc package ${entry.name} is not a bundle that can be downloaded: ${source.ref}")
+			}
+			$bundles = $bundles.append({ name: entry.name, url })
+		}
+		Ok({
+			tools,
+			programs: $programs,
+			unavailable: $unavailable,
+			expects: project.expects.find_first(|entry| entry.environment == name).map_ok(|entry| entry.programs) ?? [],
+			bundles: $bundles,
+		})
+	}
+
+	## The build sources a provider resolves and locks: all of them, but for
+	## the bundle of a Roc package that no build uses. A task or a shell
+	## fetches its environment's bundles itself, and the bundle's name is the
+	## hash of its bytes, so nothing need be locked for it. Only a sandboxed
+	## build, which has no network, takes a bundle from its provider. A
+	## project whose Roc packages serve tasks and shells alone therefore asks
+	## no provider for anything on their account.
+	##
+	## A source is left out when Roc packages name it, none of them is in a
+	## build's environment or one that environment extends, and no build
+	## lists it among its inputs.
+	resolved_build_sources : Spec -> List(Spec.BuildSource)
+	resolved_build_sources = |spec| {
+		var $building = unique(spec.builds.map(|build| build.environment))
+		var $frontier = $building
+		var $depth = 0.U64
+		# Inheritance as declared: a validated Spec has none left to follow.
+		while !$frontier.is_empty() and $depth < 128 {
+			parents = unique($frontier.fold([], |found, name| found.concat(spec.environments.find_first(|e| e.name == name).map_ok(|e| e.parents) ?? [])))
+			$frontier = parents.keep_if(|name| !$building.contains(name))
+			$building = $building.concat($frontier)
+			$depth = $depth + 1
+		}
+		spec.build_sources.keep_if(
+			|source| {
+				bundled = spec.roc_packages.keep_if(|entry| entry.source == source.name)
+				bundled.is_empty() or bundled.any(|entry| $building.contains(entry.environment)) or spec.builds.any(|build| build.inputs.contains(source.name))
+			},
+		)
+	}
+
 	## Check only the requested environment's normalized dependency closure.
 	## This models Guix shell capability without implementing a Guix executor.
 	check_environment : Spec, ProviderName, Str -> Try({}, Str)
@@ -731,15 +991,13 @@ Project :: [].{
 		if provider == Guix and !env.overlays.is_empty() {
 			return Err("Guix does not support overlays in environment ${name}")
 		}
-		# An empty environment still uses the default provider's environment builder.
 		configured = project.configured_tools.keep_if(|entry| entry.environment == name)
 		if provider == Guix and !configured.is_empty() {
 			return Err("Guix does not support configured tools in environment ${name}")
 		}
 		all_tools = env.tools.concat(project.system_tools.keep_if(|entry| entry.environment == name).fold([], |tools, entry| tools.concat(entry.tools))).concat(project.commands.keep_if(|entry| entry.environment == name).map(|entry| entry.tool)).concat(configured.map(|entry| entry.tool))
-		source_names = if all_tools.is_empty() ["default"] else unique(all_tools.map(|t| t.source))
-		for source_name in source_names {
-			source = project.sources.find_first(|s| s.name == source_name).map_err(|_| "unknown source: ${source_name}")?
+		for source_name in unique(all_tools.map(|t| t.source)) {
+			source = project.sources.find_first(|s| s.name == source_name).map_err(|_| unknown_source(project.sources, source_name))?
 			match (provider, source.provider) {
 				(Nix, GuixPackages(_)) => return Err("source ${source.name} requires Guix, not Nix")
 				(Guix, NixPackages(_)) => return Err("source ${source.name} requires Nix, not Guix")
@@ -756,7 +1014,9 @@ Project :: [].{
 	unique = |items| items.fold([], |acc, item| if acc.contains(item) acc else acc.append(item))
 }
 
-expect Project.tool("git") == Ok({ source: "default", name: "git" })
+# A tool always names its source: a name alone is no tool.
+expect Project.tool("nix#git") == Ok({ source: "nix", name: "git" })
+expect Project.tool("git").is_err() and Project.tool("#git").is_err() and Project.tool("nix#").is_err()
 expect Project.tool("stable#python@3.12:out") == Ok({ source: "stable", name: "python@3.12:out" })
 expect Project.tool("bad##git").is_err()
 expect Project.tool("git\n").is_err()
@@ -803,6 +1063,9 @@ fixture = |environments| Spec.{
 	commands: [],
 	configured_tools: [],
 	roc_packages: [],
+	programs: [],
+	environment_programs: [],
+	expects: [],
 	shells: [],
 	tasks: [],
 	build_sources: [],
@@ -813,15 +1076,15 @@ fixture = |environments| Spec.{
 }
 
 base : Spec.Environment
-base = { name: "base", parents: [], tools: [{ source: "default", name: "git" }], overlays: ["first"] }
+base = { name: "base", parents: [], tools: [{ source: "nix", name: "git" }], overlays: ["first"] }
 
 child : Spec.Environment
-child = { name: "dev", parents: ["base"], tools: [{ source: "default", name: "python3" }, { source: "default", name: "git" }], overlays: ["first", "second"] }
+child = { name: "dev", parents: ["base"], tools: [{ source: "nix", name: "python3" }, { source: "nix", name: "git" }], overlays: ["first", "second"] }
 
 # Declaration order is irrelevant; inheritance order is not. First wins.
 expect Project.validate(fixture([child, base])) == Project.validate(
 	fixture([
-		{ name: "dev", parents: [], tools: [{ source: "default", name: "git" }, { source: "default", name: "python3" }], overlays: ["first", "second"] },
+		{ name: "dev", parents: [], tools: [{ source: "nix", name: "git" }, { source: "nix", name: "python3" }], overlays: ["first", "second"] },
 		base,
 	]),
 )
@@ -834,7 +1097,7 @@ expect match Project.validate(fixture([base, { ..child, tools: [], overlays: [] 
 
 # Validation can be repeated by frontend, loader, and provider without changes.
 expect match Project.validate(fixture([base, child])) {
-	Ok(spec) => Project.validate(spec) == Ok(spec) and Spec.parse(spec.to_str()) == Ok(spec) and spec.sources.first() == Ok({ name: "default", provider: Auto })
+	Ok(spec) => Project.validate(spec) == Ok(spec) and Spec.parse(spec.to_str()) == Ok(spec) and spec.sources == fixture([]).sources
 	Err(_) => False
 }
 
@@ -843,19 +1106,36 @@ expect Project.validate(fixture([child])) == Err("unknown environment: base")
 expect Project.validate(fixture([{ ..base, parents: ["base"] }])).is_err()
 expect Project.validate(fixture([{ ..base, parents: ["dev"] }, child])).is_err()
 expect Project.validate(fixture([base, { ..child, parents: ["base", "base"] }])).is_err()
-expect Project.validate(fixture([{ ..base, tools: [{ source: "missing", name: "git" }] }])) == Err("unknown source: missing")
+expect Project.validate(fixture([{ ..base, tools: [{ source: "missing", name: "git" }] }])) == Err("unknown source: missing; Blueprint.roc declares nix, guix")
 expect Project.validate(fixture([{ ..base, overlays: ["missing"] }])) == Err("unknown overlay: missing")
 expect Project.validate(fixture([{ ..base, overlays: ["data"] }])) == Err("unknown overlay: data")
-expect Project.validate(fixture([{ ..base, tools: [{ source: "default", name: "git#extra" }] }])).is_err()
+expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "git#extra" }] }])).is_err()
 expect Project.validate(fixture([{ ..base, name: "bad/name" }])).is_err()
 
-# Explicit providers validate grammar statically; Auto waits for selection.
+# Every source says what it is, so a tool's name is held to its source's
+# grammar at once: what Guix writes is no Nix attribute, and the reverse.
 expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])).is_err()
 expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])).is_err()
 expect {
-	spec = fixture([{ ..base, overlays: [], tools: [{ source: "default", name: "python@3:out" }] }])
-	Project.validate(spec).is_ok() and Project.check_environment(spec, Guix, "base").is_ok() and Project.check_environment(spec, Nix, "base").is_err()
+	spec = fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@3:out" }] }])
+	Project.validate(spec).is_ok() and Project.check_environment(spec, Guix, "base").is_ok() and Project.check_environment(spec, Nix, "base") == Err("source guix requires Guix, not Nix")
 }
+
+# No source is implied. A project that declares none has none, a tool cannot
+# name one that is not declared, and the refusal lists those that are.
+expect {
+	bare = { ..fixture([{ ..base, tools: [], overlays: [] }]), sources: [], inputs: [] }
+	Project.validate(bare).map_ok(|spec| spec.sources) == Ok([])
+		and Project.validate({ ..bare, environments: [{ ..base, overlays: [] }] }) == Err("unknown source: nix; Blueprint.roc declares no package source")
+			and Project.validate(fixture([{ ..base, tools: [{ source: "default", name: "git" }] }])) == Err("unknown source: default; Blueprint.roc declares nix, guix")
+				# An environment with no tool asks nothing of any provider.
+				and Project.check_environment(bare, Nix, "base") == Ok({})
+					and Project.check_environment(bare, Guix, "base") == Ok({})
+}
+
+# A source that leaves its package set to the consumer is refused: the tag is
+# read, so that a Spec from before sources were explicit says so.
+expect Project.validate({ ..fixture([]), sources: [{ name: "default", provider: Auto }] }) == Err("source default is Auto, which names no package set; declare the set it takes its tools from")
 
 # An unused overlay/foreign source is not a global provider requirement.
 expect {
@@ -878,26 +1158,26 @@ expect {
 		requires_: ["system-tools"],
 		systems: ["x86_64-linux", "aarch64-darwin"],
 		system_tools: [
-			{ environment: "base", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] },
-			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "default", name: "alsa-lib" }, { source: "default", name: "wayland" }] },
+			{ environment: "base", system: "x86_64-linux", tools: [{ source: "nix", name: "wayland" }] },
+			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "nix", name: "alsa-lib" }, { source: "nix", name: "wayland" }] },
 		],
 	}
 	match Project.validate(spec) {
 		Ok(valid) => valid.system_tools == [
-			{ environment: "base", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] },
-			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }, { source: "default", name: "alsa-lib" }] },
+			{ environment: "base", system: "x86_64-linux", tools: [{ source: "nix", name: "wayland" }] },
+			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "nix", name: "wayland" }, { source: "nix", name: "alsa-lib" }] },
 		] and Project.validate(valid) == Ok(valid) and Project.validate({ ..spec, systems: ["x86_64-linux", "aarch64-darwin", "x86_64-linux"] }) == Ok(valid)
 		Err(_) => False
 	}
 }
 
 expect {
-	entry = { environment: "base", system: "x86_64-linux", tools: [{ source: "default", name: "wayland" }] }
+	entry = { environment: "base", system: "x86_64-linux", tools: [{ source: "nix", name: "wayland" }] }
 	spec = { ..fixture([base]), system_tools: [entry] }
 	Project.validate(spec) == Err("system tools require feature: system-tools") and
 		Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [entry, entry] }) == Err("DuplicateToolsFor: environment base on x86_64-linux") and
 			Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [{ ..entry, system: "aarch64-darwin" }] }) == Err("undeclared system for system tools: aarch64-darwin") and
-				Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [{ ..entry, tools: [{ source: "missing", name: "wayland" }] }] }) == Err("unknown source: missing")
+				Project.validate({ ..spec, requires_: ["system-tools"], system_tools: [{ ..entry, tools: [{ source: "missing", name: "wayland" }] }] }) == Err("unknown source: missing; Blueprint.roc declares nix, guix")
 }
 
 # Runtime callers must not bypass validation by constructing Spec directly.
@@ -918,6 +1198,9 @@ build_fixture = |builds| Spec.{
 	commands: [],
 	configured_tools: [],
 	roc_packages: [],
+	programs: [],
+	environment_programs: [],
+	expects: [],
 	shells: [],
 	tasks: [],
 	build_sources: [{ name: "assets", ref: "path:./assets" }],
@@ -968,14 +1251,14 @@ expect ["", "/absolute", ".", "..", "./artifact", "dist/../escape", "dist//file"
 expect Project.validate(build_fixture([{ ..library, output: "dist/my artifact" }])).is_ok()
 # Commands inherit parent first; a child replaces a same-named command in place.
 expect {
-	git = { source: "default", name: "git" }
+	git = { source: "nix", name: "git" }
 	spec = {
 		..fixture([base, { ..child, overlays: [] }]),
 		requires_: ["commands"],
 		commands: [
 			{ environment: "base", name: "vcs", tool: git },
 			{ environment: "base", name: "py", tool: git },
-			{ environment: "dev", name: "py", tool: { source: "default", name: "python3" } },
+			{ environment: "dev", name: "py", tool: { source: "nix", name: "python3" } },
 			{ environment: "dev", name: "roc-stable", tool: { source: "nix", name: "rocpkgs.nightly" } },
 		],
 	}
@@ -984,7 +1267,7 @@ expect {
 			{ environment: "base", name: "vcs", tool: git },
 			{ environment: "base", name: "py", tool: git },
 			{ environment: "dev", name: "vcs", tool: git },
-			{ environment: "dev", name: "py", tool: { source: "default", name: "python3" } },
+			{ environment: "dev", name: "py", tool: { source: "nix", name: "python3" } },
 			{ environment: "dev", name: "roc-stable", tool: { source: "nix", name: "rocpkgs.nightly" } },
 		]
 		Err(_) => False
@@ -992,12 +1275,12 @@ expect {
 }
 
 expect {
-	entry = { environment: "base", name: "vcs", tool: { source: "default", name: "git" } }
+	entry = { environment: "base", name: "vcs", tool: { source: "nix", name: "git" } }
 	spec = { ..fixture([base]), commands: [entry] }
 	Project.validate(spec) == Err("commands require feature: commands") and
 		Project.validate({ ..spec, requires_: ["commands"], commands: [entry, entry] }) == Err("DuplicateCommand: environment base: vcs") and
 			Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, environment: "missing" }] }) == Err("unknown environment for command: missing") and
-				Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing") and
+				Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing; Blueprint.roc declares nix, guix") and
 					Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, tool: { source: "nix", name: "python@3" } }] }).is_err()
 }
 
@@ -1042,12 +1325,11 @@ expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../esc
 build_source_fixture : List(Spec.BuildSource), List(Str) -> Spec
 build_source_fixture = |build_sources, requires_| {
 	spec = build_fixture([library])
-	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
+	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
 }
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["builds"])) == Err("build sources require feature: sources")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["sources"])) == Err("builds require feature: builds")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:../escape" }], ["sources", "builds"])).is_err()
-expect Project.validate(build_source_fixture([{ name: "default", ref: "path:./assets" }], ["sources", "builds"])) == Err("DuplicateInput: default")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }, { name: "assets", ref: "path:./other" }], ["sources", "builds"])) == Err("DuplicateBuildSource: assets")
 expect Project.validate(build_source_fixture([{ name: "bad/name", ref: "path:./assets" }], ["sources", "builds"])).is_err()
 
@@ -1109,6 +1391,9 @@ workflow_features = |workflows, features| Spec.{
 	commands: [],
 	configured_tools: [],
 	roc_packages: [],
+	programs: [],
+	environment_programs: [],
+	expects: [],
 	shells: [],
 	tasks: [{ name: "check.all", environment: "builder", run: ["cmd"] }],
 	build_sources: [{ name: "assets", ref: "path:./assets" }],
@@ -1349,7 +1634,7 @@ expect {
 	spec = fixture([base])
 	Project.validate({ ..spec, shells: [shell, shell] }) == Err("DuplicateShell: default") and
 		Project.validate({ ..spec, tasks: [task, task] }) == Err("DuplicateTask: check") and
-			Project.validate({ ..spec, sources: [{ name: "default", provider: Auto }, { name: "default", provider: Auto }] }) == Err("DuplicateSource: default") and
+			Project.validate({ ..spec, sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }, { name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }] }) == Err("DuplicateSource: nix") and
 				Project.validate({ ..spec, inputs: [{ name: "tools", url: "github:example/tools", kind: Flake }, { name: "tools", url: "github:example/overlay", kind: Overlay }] }) == Err("DuplicateInput: tools")
 }
 
@@ -1357,10 +1642,12 @@ expect {
 expect {
 	spec = fixture([base])
 	assets = { name: "assets", ref: "path:./assets" }
-	Project.validate({ ..spec, sources: [{ name: "data", provider: Auto }] }) == Err("DuplicateInput: data") and
+	Project.validate({ ..spec, sources: [{ name: "data", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] }) == Err("DuplicateInput: data") and
 		Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "data" }] }) == Err("DuplicateInput: data") and
 			Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "nix" }] }) == Err("DuplicateInput: nix") and
-				Project.validate({ ..spec, requires_: ["sources"], build_sources: [assets] }).is_ok()
+				Project.validate({ ..spec, requires_: ["sources"], build_sources: [assets] }).is_ok() and
+				# `default` is a name like any other: nothing declares it unasked.
+					Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "default" }] }).is_ok()
 }
 
 # A shell or task must use a declared environment, and a task a nonempty argv.
@@ -1387,17 +1674,11 @@ expect {
 	Project.validate(fixture([environment("one", "two"), environment("two", "three"), environment("three", "one")])) == Err("environment cycle: one -> two -> three -> one")
 }
 
-# Naming the default source explicitly changes nothing.
-expect {
-	spec = fixture([base])
-	Project.validate({ ..spec, sources: [{ name: "default", provider: Auto }].concat(spec.sources) }) == Project.validate(spec)
-}
-
 # A flake input is not a package source, and explicit providers name their grammar.
-expect Project.validate(fixture([{ ..base, tools: [{ source: "data", name: "git" }] }])) == Err("unknown source: data")
+expect Project.validate(fixture([{ ..base, tools: [{ source: "data", name: "git" }] }])) == Err("unknown source: data; Blueprint.roc declares nix, guix")
 expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])) == Err("invalid Nix tool: python@3")
 expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])) == Err("invalid Guix tool: python@")
-expect Project.validate({ ..fixture([base]), requires_: ["commands"], commands: [{ environment: "base", name: "bin/vcs", tool: { source: "default", name: "git" } }] }) == Err("invalid command name: bin/vcs")
+expect Project.validate({ ..fixture([base]), requires_: ["commands"], commands: [{ environment: "base", name: "bin/vcs", tool: { source: "nix", name: "git" } }] }) == Err("invalid command name: bin/vcs")
 
 rust : Spec.Tool
 rust = { source: "nix", name: "rust-bin.stable.\"1.95.0\".default" }
@@ -1436,7 +1717,7 @@ expect {
 	Project.validate(spec) == Err("configured tools require feature: configured-tools") and
 		Project.validate({ ..featured, configured_tools: [entry, entry] }) == Err("DuplicateToolWith: environment base: ${rust.name}") and
 			Project.validate({ ..featured, configured_tools: [{ ..entry, environment: "missing" }] }) == Err("unknown environment for configured tool: missing") and
-				Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing") and
+				Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing; Blueprint.roc declares nix, guix") and
 					Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "nix", name: "python@3" } }] }).is_err() and
 						Project.validate({ ..featured, configured_tools: [{ ..entry, options: Value.List([]) }] }) == Err("options of tool ${rust.name} must be Attrs") and
 							Project.validate({ ..featured, configured_tools: [{ ..entry, options: Value.Attrs([{ name: "targets", value: Value.Int(1) }, { name: "targets", value: Value.Int(2) }]) }] }) == Err("DuplicateOption: tool ${rust.name}: targets") and
@@ -1468,3 +1749,239 @@ expect {
 expect Project.validate(workflow_fixture([{ name: "ci", steps: [RunTask("library", [])] }])) == Err("unknown task: library")
 expect Project.validate(workflow_fixture([{ name: "ci", steps: [BuildArtifact("missing")] }])) == Err("unknown build: missing")
 expect Project.validate(workflow_fixture([{ name: "ci", steps: [RunWorkflow("missing")] }])) == Err("unknown workflow: missing")
+
+# A download URL is https with a host and a path, and nothing that makes the
+# same bytes reachable under another name or with a secret.
+expect
+	[
+		"https://example.test/tool",
+		"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-04-130536d/roc_nightly-linux_x86_64-2026-10-04-130536d.tar.gz",
+		"https://example.test:8443/a/b%20c/tool-1.0+x86_64.zip",
+		"https://xn--bcher-kva.example/tool",
+		"http://127.0.0.1:8080/tool",
+		"http://127.0.0.1/tool",
+	].all(Project.valid_download_url)
+expect
+	[
+		"",
+		"https://",
+		"https://example.test",
+		"https://example.test/",
+		"https:///tool",
+		"https://example.test/a/",
+		"https://example.test//tool",
+		"https://example.test/a/../tool",
+		"https://example.test/./tool",
+		"http://example.test/tool",
+		"http://localhost/tool",
+		"http://127.0.0.1.example.test/tool",
+		"http://127.0.0.10/tool",
+		"http://127.0.0.1",
+		"ftp://example.test/tool",
+		"file:///tmp/tool",
+		"path:./tool",
+		"https://user@example.test/tool",
+		"https://user:secret@example.test/tool",
+		"https://example.test/tool?token=1",
+		"https://example.test/tool#sha256",
+		"https://example.test/a b",
+		"https://example.test/tool\n",
+		"https://example.test\\tool",
+		"https://example.test:port/tool",
+		"https://example.test:123456/tool",
+		"https://example.test:/tool",
+		"https://-example.test/tool",
+		"https://example..test/tool",
+		"https://[::1]/tool",
+		"https://exämple.test/tool",
+		" https://example.test/tool",
+	].all(|url| !Project.valid_download_url(url))
+
+linux_tool : Spec.Program
+linux_tool = { name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux"], unpack: File, path: "" }
+
+linux_roc : Spec.Program
+linux_roc = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc.tar.gz"], unpack: TarGz, path: "roc_nightly/roc" }
+
+# Two environments without tools or overlays, the second extending the first.
+fetching : Spec
+fetching = {
+	..fixture([{ ..base, tools: [], overlays: [] }, { name: "dev", parents: ["base"], tools: [], overlays: [] }]),
+	requires_: ["programs", "expects", "commands"],
+	systems: ["x86_64-linux", "aarch64-darwin"],
+	programs: [linux_tool, { ..linux_tool, system: "aarch64-darwin", urls: ["https://example.test/tool-aarch64-darwin", "https://mirror.example.test/tool-aarch64-darwin"] }, linux_roc],
+}
+
+# Selected programs and expected tools inherit parent first, each name once,
+# and an environment that ends with none has no entry. Normalizing again
+# changes nothing.
+expect {
+	spec = {
+		..fetching,
+		environment_programs: [{ environment: "dev", programs: ["tool", "roc-stable", "tool"] }, { environment: "base", programs: ["roc-stable"] }],
+		expects: [{ environment: "dev", programs: ["gh", "git", "gh"] }],
+	}
+	match Project.validate(spec) {
+		Ok(project) => project.environment_programs == [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["roc-stable", "tool"] }]
+			and project.expects == [{ environment: "dev", programs: ["gh", "git"] }]
+				and project.programs == spec.programs
+					and Project.validate(project) == Ok(project)
+						and Spec.parse(project.to_str()) == Ok(project)
+		Err(_) => False
+	}
+}
+
+# A declared program nothing selects is valid, and so is an empty selection.
+expect Project.validate(fetching).map_ok(|project| project.environment_programs) == Ok([])
+expect Project.validate({ ..fetching, environment_programs: [{ environment: "base", programs: [] }], expects: [{ environment: "base", programs: [] }] }).map_ok(|project| (project.environment_programs, project.expects)) == Ok(([], []))
+
+# An older consumer is told by name; without the marker the Spec is refused.
+expect
+	Project.validate({ ..fetching, requires_: ["expects"] }) == Err("programs require feature: programs") and
+		Project.validate({ ..fetching, programs: [], requires_: [], environment_programs: [{ environment: "base", programs: [] }] }) == Err("programs require feature: programs") and
+			Project.validate({ ..fetching, requires_: ["programs"], expects: [{ environment: "base", programs: ["git"] }] }) == Err("expected tools require feature: expects")
+
+# Each program is one download for one declared System, under a command name.
+expect
+	Project.validate({ ..fetching, programs: [linux_tool, linux_tool] }) == Err("DuplicateProgram: tool on x86_64-linux") and
+		Project.validate({ ..fetching, programs: [{ ..linux_tool, system: "riscv64-linux" }] }) == Err("undeclared system for program tool: riscv64-linux") and
+			Project.validate({ ..fetching, programs: [{ ..linux_tool, name: "bin/tool" }] }) == Err("invalid program name: bin/tool") and
+				Project.validate({ ..fetching, programs: [{ ..linux_tool, name: "-tool" }] }) == Err("invalid program name: -tool") and
+					Project.validate({ ..fetching, programs: [{ ..linux_tool, name: "" }] }) == Err("invalid program name: ")
+
+# The URL rule names the program, the System and the URL it refuses.
+expect
+	Project.validate({ ..fetching, programs: [{ ..linux_roc, system: "aarch64-darwin", urls: ["http://x/roc.tar.gz"] }] }) == Err("program roc-stable on aarch64-darwin has a URL that is not a download URL; expected https://<host>/<path> with no credentials, query or fragment:\n    http://x/roc.tar.gz") and
+		Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["https://token@example.test/tool"] }] }).is_err() and
+			Project.validate({ ..fetching, programs: [{ ..linux_tool, urls: ["http://127.0.0.1:4000/tool"] }] }).is_ok()
+
+# An archive names the program inside it; a File is the program.
+expect
+	Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive:\n    ") and
+		Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "../roc" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive:\n    ../roc") and
+			Project.validate({ ..fetching, programs: [{ ..linux_roc, path: "/usr/bin/roc" }] }) == Err("program roc-stable on x86_64-linux: invalid path in its archive:\n    /usr/bin/roc") and
+				Project.validate({ ..fetching, programs: [{ ..linux_roc, unpack: Zip, path: "roc/roc.exe" }, { ..linux_tool, unpack: TarXz, path: "bin/tool" }] }).is_ok() and
+					Project.validate({ ..fetching, programs: [{ ..linux_tool, path: "tool" }] }) == Err("program tool on x86_64-linux: a File is the program itself and has no path:\n    tool")
+
+# A program shares no name with a source, an input or a build source, so that
+# `blueprint update <name>` means one thing.
+expect
+	["nix", "guix", "first", "data"].all(|name| Project.validate({ ..fetching, programs: [{ ..linux_tool, name }] }) == Err("program ${name} has the name of a source or input")) and
+		Project.validate({ ..fetching, requires_: ["programs", "sources"], build_sources: [{ name: "assets", ref: "path:./assets" }], programs: [{ ..linux_tool, name: "assets" }] }) == Err("program assets has the name of a source or input")
+
+# A selection names its environment once, with names a file on PATH can have.
+expect
+	Project.validate({ ..fetching, environment_programs: [{ environment: "missing", programs: ["tool"] }] }) == Err("unknown environment for program: missing") and
+		Project.validate({ ..fetching, expects: [{ environment: "missing", programs: ["git"] }] }) == Err("unknown environment for expected tool: missing") and
+			Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["tool"] }, { environment: "dev", programs: [] }] }) == Err("DuplicatePrograms: environment dev") and
+				Project.validate({ ..fetching, expects: [{ environment: "dev", programs: ["git"] }, { environment: "dev", programs: ["gh"] }] }) == Err("DuplicateExpect: environment dev") and
+					Project.validate({ ..fetching, expects: [{ environment: "dev", programs: ["git", "/usr/bin/gh"] }] }) == Err("invalid expected tool name in environment dev: /usr/bin/gh") and
+						Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["../tool"] }] }) == Err("invalid program name in environment dev: ../tool")
+
+# A selected program is a declared one, whichever environment selects it.
+expect
+	Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["roc-stable", "zig"] }] }) == Err("environment dev selects program zig, which no Fetch declares") and
+		Project.validate({ ..fetching, programs: [], environment_programs: [{ environment: "base", programs: ["roc-stable"] }] }) == Err("environment base selects program roc-stable, which no Fetch declares")
+
+# One name on PATH has one origin, in the environment and in what it inherits.
+expect {
+	command = { environment: "base", name: "roc-stable", tool: { source: "nix", name: "rocpkgs.nightly" } }
+	Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["tool"] }], expects: [{ environment: "dev", programs: ["tool"] }] }) == Err("environment dev has tool as both a program and an expected tool") and
+		Project.validate({ ..fetching, environment_programs: [{ environment: "dev", programs: ["tool"] }], expects: [{ environment: "base", programs: ["tool"] }] }) == Err("environment dev has tool as both a program and an expected tool") and
+			Project.validate({ ..fetching, commands: [command], environment_programs: [{ environment: "base", programs: ["roc-stable"] }] }) == Err("environment base has roc-stable as both a program and a Command") and
+				Project.validate({ ..fetching, commands: [command], environment_programs: [{ environment: "dev", programs: ["roc-stable"] }] }) == Err("environment dev has roc-stable as both a program and a Command") and
+					Project.validate({ ..fetching, commands: [command], expects: [{ environment: "dev", programs: ["roc-stable"] }] }) == Err("environment dev has roc-stable as both an expected tool and a Command") and
+					# A child's Command meets the tool its parent expects.
+						Project.validate({ ..fetching, commands: [{ ..command, environment: "dev" }], environment_programs: [{ environment: "base", programs: ["tool"] }], expects: [{ environment: "base", programs: ["roc-stable"] }] }) == Err("environment dev has roc-stable as both an expected tool and a Command") and
+						# Unrelated environments may take one name from different origins.
+							Project.validate({ ..fixture([{ ..base, tools: [], overlays: [] }, { name: "other", parents: [], tools: [], overlays: [] }]), requires_: ["programs", "expects", "commands"], programs: [linux_roc], commands: [{ ..command, environment: "other" }], environment_programs: [{ environment: "base", programs: ["roc-stable"] }] }).is_ok()
+}
+
+# What an environment needs is split by who supplies it, for one System: a
+# provider's tools from every way of declaring one, the programs that exist
+# there, the names of those that do not, what the machine must have, and each
+# Roc bundle with its URL. Inherited selections come first.
+expect {
+	git = { source: "nix", name: "git" }
+	zig = { source: "nix", name: "zigpkgs.\"0.16.0\"" }
+	spec = {
+		..fetching,
+		requires_: ["programs", "expects", "commands", "system-tools", "configured-tools", "roc-packages", "sources"],
+		environments: [{ ..base, tools: [git], overlays: [] }, { name: "dev", parents: ["base"], tools: [zig, git], overlays: [] }],
+		system_tools: [
+			{ environment: "dev", system: "x86_64-linux", tools: [{ source: "nix", name: "wayland" }] },
+			{ environment: "dev", system: "aarch64-darwin", tools: [{ source: "nix", name: "libiconv" }] },
+		],
+		commands: [{ environment: "base", name: "py", tool: { source: "nix", name: "python3" } }],
+		configured_tools: [{ environment: "dev", tool: rust, options: rust_targets([]) }],
+		environment_programs: [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["tool"] }],
+		expects: [{ environment: "dev", programs: ["gh"] }],
+		build_sources: [{ name: "roc-abc", ref: "tarball+https://example.test/releases/1.0/abc.tar.zst" }],
+		roc_packages: [{ environment: "base", name: "abc", source: "roc-abc" }],
+	}
+	project = Project.validate(spec)?
+	darwin_tool = { ..linux_tool, system: "aarch64-darwin", urls: ["https://example.test/tool-aarch64-darwin", "https://mirror.example.test/tool-aarch64-darwin"] }
+	bundles = [{ name: "abc", url: "https://example.test/releases/1.0/abc.tar.zst" }]
+	Project.environment_use(project, "dev", "x86_64-linux") == Ok({
+		tools: [git, zig, { source: "nix", name: "wayland" }, { source: "nix", name: "python3" }, rust],
+		programs: [linux_roc, linux_tool],
+		unavailable: [],
+		expects: ["gh"],
+		bundles,
+	})
+		and Project.environment_use(project, "dev", "aarch64-darwin") == Ok({
+			tools: [git, zig, { source: "nix", name: "libiconv" }, { source: "nix", name: "python3" }, rust],
+			programs: [darwin_tool],
+			unavailable: ["roc-stable"],
+			expects: ["gh"],
+			bundles,
+		})
+			and Project.environment_use(project, "base", "x86_64-linux") == Ok({ tools: [git, { source: "nix", name: "python3" }], programs: [linux_roc], unavailable: [], expects: [], bundles })
+				and Project.environment_use(project, "missing", "x86_64-linux") == Err("unknown environment: missing")
+}
+
+# An environment that declares nothing needs nothing, from anyone.
+expect Project.validate(fetching).map_ok(|project| Project.environment_use(project, "dev", "x86_64-linux")) == Ok(Ok({ tools: [], programs: [], unavailable: [], expects: [], bundles: [] }))
+
+# A Roc package is downloaded over HTTPS from a file of its own name, or the
+# environment cannot be planned at all.
+expect
+	["tarball+http://example.test/abc.tar.zst", "tarball+https://example.test/other.tar.zst", "https://example.test/abc.tar.zst", "github:example/abc.tar.zst"].all(
+		|ref|
+			match Project.validate({ ..fetching, requires_: ["programs", "roc-packages", "sources"], build_sources: [{ name: "roc-abc", ref }], roc_packages: [{ environment: "base", name: "abc", source: "roc-abc" }] }) {
+				Ok(project) => Project.environment_use(project, "dev", "x86_64-linux") == Err("Roc package abc is not a bundle that can be downloaded: ${ref}")
+				Err(_) => False
+			},
+	)
+
+# The bundle of a Roc package is a provider's to lock only where a build uses
+# it: in the build's own environment or one that environment extends. What
+# tasks and shells alone use is left out, and every other source stays.
+expect {
+	source = |name| { name, ref: "tarball+https://example.test/${name}.tar.zst" }
+	environment = |name, parents| { name, parents, tools: [], overlays: [] }
+	spec = {
+		..Spec.empty("bundles"),
+		systems: ["x86_64-linux"],
+		requires_: ["sources", "builds", "roc-packages"],
+		environments: [environment("packages", []), environment("scripts", ["packages"]), environment("tasks", []), environment("plain", [])],
+		build_sources: [source("roc-shared"), source("roc-scripts"), source("roc-tasks"), { name: "assets", ref: "path:./assets" }, { name: "roc-notes", ref: "path:./notes" }],
+		roc_packages: [
+			{ environment: "packages", name: "shared", source: "roc-shared" },
+			{ environment: "scripts", name: "scripts", source: "roc-scripts" },
+			{ environment: "tasks", name: "tasks", source: "roc-tasks" },
+		],
+		tasks: [{ name: "check", environment: "tasks", run: ["scripts/check.roc"] }],
+		builds: [{ name: "app", environment: "scripts", inputs: [], needs: [], run: ["true"], output: "out" }],
+	}
+	names = |project| Project.resolved_build_sources(project).map(|entry| entry.name)
+	# As declared and as validated, which flattens inheritance, alike.
+	names(spec) == ["roc-shared", "roc-scripts", "assets", "roc-notes"]
+		and Project.validate(spec).map_ok(names) == Ok(["roc-shared", "roc-scripts", "assets", "roc-notes"])
+			# With no build, no bundle is a provider's; a source that is not one stays.
+			and names({ ..spec, builds: [] }) == ["assets", "roc-notes"]
+				# A build in another environment does not make the tasks' bundle its own,
+				and names({ ..spec, builds: [{ name: "app", environment: "plain", inputs: [], needs: [], run: ["true"], output: "out" }] }) == ["assets", "roc-notes"]
+					# unless it lists the bundle's source among its inputs.
+					and names({ ..spec, builds: [{ name: "app", environment: "plain", inputs: ["roc-tasks"], needs: [], run: ["true"], output: "out" }] }) == ["roc-tasks", "assets", "roc-notes"]
+}

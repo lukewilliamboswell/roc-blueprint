@@ -2,24 +2,22 @@
 
 Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 
-Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
-
 [cols="3,5",options="header"]
 |===
 | Command
 | Meaning
 
 | `blueprint` / `blueprint gen`
-| Generate `.blueprint/` from existing matching authoritative pins
+| Generate the Nix files under `.blueprint/` from the lock. A project with no Nix package source has none, and nothing is generated
 
 | `blueprint shell [NAME]`
-| Generate the selected alias's environment, then enter it (default alias `default`)
+| Enter the environment of the shell alias `NAME` (default `default`): through `nix develop` when it has a tool from a Nix source, and otherwise in the caller's own shell
 
 | `blueprint run TASK [-- ARGS...]`
-| Generate the task's environment, then run its argv with extra arguments
+| Run the task's argv in its environment, with the extra arguments appended
 
 | `blueprint build NAME`
-| Snapshot and build an artifact plus dependencies; print its actual store path
+| Snapshot and build an artifact plus dependencies in Nix's sandbox; print its actual store path
 
 | `blueprint workflow NAME`
 | Execute an ordered task/build workflow, stopping on failure
@@ -28,10 +26,13 @@ Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 | List tasks and their environments
 
 | `blueprint update`
-| Explicitly initialize/update and atomically publish the authoritative lock
+| Write `Blueprint.lock`: the digest of every fetched program on every declared system, and the pins of package sources, inputs and build sources. See <<what-update-needs-and-records>>
 
-| `blueprint update INPUT...`
-| Update only the named package sources, inputs or build sources, keeping every other pin of a lock that is current for `Blueprint.roc`. Local `path:` inputs are read again either way
+| `blueprint update NAME...`
+| Update only the named package sources, inputs, build sources and fetched programs, keeping everything else of a lock that is current for `Blueprint.roc`. Local `path:` inputs are read again either way. A named program is resolved again whether or not its URLs changed
+
+| `blueprint requirements [--json] [TASK...]`
+| Say what the named tasks need, or every task: a provider, fetched programs, tools of the machine. See <<what-tasks-need>>
 
 | `blueprint check`
 | Run the compiler check and validate all shell/task/build environments without requiring a lock
@@ -43,27 +44,220 @@ Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 | Project help; subcommand help lists tasks, aliases and builds
 |===
 
+== What a run does, in order
+
+`blueprint run`, `shell`, `workflow` and `build` do the same things in the
+same order, and each stops the command before the next begins:
+
+. Read `Blueprint.roc` with the Roc compiler, and refuse what the
+  configuration alone rules out, such as a task that does not exist or a
+  program its recipe says is unavailable on this system.
+. Read `Blueprint.lock` and require that it matches `Blueprint.roc`.
+. Plan every step of the request. All problems are reported together: a
+  program the lock does not hold, one whose URLs changed, a build this
+  machine cannot run.
+. Look on `PATH` for every program the steps need of the machine: the tools
+  their environments `Expect`, and `nix` when a step has a tool from a Nix
+  source or is a build. Everything missing is named in one message.
+. Make every fetched program ready in the store, downloading what is not
+  there and checking each against the lock.
+. Run the steps. Each gets its Roc packages published and its fetched
+  programs first on `PATH`.
+
+Nothing is downloaded, generated or run for a request that fails an earlier
+check. xref:without-nix.adoc#the-store-of-downloads[Work without Nix]
+describes the store and the `PATH` of a step.
+
 == What each command validates
 
 Provider capability checks follow the requested environment closure; unrelated
 valid provider declarations do not block selected operations. Whole-project
 structural validation and required-feature checks still apply. Full rendering
-(`gen`, `update`, `check`, `flake`) checks all shell/task/build environments.
+(`gen`, `update`, `check`, `flake`) checks every shell, task and build
+environment that Nix builds; one with no tool from a Nix source is entered
+without Nix and is left out of the flake.
 
 == The lock and generated files
 
 * *Commit* `Blueprint.roc` and the authority (default `Blueprint.lock`, a
-  versioned S-expression listing each pinned source and its digest);
+  versioned S-expression listing each fetched program with its digest and
+  each pinned source with its revision and digest);
   generated state (default `.blueprint/`) is not committed: `blueprint`
-  writes a `.gitignore` there that ignores everything in it. A lock written
-  by an older `blueprint` is refused; run `blueprint update`.
-* Normal `gen`, `shell`, `run`, `build` and `workflow` require matching pins and never
-  rewrite authority or independently update derived locks.
+  writes a `.gitignore` there that ignores everything in it.
+* Normal `gen`, `shell`, `run`, `build` and `workflow` require a lock that
+  matches `Blueprint.roc` and never rewrite it. A lock that does not match
+  says what changed, and one in a format this `blueprint` does not read is
+  refused; both name `blueprint update`.
+* A fetched program is stale by itself. When its URLs in `Blueprint.roc` are
+  not those in the lock, only requests that use it fail, and
+  `blueprint update <name>` resolves it alone.
 * `nix develop` takes the bash it runs a shell or task with from a flake input
-  named `nixpkgs`, so the generated flake gives that name to the `default`
-  package source (or, without one, the first Nix package source declared) and
-  that bash is pinned by `Blueprint.lock` like every tool, unless the project
-  declares an input named `nixpkgs` itself.
+  named `nixpkgs`, so the generated flake gives that name to the first Nix
+  package source declared and that bash is pinned by `Blueprint.lock` like
+  every tool, unless the project declares an input named `nixpkgs` itself.
+
+[#what-tasks-need]
+== What tasks need
+
+`blueprint requirements` reads `Blueprint.roc` and nothing else: not `PATH`,
+not the store and not `Blueprint.lock`. It answers before anything is
+installed or resolved, and gives the same answer on every machine. The system
+is `BLUEPRINT_TARGET`, or the one it runs on.
+
+[source]
+----
+$ blueprint requirements
+system x86_64-linux
+providers: nix
+task check [dev]: programs roc-stable; expects gh, git; roc packages 2
+task host [zig]: provider nix (nix#zigpkgs."0.16.0"); programs roc-stable; expects gh, git; roc packages 2
+----
+
+With `--json` the report is one JSON object for a program to read:
+
+[source,json]
+----
+{"format":1,"system":"x86_64-linux","providers":["nix"],"expects":["gh","git"],"tasks":[
+ {"name":"check","environment":"dev","providers":[],"tools":[],"programs":["roc-stable"],"unavailable":[],"expects":["gh","git"],"roc_packages":2},
+ {"name":"host","environment":"zig","providers":["nix"],"tools":["nix#zigpkgs.\"0.16.0\""],"programs":["roc-stable"],"unavailable":[],"expects":["gh","git"],"roc_packages":2}]}
+----
+
+[cols="1,4",options="header"]
+|===
+| Field
+| Meaning
+
+| `format`
+| The number of this shape, `1`. Every field below is always present. A change a reader of format 1 could misread gets another number.
+
+| `system`
+| The system the report is for.
+
+| `providers`
+| The providers that must be on the machine to run the reported tasks on that system, each once. `"nix"` is there exactly when one of those tasks has, in its environment on that system, a tool from a Nix package source. A Nix source that is declared and that no reported task uses does not put it there. Neither does a shell, a build or `blueprint update`: they are not tasks, a build always needs Nix, and an update needs it whenever the project declares something Nix resolves.
+
+| `expects`
+| The programs those tasks expect the machine to have already, each once.
+
+| `tasks`
+| One object for each task, in the order asked, or in the order of `Blueprint.roc` when none is named.
+
+| `tasks[].providers`, `tasks[].tools`
+| The providers that task needs, by the same rule, and the tools they supply, as `Blueprint.roc` writes them.
+
+| `tasks[].programs`, `tasks[].unavailable`
+| The programs its environment fetches on that system, and those it lists that do not exist there. A task with an unavailable program cannot run on that system.
+
+| `tasks[].expects`, `tasks[].roc_packages`
+| The programs the task expects of the machine, and how many Roc packages its environment has.
+|===
+
+A task that is not declared is an error, and nothing is printed for the
+others. To install Nix only where it is needed, test whether `providers`
+holds `"nix"` for the tasks a job runs:
+
+[source,sh]
+----
+blueprint requirements --json check | jq -e '.providers | index("nix")'
+----
+
+== What update needs and records
+
+`blueprint update` is the one command that decides what a project uses. It
+writes the whole lock or nothing.
+
+=== Without Nix, and with it
+
+`blueprint update` starts Nix only when `Blueprint.roc` declares something Nix
+resolves: a Nix package source, an input or overlay, or a build source,
+including the bundle of a Roc package that a build uses. It looks for `nix`
+before doing anything else and says why it needs it:
+
+[source]
+----
+blueprint: this machine lacks what blueprint update needs, and blueprint installs none of it:
+  nix: Blueprint.roc declares the Nix source nix, which Nix resolves
+----
+
+A project that declares none of these is updated with no Nix on the machine.
+In a project that does, the pins Nix resolves and the digests of fetched
+programs share the one lock, and `blueprint update PROGRAM...`, naming
+fetched programs alone, asks Nix for nothing: it needs a lock that is already
+current for everything else. A name that is neither an input nor a program is
+an error that lists both kinds.
+
+=== The digests of fetched programs
+
+For each fetched program and each declared system, the lock holds the URLs the
+program is declared with, the SHA-256 and the length of the download, and how
+the digest was obtained:
+
+[cols="1,4",options="header"]
+|===
+| `obtained`
+| Meaning
+
+| `Computed`
+| `blueprint update` downloaded the bytes and hashed them. Nothing else was to be had.
+
+| `Published`
+| The release that serves the download reports this digest, and the bytes were not downloaded. A run on that system checks its download against it.
+
+| `Both`
+| It hashed the bytes, and the release reports the same digest and length.
+|===
+
+A reviewer of a lock change reads these: `Computed` alone rests on the one
+download `blueprint update` made, and `Published` on what the publisher's
+release says.
+
+An entry whose URLs are unchanged is kept, and nothing is asked or downloaded
+for it; a program named on the command line is resolved again regardless.
+Otherwise the download for the system the update runs on is fetched and
+hashed, and is kept in the store for the run that follows. A program that is
+the very download `blueprint` fetched as its own compiler, as a
+`Recipes.roc_nightly` of that nightly is, is hashed from the store and not
+fetched a second time.
+
+When the first URL is a GitHub release asset,
+`+https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>+`, the
+release is asked once what it publishes. A digest computed here that differs
+from the published one stops the update, and nothing is written. For another
+system the published digest is recorded and nothing is downloaded; an asset
+with no published digest, or a URL that is not a release asset, is downloaded
+and hashed instead.
+
+=== When the release cannot be asked
+
+The question to GitHub carries no token, and GitHub answers 60 such requests
+an hour from one address. A question that is refused, that cannot be put, or
+whose answer does not describe a release does not stop the update:
+`blueprint update` says so once for the release, downloads and hashes that
+release's assets for every system, and records each as `Computed`. A digest
+that is published and differs from the computed one always stops it. A run
+never asks GitHub anything.
+
+[source]
+----
+blueprint: could not ask for the digests roc-lang/nightlies publishes for its release nightly-2026-10-13-b17d287: HTTP 403 from https://api.github.com/repos/roc-lang/nightlies/releases/tags/nightly-2026-10-13-b17d287 (1 attempt). GitHub answers 60 such requests an hour from one address when no token is sent, and blueprint sends none. The digests of its downloads are computed by downloading each of them instead, and Blueprint.lock records them as computed
+----
+
+Such an update downloads the program for every declared system, where one
+that is answered downloads it for this machine alone.
+
+=== New download hosts
+
+After writing the lock, `blueprint update` prints every download host the new
+lock names and the lock before it did not, one to a line:
+
+[source]
+----
+Blueprint.lock now names download hosts it did not name before:
+  github.com
+----
+
+It prints nothing when there is none. A new host in a lock update is worth a
+reviewer's look.
 
 == Environment variables
 
@@ -73,8 +267,17 @@ structural validation and required-feature checks still apply. Full rendering
   choose caller paths; relative values resolve against the selected project
   root, not the invocation directory. Out-of-tree generated roots are supported.
 * *`BLUEPRINT_TARGET`* selects a declared target (default: this machine's
-  System). *`ROC`* selects the compatible compiler; unset, it is found on
-  `PATH` or fetched.
-* *`GH_TOKEN`* or *`GITHUB_TOKEN`*, on Windows only, authorizes the request for
-  a compiler's digest; see
-  xref:windows.adoc#the-compiler-roc-stable[Run tasks on Windows].
+  System).
+* *`ROC`* selects the compiler that reads `Blueprint.roc`, which must be the
+  nightly `blueprint` was built for; unset, a matching `roc` on `PATH` is
+  used, or the nightly is downloaded into the store.
+* *`XDG_CACHE_HOME`* names the directory that holds the store of downloads,
+  `blueprint/`, and Roc's package cache, `roc/packages` (default: `.cache` in
+  `HOME`).
+* *`SHELL`* names the program `blueprint shell` starts for an environment
+  with no tool from a Nix source (default: `/bin/sh`).
+* *`PATH`* is where expected tools, `nix`, `tar`, `ln` and `chmod` are found.
+
+No variable selects a provider or turns Nix on or off: `Blueprint.roc` alone
+decides what a request needs. No request `blueprint` makes carries a token or
+any other credential, and it reads none from the environment.

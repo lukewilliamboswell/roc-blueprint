@@ -1,3 +1,4 @@
+import cli.Duration
 import cli.Cmd
 import cli.Env
 import cli.OsStr
@@ -62,7 +63,7 @@ CliHarness := [].{
 	## Remove the temporary directory, whatever a case left in it.
 	close! : Bench => {}
 	close! = |bench| {
-		_ = Cmd.new_str("chmod").args_str(["-R", "u+w", "--", bench.work]).run!()
+		_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--", bench.work].map(OsStr.from_str)).run!()
 		_ = Path.delete_all!(Path.utf8(bench.work))
 		{}
 	}
@@ -198,8 +199,8 @@ CliHarness := [].{
 	tool! = |argv|
 		match argv {
 			[program, .. as args] =>
-				match Cmd.new_str(program).args_str(args).run!() {
-					Ok({ status: Exited(0), .. }) => Ok({})
+				match Cmd.new(OsStr.from_str(program)).args(args.map(OsStr.from_str)).run!() {
+					Ok(Cmd.Output.{ status: Exited(0), .. }) => Ok({})
 					_ => Script.fail!("${Str.join_with(argv, " ")} failed")
 				}
 
@@ -210,8 +211,8 @@ CliHarness := [].{
 	## inode number nor a mode, and a link count not at all.
 	stat! : Str, Str => Try(Str, _)
 	stat! = |format, file|
-		match Cmd.new_str("stat").args_str(["-c", format, "--", file]).run!() {
-			Ok({ status: Exited(0), stdout_bytes, .. }) => Ok(Str.from_utf8_lossy(stdout_bytes).trim())
+		match Cmd.new(OsStr.from_str("stat")).args(["-c", format, "--", file].map(OsStr.from_str)).run!() {
+			Ok(Cmd.Output.{ status: Exited(0), stdout_bytes, .. }) => Ok(Str.from_utf8_lossy(stdout_bytes).trim())
 			_ => Script.fail!("stat -c ${format} -- ${file} failed")
 		}
 
@@ -282,22 +283,22 @@ Call : { program : Str, args : List(Str), cwd : Str, env : List((OsStr, OsStr)) 
 
 command : Call -> Cmd
 command = |call|
-	Cmd.new_str(call.program).args_str(call.args).cwd(Path.utf8(call.cwd)).clear_envs().envs(call.env).timeout_ms(60000)
+	Cmd.new(OsStr.from_str(call.program)).args(call.args.map(OsStr.from_str)).cwd(Path.utf8(call.cwd)).clear_envs().envs(call.env).timeout(Duration.millis(60000))
 
 describe : Call -> Str
 describe = |call| Str.join_with([call.program].concat(call.args), " ")
 
-finished! : Try(Cmd.RunOutput, Cmd.RunErr), Str => Try(CliHarness.Outcome, _)
+finished! : Try(Cmd.Output, [Closed, CmdErr(Cmd.Err)]), Str => Try(CliHarness.Outcome, _)
 finished! = |ran, what|
 	match ran {
-		Ok({ status, stdout_bytes, stderr_bytes }) => {
-			code = match status {
+		Ok(output) => {
+			code = match output.status {
 				Exited(exit_code) => exit_code
 				Signaled(signal) => 128 + signal
 			}
-			Ok({ code, stdout: Str.from_utf8_lossy(stdout_bytes), stderr: Str.from_utf8_lossy(stderr_bytes) })
+			Ok({ code, stdout: Str.from_utf8_lossy(output.stdout_bytes), stderr: Str.from_utf8_lossy(output.stderr_bytes) })
 		}
-		Err(Timeout(_)) => Script.fail!("${what} did not finish in a minute")
+		Err(CmdErr(TimedOut(_))) => Script.fail!("${what} did not finish in a minute")
 		Err(_) => Script.fail!("could not run ${what}")
 	}
 
@@ -342,6 +343,7 @@ sample_authority = Lock.to_str(
 		intent: Lock.empty_intent,
 		sources: [],
 		hints: [{ provider: "nix", value: Locks.to_value(LockJson.decode("{\"graph\":{\"nodes\":{\"default\":{\"locked\":{\"rev\":\"abc\"}}},\"version\":7}}") ?? LockJson.Null) }],
+		fetched: [],
 	},
 )
 

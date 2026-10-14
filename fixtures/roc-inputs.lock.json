@@ -1,15 +1,15 @@
 {
-  "compiler": "nightly-2026-10-04-130536d",
+  "compiler": "nightly-2026-10-13-b17d287",
   "overlay": {
     "owner": "roc-lang",
     "repo": "roc-overlay",
-    "rev": "fb02fef7a45ddf115f558c8eaf32bd1ce2f9912f",
-    "nar_hash": "sha256-R4ZjP2ceAyOyllFY+8wE1LLFVV4qvjw2yix57tzu6g0="
+    "rev": "2883daa3ca02b87a10e194375ae01e2ef5e22d8d",
+    "nar_hash": "sha256-WorOv8SkoIf2C0HXPSvvQCsEygSR+9dDcPM0v0mwb3k="
   },
   "bundles": [
     {
-      "url": "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
-      "nar_hash": "sha256-1nUCET+ivhqMeByYOq+q999iZibZPczFUIwRpQqe5IY="
+      "url": "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
+      "nar_hash": "sha256-aL0aBlzirPFEltrfG0hQLLhw2am1ZgX36b/B2bXX0ds="
     },
     {
       "url": "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",

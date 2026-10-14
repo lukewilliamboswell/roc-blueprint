@@ -1,6 +1,6 @@
 #!/usr/bin/env roc
 app [main!] {
-	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 	nix: "../../blueprint-nix/main.roc",
 }
 
@@ -10,7 +10,6 @@ import cli.OsStr
 import cli.Path
 import cli.Sleep
 import cli.Stderr
-import cli.Stdin
 import cli.Stdout
 import cli.Utc
 import StubTool
@@ -23,20 +22,18 @@ import StubTool
 ##   roc-record  record the arguments, then run `STUB_REAL_ROC` with them
 ##   roc-wire    `version` prints `STUB_ROC_VERSION`; `Blueprint.roc` prints `./wire.scm`
 ##   roc-probe   record; `version` prints `STUB_PROBE_VERSION`, exits `STUB_PROBE_STATUS`
-##   roc-stable  record, then print the arguments on one line
+##   roc-stable  record, then print the arguments on one line; with
+##               `STUB_SHOW_EXE`, first print the file this process is, links
+##               resolved. `program` is the same under another file name.
 ##   nix         record; `flake update [INPUT...]` writes a `flake.lock` from `STUB_NIX_FIXTURE`
 ##               as `STUB_NIX_MODE` says (`declared` or `local`, the latter with
 ##               `STUB_NIX_REV`), after waiting at `STUB_NIX_PAUSE` if set;
-##               `build` prints `STUB_NIX_OUT`; `develop` exits 23 if `STUB_NIX_FAIL`
+##               `build` prints `STUB_NIX_OUT`; `develop` exits 23 if `STUB_NIX_FAIL`,
+##               and with `STUB_NIX_RUN` runs what follows `--command`, as it is
+##               found on this process's PATH
 ##   guix        record, exit 99
 ##   python3     record in the directory `STUB_PYTHON_LOG`, exit 97
 ##   readlink    print `STUB_READLINK`, or exit 1 without it
-##   curl        record, in the directory `STUB_CURL_LOG` if set; exit
-##               `STUB_CURL_STATUS` if set; with `--output FILE` copy
-##               `STUB_CURL_ARCHIVE` there, otherwise print the file `STUB_CURL_RELEASE`
-##   zig         record; `version` prints `STUB_ZIG_VERSION`
-##   tar         record; `-xf ARCHIVE -C DIRECTORY` copies the tree `STUB_TAR_TREE`
-##               into the directory
 ##
 ## A record is one file holding one line of JSON, in `<name>-calls/` under the
 ## working directory. It runs nothing through a shell.
@@ -63,26 +60,17 @@ main! = |args| {
 
 act! : StubTool.Role, List(OsStr) => Try(I32, Str)
 act! = |role, args| {
-	given = args.map(OsStr.display)
-	# What `curl --config -` reads from standard input is part of the request:
-	# it is recorded as a last argument, `stdin:<text>`.
-	argv = match role {
-		Curl if StubTool.curl_reads_input(given) => {
-			text = Stdin.read_to_end!().map_err(|_| "cannot read standard input")?
-			given.append("stdin:${Str.from_utf8_lossy(text)}")
-		}
-		_ => given
-	}
+	argv = args.map(OsStr.display)
 	match role {
 		RocRecord => {
 			record!("roc-calls", argv)?
 			real = variable!("STUB_REAL_ROC")?
 			# There is no exec here: the compiler is a child with this process's
 			# streams, and its status becomes this process's.
-			ran = Cmd.new_str(real).args(args).stdin(Inherit).stdout(Inherit).stderr(Inherit).run!()
+			ran = Cmd.new(OsStr.from_str(real)).args(args).stdin(Inherit).stdout(Inherit).stderr(Inherit).run!()
 			match ran {
-				Ok({ status: Exited(code), .. }) => Ok(code)
-				Ok({ status: Signaled(signal), .. }) => Ok(128 + signal)
+				Ok(Cmd.Output.{ status: Exited(code), .. }) => Ok(code)
+				Ok(Cmd.Output.{ status: Signaled(signal), .. }) => Ok(128 + signal)
 				Err(_) => Err("could not run ${real}")
 			}
 		}
@@ -118,6 +106,8 @@ act! = |role, args| {
 					if optional!("STUB_NIX_FAIL").is_ok() {
 						_ = Stderr.line!("native package command failed")
 						Ok(23)
+					} else if optional!("STUB_NIX_RUN").is_ok() {
+						entered!(argv)
 					} else {
 						Ok(0)
 					}
@@ -141,50 +131,30 @@ act! = |role, args| {
 
 		RocStable => {
 			record!("roc-stable-calls", argv)?
-			written!("stub roc-stable: ${Str.join_with(argv, " ")}\n")
-		}
-		Curl => {
-			record!(optional!("STUB_CURL_LOG") ?? "curl-calls", argv)?
-			match optional!("STUB_CURL_STATUS") {
-				Ok(status) => {
-					_ = Stderr.line!("curl: (22) the stub was told to fail")
-					I32.from_str(status).map_err(|_| "STUB_CURL_STATUS is not a number: ${status}")
-				}
-				Err(_) =>
-					match StubTool.curl_output(argv) {
-						Ok(file) => {
-							archive = variable!("STUB_CURL_ARCHIVE")?
-							Path.copy!(Path.utf8(archive), Path.utf8(file)).map_err(|_| "cannot copy ${archive} to ${file}")?
-							Ok(0)
-						}
-						Err(NoOutput) => {
-							release = variable!("STUB_CURL_RELEASE")?
-							written!(Path.read_utf8!(Path.utf8(release)).map_err(|_| "cannot read ${release}")?)
-						}
-					}
+			shown = match optional!("STUB_SHOW_EXE") {
+				Ok(_) => "exe: ${Env.exe_path!().map_ok(Path.display) ?? "unknown"}\n"
+				Err(_) => ""
 			}
-		}
-		Zig => {
-			record!("zig-calls", argv)?
-			match argv {
-				["version"] => written!("${variable!("STUB_ZIG_VERSION")?}\n")
-				_ => Ok(0)
-			}
-		}
-		Tar => {
-			record!("tar-calls", argv)?
-			match argv {
-				["-xf", _, "-C", directory] => {
-					tree = variable!("STUB_TAR_TREE")?
-					Path.copy_dir_with!(Path.utf8(tree), Path.utf8(directory), { symlinks: Preserve, destination: Merge })
-						.map_err(|_| "cannot copy ${tree} into ${directory}")?
-					Ok(0)
-				}
-				_ => Err("unexpected tar arguments: ${Str.inspect(argv)}")
-			}
+			written!("${shown}stub roc-stable: ${Str.join_with(argv, " ")}\n")
 		}
 	}
 }
+
+## Stand in for `nix develop ... --command`: run the command as a child with
+## this process's streams and environment, and end as it ends.
+entered! : List(Str) => Try(I32, Str)
+entered! = |argv|
+	match argv {
+		["--command", program, .. as rest] =>
+			match Cmd.new(OsStr.from_str(program)).args(rest.map(OsStr.from_str)).stdin(Inherit).stdout(Inherit).stderr(Inherit).run!() {
+				Ok(Cmd.Output.{ status: Exited(code), .. }) => Ok(code)
+				Ok(Cmd.Output.{ status: Signaled(signal), .. }) => Ok(128 + signal)
+				Err(_) => Err("could not run ${program}")
+			}
+
+		[_, .. as rest] => entered!(rest)
+		[] => Ok(0)
+	}
 
 ## A variable that is set and not empty.
 optional! : Str => Try(Str, [Unset])
@@ -210,7 +180,7 @@ record! = |directory, argv| {
 	self = Path.canonicalize!(Path.utf8("/proc/self")).map_ok(Path.display).map_err(|_| "cannot read /proc/self")?
 	pid = self.split_on("/").last() ?? ""
 	Path.create_all!(Path.utf8(directory)).map_err(|_| "cannot create ${directory}")?
-	file = "${directory}/${StubTool.record_file(Utc.now!(), pid)}"
+	file = "${directory}/${StubTool.record_file(Utc.now!().to_nanos_since_epoch(), pid)}"
 	Path.write_utf8!(Path.utf8(file), StubTool.record(argv)).map_err(|_| "cannot write ${file}")
 }
 

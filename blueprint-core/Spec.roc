@@ -21,6 +21,9 @@ Spec := {
 	commands : List({ environment : Str, name : Str, tool : { source : Str, name : Str } }),
 	configured_tools : List({ environment : Str, tool : { source : Str, name : Str }, options : Value }),
 	roc_packages : List({ environment : Str, name : Str, source : Str }),
+	programs : List({ name : Str, system : Str, urls : List(Str), unpack : [File, TarGz, TarXz, Zip], path : Str }),
+	environment_programs : List({ environment : Str, programs : List(Str) }),
+	expects : List({ environment : Str, programs : List(Str) }),
 	shells : List({ name : Str, environment : Str }),
 	tasks : List({ name : Str, environment : Str, run : List(Str) }),
 	build_sources : List({ name : Str, ref : Str }),
@@ -44,6 +47,10 @@ Spec := {
 	encoder_for : _
 
 	Format : { major : U64, minor : U64 }
+
+	## Which package set a source is. `Auto` is read and never written: a
+	## Spec or a Lock from before sources were explicit holds it, and
+	## `Project.validate` refuses a Spec that does.
 	Provider : [Auto, NixPackages(Str), GuixPackages(Str)]
 	Source : { name : Str, provider : Provider }
 	Input : { name : Str, url : Str, kind : [Overlay, Flake] }
@@ -65,6 +72,28 @@ Spec := {
 	## for in its package cache; `source` names the locked build source that
 	## fetches it.
 	RocPackage : { environment : Str, name : Str, source : Str }
+
+	## What a download is: `File` is the program itself; the others are an
+	## archive to unpack whole, of which the program is one file.
+	Unpack : [File, TarGz, TarXz, Zip]
+
+	## A program downloaded for one System, under the command name `name`.
+	## There is one entry per System it exists for: a program with no entry
+	## for a System is unavailable there. `urls` is where the download is, the
+	## primary first and then alternates for the same bytes, each once; it is
+	## never empty. `path` is the program inside the unpacked archive, and
+	## empty for a `File`. The Lock holds the one SHA-256 of what every URL
+	## serves; the Spec never does. A Spec that declares or selects a program
+	## requires the feature `programs`.
+	Program : { name : Str, system : Str, urls : List(Str), unpack : Unpack, path : Str }
+
+	## The declared programs an environment has on PATH, by name.
+	EnvironmentPrograms : { environment : Str, programs : List(Str) }
+
+	## Programs an environment's commands expect the machine to have on PATH
+	## already. They are checked for, never installed and never version-pinned.
+	## A Spec that holds any requires the feature `expects`.
+	Expects : { environment : Str, programs : List(Str) }
 	Shell : { name : Str, environment : Str }
 	Task : { name : Str, environment : Str, run : List(Str) }
 
@@ -86,7 +115,7 @@ Spec := {
 	Raw : { backend : Str, target : Str, value : Value }
 
 	current_format : Format
-	current_format = { major: 2, minor: 6 }
+	current_format = { major: 2, minor: 7 }
 
 	empty : Str -> Spec
 	empty = |name| Spec.{
@@ -101,6 +130,9 @@ Spec := {
 		commands: [],
 		configured_tools: [],
 		roc_packages: [],
+		programs: [],
+		environment_programs: [],
+		expects: [],
 		shells: [],
 		tasks: [],
 		build_sources: [],
@@ -136,6 +168,9 @@ Spec := {
 				commands: wire.commands ?? [],
 				configured_tools: wire.configured_tools ?? [],
 				roc_packages: wire.roc_packages ?? [],
+				programs: wire.programs ?? [],
+				environment_programs: wire.environment_programs ?? [],
+				expects: wire.expects ?? [],
 				shells: wire.shells ?? [],
 				tasks: wire.tasks ?? [],
 				build_sources: wire.build_sources ?? [],
@@ -163,6 +198,9 @@ Wire : {
 	commands : Try(List(Spec.Command), [Missing]),
 	configured_tools : Try(List(Spec.ConfiguredTool), [Missing]),
 	roc_packages : Try(List(Spec.RocPackage), [Missing]),
+	programs : Try(List(Spec.Program), [Missing]),
+	environment_programs : Try(List(Spec.EnvironmentPrograms), [Missing]),
+	expects : Try(List(Spec.Expects), [Missing]),
 	shells : Try(List(Spec.Shell), [Missing]),
 	tasks : Try(List(Spec.Task), [Missing]),
 	build_sources : Try(List(Spec.BuildSource), [Missing]),
@@ -192,11 +230,44 @@ expect {
 expect {
 	options = Value.Attrs([{ name: "targets", value: Value.List([Value.Str("x86_64-unknown-linux-musl")]) }])
 	spec = { ..Spec.empty("x"), requires_: ["configured-tools"], configured_tools: [{ environment: "dev", tool: { source: "default", name: "rust-bin.stable.\"1.95.0\".default" }, options }] }
-	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 6 }
+	Spec.parse(spec.to_str()) == Ok(spec)
 }
 
 # A 2.5 record has no configured tools.
 expect Spec.parse("((format ((major 2) (minor 5))) (name \"x\"))").map_ok(|spec| spec.configured_tools) == Ok([])
+
+# Fetched programs, one entry per System, with what selects and expects them.
+expect {
+	spec = {
+		..Spec.empty("x"),
+		requires_: ["programs", "expects"],
+		programs: [
+			{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc-linux.tar.gz"], unpack: TarGz, path: "roc/roc" },
+			{ name: "roc-stable", system: "x86_64-windows", urls: ["https://example.test/roc-windows.zip"], unpack: Zip, path: "roc/roc.exe" },
+			{ name: "notes", system: "x86_64-linux", urls: ["https://example.test/notes.tar.xz", "https://mirror.example.test/notes.tar.xz"], unpack: TarXz, path: "bin/notes" },
+			{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux"], unpack: File, path: "" },
+		],
+		environment_programs: [{ environment: "dev", programs: ["roc-stable", "tool"] }],
+		expects: [{ environment: "dev", programs: ["gh", "git"] }],
+	}
+	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 7 }
+}
+
+# A 2.6 record, as blueprint 0.5 printed it, has none of them.
+expect match Spec.parse("((format ((major 2) (minor 6))) (name \"x\") (requires (\"commands\")) (commands (((environment \"dev\") (name \"roc-stable\") (tool ((source \"default\") (name \"rocpkgs.nightly\")))))))") {
+	Ok(spec) => spec.format == { major: 2, minor: 6 } and spec.programs == [] and spec.environment_programs == [] and spec.expects == [] and spec.commands.len() == 1
+	Err(_) => False
+}
+
+# A consumer that predates them refuses the Spec by the features' names.
+expect match Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (requires (\"programs\" \"expects\")))") {
+	Ok(spec) => Spec.unsupported_features(spec, ["raw", "sources", "commands"]) == ["programs", "expects"]
+	Err(_) => False
+}
+
+# An unpacking the consumer does not know is not dropped as optional data.
+expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a.7z\")) (unpack SevenZip) (path \"a\")))))").is_err()
+expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (unpack File) (path \"\")))))").is_err()
 expect Spec.parse("((format ((major 1) (minor 0))) (shells 42))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
 expect Spec.parse("((format ((major 3) (minor 0))))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))
 # Earlier minor records omit newer optional build and workflow fields.
@@ -259,3 +330,7 @@ expect Spec.parse(
 	\\ (workflows (((name "ci")))))
 	,
 ).is_err()
+
+# A 2.7 program entry names its URLs as a list; one bare `url` is not it.
+expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (url \"https://example.test/a\") (unpack File) (path \"\")))))").is_err()
+expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a\" \"https://mirror.example.test/a\")) (unpack File) (path \"\")))))").map_ok(|spec| spec.programs.map(|program| program.urls)) == Ok([["https://example.test/a", "https://mirror.example.test/a"]])

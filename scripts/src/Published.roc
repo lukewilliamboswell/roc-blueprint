@@ -22,7 +22,9 @@ Published := [].{
 			_ => Err(NoPlatformBundle)
 		}
 
-	## A first `Blueprint.roc`, as an AsciiDoc source block.
+	## A first `Blueprint.roc`, as an AsciiDoc source block: the smallest
+	## project, which takes nothing from Nix. `scripts/test_config.roc`
+	## compiles it with the rest of the manual's Roc.
 	snippet : Str -> Str
 	snippet = |platform_url|
 		Str.join_with(
@@ -31,20 +33,17 @@ Published := [].{
 				"----",
 				"app [config] { pf: platform \"${platform_url}\" }",
 				"",
+				"import pf.Recipes",
+				"",
 				"config = [",
 				"	Name(\"my-project\"),",
-				"	Systems([\"x86_64-linux\", \"aarch64-linux\", \"aarch64-darwin\"]),",
-				"	Overlay(\"roc\", \"github:roc-lang/roc-overlay\"),",
-				"	Environment(\"base\", [Tools([\"git\", \"zig\"])]),",
 				"	Environment(\"dev\", [",
-				"		Extend(\"base\"),",
-				"		Tools([\"rocpkgs.nightly\", \"python3\", \"sqlite\"]),",
-				"		Overlays([\"roc\"]),",
+				"		Programs([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-10-13-b17d287\"))]),",
+				"		Expect([\"git\"]),",
 				"	]),",
 				"	Shell(\"default\", [Use(\"dev\")]),",
-				"	Shell(\"ci\", [Use(\"base\")]),",
-				"	Task(\"version\", [Use(\"dev\"), Run([\"python3\", \"--version\"])]),",
-				"	Task(\"check\", [Use(\"base\"), Run([\"git\", \"--version\"])]),",
+				"	Task(\"version\", [Use(\"dev\"), Run([\"roc-stable\", \"version\"])]),",
+				"	Task(\"status\", [Use(\"dev\"), Run([\"git\", \"status\", \"--short\"])]),",
 				"]",
 				"----",
 				"",

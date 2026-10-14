@@ -8,20 +8,65 @@ request, with whatever the new compiler breaks fixed in the same request.
 To move the product compiler:
 
 . Put the nightly's tag in `blueprint-cli/compiler-version`.
+. Replace the entries of `compilers` in `blueprint-cli/Bootstrap.roc` (see
+   <<the-bootstrap-table>>) with the nightly's.
 . If the locked roc-overlay predates that nightly, run
-   `nix flake update roc-overlay` and set `NixProvider.roc_overlay` to the
-   value `scripts/test.roc static` asks for.
+   `nix flake update roc-overlay`.
 . Set the compiler and overlay in `fixtures/roc-inputs.lock.json` to match.
 . Move the basic-cli release in `blueprint-cli/main.roc`, the fixtures, the
-   examples and `rocPackages` in `flake.nix` if the nightly needs a newer one.
-. Replace the entries of `compilers` in `blueprint-host/HostProvider.roc`
-   with the nightly's tag and the SHA-256 of each of its compiler archives,
-   which `gh release view <tag> --repo roc-lang/nightlies --json assets`
-   reports. `scripts/test.roc static` fails until the tag is there.
+   examples, `scripts/src/SmokeBinary.roc` and `rocPackages` in `flake.nix`
+   if the nightly needs a newer one.
+. Move the nightly the manual's examples and `Published.snippet` fetch as
+   `roc-stable`, so that a reader's first project downloads one archive for
+   both the compiler `blueprint` uses and the one its scripts run on.
 . Set the hash of `rocGlueSpec` in `flake.nix` to that of the nightly's
    source archive, which `nix build .#roc-glue-spec` reports, and run
    `scripts/check_glue.roc --update`. Commit the bindings it changes together
    with whatever the host needs to build against them.
+
+[#the-bootstrap-table]
+=== The bootstrap table
+
+A project has no lock until its `Blueprint.roc` has been read, so the digest
+of the compiler that reads it cannot come from one. `blueprint` carries it:
+`compilers` in `blueprint-cli/Bootstrap.roc` holds, for the nightly in
+`blueprint-cli/compiler-version` and each system `blueprint` runs on, the
+URL of the compiler archive in roc-lang/nightlies, its SHA-256, its size, its
+format and the path of `roc` inside it.
+
+[cols="2,3",options="header"]
+|===
+| System
+| Archive of the nightly
+
+| `x86_64-linux`
+| `roc_nightly-linux_x86_64-<date>-<commit>.tar.gz`
+
+| `aarch64-linux`
+| `roc_nightly-linux_arm64-<date>-<commit>.tar.gz`
+
+| `aarch64-darwin`
+| `roc_nightly-macos_apple_silicon-<date>-<commit>.tar.gz`
+
+| `x86_64-darwin`
+| `roc_nightly-macos_x86_64-<date>-<commit>.tar.gz`
+
+| `x86_64-windows`
+| `roc_nightly-windows_x86_64-<date>-<commit>.zip`
+|===
+
+`gh release view <tag> --repo roc-lang/nightlies --json assets` reports each
+asset's `digest` and `size`. The entries are data and nothing else: no rule
+derives a URL. `scripts/test.roc static` fails until every system `blueprint`
+runs on has an entry of the nightly in `compiler-version`.
+
+With `ROC` unset and no matching `roc` on `PATH`, `blueprint` downloads its
+system's archive into the per-user store and checks it against the entry
+before using it; it starts no provider to read a `Blueprint.roc`. The entry
+names the same download as `Recipes.roc_nightly` of that tag, so a project
+that fetches that nightly as `roc-stable` holds it once, and
+`blueprint update` records its digest from the store without a second
+download.
 
 To move the scripts' compiler, change `rocStableTag` in `flake.nix` and the
 `roc: "<tag>"` field in the header of each `scripts/*.roc` to the same tag;
@@ -38,12 +83,12 @@ The required checks are listed under
 <<repository-settings-the-workflows-rely-on>>. Keep their names aligned with
 the workflows when changing CI.
 
-The October 4 nightly (`nightly-2026-10-04-130536d`) rejects redundant type
-exposes, so it needs the basic-cli 0.24.0 release and roc-fuzz 0.4.3.
+basic-cli 0.26.0-rc2 requires the October 12 nightly or later. This repository
+pins `nightly-2026-10-13-b17d287` for the product and scripts, with roc-fuzz 0.4.3.
 
 The complete suite requires x86_64 Linux and a running Nix daemon; the
 development shell supplies the rest. `zig build` builds the platform host for
-all four targets, so on Apple Silicon macOS the CLI's tests, the native CLI and
+all five targets, so on Apple Silicon macOS the CLI's tests, the native CLI and
 the evaluation of a `Blueprint.roc` work too. Sandboxed builds, and so the
 `scenarios`, `builds` and `package` groups, remain x86_64 Linux only.
 
@@ -112,8 +157,12 @@ roc-overlay revision in `flake.lock` and the compiler at the nightly in
 `blueprint-cli/compiler-version`, all compiled into the smoke program. A
 release therefore does not depend on what moved upstream that day.
 `.github/workflows/floating.yml` runs the same test weekly with `--floating`,
-which resolves what a new user's project would: Blueprint's default package
-source, the overlay's default branch and its newest nightly.
+which resolves what a new user's project would: a branch of nixpkgs, the
+overlay's default branch and its newest nightly.
+With `--no-nix` the same program writes a project that takes nothing from
+Nix and requires a machine that has none; the `no-nix` job of `ci.yml` runs
+it on all four released systems (see
+xref:contributing.adoc#the-job-with-no-nix[The job with no Nix]).
 
 `build_release.roc` takes its compiler from the flake: `nix build .#roc-cross`
 is the x86_64 Linux compiler archive of the nightly in
@@ -121,13 +170,11 @@ is the x86_64 Linux compiler archive of the nightly in
 `darwin/` sysroot of the Apple Silicon archive beside it, which Roc needs to
 link macOS programs. Both are fetched by the URL and hash the locked
 roc-overlay records. The package is not in the development shell, so only a
-release build downloads the macOS archive. The three CLI binaries are compiled
+release build downloads the macOS archive. The four CLI binaries are compiled
 at the same time, each about 2.3 GB at its peak.
 
-A binary fetches the compiler named in `blueprint-cli/compiler-version` from the roc-overlay
-revision in `NixProvider.roc_overlay`. Change that constant whenever
-`flake.lock` moves the `roc-overlay` input; `scripts/test.roc` fails when the two
-differ.
+A binary downloads the compiler named in `blueprint-cli/compiler-version`
+by the digest it records; see <<the-bootstrap-table>>.
 
 === Write the release notes
 
@@ -205,10 +252,12 @@ roc-automation's
 https://lukewilliamboswell.github.io/roc-automation/actions.html#setup-blueprint[`setup-blueprint`]
 action downloads `blueprint-x86_64-linux`, `blueprint-aarch64-linux` and
 `blueprint-aarch64-darwin` from the release a caller names, exactly as
-published, and callers copy the SHA-256 values from `blueprint.sha256`.
+published. This release also includes `blueprint-x86_64-windows.exe`; the
+setup action does not yet install it. Callers copy the SHA-256 values from
+`blueprint.sha256`.
 Renaming an asset, archiving the binaries or changing the checksum file breaks
 every caller. `scripts/release_assets.roc` fails the build unless exactly
-those four names are present, and the publish job checks again before it
+those five names are present, and the publish job checks again before it
 uploads. A binary for another system is an addition; it does not change these.
 
 The platform bundle is the one `.tar.zst` asset named by its hash alone, and
@@ -245,48 +294,29 @@ If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
 == What remains for Windows
 
 https://github.com/lukewilliamboswell/roc-blueprint/issues/40[Issue #40] asks
-for `blueprint run` on Windows. The part that needs nothing from upstream is
-merged: the host provider in `blueprint-host/`, which
-xref:windows.adoc#run-tasks-on-windows[Run tasks on Windows] describes. It is
-tested on Linux only. No Windows binary is built or released, and the platform
-has no Windows target, so a Windows user cannot run any of it yet.
+for `blueprint run` on Windows. What needs nothing from upstream is in place:
+a task whose environment has no Nix tool runs with no provider, from fetched
+programs, expected tools and Roc packages, and the planner, the store's
+location and `Recipes.roc_nightly` have their Windows forms. The Windows
+target and release binary are built in CI; the Nix-free smoke test runs on
+Linux, macOS and Windows.
 
-TODO(#40): the rest waits on three things upstream.
+The upstream prerequisites are now released: basic-cli 0.26.0-rc2 supplies
+its Windows MSVC host and runtime, the pinned Roc nightly links from listed
+inputs, and the locked roc-platform-template-zig release supplies this
+platform's startup and import libraries.
 
-* roc-overlay must package a nightly at or after `nightly-2026-10-11-7d256b9`,
-  the first that links a Windows program from the inputs a platform lists and
-  so can cross-link one on Linux, without the Windows SDK.
-* basic-cli must release a version whose `x64win` target lists a startup
-  object and a C runtime, which that nightly requires. The CLI is a basic-cli
-  program and does not link for Windows without it.
-* roc-platform-template-zig must publish a linker-inputs release with the
-  Windows startup inputs, for this repository's own Zig host.
+`zig build` builds `targets/x64win/host.lib`; the platform bundle carries it
+and the verified Windows linker inputs. `scripts/build_release.roc` builds
+`blueprint-x86_64-windows.exe` and its smoke program. The `no-nix` CI job runs
+that program on `windows-latest`, fetching the compiler, updating a lock,
+reporting requirements and building and running a basic-cli program twice.
+Windows skips `chmod` and exposes fetched programs with hard links, falling
+back to a copy across volumes. Archives use the machine's bsdtar.
 
-When they exist, in one pull request:
-
-. Move the product compiler to that nightly, as <<move-a-compiler>> describes,
-  with the basic-cli release and `link-inputs.lock.json`.
-. Add the platform's `x64win` target: `blueprint-platform/build.zig`, the
-  `targets:` section of `blueprint-platform/main.roc`, and the bundle and
-  artifact globs, which must learn `host.lib`.
-. Cross-build `blueprint-x86_64-windows.exe` in `scripts/src/Release.roc`.
-. Add a `.gitattributes` that keeps line endings as they are committed.
-. Add a `windows-latest` job that runs the cross-built binary on a committed
-  `Blueprint.roc` and `Blueprint.lock`, the lock written on Linux.
-. Attach the binary to the release and add its line to `blueprint.sha256`.
-  The existing asset names do not change.
-. Check each claim in the Windows chapter on that runner, and remove the
-  notice at its head.
-
-Known limits of what is merged, to settle then:
-
-* `roc-stable` is checked against a digest asked of GitHub at run time, not
-  one recorded in `Blueprint.lock` (xref:architecture.adoc#inv-3[invariant 3]).
-  `blueprint update` could record it.
-* curl and tar are run from `C:/Windows/System32`. A provider cannot ask where
-  Windows is installed.
-* A project whose evaluating compiler and `roc-stable` are the same nightly
-  downloads it twice.
+The full Nix suites remain Linux-only. Windows 10 and 11 desktop execution
+has not been verified here; the CI runner checks Windows Server. Tasks must
+invoke their interpreter explicitly, for example `Run(["roc-stable", "hello.roc"])`.
 
 == Upstream workarounds still in place
 

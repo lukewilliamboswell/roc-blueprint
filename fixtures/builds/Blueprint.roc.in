@@ -15,11 +15,11 @@ config = [
 		"builder",
 		[
 			Overlays(["roc"]),
-			Command("roc-stable", "rocpkgs.@ROC_COMPILER@"),
+			Command("roc-stable", "default#rocpkgs.@ROC_COMPILER@"),
 			RocPackages([@ROC_PACKAGES@]),
 		],
 	),
-	Environment("coreutils", [Tools(["coreutils"])]),
+	Environment("coreutils", [Tools(["default#coreutils"])]),
 	Environment("bare", []),
 	Packages("foreign", From(GuixPackages("https://example.invalid/guix"))),
 	Environment("foreign", [Tools(["foreign#python"])]),

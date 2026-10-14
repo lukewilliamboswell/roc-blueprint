@@ -24,15 +24,15 @@ Process := [].{
 	## A program with string arguments, run in `directory`.
 	command : Str, List(Str), Str -> Job
 	command = |program, args, directory| {
-		cmd: Cmd.new_str(program).args_str(args).cwd(Path.utf8(directory)),
+		cmd: Cmd.new(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(Path.utf8(directory)),
 		label: Str.join_with([program.split_on("/").last() ?? program].concat(args), " "),
 	}
 
 	## The same command with these environment variables added.
 	with_env : Job, List((Str, Str)) -> Job
-	with_env = |job, variables| { ..job, cmd: job.cmd.envs_str(variables) }
+	with_env = |job, variables| { ..job, cmd: job.cmd.envs(variables.map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) }
 
-	outcome : Cmd.RunOutput -> Outcome
+	outcome : Cmd.Output -> Outcome
 	outcome = |output| {
 		code = match output.status {
 			Exited(exit_code) => exit_code
@@ -71,9 +71,9 @@ Process := [].{
 	passthrough! : Job => Try({}, _)
 	passthrough! = |job| {
 		Stdout.line!("RUN  ${job.label}")?
-		match Cmd.exec_exit_code!(job.cmd) {
-			Ok(0) => Ok({})
-			Ok(code) => Script.fail!("${job.label} exited with code ${code.to_str()}")
+		match job.cmd.inherit_stdio().run!() {
+			Ok(Cmd.Output.{ status: Exited(0), .. }) => Ok({})
+			Ok(output) => Script.fail!("${job.label} exited with code ${outcome(output).code.to_str()}")
 			Err(_) => Script.fail!("could not run ${job.label}")
 		}
 	}
@@ -116,14 +116,18 @@ Process := [].{
 	## through a symbolic link.
 	holds_program! : Str, Str => Bool
 	holds_program! = |directory, name|
-		match Path.canonicalize!(Path.utf8("${directory}/${name}")) {
+		match Path.canonicalize!(Path.utf8("${directory}/${name}${if Env.platform!().os == WINDOWS ".exe" else ""}")) {
 			Ok(real) => !directory.is_empty() and (Path.is_file!(real) ?? False) and (Path.is_executable!(real) ?? False)
 			Err(_) => False
 		}
 
+	## Canonical OS paths as portable text.
+	portable : Str -> Str
+	portable = |value| value.replace_each("\\", "/").drop_prefix("//?/")
+
 	## The directories of `PATH`, in order.
 	search_path! : () => List(Str)
-	search_path! = || (Env.var_str!(OsStr.from_str("PATH")) ?? "").split_on(":").keep_if(|directory| !directory.is_empty())
+	search_path! = || (Env.var_str!(OsStr.from_str("PATH")) ?? "").split_on(if Env.platform!().os == WINDOWS ";" else ":").keep_if(|directory| !directory.is_empty())
 
 	## The directories among these that hold an executable called `name`.
 	holding! : List(Str), Str => List(Str)
@@ -192,7 +196,7 @@ expect Process.relative("/repo", "/repo/blueprint-platform/main.roc") == "bluepr
 expect Process.lines("a\n\nb\n") == ["a", "b"]
 expect Process.batches([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
 expect Process.batches([1].drop_first(1), 2).is_empty()
-expect Process.outcome({ status: Exited(3), stdout_bytes: "out".to_utf8(), stderr_bytes: "err".to_utf8() }) == { code: 3, stdout: "out", stderr: "err" }
-expect Process.outcome({ status: Signaled(9), stdout_bytes: [], stderr_bytes: [] }).code == 137
+expect Process.outcome(Cmd.Output.{ command: "test", status: Exited(3), stdout_bytes: "out".to_utf8(), stderr_bytes: "err".to_utf8() }) == { code: 3, stdout: "out", stderr: "err" }
+expect Process.outcome(Cmd.Output.{ command: "test", status: Signaled(9), stdout_bytes: [], stderr_bytes: [] }).code == 137
 expect Process.command("/repo/blueprint", ["run", "hello"], "/tmp").label == "blueprint run hello"
 expect Process.sorted(["b", "ab", "a", "Z", "a"]) == ["Z", "a", "a", "ab", "b"]

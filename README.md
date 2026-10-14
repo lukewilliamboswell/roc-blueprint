@@ -6,9 +6,10 @@
 
 Describe a project's development environments, the commands that run in them,
 its sandboxed builds and its ordered workflows in one typed file,
-`Blueprint.roc`. The `blueprint` command realises that file through Nix, from
-pins the project commits, so a contributor's machine and a CI runner get the
-same tools.
+`Blueprint.roc`. The file says where every program comes from: a download
+checked against a digest the project commits, the machine itself, or a pinned
+Nix package source. A contributor's machine and a CI runner get the same
+tools, and Nix is started only for what a project takes from it.
 
 **[Read the manual](https://lukewilliamboswell.github.io/roc-blueprint/)** ·
 [Latest release](https://github.com/lukewilliamboswell/roc-blueprint/releases/latest)
@@ -17,37 +18,43 @@ same tools.
 # Blueprint.roc at the repository root
 app [config] { pf: platform "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/<version>/<hash>.tar.zst" }
 
+import pf.Recipes
+
 config = [
 	Name("my-project"),
-	Overlay("roc", "github:roc-lang/roc-overlay"),
-	Environment("base", [Tools(["git", "zig"])]),
 	Environment("dev", [
-		Extend("base"),
-		Tools(["rocpkgs.nightly", "python3", "sqlite"]),
-		Overlays(["roc"]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))]),
+		Expect(["git"]),
 	]),
 	Shell("default", [Use("dev")]),
-	Task("version", [Use("dev"), Run(["python3", "--version"])]),
+	Task("version", [Use("dev"), Run(["roc-stable", "version"])]),
+	Task("status", [Use("dev"), Run(["git", "status", "--short"])]),
 ]
 ```
 
 ```sh
-blueprint update         # resolve the inputs and write Blueprint.lock
-blueprint shell          # enter the default shell's environment
+blueprint update         # record every download's digest in Blueprint.lock
 blueprint run version    # run the task's command in dev
+blueprint shell          # enter dev, with roc-stable on PATH
 ```
 
+This project fetches its compiler, expects `git` of the machine and needs no
+Nix. A tool from Nix is written with its source, `Tools(["nix#zig"])`, after
+declaring `Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable")))`.
 [Get started](https://lukewilliamboswell.github.io/roc-blueprint/getting-started.html)
 has this file with the latest release's platform URL filled in, and each
 release's notes give its own.
 
 ## Install
 
-`blueprint` needs [Nix](https://nixos.org/download) with flakes enabled, and
-nothing else. Each
+Each
 [release](https://github.com/lukewilliamboswell/roc-blueprint/releases/latest)
-attaches a binary for x86_64 Linux, arm64 Linux and Apple Silicon macOS, with
-SHA-256 sums in `blueprint.sha256`. Or run it from the flake:
+attaches a `blueprint` binary for x86_64 Linux, arm64 Linux and Apple Silicon
+macOS, with SHA-256 sums in `blueprint.sha256`. It needs no Roc: it downloads
+the compiler that reads `Blueprint.roc`. [Nix](https://nixos.org/download)
+with flakes enabled is needed for tools from a Nix package source and for
+sandboxed builds, and where it is installed `blueprint` also runs from the
+flake:
 
 ```sh
 nix run github:lukewilliamboswell/roc-blueprint/<version> -- --help

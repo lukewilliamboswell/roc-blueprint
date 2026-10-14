@@ -2,7 +2,7 @@
 app [main!] {
 	core: "../../blueprint-core/main.roc",
 	nix: "../../blueprint-nix/main.roc",
-	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 }
 
 import pf.Stdout
@@ -17,6 +17,7 @@ import "../../blueprint-nix/tests/sample.spec.scm" as wire : Str
 import "../../blueprint-nix/tests/sample.golden.nix" as golden : Str
 import "inputs.lock" as native_lock : Str
 import "authority.lock" as authority : Str
+import "../../blueprint-core/fuzz/lock-parse/corpus/nix-authority.scm" as authority_0_5 : Str
 
 layout : Layout
 layout = Layout.{
@@ -51,19 +52,25 @@ files = |_| {
 	}
 }
 
-# The planner emits unused Auto too; alias it to the existing identical nixpkgs pin.
-# This fixture-only seed completion changes no locked node or fetch identity.
-complete_native_lock : Str
-complete_native_lock = native_lock.replace_each(
-	"\"nixpkgs\": \"nixpkgs\",",
-	"\"default\": \"nixpkgs\", \"nixpkgs\": \"nixpkgs\",",
-)
-
-# Explicit conversion of the completed Nix seed preserves every supplied pin.
+# The project declares every input the seed pins, and the planner adds none:
+# explicit conversion of the Nix seed as it is preserves every supplied pin.
 expect {
-	converted = Locks.from_nix(project(wire)?, layout, complete_native_lock)?
+	converted = Locks.from_nix(project(wire)?, layout, native_lock)?
 	encoded = Locks.encode(converted)
 	encoded == authority
+}
+
+# The lock blueprint 0.5 wrote for the same project, in Lock format 1.0, is
+# still read. It also pins the `default` source that 0.5 implied and nothing
+# declares now, so it is not this project's authority: planning from it is
+# refused, and the pins it shares are the same.
+expect {
+	old = Locks.decode(authority_0_5)?
+	current = Locks.decode(authority)?
+	authority_0_5.contains("(minor 0)")
+		and Locks.sources(old).map(|source| source.name) == ["default", "nixpkgs", "roc"]
+			and Locks.sources(old).drop_first(1) == Locks.sources(current)
+				and NixProvider.plan(project(wire)?, Request.Generate, "x86_64-linux", layout, old).map_ok(|steps| steps.steps.len()) == Err("lock input or ordered-overlay identity changed; run blueprint update")
 }
 
 # Inspection preserves the B1 golden; plans add stable, explicit input kinds.
@@ -71,12 +78,6 @@ expect NixProvider.render(project(wire)?) == Ok(golden)
 
 planned_golden : Str
 planned_golden = golden.replace_each(
-	"  inputs = {\n",
-	"  inputs = {\n".concat(
-		"    \"default\" = { url = \"github:NixOS/nixpkgs/nixos-unstable\"; "
-			.concat("flake = true; };\n"),
-	),
-).replace_each(
 	"\"nixpkgs\".url = \"github:NixOS/nixpkgs/nixos-unstable\";",
 	"\"nixpkgs\" = { url = \"github:NixOS/nixpkgs/nixos-unstable\"; "
 		.concat("flake = true; };"),
@@ -98,7 +99,7 @@ expect match files({}) {
 # nodes last: planning from the authority adds, drops and reorders no pin.
 # No value in the fixture holds a space.
 expect {
-	compact = complete_native_lock.replace_each("\n", "").replace_each(" ", "")
+	compact = native_lock.replace_each("\n", "").replace_each(" ", "")
 	nodes = compact.drop_prefix("{\"nodes\":").drop_suffix(",\"root\":\"root\",\"version\":7}")
 	match files({}) {
 		Ok(generated) => nodes != compact and generated.last().map_ok(|file| file.contents) == Ok("{\"root\":\"root\",\"version\":7,\"nodes\":${nodes}}\n")

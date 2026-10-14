@@ -1,6 +1,6 @@
 #!/usr/bin/env roc-stable
 app [main!] {
-	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.24.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst",
+	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 }
 
 import cli.Env
@@ -23,6 +23,12 @@ import src/SmokeBinary
 ## resolves what a new user's project would that day:
 ##
 ##   dist/smoke-x86_64-linux --floating dist/blueprint-x86_64-linux
+##
+## With `--no-nix` the project takes nothing from Nix, and the machine must
+## have none: the compiler is a fetched program, and a basic-cli script is
+## built, linked and run with it.
+##
+##   dist/smoke-aarch64-darwin --no-nix dist/blueprint-aarch64-darwin
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	arguments = args.map(OsStr.display)
@@ -31,9 +37,9 @@ main! = |args| {
 		return SmokeBinary.python!(arguments)
 	}
 	result = match SmokeBinary.requested(arguments) {
-		Ok(request) => SmokeBinary.run!(request.binary, request.inputs)
+		Ok(request) => SmokeBinary.run!(request.binary, request.mode)
 		Err(Usage) => {
-			_ = Stderr.line!("usage: scripts/smoke_binary.roc [--floating] BLUEPRINT_BINARY")
+			_ = Stderr.line!("usage: scripts/smoke_binary.roc [--floating | --no-nix] BLUEPRINT_BINARY")
 			return Err(Exit(2))
 		}
 	}
