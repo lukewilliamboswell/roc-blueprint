@@ -93,6 +93,7 @@ SmokeBinary := [].{
 				"",
 				"config = [",
 				"	Name(\"smoke\"),",
+				"	Systems([\"x86_64-linux\", \"aarch64-linux\", \"aarch64-darwin\", \"x86_64-windows\"]),",
 				"	Environment(\"dev\", [",
 				"		Programs([Fetch(\"roc-stable\", Recipes.roc_nightly(\"${tag}\"))]),",
 				"		Expect([\"git\"]),",
@@ -431,7 +432,7 @@ expect [[], ["--floating"], ["--no-nix"], ["--pinned", "blueprint"], ["blueprint
 # compiler is a fetched program and git is the machine's.
 expect {
 	text = SmokeBinary.no_nix_roc("../pf/main.roc", "nightly-2026-10-13-b17d287")
-	text.starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tEnvironment(\"dev\", [\n\t\tPrograms([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-10-13-b17d287\"))]),\n\t\tExpect([\"git\"]),\n\t\tRocPackages([\"https://github.com/roc-lang/basic-cli/")
+	text.starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tSystems([\"x86_64-linux\", \"aarch64-linux\", \"aarch64-darwin\", \"x86_64-windows\"]),\n\tEnvironment(\"dev\", [\n\t\tPrograms([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-10-13-b17d287\"))]),\n\t\tExpect([\"git\"]),\n\t\tRocPackages([\"https://github.com/roc-lang/basic-cli/")
 		and ["NixPackages", "Overlay(", "Tools(", "Command(", "#"].all(|part| !text.contains(part))
 }
 expect SmokeBinary.linked_script.starts_with("#!/usr/bin/env roc-stable\napp [main!] { cli: platform \"https://github.com/roc-lang/basic-cli/releases/download/")

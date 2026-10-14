@@ -237,6 +237,10 @@ The store uses `LOCALAPPDATA` when `XDG_CACHE_HOME` is unset.
 `tar` reads zip archives. Fetched programs are exposed with hard links, or
 copies when the store is on another drive, and need no `ln` or `chmod`.
 
+Include `"x86_64-windows"` in the project's `Systems`: the default list
+contains Linux and macOS only, and fetched programs are locked for the
+declared systems.
+
 Windows does not execute a script's shebang. Name its interpreter in the task:
 `Run(["roc-stable", "hello.roc"])`. Nix tools and sandboxed builds remain
 unavailable. CI checks Windows Server; Windows 10 and 11 desktop installations
