@@ -345,8 +345,8 @@ packaged! = |context| {
 	Process.check!(StaticChecks.constant(flake, "version") == Ok(reported), "the packaged blueprint reports version ${reported}, not the version in flake.nix")?
 
 	step!("Nix flake: every system's outputs evaluate (no build)")?
-	# The flake exposes the systems a binary is released for.
-	for released in Release.systems {
+	# Nix outputs cover the Unix release systems; Windows uses the binary.
+	for released in Release.systems.keep_if(|released| released.target != "x64win") {
 		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#packages.${released.system}.blueprint.drvPath"], context.root))?
 		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#devShells.${released.system}.default.drvPath"], context.root))?
 	}

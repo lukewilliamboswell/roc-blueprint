@@ -222,7 +222,16 @@ SmokeBinary := [].{
 		blueprint = Process.portable(Path.to_str(Path.canonicalize!(Path.utf8(binary))?)?)
 		# macOS temporary directories sit behind a symlink; the relative
 		# platform path must be computed from the real location.
-		work = Process.portable(Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-smoke-")?)?)?)
+		# A relative platform dependency cannot cross Windows drive letters.
+		# Keep the project on the checkout's drive, even when TEMP is on C:.
+		temporary = if Env.platform!().os == WINDOWS {
+			cache = Path.utf8("${root}/.cache")
+			cache.create_all!()?
+			Env.create_temp_dir_in!(cache, "blueprint-smoke-")?
+		} else {
+			Env.create_temp_dir_with_prefix!("blueprint-smoke-")?
+		}
+		work = Process.portable(Path.to_str(Path.canonicalize!(temporary)?)?)
 		result = smoke!(root, blueprint, work, mode)
 		_ = Path.delete_all!(Path.utf8(work))
 		result
