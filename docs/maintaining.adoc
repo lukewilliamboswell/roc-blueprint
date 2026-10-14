@@ -251,8 +251,10 @@ The names of the binaries and of their checksum file are a contract.
 roc-automation's
 https://lukewilliamboswell.github.io/roc-automation/actions.html#setup-blueprint[`setup-blueprint`]
 action downloads `blueprint-x86_64-linux`, `blueprint-aarch64-linux` and
-`blueprint-aarch64-darwin`, plus `blueprint-x86_64-windows.exe`, from the release a caller names, exactly as
-published, and callers copy the SHA-256 values from `blueprint.sha256`.
+`blueprint-aarch64-darwin` from the release a caller names, exactly as
+published. This release also includes `blueprint-x86_64-windows.exe`; the
+setup action does not yet install it. Callers copy the SHA-256 values from
+`blueprint.sha256`.
 Renaming an asset, archiving the binaries or changing the checksum file breaks
 every caller. `scripts/release_assets.roc` fails the build unless exactly
 those five names are present, and the publish job checks again before it
