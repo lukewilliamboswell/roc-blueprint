@@ -1214,7 +1214,7 @@ start! = |step, names, bin, layout| {
 		}
 		_ => {
 			argv = match step.argv {
-				[program, .. as rest] if Env.platform!().os == WINDOWS and names.contains(program) => ["${bin}/${program}.exe"].concat(rest)
+				[program, .. as rest] if Env.platform!().os == WINDOWS and names.contains(program) => ["${bin}/${Store.executable_name(program)}"].concat(rest)
 				_ => started(step.argv, names, bin)
 			}
 			exec_within!(argv, layout.project_root, directories).map_err(

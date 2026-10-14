@@ -254,6 +254,10 @@ Store := [].{
 		if $hasher.finish().to_hex() == sha256 Ok({ sha256, size: $size }) else Err(NotHeld)
 	}
 
+	## Preserve an explicitly named executable extension on Windows.
+	executable_name : Str -> Str
+	executable_name = |name| if name.ends_with(".exe") name else "${name}.exe"
+
 	## Put `target` on a run's PATH as `name`: a symbolic link in `bin`, so
 	## that a program finds what is beside its real path.
 	expose! : Str, Str, Str => Try({}, Str)
@@ -261,7 +265,7 @@ Store := [].{
 		if Env.platform!().os == WINDOWS {
 			# A hard link needs no symlink privileges. Copy across volumes.
 			source = Path.utf8(target)
-			destination = Path.utf8("${bin}/${name}.exe")
+			destination = Path.utf8("${bin}/${executable_name(name)}")
 			match source.hard_link!(destination) {
 				Ok({}) => Ok({})
 				Err(_) => source.copy!(destination).map_err(|_| "could not expose ${name} from ${target} in ${bin}")
@@ -536,3 +540,6 @@ expect Store.listing_problem("roc/\nroc/roc\n", "drwxr-xr-x a/b 0 2026-10-05 02:
 expect Store.inside("roc/darwin", "../roc") and Store.inside("", "roc/roc") and !Store.inside("roc", "../..") and !Store.inside("roc", "") and !Store.inside("roc", "C:/x")
 
 expect digest(sha) and !digest("sha256:${sha}") and !digest(sha.replace_each("8", "G")) and !digest("")
+
+expect Store.executable_name("roc-stable") == "roc-stable.exe"
+expect Store.executable_name("tool.exe") == "tool.exe"

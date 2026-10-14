@@ -295,8 +295,9 @@ https://github.com/lukewilliamboswell/roc-blueprint/issues/40[Issue #40] asks
 for `blueprint run` on Windows. What needs nothing from upstream is in place:
 a task whose environment has no Nix tool runs with no provider, from fetched
 programs, expected tools and Roc packages, and the planner, the store's
-location and `Recipes.roc_nightly` have their Windows forms. The Windows target and release binary are built in CI; the Nix-free
-smoke test runs on Linux, macOS and Windows.
+location and `Recipes.roc_nightly` have their Windows forms. The Windows
+target and release binary are built in CI; the Nix-free smoke test runs on
+Linux, macOS and Windows.
 
 The upstream prerequisites are now released: basic-cli 0.26.0-rc2 supplies
 its Windows MSVC host and runtime, the pinned Roc nightly links from listed
