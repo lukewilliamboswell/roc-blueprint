@@ -27,7 +27,7 @@ Tree :: [].{
 		var $hasher = Crypto.SHA256.Hasher.empty().write("blueprint-tree-v1\n".to_utf8())
 		for entry in sorted {
 			check_path(entry.path)?
-			folded = entry.path.to_utf8().map(|b| if b >= 'A' and b <= 'Z' b + 32 else b)
+			folded = entry.path.to_utf8().map(|b| if (b >= 'A' and b <= 'Z') b + 32 else b)
 			if $folded.contains(folded) {
 				return Err("tree has paths that differ only by case: ${entry.path}")
 			}
@@ -35,7 +35,7 @@ Tree :: [].{
 			line = match entry.kind {
 				Dir => "D\t${entry.path}\n"
 				File({ executable, digest: content }) => {
-					x = if executable "x" else "-"
+					x = if (executable) "x" else "-"
 					"F\t${x}\t${content.to_hex()}\t${entry.path}\n"
 				}
 			}
@@ -77,8 +77,8 @@ expect {
 	a = Tree.digest([file("a", False, "1"), file("b", False, "2")])
 	a == Tree.digest([file("b", False, "2"), file("a", False, "1")])
 		and a != Tree.digest([file("a", False, "1"), file("b", False, "3")])
-			and a != Tree.digest([file("a", True, "1"), file("b", False, "2")])
-				and a != Tree.digest([file("a", False, "1"), file("c", False, "2")])
+		and a != Tree.digest([file("a", True, "1"), file("b", False, "2")])
+		and a != Tree.digest([file("a", False, "1"), file("c", False, "2")])
 }
 
 # Chunked hashing gives the same file digest as hashing the whole file.

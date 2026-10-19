@@ -17,7 +17,7 @@ import pf.Recipes
 config = [
 	Name("my-package"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-18-1df370f"))]),
 		Expect(["git"]),
 		RocPackages([
 			"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
@@ -242,6 +242,14 @@ contains Linux and macOS only, and fetched programs are locked for the
 declared systems.
 
 Windows does not execute a script's shebang. Name its interpreter in the task:
-`Run(["roc-stable", "hello.roc"])`. Nix tools and sandboxed builds remain
+`Run(["roc-stable", "--no-cache", "hello.roc"])`. The `--no-cache` flag
+works around https://github.com/roc-lang/roc/issues/12429[Roc issue #12429]:
+the October 18 nightly reports duplicate symbols when linking cached Windows
+objects, including on the first run with an empty cache. CI uses this
+workaround on Windows and still builds, links and runs the program. It
+disables Roc's compilation cache for that invocation; Blueprint's download
+store and lock verification still apply.
+
+Nix tools and sandboxed builds remain
 unavailable. CI checks Windows Server; Windows 10 and 11 desktop installations
 have not been verified here.

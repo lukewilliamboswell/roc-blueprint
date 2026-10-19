@@ -5,6 +5,8 @@ import cli.OsStr
 import cli.Path
 import cli.Stdout
 import Script
+import FlakeLock
+import "../../blueprint-cli/compiler-version" as compiler_version : Str
 
 ## An end-to-end test of the `RocPackages` setting against the real
 ## `./blueprint` and real Nix. A task or a shell has its bundles downloaded by
@@ -20,8 +22,8 @@ RocPackagesTest := [].{
 	## basic-cli depends on this; a project must list it too.
 	http = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"
 
-	## An explicit nightly, so the compiler resolving these bundles is known.
-	roc_tag = "nightly-2026-10-13-b17d287"
+	## Exercise the product's pinned compiler, from the reviewed overlay pin.
+	roc_tag = compiler_version.trim()
 
 	greeting = "Hello from locked packages"
 
@@ -50,8 +52,8 @@ RocPackagesTest := [].{
 	## A project whose `dev` environment inherits the listed bundles and runs
 	## Roc as `roc-stable`; `plain` has no Roc packages at all. With `build`,
 	## a sandboxed build runs in `dev` too.
-	blueprint_roc : Str, List(Str), [WithBuild, TasksOnly] -> Str
-	blueprint_roc = |platform_path, bundles, builds| {
+	blueprint_roc : Str, Str, List(Str), [WithBuild, TasksOnly] -> Str
+	blueprint_roc = |platform_path, overlay, bundles, builds| {
 		urls = Str.join_with(bundles.map(|url| "\"${url}\""), ", ")
 		build = match builds {
 			WithBuild => ["	Build(\"offline\", [Use(\"dev\"), Run([\"roc-stable\", \"main.roc\", \"greeting.txt\"]), Output(\"greeting.txt\")]),"]
@@ -65,7 +67,7 @@ RocPackagesTest := [].{
 				"	Name(\"roc-packages\"),",
 				"	Systems([\"x86_64-linux\"]),",
 				"	Packages(\"nix\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),",
-				"	Overlay(\"roc\", \"github:roc-lang/roc-overlay\"),",
+				"	Overlay(\"roc\", \"${overlay}\"),",
 				"	Environment(\"packages\", [RocPackages([${urls}])]),",
 				"	Environment(\"dev\", [Extend(\"packages\"), Overlays([\"roc\"]), Command(\"roc-stable\", \"nix#rocpkgs.${roc_tag}\")]),",
 				"	Environment(\"plain\", [Tools([\"nix#hello\"])]),",
@@ -109,7 +111,11 @@ RocPackagesTest := [].{
 			return Script.fail!("./blueprint is missing; build it with `roc build blueprint-cli/main.roc --output=./blueprint`")
 		}
 		work = Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-roc-packages-")?)?
-		result = scenarios!({ root: Path.to_str(Path.canonicalize!(root)?)?, blueprint, work: Path.to_str(work)? })
+		overlay = match FlakeLock.locked(Path.read_utf8!(Path.join(root, "flake.lock"))?, "roc-overlay") {
+			Ok(pin) => FlakeLock.ref(pin)
+			Err(_) => return Script.fail!("flake.lock has no roc-overlay pin")
+		}
+		result = scenarios!({ overlay, root: Path.to_str(Path.canonicalize!(root)?)?, blueprint, work: Path.to_str(work)? })
 		# A failed scenario may have left a directory read-only.
 		_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--"].map(OsStr.from_str)).arg(Path.to_os_str(work)).exec!()
 		_ = Path.delete_all!(work)
@@ -117,7 +123,7 @@ RocPackagesTest := [].{
 	}
 }
 
-Context : { root : Str, blueprint : Path, work : Str }
+Context : { root : Str, blueprint : Path, work : Str, overlay : Str }
 
 Outcome : { code : I32, stdout : Str, stderr : Str }
 
@@ -298,7 +304,7 @@ scenarios! = |context| {
 
 	Path.create_all!(Path.utf8(project))?
 	platform_path = RocPackagesTest.relative(project, "${context.root}/blueprint-platform/main.roc")
-	Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), RocPackagesTest.blueprint_roc(platform_path, [RocPackagesTest.basic_cli, RocPackagesTest.http], WithBuild))?
+	Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), RocPackagesTest.blueprint_roc(platform_path, context.overlay, [RocPackagesTest.basic_cli, RocPackagesTest.http], WithBuild))?
 	Path.write_utf8!(Path.utf8("${project}/main.roc"), RocPackagesTest.app_roc)?
 	_ = succeed!(context, cache, project, ["update"])?
 	lock = Path.read_utf8!(Path.utf8("${project}/Blueprint.lock"))?
@@ -448,7 +454,7 @@ scenarios! = |context| {
 	Path.create_all!(Path.utf8(partial))?
 	Path.write_utf8!(
 		Path.utf8("${partial}/Blueprint.roc"),
-		RocPackagesTest.blueprint_roc(RocPackagesTest.relative(partial, "${context.root}/blueprint-platform/main.roc"), [RocPackagesTest.basic_cli], WithBuild),
+		RocPackagesTest.blueprint_roc(RocPackagesTest.relative(partial, "${context.root}/blueprint-platform/main.roc"), context.overlay, [RocPackagesTest.basic_cli], WithBuild),
 	)?
 	Path.write_utf8!(Path.utf8("${partial}/main.roc"), RocPackagesTest.app_roc)?
 	_ = succeed!(context, cache, partial, ["update"])?
@@ -466,7 +472,7 @@ scenarios! = |context| {
 	Path.create_all!(Path.utf8(tasks_only))?
 	Path.write_utf8!(
 		Path.utf8("${tasks_only}/Blueprint.roc"),
-		RocPackagesTest.blueprint_roc(RocPackagesTest.relative(tasks_only, "${context.root}/blueprint-platform/main.roc"), [RocPackagesTest.basic_cli, RocPackagesTest.http], TasksOnly),
+		RocPackagesTest.blueprint_roc(RocPackagesTest.relative(tasks_only, "${context.root}/blueprint-platform/main.roc"), context.overlay, [RocPackagesTest.basic_cli, RocPackagesTest.http], TasksOnly),
 	)?
 	Path.write_utf8!(Path.utf8("${tasks_only}/main.roc"), RocPackagesTest.app_roc)?
 	tasks_cache = "${context.work}/tasks-cache"
@@ -502,5 +508,6 @@ expect !RocPackagesTest.within("/tmp/work/cache", "/home/me/.cache")
 
 expect leftover("blueprint-abc.x1y2z3.tmp") and leftover("abc.0123456789abcdef.tmp") and !leftover("abc") and !leftover("abc.deps.json")
 expect same_names(["a", "b"], ["b", "a"]) and !same_names(["a"], ["a", "b"])
-expect RocPackagesTest.blueprint_roc("../p/main.roc", ["https://e.test/a.tar.zst", "https://e.test/b.tar.zst"], WithBuild).contains("RocPackages([\"https://e.test/a.tar.zst\", \"https://e.test/b.tar.zst\"])")
-expect RocPackagesTest.blueprint_roc("../p/main.roc", [], WithBuild).contains("Build(\"offline\"") and !RocPackagesTest.blueprint_roc("../p/main.roc", [], TasksOnly).contains("Build(")
+expect RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", ["https://e.test/a.tar.zst", "https://e.test/b.tar.zst"], WithBuild).contains("RocPackages([\"https://e.test/a.tar.zst\", \"https://e.test/b.tar.zst\"])")
+expect RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", [], WithBuild).contains("Build(\"offline\"") and !RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", [], TasksOnly).contains("Build(")
+expect RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", [], WithBuild).contains("Overlay(\"roc\", \"github:roc-lang/roc-overlay/pinned\")")

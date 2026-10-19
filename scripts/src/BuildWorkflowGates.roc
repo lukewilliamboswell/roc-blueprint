@@ -348,13 +348,12 @@ example_smoke! = |suite| {
 	replacements = [
 		("\"../../blueprint-platform/main.roc\"", "\"${BuildHarness.relative(project, "${suite.root}/blueprint-platform/main.roc")}\""),
 		("\"github:NixOS/nixpkgs/nixos-unstable\"", "\"${suite.pins.nixpkgs.ref}\""),
-		("\"github:roc-lang/roc-overlay\"", "\"${suite.pins.overlay.ref}\""),
 	]
 	for (old, _) in replacements {
 		BuildHarness.require!(count(authored, old) == 1, "the example no longer holds ${old} exactly once")?
 	}
 	# The example names what the suite has fetched; anything else needs the network.
-	for needed in ["nix#rocpkgs.${suite.pins.compiler}"].concat(suite.pins.bundles.map(|bundle| bundle.ref)) {
+	for needed in [suite.pins.overlay.ref, "nix#rocpkgs.${suite.pins.compiler}"].concat(suite.pins.bundles.map(|bundle| bundle.ref)) {
 		BuildHarness.require!(authored.contains("\"${needed}\""), "the example does not use the pinned ${needed}")?
 	}
 	config = "${project}/Blueprint.roc"

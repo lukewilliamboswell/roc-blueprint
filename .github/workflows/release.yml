@@ -40,6 +40,7 @@ jobs:
       version: ${{ steps.request.outputs.version }}
       title: ${{ steps.request.outputs.title }}
       prerelease: ${{ steps.request.outputs.prerelease }}
+      compiler-tag: ${{ steps.request.outputs.compiler-tag }}
     steps:
       - name: Require the default branch for publication
         if: github.event_name == 'workflow_dispatch'
@@ -214,6 +215,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     environment:
       name: release
     steps:
@@ -233,6 +236,47 @@ jobs:
           sha256sum -c blueprint.sha256
           test "$(LC_ALL=C ls)" = "$(cat ../release-assets.txt)"
 
+      # These subjects are the exact assets built and tested in this run.
+      # No repository code runs with the signing/publication permissions.
+      - name: Attest the tested release assets
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/release/*
+          create-storage-record: false
+
+      - name: Retain and verify the provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cp "$BUNDLE" dist/release/roc-blueprint-provenance.sigstore.json
+          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-windows.exe; do
+            policy=(--repo "$GH_REPO" --signer-workflow "$GH_REPO/.github/workflows/release.yml" --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners)
+            gh attestation verify "dist/release/$name" "${policy[@]}" --bundle "$BUNDLE"
+            gh attestation verify "dist/release/$name" "${policy[@]}"
+          done
+
+          # Exercise rejection too: a valid bundle cannot authorize other
+          # bytes, another source revision, or a different workflow.
+          must_reject() {
+            if gh attestation verify "$@" --repo "$GH_REPO" --bundle "$BUNDLE" > /dev/null 2>&1; then
+              echo "Provenance verification accepted an invalid artifact or identity" >&2
+              exit 1
+            fi
+          }
+          cp dist/release/blueprint-x86_64-linux dist/modified-binary
+          printf 'modified' >> dist/modified-binary
+          must_reject dist/modified-binary
+          must_reject dist/release/blueprint-x86_64-linux --source-digest 0000000000000000000000000000000000000000
+          must_reject dist/release/blueprint-x86_64-linux --signer-workflow "$GH_REPO/.github/workflows/ci.yml"
+
+          printf '%s\n' roc-blueprint-provenance.sigstore.json >> dist/release-assets.txt
+          LC_ALL=C sort -o dist/release-assets.txt dist/release-assets.txt
+          test "$(LC_ALL=C ls dist/release)" = "$(cat dist/release-assets.txt)"
+
       # A published release is never completed or corrected afterwards. So
       # every asset goes onto a draft, is downloaded back and compared with
       # the tested file, and only then is the release published.
@@ -243,6 +287,7 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
           TITLE: ${{ needs.validate.outputs.title }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          COMPILER_TAG: ${{ needs.validate.outputs.compiler-tag }}
         run: |
           set -euo pipefail
           assets=(dist/release/*)
@@ -261,6 +306,11 @@ jobs:
             cmp "$asset" "published/$(basename "$asset")"
           done
           test "$(find published -type f | wc -l)" = "${#assets[@]}"
+
+          # A nightly released during the build invalidates this candidate.
+          # Leave the draft unpublished; update the pin and repeat the tests.
+          latest=$(gh api repos/roc-lang/nightlies/releases/latest --jq .tag_name)
+          test "$COMPILER_TAG" = "$latest" || { echo "Compiler $COMPILER_TAG is no longer the latest nightly ($latest); update the pin and rerun the full suite" >&2; exit 1; }
 
           gh release edit "$VERSION" --draft=false
 

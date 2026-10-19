@@ -462,7 +462,7 @@ NixProvider :: [].{
 		for file in files {
 			if Layout.contains(file, layout.workspace)
 				or Layout.contains(file, layout.lock_path)
-					or Layout.contains(layout.lock_path, file) {
+				or Layout.contains(layout.lock_path, file) {
 				return Err("generated files, workspace and authority must not overlap")
 			}
 		}
@@ -474,9 +474,9 @@ NixProvider :: [].{
 				path = "${layout.project_root}/${Locks.local_path(input)}"
 				if Layout.contains(path, layout.workspace)
 					or Layout.contains(layout.workspace, path)
-						or Layout.contains(path, layout.generated_root)
-							or Layout.contains(layout.generated_root, path)
-								or Layout.contains(path, layout.lock_path) {
+					or Layout.contains(path, layout.generated_root)
+					or Layout.contains(layout.generated_root, path)
+					or Layout.contains(path, layout.lock_path) {
 					return Err("local input overlaps caller-generated paths or lock")
 				}
 			}
@@ -563,7 +563,7 @@ NixProvider :: [].{
 		}
 		selected_names = names.fold(
 			[],
-			|seen, name| if seen.contains(name) seen else seen.append(name),
+			|seen, name| if (seen.contains(name)) seen else seen.append(name),
 		)
 		for name in selected_names {
 			Project.check_environment(spec, Nix, name)?
@@ -667,7 +667,7 @@ NixProvider :: [].{
 			Some(data) => {
 				for input in data.inputs {
 					url = quote(Locks.input_url(input, data.layout))
-					flake = if input.flake "true" else "false"
+					flake = if (input.flake) "true" else "false"
 					$declared = $declared.append({ name: input.name, kind: input.kind })
 					$rendered = append_rendered(
 						$rendered,
@@ -808,11 +808,11 @@ NixProvider :: [].{
 	source_names : Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Str) -> List(Str)
 	source_names = |environment, system_tools, commands, configured, builder| {
 		all_tools = environment.tools.concat(system_tools.keep_if(|entry| entry.environment == environment.name).fold([], |tools, entry| tools.concat(entry.tools))).concat(commands.keep_if(|entry| entry.environment == environment.name).map(|entry| entry.tool)).concat(configured.keep_if(|entry| entry.environment == environment.name).map(|entry| entry.tool))
-		initial = if all_tools.is_empty() builder else []
+		initial = if (all_tools.is_empty()) builder else []
 		all_tools.map(|t| t.source).fold(
 			initial,
 			|seen, name|
-				if seen.contains(name) seen else seen.append(name),
+				if (seen.contains(name)) seen else seen.append(name),
 		)
 	}
 
@@ -904,7 +904,7 @@ NixProvider :: [].{
 		Planned({ root, exclude }) => {
 			names = exclude.keep_if(|item| !item.starts_with("/")).map(quote)
 			paths = exclude.keep_if(|item| item != root and Layout.contains(root, item))
-				.fold([], |seen, item| if seen.contains(item) seen else seen.append(item))
+				.fold([], |seen, item| if (seen.contains(item)) seen else seen.append(item))
 				.map(quote)
 			lines([
 				"      packages = let",
@@ -1038,8 +1038,8 @@ NixProvider :: [].{
 	value_to_nix : Value -> Str
 	value_to_nix = |value| match value {
 		Str(s) => quote(s)
-		Int(n) => if n < 0 "(${n.to_str()})" else n.to_str()
-		Bool(b) => if b "true" else "false"
+		Int(n) => if (n < 0) "(${n.to_str()})" else n.to_str()
+		Bool(b) => if (b) "true" else "false"
 		List([]) => "[ ]"
 		List(items) => "[ ${Str.join_with(items.map(value_to_nix), " ")} ]"
 		Attrs([]) => "{ }"
@@ -1212,8 +1212,8 @@ expect {
 	building = { ..locking, requires_: ["builds"], builds: [{ name: "app", environment: "dev", inputs: [], needs: [], run: ["true"], output: "out" }] }
 	NixProvider.whole(locking) == [] and NixProvider.whole(mk(simple)) == ["dev"] and NixProvider.whole(building) == ["dev"]
 		and NixProvider.render(locking).map_ok(|text| text.contains("mkShell") or text.contains("\"default\"")) == Ok(False)
-			and NixProvider.update_files(locking, "x86_64-linux", TestData.layout).map_ok(|files| files.map(|file| file.contents.contains("\"roc\" = { url = \"github:roc-lang/roc-overlay\"; flake = true; };"))) == Ok([True])
-				and NixProvider.render(building) == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
+		and NixProvider.update_files(locking, "x86_64-linux", TestData.layout).map_ok(|files| files.map(|file| file.contents.contains("\"roc\" = { url = \"github:roc-lang/roc-overlay\"; flake = true; };"))) == Ok([True])
+		and NixProvider.render(building) == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
 }
 expect (NixProvider.provider.render)(mk({ ..simple, sources: [] })) == Ok([]) and (NixProvider.provider.render)(mk(simple)).map_ok(|files| files.map(|file| file.path)) == Ok(["flake.nix"])
 expect NixProvider.builder_source(mk({ ..simple, sources: [{ name: "guix", provider: GuixPackages("channels") }, stable, unstable] })) == ["stable"] and NixProvider.builder_source(mk({ ..simple, sources: [] })) == []
@@ -1285,7 +1285,7 @@ expect {
 	as_input = { ..simple, inputs: [{ name: "nixpkgs", url: "github:example/flake", kind: Flake }] }
 	alias_lines(as_source) == Ok(["    \"nixpkgs\".url = \"github:NixOS/nixpkgs/nixos-24.05\";", "            \"nixpkgs\" = import inputs.\"nixpkgs\" { inherit system overlays; };", "            sets.\"nixpkgs\".\"git\""])
 		and alias_lines(as_overlay) == Ok(["    \"nixpkgs\".url = \"github:example/overlay\";", "          overlays = [ inputs.\"nixpkgs\".overlays.default ];"])
-			and alias_lines(as_input) == Ok(["    \"nixpkgs\".url = \"github:example/flake\";"])
+		and alias_lines(as_input) == Ok(["    \"nixpkgs\".url = \"github:example/flake\";"])
 }
 
 # The rule itself: package sources only, the first declared, none when the
@@ -1625,8 +1625,8 @@ expect {
 	both = (NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, Named(["assets", "default"], lock))?
 	asked.argv == ["nix", "flake", "update", "default", "assets", "--flake", "path:${root}"]
 		and both.argv == ["nix", "flake", "update", "assets", "default", "--flake", "path:${root}"]
-			and asked.files.map(|file| file.path) == ["${root}/flake.nix", "${root}/flake.lock"]
-				and asked.native_lock == "${root}/flake.lock"
+		and asked.files.map(|file| file.path) == ["${root}/flake.nix", "${root}/flake.lock"]
+		and asked.native_lock == "${root}/flake.lock"
 }
 
 # A name Blueprint.roc does not declare is refused before any effect, and so
@@ -1749,45 +1749,45 @@ expect match plan_fixture(Request.Build("app")) {
 			"\"\" \"two words\" \"line\\nbreak\" \"$HOME\"",
 		)
 			and file.contents.contains("path = artifacts.\"library\";")
-				and file.contents.contains("path = inputs.\"assets\";")
-					and file.contents.contains("path = /. + \"/project\";")
-						and file.contents.contains(
-							"isolation = { mnt = \"@blueprint-caller-mnt-namespace@\"; "
-								.concat("net = \"@blueprint-caller-net-namespace@\"; };"),
-						)
-							and file.contents.contains(
-								Str.join_with(
-									[
-										"          in derivation {",
-										"            name = \"blueprint-app\";",
-										"            inherit system;",
-										"            builder = runner;",
-										"            args = [ \"__build-runner\" ];",
-										"            blueprintSpec = builtins.toJSON {",
-										"              inherit project isolation;",
-									],
-									"\n",
-								),
-							)
-								and file.contents.contains(
-									Str.join_with(
-										[
-											"              readlink = \"\${pkgs.coreutils}/bin/readlink\";",
-											"              chmod = \"\${pkgs.coreutils}/bin/chmod\";",
-											"            };",
-											"            passAsFile = [ \"blueprintSpec\" ];",
-											"          };",
-										],
-										"\n",
-									),
-								)
-									and file.contents.contains(
-										"              path = pkgs.lib.makeBinPath tools;\n",
-									)
-										and !file.contents.contains("pkgs.bash")
-											and !file.contents.contains("runCommand")
-												and !file.contents.contains("python3}")
-													and !file.contents.contains("outputHash")
+			and file.contents.contains("path = inputs.\"assets\";")
+			and file.contents.contains("path = /. + \"/project\";")
+			and file.contents.contains(
+				"isolation = { mnt = \"@blueprint-caller-mnt-namespace@\"; "
+					.concat("net = \"@blueprint-caller-net-namespace@\"; };"),
+			)
+			and file.contents.contains(
+				Str.join_with(
+					[
+						"          in derivation {",
+						"            name = \"blueprint-app\";",
+						"            inherit system;",
+						"            builder = runner;",
+						"            args = [ \"__build-runner\" ];",
+						"            blueprintSpec = builtins.toJSON {",
+						"              inherit project isolation;",
+					],
+					"\n",
+				),
+			)
+			and file.contents.contains(
+				Str.join_with(
+					[
+						"              readlink = \"\${pkgs.coreutils}/bin/readlink\";",
+						"              chmod = \"\${pkgs.coreutils}/bin/chmod\";",
+						"            };",
+						"            passAsFile = [ \"blueprintSpec\" ];",
+						"          };",
+					],
+					"\n",
+				),
+			)
+			and file.contents.contains(
+				"              path = pkgs.lib.makeBinPath tools;\n",
+			)
+			and !file.contents.contains("pkgs.bash")
+			and !file.contents.contains("runCommand")
+			and !file.contents.contains("python3}")
+			and !file.contents.contains("outputHash")
 		Err(_) => False
 	}
 	_ => False
@@ -1830,10 +1830,10 @@ expect match (plan_fixture(Request.Build("app")), plan_fixture(Request.Generate)
 				"[ \".git\" \".hg\" \".svn\" \".jj\" ]",
 			)
 				and planned.contents.contains("builtins.elem path [ \"/project/assets\" ])")
-					and inert.contents.contains("project = builtins.throw")
-						and inert.contents.contains("isolation = builtins.throw")
-							and inert.contents.contains("runner = builtins.throw")
-								and !inert.contents.contains("@blueprint-caller")
+				and inert.contents.contains("project = builtins.throw")
+				and inert.contents.contains("isolation = builtins.throw")
+				and inert.contents.contains("runner = builtins.throw")
+				and !inert.contents.contains("@blueprint-caller")
 		_ => False
 	}
 	_ => False
@@ -1972,7 +1972,7 @@ expect [Request.Run("script", ["extra"]), Request.Shell("scripts"), Request.Run(
 				flake = plan.files.first().map_ok(|file| file.contents) ?? ""
 				plan.operations.take_first(1) == [VerifyTree({ path: "/project/assets", digest: assets_tree })] and plan.operations.len() == 2
 					and !flake.contains("blueprintRocPackages") and !flake.contains("roc_packages") and !flake.contains("roc-ghi")
-						and flake.contains("    \"roc-abc\" = { url = \"tarball+https://example.test/abc.tar.zst\"; flake = false; };\n")
+					and flake.contains("    \"roc-abc\" = { url = \"tarball+https://example.test/abc.tar.zst\"; flake = false; };\n")
 			}
 			_ => False
 		},
@@ -1998,7 +1998,7 @@ expect match (roc_plan(Request.Build("script")), roc_plan(Request.Build("library
 		contents = |step| step.files.first().map_ok(|file| file.contents) ?? ""
 		contents(script).contains(with_packages) and !contents(script).contains(without)
 			and contents(library).contains(without) and !contents(library).contains("roc_packages")
-				and !contents(library).contains("bin/ln")
+			and !contents(library).contains("bin/ln")
 	}
 	_ => False
 }
@@ -2008,7 +2008,7 @@ expect match (roc_plan(Request.Build("script")), roc_plan(Request.Build("library
 expect match NixProvider.render(roc_project) {
 	Ok(text) => text.contains("    \"roc-abc\" = { url = \"tarball+https://example.test/abc.tar.zst\"; flake = false; };\n")
 		and !text.contains("blueprintRocPackages") and !text.contains("roc-ghi")
-			and !text.contains("shellHook")
+		and !text.contains("shellHook")
 	Err(_) => False
 }
 
@@ -2019,7 +2019,7 @@ expect Locks.inputs({ ..roc_project, builds: [TestData.library] }).map_ok(|input
 expect match plan_fixture(Request.Generate) {
 	Ok({ steps: [plan] }) => plan.action == Generate
 		and plan.argv.is_empty() and plan.operations.len() == 1
-			and !plan.files.any(|file| file.path == TestData.layout.lock_path)
+		and !plan.files.any(|file| file.path == TestData.layout.lock_path)
 	_ => False
 }
 
@@ -2272,8 +2272,8 @@ expect ["flake.nix", "flake.lock"].all(
 						"x86_64-linux",
 						layout,
 					).is_err()
-						and NixProvider.local_checks(project, "x86_64-linux", layout).is_err()
-							and NixProvider.update_files(project, "x86_64-linux", layout).is_err()
+					and NixProvider.local_checks(project, "x86_64-linux", layout).is_err()
+					and NixProvider.update_files(project, "x86_64-linux", layout).is_err()
 			},
 		)
 	},
@@ -2350,12 +2350,12 @@ expect {
 	plan.steps.len() == 4096 and plan.steps.all(
 		|step| step.action == Build("library")
 			and step.artifacts.map(|artifact| artifact.name) == ["library"]
-				and step.operations.keep_if(
-					|operation| match operation {
-						Isolation(_) => True
-						_ => False
-					},
-				).len() == 1,
+			and step.operations.keep_if(
+				|operation| match operation {
+					Isolation(_) => True
+					_ => False
+				},
+			).len() == 1,
 	) and match plan.steps.first() {
 		Ok(step) => match step.files.first() {
 			Ok(file) => file.contents.to_utf8().len() > 524288
@@ -2479,21 +2479,21 @@ expect {
 	# The payload is rendered once for each of the four systems.
 	one > 4 * 1024 and one < 5 * 1024 + 8192
 		and below.steps.len() == 3
-			and within(project, "below", three) == Ok({})
-				and within(project, "below", three - 1) == Err(over_budget)
-					and within(project, "over", three) == Err(over_budget)
-						and within(project, "over", three + four - 1) == Err(over_budget)
-							and within(project, "over", three + four) == Ok({})
-								# A repeated request is the same recipe and costs nothing more.
-								and within(project, "again", three + four) == Ok({})
-									and NixProvider.plan_within(
-										project,
-										Request.Workflow("over"),
-										"x86_64-linux",
-										TestData.layout,
-										locks,
-										three,
-									).map_ok(|plan| plan.steps) == Err(over_budget)
+		and within(project, "below", three) == Ok({})
+		and within(project, "below", three - 1) == Err(over_budget)
+		and within(project, "over", three) == Err(over_budget)
+		and within(project, "over", three + four - 1) == Err(over_budget)
+		and within(project, "over", three + four) == Ok({})
+		# A repeated request is the same recipe and costs nothing more.
+		and within(project, "again", three + four) == Ok({})
+		and NixProvider.plan_within(
+			project,
+			Request.Workflow("over"),
+			"x86_64-linux",
+			TestData.layout,
+			locks,
+			three,
+		).map_ok(|plan| plan.steps) == Err(over_budget)
 }
 
 # One valid atomic step can exceed the allowance through its dependency
@@ -2523,19 +2523,19 @@ expect {
 	leaf = request_bytes(project, Request.Build("dep-0"))?
 	Project.validate(project).is_ok()
 		and Project.build_closure(project, "root").map_ok(List.len) == Ok(64)
-			# The closure is 64 definitions on four systems, not one.
-			and closure > 32 * leaf
-				and within(project, "large", closure) == Ok({})
-					and within(project, "large", closure - 1) == Err(over_budget)
-						and within(project, "large", 32 * leaf) == Err(over_budget)
-							and NixProvider.plan_within(
-								project,
-								Request.Workflow("large"),
-								"x86_64-linux",
-								TestData.layout,
-								plan_locks?,
-								closure - 1,
-							).map_ok(|plan| plan.steps) == Err(over_budget)
+		# The closure is 64 definitions on four systems, not one.
+		and closure > 32 * leaf
+		and within(project, "large", closure) == Ok({})
+		and within(project, "large", closure - 1) == Err(over_budget)
+		and within(project, "large", 32 * leaf) == Err(over_budget)
+		and NixProvider.plan_within(
+			project,
+			Request.Workflow("large"),
+			"x86_64-linux",
+			TestData.layout,
+			plan_locks?,
+			closure - 1,
+		).map_ok(|plan| plan.steps) == Err(over_budget)
 }
 
 # A closure exactly at the allowance succeeds (even repeated); adding one
@@ -2608,19 +2608,19 @@ expect {
 				Err(_) => False
 			},
 		) and Project.validate(over_limit).is_ok()
-			and within(at_limit, "limit", allowance) == Ok({})
-				and within(over_limit, "limit", allowance) == Err(over_budget)
-					and within(over_limit, "limit", allowance + 1) == Ok({})
-						and NixProvider.plan_within(
-							over_limit,
-							Request.Workflow("limit"),
-							"x86_64-linux",
-							TestData.layout,
-							locks,
-							allowance,
-						).map_ok(|sequence| sequence.steps) == Err(over_budget)
-							# Callers reach the same accounting with the 16 MiB allowance.
-							and NixProvider.preflight(over_limit, Request.Workflow("limit"), "x86_64-linux", TestData.layout) == Ok({})
+		and within(at_limit, "limit", allowance) == Ok({})
+		and within(over_limit, "limit", allowance) == Err(over_budget)
+		and within(over_limit, "limit", allowance + 1) == Ok({})
+		and NixProvider.plan_within(
+			over_limit,
+			Request.Workflow("limit"),
+			"x86_64-linux",
+			TestData.layout,
+			locks,
+			allowance,
+		).map_ok(|sequence| sequence.steps) == Err(over_budget)
+		# Callers reach the same accounting with the 16 MiB allowance.
+		and NixProvider.preflight(over_limit, Request.Workflow("limit"), "x86_64-linux", TestData.layout) == Ok({})
 }
 
 # The shared renderer charges every actual byte, including escaped Raw,
@@ -2720,9 +2720,9 @@ expect {
 		[library] => sequence.steps.all(
 			|step| step.operations.first() == library.operations.first()
 				and step.files.last() == library.files.last()
-					and !step.files.any(
-						|file| file.path == TestData.layout.lock_path,
-					),
+				and !step.files.any(
+					|file| file.path == TestData.layout.lock_path,
+				),
 		) and Locks.encode(locks) == before
 		_ => False
 	}
@@ -2770,12 +2770,12 @@ expect {
 			TestData.layout,
 			locks,
 		).map_ok(|plan| plan.steps)
-			and NixProvider.preflight(
-				project,
-				Request.Workflow("later"),
-				"x86_64-linux",
-				TestData.layout,
-			).is_err()
+		and NixProvider.preflight(
+			project,
+			Request.Workflow("later"),
+			"x86_64-linux",
+			TestData.layout,
+		).is_err()
 }
 
 # A later build's transitive dependency provider is checked before returning
@@ -2816,12 +2816,12 @@ expect {
 			TestData.layout,
 			locks,
 		).map_ok(|plan| plan.steps)
-			and NixProvider.preflight(
-				project,
-				Request.Workflow("ci"),
-				"x86_64-linux",
-				TestData.layout,
-			).is_err()
+		and NixProvider.preflight(
+			project,
+			Request.Workflow("ci"),
+			"x86_64-linux",
+			TestData.layout,
+		).is_err()
 }
 
 # Task-compatible target selection cannot hide a later unsupported build.
@@ -3086,17 +3086,17 @@ expect {
 	last = |request| NixProvider.plan(TestData.project(TestData.data), request, "x86_64-linux", TestData.layout, locks).map_ok(|steps| steps.steps.map(|step| step.operations.last()))
 	last(Request.Run("check", [])) == Ok([Ok(Present([{ program: "nix", because: "environment builder takes default#python3 from the Nix source default" }]))])
 		and last(Request.Build("app")).map_ok(|steps| steps.last()) == Ok(Ok(Ok(Present([{ program: "nix", because: "build app runs in the Nix sandbox" }]))))
-			and NixProvider.plan(TestData.project(TestData.data), Request.Generate, "x86_64-linux", TestData.layout, locks).map_ok(
-				|steps| steps.steps.any(
-					|step| step.operations.any(
-						|operation|
-							match operation {
-								Present(_) => True
-								_ => False
-							},
-					),
+		and NixProvider.plan(TestData.project(TestData.data), Request.Generate, "x86_64-linux", TestData.layout, locks).map_ok(
+			|steps| steps.steps.any(
+				|step| step.operations.any(
+					|operation|
+						match operation {
+							Present(_) => True
+							_ => False
+						},
 				),
-			) == Ok(False)
+			),
+		) == Ok(False)
 }
 
 expect NixProvider.realises(NixPackages("github:NixOS/nixpkgs/nixos-unstable")) and !NixProvider.realises(GuixPackages("https://git.savannah.gnu.org/git/guix.git")) and !NixProvider.realises(Auto)
@@ -3108,5 +3108,5 @@ expect {
 	project = TestData.project(TestData.data)
 	(NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, All).map_ok(|resolution| resolution.present) == Ok([{ program: "nix", because: "Blueprint.roc declares the Nix source default, which Nix resolves" }])
 		and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }) == "Blueprint.roc declares the input roc, which Nix resolves"
-			and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [] }) == "Blueprint.roc declares the source assets, which Nix locks"
+		and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [] }) == "Blueprint.roc declares the source assets, which Nix locks"
 }

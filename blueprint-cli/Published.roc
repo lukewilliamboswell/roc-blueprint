@@ -94,7 +94,7 @@ Published := [].{
 		match Download.asked!(asked.api, [("User-Agent", "blueprint"), ("Accept", "application/vnd.github+json")]) {
 			Ok(bytes) =>
 				match Str.from_utf8(bytes) {
-					Ok(text) => if digest(text, asked.asset) == Err(Unreadable) Unanswered(notice(asked, 200, "the answer from ${asked.api} does not describe a release")) else Described(text)
+					Ok(text) => if (digest(text, asked.asset) == Err(Unreadable)) Unanswered(notice(asked, 200, "the answer from ${asked.api} does not describe a release")) else Described(text)
 					Err(_) => Unanswered(notice(asked, 200, "the answer from ${asked.api} is not text"))
 				}
 
@@ -165,6 +165,6 @@ expect {
 	asked = { api: "https://api.github.com/repos/owner/tool/releases/tags/1.0", repository: "owner/tool", tag: "1.0", asset: "tool" }
 	Published.notice(asked, 403, "HTTP 403 from https://api.github.com/repos/owner/tool/releases/tags/1.0 (1 attempt)") == "could not ask for the digests owner/tool publishes for its release 1.0: HTTP 403 from https://api.github.com/repos/owner/tool/releases/tags/1.0 (1 attempt). GitHub answers 60 such requests an hour from one address when no token is sent, and blueprint sends none. The digests of its downloads are computed by downloading each of them instead, and Blueprint.lock records them as computed"
 		and Published.notice(asked, 429, "x").contains("60 such requests an hour")
-			and !Published.notice(asked, 0, "could not reach https://api.github.com/x (3 attempts)").contains("60 such requests")
-				and Published.notice(asked, 500, "x").contains("computed by downloading each of them instead")
+		and !Published.notice(asked, 0, "could not reach https://api.github.com/x (3 attempts)").contains("60 such requests")
+		and Published.notice(asked, 500, "x").contains("computed by downloading each of them instead")
 }

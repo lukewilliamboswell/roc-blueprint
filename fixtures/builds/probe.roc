@@ -35,7 +35,7 @@ main! = |args| {
 }
 
 require : Bool, Str -> Try({}, [Failed(Str)])
-require = |holds, message| if holds Ok({}) else Err(Failed(message))
+require = |holds, message| if (holds) Ok({}) else Err(Failed(message))
 
 probe! : Bool => Try({}, _)
 probe! = |sandbox| {

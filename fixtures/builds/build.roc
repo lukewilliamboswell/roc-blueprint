@@ -33,7 +33,7 @@ main! = |args| {
 }
 
 require : Bool, Str -> Try({}, [Failed(Str)])
-require = |holds, message| if holds Ok({}) else Err(Failed(message))
+require = |holds, message| if (holds) Ok({}) else Err(Failed(message))
 
 library! : () => Try({}, _)
 library! = || {
@@ -52,7 +52,7 @@ library! = || {
 ## The current project bytes a library is made of.
 library_payload! : () => Try(List(U8), _)
 library_payload! = || {
-	task = if Path.exists!("task-produced.txt")? Path.read_bytes!("task-produced.txt")? else "<absent>".to_utf8()
+	task = if (Path.exists!("task-produced.txt")?) Path.read_bytes!("task-produced.txt")? else "<absent>".to_utf8()
 	Ok("library".to_utf8().append(0).concat(Path.read_bytes!("untracked.txt")?).append('|').concat(task))
 }
 
@@ -87,7 +87,7 @@ bundle! = || {
 	var $lines = []
 	for name in files {
 		file = Path.unix_bytes(name)
-		executable = if Path.is_executable!(file)? "x" else "-"
+		executable = if (Path.is_executable!(file)?) "x" else "-"
 		$lines = $lines.append("${hex(name)} ${executable} ${hex(Path.read_bytes!(file)?)}\n")
 	}
 	Path.create_all!("dist/bundle")?
@@ -140,7 +140,7 @@ walk! = |directory, prefix| {
 	var $found = []
 	for entry in Path.list!(directory)? {
 		base = basename(Path.to_os_str(entry).to_bytes())
-		name = if prefix.is_empty() base else prefix.append('/').concat(base)
+		name = if (prefix.is_empty()) base else prefix.append('/').concat(base)
 		if Path.is_dir!(entry)? {
 			$found = $found.append({ name, directory: Bool.True }).concat(walk!(entry, name)?)
 		} else {
@@ -158,7 +158,7 @@ names! = |directory| {
 }
 
 basename : List(U8) -> List(U8)
-basename = |bytes| bytes.fold([], |name, byte| if byte == '/' [] else name.append(byte))
+basename = |bytes| bytes.fold([], |name, byte| if (byte == '/') [] else name.append(byte))
 
 ## Whether `inner` is `outer` or lies beneath it.
 inside : Path, Path -> Bool
@@ -174,14 +174,14 @@ order = |left, right|
 		([], []) => Same
 		([], _) => Before
 		(_, []) => After
-		([first, .. as rest], [other, .. as others]) => if first < other Before else if first > other After else order(rest, others)
+		([first, .. as rest], [other, .. as others]) => if (first < other) Before else if (first > other) After else order(rest, others)
 	}
 
 hex : List(U8) -> Str
 hex = |bytes| Str.from_utf8_lossy(bytes.fold([], |out, byte| out.append(digit(byte // 16)).append(digit(byte % 16))))
 
 digit : U8 -> U8
-digit = |nibble| if nibble < 10 '0' + nibble else 'a' + (nibble - 10)
+digit = |nibble| if (nibble < 10) '0' + nibble else 'a' + (nibble - 10)
 
 expect hex([0, 255, 16, 'a']) == "00ff1061"
 expect basename("/project/nested/file".to_utf8()) == "file".to_utf8()

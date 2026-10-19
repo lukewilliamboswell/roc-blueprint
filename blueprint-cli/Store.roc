@@ -41,7 +41,7 @@ Store := [].{
 	root_of = |env| {
 		usable = |value|
 			match value {
-				Ok(text) => if Paths.absolute(Paths.portable(text)) Ok(Paths.normalize(Paths.portable(text))) else Err(Unusable)
+				Ok(text) => if (Paths.absolute(Paths.portable(text))) Ok(Paths.normalize(Paths.portable(text))) else Err(Unusable)
 				Err(_) => Err(Unusable)
 			}
 		match (usable(env.xdg_cache_home), usable(env.local_app_data), usable(env.home)) {
@@ -158,7 +158,7 @@ Store := [].{
 				_ => return Err("it holds ${name}, which is not a file, a directory or a link")
 			}
 		}
-		if $found Ok({}) else Err("it holds no file ${path}")
+		if ($found) Ok({}) else Err("it holds no file ${path}")
 	}
 
 	## The store on this machine.
@@ -198,7 +198,7 @@ Store := [].{
 			return Ok(file)
 		}
 		tree!(store, program)?
-		if regular!(file) Ok(file) else Err("the store has no ${file} after making it; delete ${tree_path(store, program.sha256, program.unpack)} and run again")
+		if (regular!(file)) Ok(file) else Err("the store has no ${file} after making it; delete ${tree_path(store, program.sha256, program.unpack)} and run again")
 	}
 
 	## What a program's URLs serve now, with its SHA-256 and length, for an
@@ -230,7 +230,7 @@ Store := [].{
 	remember! : Str, Str, List(U8) => Try({}, Str)
 	remember! = |store, sha256, bytes| {
 		file = artifact_path(store, sha256)
-		if regular!(file) Ok({}) else keep!(Paths.parent(file), file, bytes)
+		if (regular!(file)) Ok({}) else keep!(Paths.parent(file), file, bytes)
 	}
 
 	## The digest and length of a download the store already holds, hashed
@@ -251,12 +251,12 @@ Store := [].{
 			$hasher = $hasher.write(chunk)
 			$size = $size + chunk.len()
 		}
-		if $hasher.finish().to_hex() == sha256 Ok({ sha256, size: $size }) else Err(NotHeld)
+		if ($hasher.finish().to_hex() == sha256) Ok({ sha256, size: $size }) else Err(NotHeld)
 	}
 
 	## Preserve an explicitly named executable extension on Windows.
 	executable_name : Str -> Str
-	executable_name = |name| if name.ends_with(".exe") name else "${name}.exe"
+	executable_name = |name| if (name.ends_with(".exe")) name else "${name}.exe"
 
 	## Put `target` on a run's PATH as `name`: a symbolic link in `bin`, so
 	## that a program finds what is beside its real path.
@@ -305,7 +305,7 @@ regular! = |file|
 ## Remove a file or tree. One that is not there is already removed.
 discard! : Str => {}
 discard! = |target| {
-	_ = if regular!(target) Path.utf8(target).delete!() else Path.utf8(target).delete_all!()
+	_ = if (regular!(target)) Path.utf8(target).delete!() else Path.utf8(target).delete_all!()
 	{}
 }
 
@@ -382,7 +382,7 @@ keep! = |directory, file, bytes| {
 		Ok({}) =>
 			match staged.rename!(Path.utf8(file)) {
 				Ok({}) => Ok({})
-				Err(_) => if regular!(file) Ok({}) else Err("cannot keep a download at ${file}")
+				Err(_) => if (regular!(file)) Ok({}) else Err("cannot keep a download at ${file}")
 			}
 
 		Err(_) => Err("cannot write a download in ${directory}")
@@ -419,7 +419,7 @@ tree! = |store, program| {
 				}
 				# Files are read-only; directories stay writable, so that the
 				# tree can still be deleted.
-				for batch in (if Env.platform!().os == WINDOWS [] else files).chunks_of(256) {
+				for batch in (if (Env.platform!().os == WINDOWS) [] else files).chunks_of(256) {
 					run!("chmod", ["a-w"].concat(batch), "make the files of ${program.name} read-only")?
 				}
 			}
@@ -428,7 +428,7 @@ tree! = |store, program| {
 			Ok({}) => Ok({})
 			# Losing the rename to another process costs nothing: its tree
 			# was made from the same bytes.
-			Err(_) => if regular!(Store.program_path(store, program)) Ok({}) else Err("cannot place ${program.name} at ${destination}; delete what is there")
+			Err(_) => if (regular!(Store.program_path(store, program))) Ok({}) else Err("cannot place ${program.name} at ${destination}; delete what is there")
 		}
 	}
 	result = make!()

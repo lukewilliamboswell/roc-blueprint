@@ -21,7 +21,7 @@ test = |spec|
 ## A `Value` nested at most `depth` levels deep.
 value : U64 -> Fuzz.Generator(Value)
 value = |depth| |state| {
-	choice = Fuzz.u8_in(0, if depth == 0 2 else 4)(state)
+	choice = Fuzz.u8_in(0, if (depth == 0) 2 else 4)(state)
 	match choice.value {
 		0 => Fuzz.map(Fuzz.str, |s| Value.Str(s))(choice.state)
 		1 => Fuzz.map(Fuzz.u64, |n| Value.Int(U64.to_i64_wrap(n)))(choice.state)
@@ -57,7 +57,7 @@ input = {
 	url: Fuzz.str,
 	kind: Fuzz.map(
 		Fuzz.u8_in(0, 1),
-		|n| if n == 0 Overlay else Flake,
+		|n| if (n == 0) Overlay else Flake,
 	),
 }.Fuzz
 

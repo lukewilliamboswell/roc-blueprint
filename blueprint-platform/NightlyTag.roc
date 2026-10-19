@@ -19,7 +19,7 @@ NightlyTag :: { tag : Str }.{
 			["nightly", year, month, day, commit] =>
 				digits(year, 4) and digits(month, 2) and digits(day, 2)
 					and commit.to_utf8().len() >= 7 and commit.to_utf8().len() <= 40
-						and commit.to_utf8().all(|b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f'))
+					and commit.to_utf8().all(|b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f'))
 
 			_ => False
 		}

@@ -23,7 +23,7 @@ import pf.Recipes
 config = [
 	Name("my-project"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-18-1df370f"))]),
 		Expect(["git"]),
 	]),
 	Shell("default", [Use("dev")]),
@@ -49,8 +49,9 @@ release's notes give its own.
 
 Each
 [release](https://github.com/lukewilliamboswell/roc-blueprint/releases/latest)
-attaches a `blueprint` binary for x86_64 Linux, arm64 Linux and Apple Silicon
-macOS, with SHA-256 sums in `blueprint.sha256`. It needs no Roc: it downloads
+attaches a `blueprint` binary for x86_64 Linux, arm64 Linux, Apple Silicon
+macOS and x86_64 Windows, with SHA-256 sums in `blueprint.sha256` and build
+provenance in `roc-blueprint-provenance.sigstore.json`. It needs no Roc: it downloads
 the compiler that reads `Blueprint.roc`. [Nix](https://nixos.org/download)
 with flakes enabled is needed for tools from a Nix package source and for
 sandboxed builds, and where it is installed `blueprint` also runs from the

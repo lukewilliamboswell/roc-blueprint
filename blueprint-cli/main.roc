@@ -39,7 +39,7 @@ import nix.NixProvider
 import "compiler-version" as compiler_version : Str
 
 version : Str
-version = "0.6.0-rc1"
+version = "0.6.0"
 
 ## The providers a request may be planned with. This is the only reference to
 ## a concrete provider: everything else uses the Provider contract
@@ -144,14 +144,14 @@ cli_for = |loaded| {
 			Ok(spec) => {
 				# Weaver rejects an empty subcommand list, so fall back to the
 				# generic parsers when there are no shells or tasks.
-				shell_cmd: if spec.shells.is_empty()
+				shell_cmd: if (spec.shells.is_empty())
 					generic_shell_cmd
 				else
 					SubCmd.finish(
 						Cli.map(SubCmd.optional(spec.shells.map(shell_choice)), |picked| Shell(picked ?? "default")),
 						{ name: "shell", description: "Enter a shell's environment (default: \"default\")", mapper: |c| c },
 					),
-				run_cmd: if spec.tasks.is_empty()
+				run_cmd: if (spec.tasks.is_empty())
 					generic_run_cmd
 				else
 					SubCmd.finish(
@@ -206,10 +206,10 @@ cli_for = |loaded| {
 
 summary : Spec -> Str
 summary = |spec| {
-	count = |n, one, many| if n == 1 "1 ${one}" else "${n.to_str()} ${many}"
+	count = |n, one, many| if (n == 1) "1 ${one}" else "${n.to_str()} ${many}"
 	shells = spec.shells.map(|s| s.name)
 	tasks = spec.tasks.map(|t| t.name)
-	task_part = if tasks.is_empty() "no tasks" else "${count(tasks.len(), "task", "tasks")} (${Str.join_with(tasks, ", ")})"
+	task_part = if (tasks.is_empty()) "no tasks" else "${count(tasks.len(), "task", "tasks")} (${Str.join_with(tasks, ", ")})"
 	"${spec.name}: ${count(shells.len(), "shell", "shells")} (${Str.join_with(shells, ", ")}), ${task_part}."
 }
 
@@ -321,7 +321,7 @@ evaluate! = |ctx| {
 ## nothing here supplies. It is refused as that, before anything in it is
 ## read as if it were complete.
 current_platform : Spec -> Try({}, [OldPlatform])
-current_platform = |spec| if spec.requires_.contains("explicit-sources") Ok({}) else Err(OldPlatform)
+current_platform = |spec| if (spec.requires_.contains("explicit-sources")) Ok({}) else Err(OldPlatform)
 
 expect current_platform({ ..Spec.empty("x"), requires_: ["explicit-sources", "programs"] }) == Ok({})
 expect current_platform(Spec.empty("x")) == Err(OldPlatform) and current_platform({ ..Spec.empty("x"), requires_: ["sources", "builds"] }) == Err(OldPlatform)
@@ -576,9 +576,9 @@ plain_path : Str -> Bool
 plain_path = |value|
 	value.starts_with("/")
 		and Paths.normalize(value) == value
-			and !value.to_utf8().any(
-				|byte| byte < 32 or byte == 127 or byte == '"' or byte == '\\' or byte == '$',
-			)
+		and !value.to_utf8().any(
+			|byte| byte < 32 or byte == 127 or byte == '"' or byte == '\\' or byte == '$',
+		)
 
 expect plain_path("/nix/store/abc-blueprint/bin/.blueprint-wrapped")
 expect plain_path("/home/user name/bin/blueprint")
@@ -644,11 +644,11 @@ tree_digest! = |root| {
 tree_entries! : Str, Str => Try(List(Tree.Entry), _)
 tree_entries! = |root, prefix| {
 	var $entries = []
-	dir = if prefix == "" root else "${root}/${prefix}"
+	dir = if (prefix == "") root else "${root}/${prefix}"
 	for child in path(dir).list!()? {
 		full = child.to_str()?
 		name = full.split_on("/").last() ?? full
-		relative = if prefix == "" name else "${prefix}/${name}"
+		relative = if (prefix == "") name else "${prefix}/${name}"
 		match child.type!()? {
 			IsDir => {
 				$entries = $entries.append({ path: relative, kind: Dir }).concat(tree_entries!(root, relative)?)
@@ -681,7 +681,7 @@ authority_token! = |file| {
 ## entries need not be valid UTF-8.
 within : List(U8), List(U8) -> Bool
 within = |child, ancestor| {
-	base = if ancestor == ['/'] [] else ancestor
+	base = if (ancestor == ['/']) [] else ancestor
 	child == ancestor or child.take_first(base.len() + 1) == base.append('/')
 }
 
@@ -698,8 +698,8 @@ valid_namespace = |name, identity| {
 	digits = identity.to_utf8().drop_first(prefix.to_utf8().len()).drop_last(1)
 	identity.starts_with(prefix)
 		and identity.ends_with("]")
-			and !digits.is_empty()
-				and digits.all(|byte| byte >= '0' and byte <= '9')
+		and !digits.is_empty()
+		and digits.all(|byte| byte >= '0' and byte <= '9')
 }
 
 expect valid_namespace("mnt", "mnt:[4026531841]")
@@ -997,7 +997,7 @@ check_inputs! = |readlink, farm| {
 }
 
 basename : List(U8) -> List(U8)
-basename = |bytes| bytes.fold([], |acc, byte| if byte == '/' [] else acc.append(byte))
+basename = |bytes| bytes.fold([], |acc, byte| if (byte == '/') [] else acc.append(byte))
 
 expect basename("/project/src/main.roc".to_utf8()) == "main.roc".to_utf8()
 
@@ -1221,7 +1221,7 @@ execute_step! = |step, fetched, ctx| {
 ## or `/bin/sh`.
 start! : Steps.Step, List(Str), Str, Layout => Try({}, _)
 start! = |step, names, bin, layout| {
-	directories = if bin.is_empty() [] else [bin]
+	directories = if (bin.is_empty()) [] else [bin]
 	match step.action {
 		Build(name) => report_build!(step, name, layout.project_root)
 		Shell(_) if step.argv.is_empty() => {
@@ -1270,7 +1270,7 @@ roc_package_cache = |xdg_cache_home, home, root| {
 		(Err(_), Ok(directory)) => directory.concat("/.cache".to_utf8())
 		(Err(_), Err(_)) => return Err(NoRocPackageCache)
 	}
-	absolute = if base.first() == Ok('/') base else root.append('/').concat(base)
+	absolute = if (base.first() == Ok('/')) base else root.append('/').concat(base)
 	Ok(absolute.concat("/roc/packages".to_utf8()))
 }
 
@@ -1539,24 +1539,24 @@ ignore_generated! = |layout| {
 report_requirements! : Spec, Bool, List(Str), Context => Try({}, _)
 report_requirements! = |spec, json, tasks, ctx| {
 	needs = Realise.requirements(spec, ctx.target, tasks, providers).map_err(|problems| PlanFailed(problems))?
-	Stdout.write!(if json requirements_json(needs) else requirements_text(needs))
+	Stdout.write!(if (json) requirements_json(needs) else requirements_text(needs))
 }
 
 ## The report for a reader: the System, the providers the tasks need between
 ## them, then each task with what supplies its environment.
 requirements_text : Realise.Requirements -> Str
 requirements_text = |needs| {
-	listed = |what, names| if names.is_empty() [] else ["${what} ${Str.join_with(names, ", ")}"]
+	listed = |what, names| if (names.is_empty()) [] else ["${what} ${Str.join_with(names, ", ")}"]
 	task = |entry| {
-		parts = (if entry.providers.is_empty() [] else ["${if entry.providers.len() == 1 "provider" else "providers"} ${Str.join_with(entry.providers, ", ")} (${Str.join_with(entry.tools, ", ")})"])
+		parts = (if (entry.providers.is_empty()) [] else ["${if (entry.providers.len() == 1) "provider" else "providers"} ${Str.join_with(entry.providers, ", ")} (${Str.join_with(entry.tools, ", ")})"])
 			.concat(listed("programs", entry.programs))
 			.concat(listed("unavailable on ${needs.system}:", entry.unavailable))
 			.concat(listed("expects", entry.expects))
-			.concat(if entry.roc_packages == 0 [] else ["roc packages ${entry.roc_packages.to_str()}"])
-		"task ${entry.task} [${entry.environment}]: ${if parts.is_empty() "nothing to supply" else Str.join_with(parts, "; ")}"
+			.concat(if (entry.roc_packages == 0) [] else ["roc packages ${entry.roc_packages.to_str()}"])
+		"task ${entry.task} [${entry.environment}]: ${if (parts.is_empty()) "nothing to supply" else Str.join_with(parts, "; ")}"
 	}
 	Str.join_with(
-		["system ${needs.system}", "providers: ${if needs.providers.is_empty() "none" else Str.join_with(needs.providers, ", ")}"]
+		["system ${needs.system}", "providers: ${if (needs.providers.is_empty()) "none" else Str.join_with(needs.providers, ", ")}"]
 			.concat(needs.tasks.map(task))
 			.concat([""]),
 		"\n",
@@ -1580,7 +1580,7 @@ requirements_json = |needs| {
 	texts = |items| "[${Str.join_with(items.map(|item| Json.to_str(item)), ",")}]"
 	task = |entry|
 		"{\"name\":${Json.to_str(entry.task)},\"environment\":${Json.to_str(entry.environment)},\"providers\":${texts(entry.providers)},\"tools\":${texts(entry.tools)},\"programs\":${texts(entry.programs)},\"unavailable\":${texts(entry.unavailable)},\"expects\":${texts(entry.expects)},\"roc_packages\":${entry.roc_packages.to_str()}}"
-	tasks = if needs.tasks.is_empty() "[]" else "[\n ${Str.join_with(needs.tasks.map(task), ",\n ")}]"
+	tasks = if (needs.tasks.is_empty()) "[]" else "[\n ${Str.join_with(needs.tasks.map(task), ",\n ")}]"
 	"{\"format\":${requirements_format.to_str()},\"system\":${Json.to_str(needs.system)},\"providers\":${texts(needs.providers)},\"expects\":${texts(needs.expects)},\"tasks\":${tasks}}\n"
 }
 
@@ -1676,7 +1676,7 @@ resolve! = |spec, names, ctx| {
 		Held(found) => found.fetched
 		_ => []
 	}
-	fetched = obtained!(Lock.refresh(spec.programs, known, if names.is_empty() All else Named(wanted)))?
+	fetched = obtained!(Lock.refresh(spec.programs, known, if (names.is_empty()) All else Named(wanted)))?
 	lock = { ..pins, intent: Lock.intent_of(spec), fetched }
 	path(Paths.parent(layout.lock_path)).create_all!()?
 	publish_authority!(layout.lock_path, prior, lock.to_str())?
@@ -1793,7 +1793,7 @@ obtain! = |program, host, asked| {
 	looked = published!(program, asked)
 	what = "${program.name} for ${program.system}"
 	here = program.system == host
-	held = if here compiler_held!(what, program) else Err(NotHeld)
+	held = if (here) compiler_held!(what, program) else Err(NotHeld)
 	downloaded : Try({ sha256 : Str, size : U64, bytes : List(U8) }, [NotDownloaded])
 	downloaded = if held.is_err() and (here or looked.published.is_err()) {
 		Ok(Store.hashed!(what, program.urls).map_err(|message| FetchFailed(absent_advice(program, message)))?)
@@ -1941,7 +1941,7 @@ describe = |err, provider|
 				.concat("Roc ${compiler_version.trim()} is fetched automatically, ")
 				.concat("or set ROC to its executable:\n${message}")
 		# A message that already names the command is not told it twice.
-		LockFailed(message) => if message.contains("blueprint update") message else "${message}; use `blueprint update` to initialize or deliberately refresh pins"
+		LockFailed(message) => if (message.contains("blueprint update")) message else "${message}; use `blueprint update` to initialize or deliberately refresh pins"
 		OldLock => "Blueprint.lock was written by blueprint 0.5 or older, which gave every project a package source it did not declare; run `blueprint update` to resolve it again with this blueprint, and review what changes"
 		PlanFailed([problem]) => problem
 		PlanFailed(problems) => "this cannot be carried out:\n  ${Str.join_with(problems, "\n  ")}"

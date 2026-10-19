@@ -82,7 +82,7 @@
               {
                 src = pkgs.fetchurl {
                   url = "https://github.com/roc-lang/nightlies/releases/download/${rocTag}/roc_nightly-source-${lib.removePrefix "nightly-" rocTag}.tar.gz";
-                  hash = "sha256-uNTP4YnmjnySqKGedH9fQjnVhWr7nLeqkhjs78J56YY=";
+                  hash = "sha256-9LrWinfmGefwNpse6GaCnyQAOjml42x8RMxBkCNUoCQ=";
                 };
               }
               ''
@@ -131,7 +131,7 @@
 
           blueprint = pkgs.stdenv.mkDerivation {
             pname = "blueprint";
-            version = "0.6.0-rc1";
+            version = "0.6.0";
             src = lib.fileset.toSource {
               root = ./.;
               fileset = lib.fileset.unions [

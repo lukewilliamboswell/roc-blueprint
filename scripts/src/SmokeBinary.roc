@@ -83,8 +83,10 @@ SmokeBinary := [].{
 	## The project that takes nothing from Nix: the compiler of `tag` as a
 	## fetched program, `git` expected of the machine, and the script's Roc
 	## packages.
-	no_nix_roc : Str, Str -> Str
-	no_nix_roc = |platform_path, tag|
+	no_nix_roc : Str, Str, Bool -> Str
+	no_nix_roc = |platform_path, tag, windows| {
+		# Work around roc-lang/roc#12429 while still compiling and linking.
+		cache_flag = if windows "\"--no-cache\", " else ""
 		Str.join_with(
 			[
 				"app [config] { pf: platform \"${platform_path}\" }",
@@ -99,12 +101,13 @@ SmokeBinary := [].{
 				"		Expect([\"git\"]),",
 				"		RocPackages([${Str.join_with(roc_packages.map(|url| "\"${url}\""), ", ")}]),",
 				"	]),",
-				"	Task(\"script\", [Use(\"dev\"), Run([\"roc-stable\", \"hello.roc\"])]),",
+				"	Task(\"script\", [Use(\"dev\"), Run([\"roc-stable\", ${cache_flag}\"hello.roc\"])]),",
 				"]",
 				"",
 			],
 			"\n",
 		)
+	}
 
 	## What `blueprint requirements --json` must say of that project: no
 	## provider, and `git` expected. The report is read as JSON, so its
@@ -257,7 +260,7 @@ smoke! = |root, blueprint, work, mode| {
 		NoNix => {
 			tag = roc_version.trim()
 			Script.info!("==>", "no Nix: roc-stable is the fetched ${tag}, git is the machine's")?
-			Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), SmokeBinary.no_nix_roc(platform_path, tag))?
+			Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), SmokeBinary.no_nix_roc(platform_path, tag, Env.platform!().os == WINDOWS))?
 			Path.write_utf8!(Path.utf8("${project}/hello.roc"), SmokeBinary.linked_script)?
 		}
 	}
@@ -396,11 +399,11 @@ expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).starts_
 expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly\")")
 
 sample_pins : SmokeBinary.References
-sample_pins = { source: "github:NixOS/nixpkgs/abc", overlay: "github:roc-lang/roc-overlay/def", compiler: "rocpkgs.nightly-2026-10-13-b17d287" }
+sample_pins = { source: "github:NixOS/nixpkgs/abc", overlay: "github:roc-lang/roc-overlay/def", compiler: "rocpkgs.nightly-2026-10-18-1df370f" }
 
 # The pinned project names a revision or tag for everything it resolves.
 expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\"))),\n\tOverlay(\"roc\", \"github:roc-lang/roc-overlay/def\"),\n")
-expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly-2026-10-13-b17d287\")")
+expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly-2026-10-18-1df370f\")")
 
 lock_sample : Str, Str, Str -> Str
 lock_sample = |node, repo, rev| "{\n  \"nodes\": {\n    \"${node}\": {\n      \"locked\": {\n        \"narHash\": \"sha256-AAAA\",\n        \"owner\": \"o\",\n        \"repo\": \"${repo}\",\n        \"rev\": \"${rev}\",\n        \"type\": \"github\"\n      }\n    }\n  }\n}\n"
@@ -431,8 +434,8 @@ expect [[], ["--floating"], ["--no-nix"], ["--pinned", "blueprint"], ["blueprint
 # The Nix-free project names no package source, overlay or tool of one: its
 # compiler is a fetched program and git is the machine's.
 expect {
-	text = SmokeBinary.no_nix_roc("../pf/main.roc", "nightly-2026-10-13-b17d287")
-	text.starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tSystems([\"x86_64-linux\", \"aarch64-linux\", \"aarch64-darwin\", \"x86_64-windows\"]),\n\tEnvironment(\"dev\", [\n\t\tPrograms([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-10-13-b17d287\"))]),\n\t\tExpect([\"git\"]),\n\t\tRocPackages([\"https://github.com/roc-lang/basic-cli/")
+	text = SmokeBinary.no_nix_roc("../pf/main.roc", "nightly-2026-10-18-1df370f", False)
+	text.starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tSystems([\"x86_64-linux\", \"aarch64-linux\", \"aarch64-darwin\", \"x86_64-windows\"]),\n\tEnvironment(\"dev\", [\n\t\tPrograms([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-10-18-1df370f\"))]),\n\t\tExpect([\"git\"]),\n\t\tRocPackages([\"https://github.com/roc-lang/basic-cli/")
 		and ["NixPackages", "Overlay(", "Tools(", "Command(", "#"].all(|part| !text.contains(part))
 }
 expect SmokeBinary.linked_script.starts_with("#!/usr/bin/env roc-stable\napp [main!] { cli: platform \"https://github.com/roc-lang/basic-cli/releases/download/")

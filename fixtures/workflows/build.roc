@@ -49,7 +49,7 @@ app! = |argv| {
 	if dependency != library_bytes!()? {
 		return Err(Failed("the library was built from other source bytes"))
 	}
-	generated = if Path.exists!("task-produced.bin")? Path.read_bytes!("task-produced.bin")? else "<absent>".to_utf8()
+	generated = if (Path.exists!("task-produced.bin")?) Path.read_bytes!("task-produced.bin")? else "<absent>".to_utf8()
 	Path.create_all!("dist/app")?
 	Path.write_bytes!("dist/app/payload", "app".to_utf8().append(0).concat(dependency).append('|').concat(generated).append('|').concat(Path.read_bytes!(asset)?))?
 	Path.write_bytes!("dist/app/library-path", Path.to_os_str(library).to_bytes().append('\n'))?

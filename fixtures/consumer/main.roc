@@ -69,8 +69,8 @@ expect {
 	current = Locks.decode(authority)?
 	authority_0_5.contains("(minor 0)")
 		and Locks.sources(old).map(|source| source.name) == ["default", "nixpkgs", "roc"]
-			and Locks.sources(old).drop_first(1) == Locks.sources(current)
-				and NixProvider.plan(project(wire)?, Request.Generate, "x86_64-linux", layout, old).map_ok(|steps| steps.steps.len()) == Err("lock input or ordered-overlay identity changed; run blueprint update")
+		and Locks.sources(old).drop_first(1) == Locks.sources(current)
+		and NixProvider.plan(project(wire)?, Request.Generate, "x86_64-linux", layout, old).map_ok(|steps| steps.steps.len()) == Err("lock input or ordered-overlay identity changed; run blueprint update")
 }
 
 # Inspection preserves the B1 golden; plans add stable, explicit input kinds.
@@ -111,7 +111,7 @@ expect {
 expect match plan(project(wire)?, Request.Generate, "x86_64-linux", layout) {
 	Ok({ steps: [step] }) => step.action == Generate
 		and step.argv.is_empty() and step.operations.is_empty()
-			and step.artifacts.is_empty()
+		and step.artifacts.is_empty()
 	_ => False
 }
 
@@ -130,7 +130,7 @@ expect match plan(
 	Ok({ steps: [step] }) => match step.files.first() {
 		Ok(file) => file.contents.contains("\"blueprint-env-base\"")
 			and !file.contents.contains("\"blueprint-env-dev\"")
-				and !file.contents.contains("llvmPackages")
+			and !file.contents.contains("llvmPackages")
 		Err(_) => False
 	}
 	_ => False
@@ -278,7 +278,7 @@ expect {
 	match atomic.steps {
 		[step] => sequence.steps == [step, step]
 			and step.action == Run("print")
-				and Locks.decode(authority).map_ok(Locks.encode) == Ok(authority)
+			and Locks.decode(authority).map_ok(Locks.encode) == Ok(authority)
 		_ => False
 	}
 }

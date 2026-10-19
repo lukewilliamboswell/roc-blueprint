@@ -18,9 +18,11 @@ import src/Version
 ##   scripts/check_version.roc request [VERSION]
 ##       Before anything is built: VERSION is well formed, its notes exist in
 ##       docs/releases/, no tag or release of it exists, and it is the version
-##       blueprint-cli/main.roc and flake.nix report. When `GITHUB_OUTPUT` is
+##       blueprint-cli/main.roc and flake.nix report. A real release also
+##       requires the product compiler pin to be the latest official nightly.
+##       When `GITHUB_OUTPUT` is
 ##       set, the version, the release title and whether it is a pre-release
-##       are added to it.
+##       and the product compiler tag are added to it.
 ##
 ##   scripts/check_version.roc bump [VERSION]
 ##       After `scripts/bundle.roc VERSION`: `roc bump` compares the core
