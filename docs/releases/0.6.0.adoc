@@ -352,7 +352,11 @@ core: "{core-url}"
   Silicon macOS. It was developed and measured on x86_64 Linux.
 * Windows x86_64 has a binary and platform target. The Nix-free CI smoke
   test fetches Roc, updates a lock and runs a basic-cli program. Invoke
-  script interpreters explicitly; Nix tools and builds remain unavailable.
+  script interpreters explicitly. With the October 18 nightly, pass
+  `--no-cache` to Roc to avoid
+  https://github.com/roc-lang/roc/issues/12429[duplicate symbols when linking
+  Windows cached objects]; the Windows CI smoke test uses this workaround.
+  Nix tools and builds remain unavailable.
 * `tar`, `ln` and `chmod` must be on `PATH` to unpack and link a fetched
   program. A `Zip` archive unpacks only where `tar` is bsdtar.
 * A `Fetch` gives one command. An archive that holds several programs needs
