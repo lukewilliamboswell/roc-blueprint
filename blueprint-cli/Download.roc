@@ -97,7 +97,7 @@ Download := [].{
 }
 
 lowercase : Str -> Str
-lowercase = |text| Str.from_utf8_lossy(text.to_utf8().map(|b| if b >= 'A' and b <= 'Z' b + 32 else b))
+lowercase = |text| Str.from_utf8_lossy(text.to_utf8().map(|b| if (b >= 'A' and b <= 'Z') b + 32 else b))
 
 attempt! : Str, List((Str, Str)), U64 => Try(List(U8), { status : U16, reason : Str })
 attempt! = |url, headers, number|
@@ -114,7 +114,7 @@ attempt! = |url, headers, number|
 	}
 
 tried : U64 -> Str
-tried = |number| if number == 1 "1 attempt" else "${number.to_str()} attempts"
+tried = |number| if (number == 1) "1 attempt" else "${number.to_str()} attempts"
 
 follow! : Str, Str, List((Str, Str)), U64 => Try(List(U8), [Final(U16, Str), Transient(U16, Str)])
 follow! = |declared, current, headers, hops| {

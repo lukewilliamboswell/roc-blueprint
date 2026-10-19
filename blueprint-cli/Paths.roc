@@ -23,7 +23,7 @@ Paths := [].{
 	## name, and a share (`\\server\share`) has no form here and stays relative.
 	portable : Str -> Str
 	portable = |value| {
-		plain = if value.starts_with(verbatim) value.drop_prefix(verbatim) else value
+		plain = if (value.starts_with(verbatim)) value.drop_prefix(verbatim) else value
 		match plain.to_utf8() {
 			[letter, ':', separator, ..] if drive_letter(letter) and (separator == '\\' or separator == '/') => plain.replace_each("\\", "/")
 			_ => value
@@ -36,17 +36,17 @@ Paths := [].{
 	resolve : Str, Str -> Str
 	resolve = |root, value|
 		if root.starts_with("/") {
-			if value.starts_with("/") value else "${root}/${value}"
+			if (value.starts_with("/")) value else "${root}/${value}"
 		} else {
 			given = portable(value)
-			if absolute(given) and !given.starts_with("/") given else "${root.drop_suffix("/")}/${given.replace_each("\\", "/")}"
+			if (absolute(given) and !given.starts_with("/")) given else "${root.drop_suffix("/")}/${given.replace_each("\\", "/")}"
 		}
 
 	## Lexical normalization is separate from the runtime no-symlink check.
 	normalize : Str -> Str
 	normalize = |value| {
 		root = root_of(value) ?? "/"
-		rest = if value.starts_with(root) value.drop_prefix(root) else value
+		rest = if (value.starts_with(root)) value.drop_prefix(root) else value
 		parts = rest.split_on("/").fold(
 			[],
 			|acc, part|
@@ -74,14 +74,14 @@ Paths := [].{
 	## directory whose name holds the separator cannot be written in one.
 	search : List(Str), Str -> Try(Str, [Unsearchable(Str)])
 	search = |directories, existing| {
-		separator = if directories.any(|directory| root_of(directory) != Ok("/") and absolute(directory)) ";" else ":"
+		separator = if (directories.any(|directory| root_of(directory) != Ok("/") and absolute(directory))) ";" else ":"
 		for directory in directories {
 			if !absolute(directory) or directory.contains(separator) {
 				return Err(Unsearchable(directory))
 			}
 		}
 		entries = directories.map(native)
-		Ok(Str.join_with(if existing.is_empty() entries else entries.append(existing), separator))
+		Ok(Str.join_with(if (existing.is_empty()) entries else entries.append(existing), separator))
 	}
 
 	## The directory holding a normalized absolute path; a root holds itself.
@@ -89,7 +89,7 @@ Paths := [].{
 	parent = |value| {
 		root = root_of(value) ?? "/"
 		result = Str.join_with(value.split_on("/").drop_last(1), "/")
-		if result.to_utf8().len() < root.to_utf8().len() root else result
+		if (result.to_utf8().len() < root.to_utf8().len()) root else result
 	}
 }
 

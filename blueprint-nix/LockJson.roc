@@ -33,7 +33,7 @@ LockJson := [
 		Array(items) => "[${Str.join_with(items.map(encode), ",")}]"
 		String(text) => quote(text)
 		Number(text) => text
-		Boolean(value_) => if value_ "true" else "false"
+		Boolean(value_) => if (value_) "true" else "false"
 		Null => "null"
 	}
 
@@ -155,7 +155,6 @@ LockJson := [
 					}
 					$next = whitespace(bytes, $next + 1)
 				}
-				Err("unterminated lock JSON object")
 			}
 			Ok('[') => {
 				var $items = []
@@ -178,7 +177,6 @@ LockJson := [
 					}
 					$next = whitespace(bytes, $next + 1)
 				}
-				Err("unterminated lock JSON array")
 			}
 			Ok('t') => literal(bytes, i, "true", Boolean(True))
 			Ok('f') => literal(bytes, i, "false", Boolean(False))
@@ -325,9 +323,9 @@ LockJson := [
 		var $i = offset
 		while $i < offset + 4 {
 			byte = bytes.get($i).map_err(|_| "short JSON Unicode escape")?
-			digit_ = if byte >= '0' and byte <= '9' byte - '0'
-			else if byte >= 'a' and byte <= 'f' byte - 'a' + 10
-			else if byte >= 'A' and byte <= 'F' byte - 'A' + 10
+			digit_ = if (byte >= '0' and byte <= '9') byte - '0'
+			else if (byte >= 'a' and byte <= 'f') byte - 'a' + 10
+			else if (byte >= 'A' and byte <= 'F') byte - 'A' + 10
 			else return Err("invalid JSON Unicode escape")
 			$value = $value * 16 + digit_.to_u32()
 			$i = $i + 1
@@ -340,22 +338,22 @@ LockJson := [
 		if point < 128 {
 			[point.to_u8_wrap()]
 		}
-			else if point < 2048 {
-				[(192 + point // 64).to_u8_wrap(), (128 + point % 64).to_u8_wrap()]
-			} else if point < 65536 {
-				[
-					(224 + point // 4096).to_u8_wrap(),
-					(128 + point // 64 % 64).to_u8_wrap(),
-					(128 + point % 64).to_u8_wrap(),
-				]
-			} else {
-				[
-					(240 + point // 262144).to_u8_wrap(),
-					(128 + point // 4096 % 64).to_u8_wrap(),
-					(128 + point // 64 % 64).to_u8_wrap(),
-					(128 + point % 64).to_u8_wrap(),
-				]
-			}
+		else if point < 2048 {
+			[(192 + point // 64).to_u8_wrap(), (128 + point % 64).to_u8_wrap()]
+		} else if point < 65536 {
+			[
+				(224 + point // 4096).to_u8_wrap(),
+				(128 + point // 64 % 64).to_u8_wrap(),
+				(128 + point % 64).to_u8_wrap(),
+			]
+		} else {
+			[
+				(240 + point // 262144).to_u8_wrap(),
+				(128 + point // 4096 % 64).to_u8_wrap(),
+				(128 + point // 64 % 64).to_u8_wrap(),
+				(128 + point % 64).to_u8_wrap(),
+			]
+		}
 	}
 }
 

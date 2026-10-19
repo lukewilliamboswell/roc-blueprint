@@ -31,6 +31,16 @@ Version := [].{
 	outputs : Str -> Str
 	outputs = |version| "version=${version}\ntitle=${ReleaseNotes.title(version)}\nprerelease=${if ReleaseNotes.prerelease(version) "true" else "false"}\n"
 
+	## Releases build with the newest official nightly, pinned in source. A
+	## newer upstream release requires another reviewed update and test run.
+	compiler_problem : Str, Str -> Str
+	compiler_problem = |pinned, latest|
+		if pinned.trim() == latest.trim() and pinned.trim().starts_with("nightly-") {
+			""
+		} else {
+			"release compiler ${pinned.trim()} is not the latest nightly ${latest.trim()}; update the compiler pin and rerun the full suite"
+		}
+
 	## The version constants a release of `version` needs, or what is wrong.
 	constants_problem : Str, Str, Str -> Str
 	constants_problem = |version, flake, cli_source|
@@ -51,6 +61,7 @@ Version := [].{
 	request! : Str, Str => Try({}, _)
 	request! = |root, version| {
 		dry_run = version == Bundle.dry_run_version
+		compiler_tag = Path.read_utf8!(Path.utf8("${root}/blueprint-cli/compiler-version"))?.trim()
 		Process.check!(valid(version), "${version} is not a version: expected X.Y.Z or X.Y.Z-rcN")?
 		chapter = Path.read_utf8!(Path.utf8("${root}/docs/releases.adoc"))?
 		authored = match ReleaseNotes.noted(version, chapter) {
@@ -64,13 +75,15 @@ Version := [].{
 			cli_source = Path.read_utf8!(Path.utf8("${root}/blueprint-cli/main.roc"))?
 			reason = constants_problem(version, flake, cli_source)
 			Process.check!(reason.is_empty(), reason)?
+			latest = Process.succeed!(Process.command("gh", ["api", "repos/roc-lang/nightlies/releases/latest", "--jq", ".tag_name"], root))?.stdout
+			Process.check!(compiler_problem(compiler_tag, latest).is_empty(), compiler_problem(compiler_tag, latest))?
 			unpublished!(root, version)?
 		}
 		Script.pass!("${version} may be released with ${authored}")?
 		match Env.var_str!(OsStr.from_str("GITHUB_OUTPUT")) {
 			Ok(file) => {
 				earlier = if Path.exists!(Path.utf8(file))? Path.read_utf8!(Path.utf8(file))? else ""
-				Path.write_utf8!(Path.utf8(file), "${earlier}${outputs(version)}")
+				Path.write_utf8!(Path.utf8(file), "${earlier}${outputs(version)}compiler-tag=${compiler_tag}\n")
 			}
 			Err(_) => Ok({})
 		}
@@ -165,3 +178,8 @@ expect Version.outputs("0.5.0") == "version=0.5.0\ntitle=roc-blueprint 0.5.0\npr
 expect Version.constants_problem("0.5.0", "  version = \"0.5.0\";\n", "version = \"0.5.0\"\n") == ""
 expect Version.constants_problem("0.5.0", "  version = \"0.4.1\";\n", "version = \"0.5.0\"\n") == "releasing 0.5.0 needs version = \"0.5.0\" in flake.nix (now 0.4.1) and blueprint-cli/main.roc (now 0.5.0)"
 expect Version.constants_problem("0.5.0", "", "version = \"0.5.0\"\n") != ""
+
+expect Version.compiler_problem("nightly-new\n", "nightly-new\n") == ""
+expect Version.compiler_problem("nightly-old", "nightly-new") != ""
+expect Version.compiler_problem("", "") != ""
+expect Version.compiler_problem("latest", "latest") != ""

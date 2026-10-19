@@ -108,7 +108,6 @@ Value := [Str(Str), Int(I64), Bool(Bool), List(List(Value)), Attrs(List({ name :
 						}
 					}
 				}
-				Err(InvalidSexpr("unreachable"))
 			}
 			[Open, Symbol("Attrs"), Open, .. as rest] => {
 				var $attrs = []
@@ -123,7 +122,6 @@ Value := [Str(Str), Int(I64), Bool(Bool), List(List(Value)), Attrs(List({ name :
 						}
 					}
 				}
-				Err(InvalidSexpr("unreachable"))
 			}
 			[Open, Symbol(tag), ..] => Err(InvalidSexpr("unknown Value tag ${tag}"))
 			_ => Err(InvalidSexpr("expected a Value such as (Str \"...\")"))
@@ -164,7 +162,6 @@ Value := [Str(Str), Int(I64), Bool(Bool), List(List(Value)), Attrs(List({ name :
 				_ => return Err(InvalidSexpr("expected (field value) or ) in an attribute"))
 			}
 		}
-		Err(InvalidSexpr("unreachable"))
 	}
 
 	close : Value, List(Token) -> Try({ value : Value, rest : List(Token) }, [InvalidSexpr(Str), ..others])

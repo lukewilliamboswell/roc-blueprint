@@ -25,7 +25,7 @@ Project :: [].{
 			}
 			$i = $i + 1
 		}
-		if left.len() < right.len() Before else if left.len() > right.len() After else Same
+		if (left.len() < right.len()) Before else if (left.len() > right.len()) After else Same
 	}
 
 	valid_name : Str -> Bool
@@ -100,8 +100,8 @@ Project :: [].{
 				if (after and !part.starts_with(".")) or (before and !part.ends_with(".")) {
 					return Err(BadNixPath)
 				}
-				leading = if after part.drop_prefix(".") else part
-				inner = if before leading.drop_suffix(".") else leading
+				leading = if (after) part.drop_prefix(".") else part
+				inner = if (before) leading.drop_suffix(".") else leading
 				plain = inner.split_on(".")
 				if !plain.all(nix_identifier) {
 					return Err(BadNixPath)
@@ -139,14 +139,14 @@ Project :: [].{
 				parts.len() <= 2 and versions.len() <= 2 and parts.drop_first(1).all(valid_name) and versions.all(|part| !part.is_empty() and part.to_utf8().all(|b| letter(b) or (b >= '0' and b <= '9') or b == '-' or b == '_' or b == '.' or b == '+'))
 			}
 		}
-		if valid Ok({}) else Err("invalid ${if provider == Nix "Nix" else "Guix"} tool: ${name}")
+		if (valid) Ok({}) else Err("invalid ${if (provider == Nix) "Nix" else "Guix"} tool: ${name}")
 	}
 
 	check_names : List(Str), Str -> Try({}, Str)
 	check_names = |names, kind| {
 		var $seen = []
 		for name in names {
-			if !(if kind == "Task" valid_task_name(name) else valid_name(name)) {
+			if !(if (kind == "Task") valid_task_name(name) else valid_name(name)) {
 				return Err("invalid name for ${kind}: ${name}")
 			}
 			if $seen.contains(name) {
@@ -189,7 +189,7 @@ Project :: [].{
 				}
 				host.split_on(".").all(label)
 					and !port.is_empty() and port.to_utf8().len() <= 5 and port.to_utf8().all(|b| b >= '0' and b <= '9')
-						and !segments.is_empty() and segments.all(|part| !part.is_empty() and part != "." and part != "..")
+					and !segments.is_empty() and segments.all(|part| !part.is_empty() and part != "." and part != "..")
 			}
 			_ => False
 		}
@@ -709,7 +709,7 @@ Project :: [].{
 		for need in build.needs {
 			$done = visit_build(builds, need, visiting.append(name), $done)?
 			dependency = $done.find_first(|entry| entry.build.name == need).map_err(|_| "unknown build: ${need}")?
-			$height = if dependency.height + 1 > $height dependency.height + 1 else $height
+			$height = if (dependency.height + 1 > $height) dependency.height + 1 else $height
 		}
 		Ok($done.append({ build, height: $height }))
 	}
@@ -1011,7 +1011,7 @@ Project :: [].{
 	}
 
 	unique : List(a) -> List(a) where [a.is_eq : a, a -> Bool]
-	unique = |items| items.fold([], |acc, item| if acc.contains(item) acc else acc.append(item))
+	unique = |items| items.fold([], |acc, item| if (acc.contains(item)) acc else acc.append(item))
 }
 
 # A tool always names its source: a name alone is no tool.
@@ -1127,10 +1127,10 @@ expect {
 	bare = { ..fixture([{ ..base, tools: [], overlays: [] }]), sources: [], inputs: [] }
 	Project.validate(bare).map_ok(|spec| spec.sources) == Ok([])
 		and Project.validate({ ..bare, environments: [{ ..base, overlays: [] }] }) == Err("unknown source: nix; Blueprint.roc declares no package source")
-			and Project.validate(fixture([{ ..base, tools: [{ source: "default", name: "git" }] }])) == Err("unknown source: default; Blueprint.roc declares nix, guix")
-				# An environment with no tool asks nothing of any provider.
-				and Project.check_environment(bare, Nix, "base") == Ok({})
-					and Project.check_environment(bare, Guix, "base") == Ok({})
+		and Project.validate(fixture([{ ..base, tools: [{ source: "default", name: "git" }] }])) == Err("unknown source: default; Blueprint.roc declares nix, guix")
+		# An environment with no tool asks nothing of any provider.
+		and Project.check_environment(bare, Nix, "base") == Ok({})
+		and Project.check_environment(bare, Guix, "base") == Ok({})
 }
 
 # A source that leaves its package set to the consumer is refused: the tag is
@@ -1340,7 +1340,7 @@ chain_fixture = |count| {
 	var $index = 0.U64
 	while $index < count {
 		name = $index.to_str()
-		needs = if $index == 0 [] else [($index - 1).to_str()]
+		needs = if ($index == 0) [] else [($index - 1).to_str()]
 		$builds = $builds.append({ ..library, name, needs })
 		$index = $index + 1
 	}
@@ -1541,9 +1541,9 @@ workflow_chain = |count, double, leaf| {
 	var $workflows = []
 	var $index = 0.U64
 	while $index < count {
-		steps = if $index == 0 leaf else {
+		steps = if ($index == 0) leaf else {
 			step = RunWorkflow(($index - 1).to_str())
-			if double [step, step] else [step]
+			if (double) [step, step] else [step]
 		}
 		$workflows = $workflows.append({ name: $index.to_str(), steps })
 		$index = $index + 1
@@ -1705,7 +1705,7 @@ expect {
 			{ environment: "ci", tool: rust, options: rust_targets(["a"]) },
 		]
 			and Project.check_environment(spec, Nix, "ci").is_ok()
-				and Project.check_environment(spec, Guix, "ci") == Err("Guix does not support configured tools in environment ci")
+			and Project.check_environment(spec, Guix, "ci") == Err("Guix does not support configured tools in environment ci")
 		Err(_) => False
 	}
 }
@@ -1824,9 +1824,9 @@ expect {
 	match Project.validate(spec) {
 		Ok(project) => project.environment_programs == [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["roc-stable", "tool"] }]
 			and project.expects == [{ environment: "dev", programs: ["gh", "git"] }]
-				and project.programs == spec.programs
-					and Project.validate(project) == Ok(project)
-						and Spec.parse(project.to_str()) == Ok(project)
+			and project.programs == spec.programs
+			and Project.validate(project) == Ok(project)
+			and Spec.parse(project.to_str()) == Ok(project)
 		Err(_) => False
 	}
 }
@@ -1936,8 +1936,8 @@ expect {
 			expects: ["gh"],
 			bundles,
 		})
-			and Project.environment_use(project, "base", "x86_64-linux") == Ok({ tools: [git, { source: "nix", name: "python3" }], programs: [linux_roc], unavailable: [], expects: [], bundles })
-				and Project.environment_use(project, "missing", "x86_64-linux") == Err("unknown environment: missing")
+		and Project.environment_use(project, "base", "x86_64-linux") == Ok({ tools: [git, { source: "nix", name: "python3" }], programs: [linux_roc], unavailable: [], expects: [], bundles })
+		and Project.environment_use(project, "missing", "x86_64-linux") == Err("unknown environment: missing")
 }
 
 # An environment that declares nothing needs nothing, from anyone.
@@ -1978,10 +1978,10 @@ expect {
 	# As declared and as validated, which flattens inheritance, alike.
 	names(spec) == ["roc-shared", "roc-scripts", "assets", "roc-notes"]
 		and Project.validate(spec).map_ok(names) == Ok(["roc-shared", "roc-scripts", "assets", "roc-notes"])
-			# With no build, no bundle is a provider's; a source that is not one stays.
-			and names({ ..spec, builds: [] }) == ["assets", "roc-notes"]
-				# A build in another environment does not make the tasks' bundle its own,
-				and names({ ..spec, builds: [{ name: "app", environment: "plain", inputs: [], needs: [], run: ["true"], output: "out" }] }) == ["assets", "roc-notes"]
-					# unless it lists the bundle's source among its inputs.
-					and names({ ..spec, builds: [{ name: "app", environment: "plain", inputs: ["roc-tasks"], needs: [], run: ["true"], output: "out" }] }) == ["roc-tasks", "assets", "roc-notes"]
+		# With no build, no bundle is a provider's; a source that is not one stays.
+		and names({ ..spec, builds: [] }) == ["assets", "roc-notes"]
+		# A build in another environment does not make the tasks' bundle its own,
+		and names({ ..spec, builds: [{ name: "app", environment: "plain", inputs: [], needs: [], run: ["true"], output: "out" }] }) == ["assets", "roc-notes"]
+		# unless it lists the bundle's source among its inputs.
+		and names({ ..spec, builds: [{ name: "app", environment: "plain", inputs: ["roc-tasks"], needs: [], run: ["true"], output: "out" }] }) == ["roc-tasks", "assets", "roc-notes"]
 }

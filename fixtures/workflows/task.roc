@@ -68,7 +68,7 @@ hex : List(U8) -> Str
 hex = |bytes| Str.from_utf8_lossy(bytes.fold([], |out, byte| out.append(digit(byte // 16)).append(digit(byte % 16))))
 
 digit : U8 -> U8
-digit = |nibble| if nibble < 10 '0' + nibble else 'a' + (nibble - 10)
+digit = |nibble| if (nibble < 10) '0' + nibble else 'a' + (nibble - 10)
 
 expect stamp(7) == "000000000000000000000007"
 expect hex([0, 255, 16, 'a']) == "00ff1061"

@@ -39,7 +39,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 				name: input.name,
 				ref: normalize_ref(input.url)?,
 				flake: True,
-				kind: if input.kind == Overlay "overlay" else "flake",
+				kind: if (input.kind == Overlay) "overlay" else "flake",
 			})
 		}
 		# The bundle of a Roc package no build uses is the Core's to fetch.
@@ -243,7 +243,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 
 	base64_decode : Str -> Try(List(U8), [Invalid])
 	base64_decode = |text| {
-		value = |c| if c >= 'A' and c <= 'Z' Ok(c - 'A') else if c >= 'a' and c <= 'z' Ok(c - 'a' + 26) else if c >= '0' and c <= '9' Ok(c - '0' + 52) else if c == '+' Ok(62) else if c == '/' Ok(63) else Err(Invalid)
+		value = |c| if (c >= 'A' and c <= 'Z') Ok(c - 'A') else if (c >= 'a' and c <= 'z') Ok(c - 'a' + 26) else if (c >= '0' and c <= '9') Ok(c - '0' + 52) else if (c == '+') Ok(62) else if (c == '/') Ok(63) else Err(Invalid)
 		input = text.to_utf8()
 		if input.len() % 4 != 0 {
 			return Err(Invalid)
@@ -567,7 +567,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 					}
 				}
 				fields = ["owner", "repo", "url", "dir", "rev", "narHash"]
-					.concat(if default_host.is_empty() ["host"] else [])
+					.concat(if (default_host.is_empty()) ["host"] else [])
 				for field in fields {
 					match LockJson.field(original_, field) {
 						Ok(expected) => {
@@ -671,11 +671,11 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 		bytes = hash.drop_prefix("sha256-").to_utf8()
 		hash.starts_with("sha256-") and bytes.len() == 44
 			and bytes.last() == Ok('=')
-				and "AEIMQUYcgkosw048".to_utf8().contains(bytes.get(42) ?? 0)
-					and bytes.take_first(43).all(
-						|b| (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z')
-							or (b >= '0' and b <= '9') or b == '+' or b == '/',
-					)
+			and "AEIMQUYcgkosw048".to_utf8().contains(bytes.get(42) ?? 0)
+			and bytes.take_first(43).all(
+				|b| (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z')
+					or (b >= '0' and b <= '9') or b == '+' or b == '/',
+			)
 	}
 
 	valid_rev : Str -> Bool
@@ -808,7 +808,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 				return Err("Nix root input ${shell_alias} does not follow the source lock identity selects")
 			}
 		}
-		if LockJson.object(root)?.len() != inputs_.len() + (if aliased 1 else 0) {
+		if LockJson.object(root)?.len() != inputs_.len() + (if (aliased) 1 else 0) {
 			return Err("Nix root input set does not match lock identity")
 		}
 		nodes = LockJson.field(graph, "nodes")?
@@ -850,7 +850,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	remote_url : Str, Str -> Bool
 	remote_url = |kind, url| url.starts_with("https://")
 		or url.starts_with("http://")
-			or (kind == "git" and url.starts_with("ssh://"))
+		or (kind == "git" and url.starts_with("ssh://"))
 
 	## Decode the supported reference syntax into Nix original attributes.
 	## Registry refs retain their original id but must lock to immutable fetches.
@@ -880,7 +880,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 			if segments.len() > 1 {
 				suffix = Str.join_with(segments.drop_first(1), "/")
 				$attrs = $attrs.append({
-					name: if valid_rev(suffix) "rev" else "ref",
+					name: if (valid_rev(suffix)) "rev" else "ref",
 					value: LockJson.String(suffix),
 				})
 			}
@@ -900,7 +900,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 			if segments.len() > 2 {
 				suffix = Str.join_with(segments.drop_first(2), "/")
 				$attrs = $attrs.append({
-					name: if valid_rev(suffix) "rev" else "ref",
+					name: if (valid_rev(suffix)) "rev" else "ref",
 					value: LockJson.String(suffix),
 				})
 			}
@@ -928,7 +928,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 					[name, value] => {
 						if !["ref", "rev", "dir"].contains(name)
 							or value.is_empty() or value.contains("%")
-								or $attrs.any(|a| a.name == name) {
+							or $attrs.any(|a| a.name == name) {
 							return Err("unsupported or duplicate Nix reference option: ${name}")
 						}
 						if name == "dir" and !Project.valid_output(value) {
@@ -1012,10 +1012,10 @@ expect match locked_fixture {
 		match Locks.derive(locks, project, layout) {
 			Ok(derived) => derived.contents.contains("/moved/assets")
 				and !derived.contents.contains("/project")
-					and derived.operations == [
-						VerifyTree({ path: "/moved/assets", digest: assets_tree }),
-					]
-						and Locks.decode(Locks.encode(locks)) == Ok(locks)
+				and derived.operations == [
+					VerifyTree({ path: "/moved/assets", digest: assets_tree }),
+				]
+				and Locks.decode(Locks.encode(locks)) == Ok(locks)
 			Err(_) => False
 		}
 	}
@@ -1035,9 +1035,9 @@ aliased_locks = with_assets(Locks.from_nix(TestData.project(TestData.data), Test
 expect match (aliased_locks, locked_fixture) {
 	(Ok(locks), Ok(before)) => Locks.decode(Locks.encode(locks)) == Ok(locks)
 		and Locks.encode(locks).contains("(name \"nixpkgs\")")
-			and !Locks.encode(before).contains("(name \"nixpkgs\")")
-				and locks != before
-					and Locks.sources(locks) == Locks.sources(before)
+		and !Locks.encode(before).contains("(name \"nixpkgs\")")
+		and locks != before
+		and Locks.sources(locks) == Locks.sources(before)
 	_ => False
 }
 
@@ -1050,7 +1050,7 @@ expect match (aliased_locks, locked_fixture) {
 		match (Locks.derive(locks, project, TestData.layout), Locks.derive(before, project, TestData.layout)) {
 			(Ok(new), Ok(old)) => new == old
 				and old.contents.contains("\"inputs\":{\"assets\":\"assets\",\"default\":\"default\",\"nixpkgs\":[\"default\"]}")
-					and Locks.decode(Locks.encode(before)) == Ok(before)
+				and Locks.decode(Locks.encode(before)) == Ok(before)
 			_ => False
 		}
 	}
@@ -1064,10 +1064,10 @@ expect {
 	retargeted = |edge| aliased_fixture.replace_each("\"nixpkgs\": [\"default\"]", "\"nixpkgs\": ${edge}")
 	accepts(aliased_fixture)
 		and !accepts(retargeted("[\"assets\"]"))
-			and !accepts(retargeted("\"default\""))
-				and !accepts(retargeted("[\"default\", \"default\"]"))
-					and !accepts(retargeted("[]"))
-						and !accepts(aliased_fixture.replace_each("\"nixpkgs\": [", "\"other\": ["))
+		and !accepts(retargeted("\"default\""))
+		and !accepts(retargeted("[\"default\", \"default\"]"))
+		and !accepts(retargeted("[]"))
+		and !accepts(aliased_fixture.replace_each("\"nixpkgs\": [", "\"other\": ["))
 }
 
 # Tampering with the recorded edge is caught when the Lock is read back.
@@ -1220,11 +1220,11 @@ expect [
 		)
 		Locks.from_nix(project, TestData.layout, native).is_ok()
 			and Locks.from_nix(project, TestData.layout, with_host("evil.example")).is_err()
-				and match Locks.from_nix(project, TestData.layout, with_host(host)) {
-					Ok(locks) => Locks.decode(Locks.encode(locks)) == Ok(locks)
-						and Locks.decode(Locks.encode(locks).replace_each(host, "evil.example")).is_err()
-					Err(_) => False
-				}
+			and match Locks.from_nix(project, TestData.layout, with_host(host)) {
+				Ok(locks) => Locks.decode(Locks.encode(locks)) == Ok(locks)
+					and Locks.decode(Locks.encode(locks).replace_each(host, "evil.example")).is_err()
+				Err(_) => False
+			}
 	},
 )
 
@@ -1244,15 +1244,15 @@ expect [
 		match (LockJson.decode(with_original_host(host)), LockJson.decode(with_original_host("custom.example"))) {
 			(Ok(default), Ok(custom)) => Locks.validate_graph(default).is_ok()
 				and Locks.validate_graph(custom).is_err()
-					and match LockJson.decode(
-						with_original_host("custom.example").replace_each(
-							"\"owner\": \"NixOS\",\n",
-							"\"host\": \"custom.example\", \"owner\": \"NixOS\",\n",
-						),
-					) {
-						Ok(graph) => Locks.validate_graph(graph).is_ok()
-						Err(_) => False
-					}
+				and match LockJson.decode(
+					with_original_host("custom.example").replace_each(
+						"\"owner\": \"NixOS\",\n",
+						"\"host\": \"custom.example\", \"owner\": \"NixOS\",\n",
+					),
+				) {
+					Ok(graph) => Locks.validate_graph(graph).is_ok()
+					Err(_) => False
+				}
 			_ => False
 		}
 	},
@@ -1283,17 +1283,17 @@ expect {
 # Normalize local spelling, rejecting escapes and non-Git SSH transport.
 expect Locks.normalize_ref("path:./assets") == Ok("path:assets")
 	and Locks.original("git+ssh://example.test/repo").is_ok()
-		and Locks.original("tarball+ssh://example.test/archive").is_err()
-			and !Locks.remote_url("tarball", "ssh://example.test/archive")
-				and !Locks.remote_url("file", "ssh://example.test/file")
-					and [
-						"path:.",
-						"path:../assets",
-						"path:/assets",
-						"git+file:///assets",
-						"path:assets?dir=../escape",
-						"path:assets%2f..",
-					].all(|ref| Locks.normalize_ref(ref).is_err())
+	and Locks.original("tarball+ssh://example.test/archive").is_err()
+	and !Locks.remote_url("tarball", "ssh://example.test/archive")
+	and !Locks.remote_url("file", "ssh://example.test/file")
+	and [
+		"path:.",
+		"path:../assets",
+		"path:/assets",
+		"git+file:///assets",
+		"path:assets?dir=../escape",
+		"path:assets%2f..",
+	].all(|ref| Locks.normalize_ref(ref).is_err())
 
 # Valid transitive follows preserve native graph structure after derivation.
 expect Locks.from_nix(
@@ -1433,7 +1433,7 @@ expect match locked_fixture {
 		text = Locks.encode(locks)
 		(Locks.decode(text) == Ok(locks))
 			and Locks.sources(locks).all(|s| s.provider == "nix")
-				and Locks.decode(text.replace_each("(rev \"", "(rev \"0")).is_err()
+			and Locks.decode(text.replace_each("(rev \"", "(rev \"0")).is_err()
 	}
 	Err(_) => False
 }

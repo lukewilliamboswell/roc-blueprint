@@ -84,7 +84,8 @@ The required checks are listed under
 the workflows when changing CI.
 
 basic-cli 0.26.0-rc2 requires the October 12 nightly or later. This repository
-pins `nightly-2026-10-13-b17d287` for the product and scripts, with roc-fuzz 0.4.3.
+pins `nightly-2026-10-18-1df370f` for the product and
+`nightly-2026-10-13-b17d287` for maintenance scripts, with roc-fuzz 0.4.3.
 
 The complete suite requires x86_64 Linux and a running Nix daemon; the
 development shell supplies the rest. `zig build` builds the platform host for
@@ -101,7 +102,10 @@ archive, the documentation archive and the manual. It is made by
 pull request runs the same workflow as a dry run, under the version
 `0.0.1-dry-run`, which is never published.
 
-. In one pull request, set `version` in `blueprint-cli/main.roc` and
+. In one pull request, move the product compiler to the latest official Roc
+  nightly using the steps above. Resolve any compatibility failures and run
+  the complete suite, including native and Nix-free checks on all four
+  released systems. Set `version` in `blueprint-cli/main.roc` and
   `flake.nix` to the release, and write its notes (see
   <<write-the-release-notes>>). Merge it.
 . Run the *Release* workflow from `main` with that version, for example
@@ -118,7 +122,8 @@ commits. Both use the notes in `docs/releases/X.Y.Z.adoc`.
 validate::
 Requires the default branch, then `scripts/check_version.roc request`
 requires a well-formed version, its notes, that no tag or release of it
-exists, and that it is the version the CLI and the flake report.
+exists, that it is the version the CLI and the flake report, and that the
+product compiler pin names the latest official nightly.
 
 build::
 Cross-builds the binaries (`scripts/build_release.roc`), runs the whole test
@@ -139,9 +144,14 @@ bundles.
 
 publish::
 The only job that may write to the repository. It checks out nothing and
-runs no script of the repository. It creates a draft release at the tested
+runs no script of the repository. It attests the tested assets and verifies
+the source and workflow identity of all four native binaries, retaining the
+attestation bundle as a release asset. It creates a draft release at the tested
 commit, uploads every asset, downloads each back and compares it with the
-tested file, and only then publishes. It does not run on a pull request.
+tested file, and only then publishes. It rechecks the latest nightly before
+publication. If a newer nightly appeared during the build, the job fails
+and leaves the draft unpublished: update the compiler pin and repeat the
+tests before releasing. It does not run on a pull request.
 
 site::
 For a final release, rebuilds and deploys the manual, which then names the
@@ -263,6 +273,44 @@ uploads. A binary for another system is an addition; it does not change these.
 The platform bundle is the one `.tar.zst` asset named by its hash alone, and
 the core bundle the one that starts `roc-blueprint-core-`. The manual and the
 version check find the previous release's bundles that way.
+
+[#verify-release-provenance]
+=== Verify release provenance
+
+New releases attach `roc-blueprint-provenance.sigstore.json` and publish
+GitHub attestations for the exact tested artifacts. The signer is this
+repository's release workflow, running from `main` on GitHub-hosted runners.
+The attestation describes the build in that workflow run; it does not claim
+a SLSA assurance level or reproducible builds.
+
+For example, after downloading a release's binary and checksum file:
+
+[source,sh]
+----
+sha256sum --ignore-missing -c blueprint.sha256
+gh attestation verify ./blueprint-aarch64-darwin \
+  --repo lukewilliamboswell/roc-blueprint \
+  --signer-workflow lukewilliamboswell/roc-blueprint/.github/workflows/release.yml \
+  --source-ref refs/heads/main \
+  --source-digest <release-commit> \
+  --signer-digest <release-commit> \
+  --deny-self-hosted-runners
+----
+
+Replace `<release-commit>` with the full source commit of the immutable
+release. The verification checks that the subject digest matches the file
+you downloaded. Review the source revision and producing workflow before
+committing the binary's SHA-256 and URL in a downstream lock or registry.
+
+To verify using retained evidence, add
+`--bundle roc-blueprint-provenance.sigstore.json` to that command. An
+air-gapped verifier also needs a previously retained trusted root, supplied
+through `--custom-trusted-root`; see `gh attestation verify --help`.
+
+Verification belongs to release publication and deliberate adoption.
+Routine builds rehash their downloaded and cached files against the
+reviewed pin locally. They need no attestation lookup. Existing releases,
+including `0.6.0-rc1`, are unchanged and gain no retrospective provenance.
 
 === Repository settings the workflows rely on
 

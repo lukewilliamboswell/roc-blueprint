@@ -58,7 +58,7 @@ Recipes :: [].{
 			top = "roc_nightly-${build}-${tag.drop_prefix("nightly-")}"
 			Archive(
 				"https://github.com/roc-lang/nightlies/releases/download/${tag}/${top}${extension}",
-				if extension == ".zip" Zip else TarGz,
+				if (extension == ".zip") Zip else TarGz,
 				"${top}/${program}",
 			)
 		}

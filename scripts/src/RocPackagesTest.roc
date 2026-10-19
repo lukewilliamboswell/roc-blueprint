@@ -21,7 +21,7 @@ RocPackagesTest := [].{
 	http = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"
 
 	## An explicit nightly, so the compiler resolving these bundles is known.
-	roc_tag = "nightly-2026-10-13-b17d287"
+	roc_tag = "nightly-2026-10-18-1df370f"
 
 	greeting = "Hello from locked packages"
 

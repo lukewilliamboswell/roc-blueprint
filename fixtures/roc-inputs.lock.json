@@ -1,10 +1,10 @@
 {
-  "compiler": "nightly-2026-10-13-b17d287",
+  "compiler": "nightly-2026-10-18-1df370f",
   "overlay": {
     "owner": "roc-lang",
     "repo": "roc-overlay",
-    "rev": "2883daa3ca02b87a10e194375ae01e2ef5e22d8d",
-    "nar_hash": "sha256-WorOv8SkoIf2C0HXPSvvQCsEygSR+9dDcPM0v0mwb3k="
+    "rev": "7147707be4ca5f2ed2a60127a06096c016ac9825",
+    "nar_hash": "sha256-agesoonFtza7R2ahJ4VaajnHRnhpaTa+kcYEdEOtahw="
   },
   "bundles": [
     {

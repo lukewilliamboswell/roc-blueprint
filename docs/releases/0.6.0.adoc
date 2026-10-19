@@ -23,11 +23,34 @@ again. "If you used 0.5", below, has the steps.
 app [config] { pf: platform "{platform-url}" }
 ----
 
-The `blueprint` binary is attached for x86_64 Linux, arm64 Linux and Apple
-Silicon macOS, with SHA-256 sums in `blueprint.sha256`. It needs no Roc: it
+The `blueprint` binary is attached for x86_64 Linux, arm64 Linux, Apple
+Silicon macOS and x86_64 Windows, with SHA-256 sums in `blueprint.sha256`. It needs no Roc: it
 downloads the compiler that reads `Blueprint.roc` into its own store and
 checks it against a digest it records. It needs Nix only for what a project
 takes from Nix. Use this release's binary with this release's platform URL.
+
+== Compiler and build provenance
+
+This release builds and evaluates projects with Roc
+`nightly-2026-10-18-1df370f`. A release requires the latest official nightly
+and passing tests on every supported system. The release workflow checks
+the compiler pin before building and again before publishing; an upstream
+nightly change requires another compiler update and test run.
+
+Release artifacts now have signed SLSA build-provenance attestations that
+identify the source commit and release workflow. The attached
+`roc-blueprint-provenance.sigstore.json` retains the verification evidence.
+Before adopting a binary, verify its SHA-256 and attestation as described in
+xref:maintaining.adoc#verify-release-provenance[Verify release provenance].
+Normal CI continues checking the checksum pinned by its project, without
+querying attestations on every run.
+
+On Windows, declare the system and fetch `roc-stable` with
+`Recipes.roc_nightly`. Name the interpreter in each script task, for example
+`Run(["roc-stable", "scripts/check_all.roc"])`. The binary is
+`blueprint-x86_64-windows.exe`; the shared setup action currently installs
+only the Linux and macOS binaries. See xref:without-nix.adoc#_windows[Windows]
+for the supported behavior and limits.
 
 == Fetch a program
 
@@ -46,7 +69,7 @@ config = [
 	Name("my-package"),
 	Environment("dev", [
 		Programs([
-			Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287")),
+			Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-18-1df370f")),
 			Fetch("blueprint-0-5", Recipes.file("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-{system}")),
 		]),
 	]),
@@ -161,7 +184,7 @@ config = [
 	Overlay("roc", "github:roc-lang/roc-overlay"),
 	Environment("dev", [
 		Overlays(["roc"]),
-		Command("roc-stable", "rocpkgs.nightly-2026-10-13-b17d287"),
+		Command("roc-stable", "rocpkgs.nightly-2026-10-18-1df370f"),
 		Tools(["git", "gh"]),
 		RocPackages([
 			"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
@@ -183,7 +206,7 @@ import pf.Recipes
 config = [
 	Name("my-package"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-18-1df370f"))]),
 		Expect(["git", "gh"]),
 		RocPackages([
 			"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
@@ -206,7 +229,7 @@ config = [
 	Overlay("zig", "github:mitchellh/zig-overlay"),
 	Environment("dev", [
 		Overlays(["roc", "zig"]),
-		Command("roc-stable", "rocpkgs.nightly-2026-10-13-b17d287"),
+		Command("roc-stable", "rocpkgs.nightly-2026-10-18-1df370f"),
 		Tools(["git", "zigpkgs.\"0.16.0\""]),
 	]),
 	Task("check", [Use("dev"), Run(["scripts/check_all.roc"])]),
@@ -228,7 +251,7 @@ config = [
 	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 	Overlay("zig", "github:mitchellh/zig-overlay"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-18-1df370f"))]),
 		Expect(["git"]),
 	]),
 	Environment("host", [

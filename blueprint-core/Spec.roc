@@ -294,7 +294,6 @@ expect match Spec.parse("((future (Tag 1)) (format ((major 2) (minor 99))) (name
 expect match Spec.parse(
 	\\((format ((major 2) (minor 2))) (name "x")
 	\\ (requires ("workflows")) (workflows (((name "ci") (steps ())))))
-	,
 ) {
 	Ok(spec) => spec.workflows == [{ name: "ci", steps: [] }] and
 		Spec.unsupported_features(spec, ["sources", "builds"]) == ["workflows"]
@@ -314,21 +313,18 @@ expect ["0", "1"].all(
 expect Spec.parse(
 	\\((format ((major 2) (minor 2))) (name "x")
 	\\ (workflows (((name "ci") (steps ((FutureStep "check")))))))
-	,
 ).is_err()
 
 # Task extra argv is required in every RunTask record on the wire.
 expect Spec.parse(
 	\\((format ((major 2) (minor 2))) (name "x")
 	\\ (workflows (((name "ci") (steps ((RunTask "check")))))))
-	,
 ).is_err()
 
 # A workflow must contain a typed steps list, even when intentionally empty.
 expect Spec.parse(
 	\\((format ((major 2) (minor 2))) (name "x")
 	\\ (workflows (((name "ci")))))
-	,
 ).is_err()
 
 # A 2.7 program entry names its URLs as a list; one bare `url` is not it.

@@ -61,7 +61,7 @@ Realise :: [].{
 	## resolves nor a program: what the project does declare of each.
 	unknown_names : List(Str), List(Str), List(Str) -> Str
 	unknown_names = |unknown, inputs, programs| {
-		listed = |kind, names| if names.is_empty() "no ${kind}" else "the ${kind}s ${Str.join_with(names, ", ")}"
+		listed = |kind, names| if (names.is_empty()) "no ${kind}" else "the ${kind}s ${Str.join_with(names, ", ")}"
 		"no input or program named ${Str.join_with(unknown, ", ")}; Blueprint.roc declares ${listed("input", inputs)} and ${listed("program", programs)}"
 	}
 
@@ -126,7 +126,7 @@ Realise :: [].{
 		if workflow and $bytes > allowance {
 			$problems = $problems.append("workflow plan exceeds 16 MiB of distinct rendered requests")
 		}
-		if $problems.is_empty() Ok(Steps.{ steps: $steps }) else Err(Project.unique($problems))
+		if ($problems.is_empty()) Ok(Steps.{ steps: $steps }) else Err(Project.unique($problems))
 	}
 
 	## The text a step stages and starts.
@@ -190,7 +190,7 @@ Realise :: [].{
 				Err(problem) => Err([problem])
 			}
 			match steps {
-				Ok(provided) => if supplied.problems.is_empty() Ok(provided.map(|step| with_supplied(step, supplied.operations))) else Err(supplied.problems)
+				Ok(provided) => if (supplied.problems.is_empty()) Ok(provided.map(|step| with_supplied(step, supplied.operations))) else Err(supplied.problems)
 				Err(problems) => Err(supplied.problems.concat(problems))
 			}
 		}
@@ -238,7 +238,7 @@ Realise :: [].{
 			Err(problem) => Err([problem])
 		}
 		match steps {
-			Ok(provided) => if $problems.is_empty() Ok(provided) else Err($problems)
+			Ok(provided) => if ($problems.is_empty()) Ok(provided) else Err($problems)
 			Err(problems) => Err($problems.concat(problems))
 		}
 	}
@@ -288,7 +288,7 @@ Realise :: [].{
 	## The sources a project declares, for the end of a message.
 	declared : Spec -> Str
 	declared = |project|
-		if project.sources.is_empty() "" else " (it declares ${Str.join_with(project.sources.map(|source| "${source.name}, ${source_kind(source.provider)}"), "; ")})"
+		if (project.sources.is_empty()) "" else " (it declares ${Str.join_with(project.sources.map(|source| "${source.name}, ${source_kind(source.provider)}"), "; ")})"
 
 	source_kind : Spec.Provider -> Str
 	source_kind = |provider|
@@ -330,9 +330,9 @@ Realise :: [].{
 		}
 		present = use.expects.map(|program| { program, because: "environment ${environment} expects it on PATH (Expect)" })
 		{
-			operations: (if present.is_empty() [] else [Present(present)])
-				.concat(if $programs.is_empty() [] else [Programs($programs)])
-				.concat(if use.bundles.is_empty() [] else [RocBundles(use.bundles)]),
+			operations: (if (present.is_empty()) [] else [Present(present)])
+				.concat(if ($programs.is_empty()) [] else [Programs($programs)])
+				.concat(if (use.bundles.is_empty()) [] else [RocBundles(use.bundles)]),
 			problems: $problems,
 		}
 	}
@@ -380,21 +380,21 @@ Realise :: [].{
 	## root, where a task runs.
 	in_project : Str, Str, Layout -> Str
 	in_project = |program, system, layout| {
-		text = if system.ends_with("-windows") program.replace_each("\\", "/") else program
+		text = if (system.ends_with("-windows")) program.replace_each("\\", "/") else program
 		if !text.contains("/") or absolute(text) {
 			program
 		} else {
-			root = if layout.project_root.ends_with("/") layout.project_root.drop_suffix("/") else layout.project_root
+			root = if (layout.project_root.ends_with("/")) layout.project_root.drop_suffix("/") else layout.project_root
 			parts = text.split_on("/").fold(
 				root.split_on("/"),
 				|kept, part|
 					match part {
 						"" | "." => kept
-						".." => if kept.len() > 1 kept.drop_last(1) else kept
+						".." => if (kept.len() > 1) kept.drop_last(1) else kept
 						_ => kept.append(part)
 					},
 			)
-			if parts.len() == 1 "${Str.join_with(parts, "/")}/" else Str.join_with(parts, "/")
+			if (parts.len() == 1) "${Str.join_with(parts, "/")}/" else Str.join_with(parts, "/")
 		}
 	}
 
@@ -453,7 +453,7 @@ Realise :: [].{
 		if !project.systems.contains(system) {
 			return Err(["target ${system} is not declared by the project"])
 		}
-		chosen = if names.is_empty() project.tasks.map(|task| task.name) else names
+		chosen = if (names.is_empty()) project.tasks.map(|task| task.name) else names
 		var $tasks = []
 		var $problems = []
 		for name in chosen {
@@ -711,7 +711,7 @@ expect {
 	bare = { ..sample, workflows: [], tasks: [], shells: [], environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), builds: [{ name: "bare", environment: "plain", inputs: [], needs: [], run: ["true"], output: "out" }] }
 	planned(bare, Request.Build("bare"), "x86_64-linux", unix, locked).map_ok(|steps| steps.map(|step| step.argv)) == Ok([["nix", "build", "bare"]])
 		and planned({ ..bare, sources: [] }, Request.Build("bare"), "x86_64-linux", unix, locked) == Err(["build bare runs in a provider's sandbox, and Blueprint.roc declares no package source for one; declare one with Packages"])
-			and planned({ ..bare, sources: sample.sources.take_first(1) }, Request.Build("bare"), "x86_64-linux", unix, locked) == Err(["build bare runs in a provider's sandbox, and Blueprint.roc declares no package source for one; declare one with Packages (it declares guix, GuixPackages)"])
+		and planned({ ..bare, sources: sample.sources.take_first(1) }, Request.Build("bare"), "x86_64-linux", unix, locked) == Err(["build bare runs in a provider's sandbox, and Blueprint.roc declares no package source for one; declare one with Packages (it declares guix, GuixPackages)"])
 }
 
 # A sandbox holds nothing of the machine, so a build whose own environment
@@ -731,7 +731,7 @@ expect {
 	fetching = { ..sample, environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), shells: [], tasks: [], builds: [], workflows: [] }
 	planned({ ..fetching, sources: [] }, Request.Generate, "x86_64-linux", unix, locked) == Ok([])
 		and planned({ ..fetching, sources: [{ name: "channel", provider: GuixPackages("https://example.test/guix.git") }] }, Request.Generate, "x86_64-linux", unix, locked) == Ok([])
-			and planned(fetching, Request.Generate, "x86_64-linux", unix, locked).map_ok(|steps| steps.len()) == Ok(1)
+		and planned(fetching, Request.Generate, "x86_64-linux", unix, locked).map_ok(|steps| steps.len()) == Ok(1)
 }
 
 # A workflow is its tasks and builds in order, each planned once and repeated
@@ -787,10 +787,10 @@ expect {
 		"tool for x86_64-linux is not in Blueprint.lock; run blueprint update",
 	])
 		and planned(sample, Request.Run("check", []), "x86_64-linux", unix, { ..locked, fetched: [] }) == Err(["roc-stable for x86_64-linux is not in Blueprint.lock; run blueprint update", "tool for x86_64-linux is not in Blueprint.lock; run blueprint update"])
-			# Another System's entry is not this one's.
-			and planned(sample, Request.Run("script", []), "aarch64-darwin", unix, stale) == Err(["roc-stable for aarch64-darwin is not in Blueprint.lock; run blueprint update"])
-				# A task that fetches nothing does not read them.
-				and planned(sample, Request.Run("hello", []), "x86_64-linux", unix, { ..locked, fetched: [] }).is_ok()
+		# Another System's entry is not this one's.
+		and planned(sample, Request.Run("script", []), "aarch64-darwin", unix, stale) == Err(["roc-stable for aarch64-darwin is not in Blueprint.lock; run blueprint update"])
+		# A task that fetches nothing does not read them.
+		and planned(sample, Request.Run("hello", []), "x86_64-linux", unix, { ..locked, fetched: [] }).is_ok()
 }
 
 # A digest that is not one is never handed to an executor to compare with.
@@ -819,7 +819,7 @@ expect {
 	once = Realise.plan_within(sample, Request.Workflow("ci"), "x86_64-linux", unix, Read(locked), [stub], 200).map_ok(|steps| steps.steps.len())
 	once == Ok(5)
 		and Realise.plan_within(sample, Request.Workflow("ci"), "x86_64-linux", unix, Read(locked), [stub], 100).map_ok(|steps| steps.steps.len()) == Err(["workflow plan exceeds 16 MiB of distinct rendered requests"])
-			and Realise.plan_within(sample, Request.Run("host", []), "x86_64-linux", unix, Read(locked), [stub], 1).is_ok()
+		and Realise.plan_within(sample, Request.Run("host", []), "x86_64-linux", unix, Read(locked), [stub], 1).is_ok()
 }
 
 # What tasks need is read from the Spec alone, per System and per task: the
@@ -882,13 +882,13 @@ expect {
 	names(sample) == ["nix"]
 		# `sample` has Roc packages, and with no build they are the Core's.
 		and names(fetching) == []
-			and names({ ..fetching, sources: [{ name: "channel", provider: GuixPackages("https://example.test/guix.git") }] }) == []
-				and names({ ..fetching, sources: sample.sources }) == ["nix"]
-					and names({ ..fetching, inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }) == ["nix"]
-						and names({ ..fetching, build_sources: fetching.build_sources.append({ name: "assets", ref: "path:./assets" }) }) == ["nix"]
-							# A build in an environment with a Roc package makes its bundle a provider's.
-							and names({ ..fetching, builds: [{ name: "app", environment: "scripts", inputs: [], needs: [], run: ["true"], output: "out" }] }) == ["nix"]
-								and Realise.resolvers(sample, []).is_empty()
+		and names({ ..fetching, sources: [{ name: "channel", provider: GuixPackages("https://example.test/guix.git") }] }) == []
+		and names({ ..fetching, sources: sample.sources }) == ["nix"]
+		and names({ ..fetching, inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }) == ["nix"]
+		and names({ ..fetching, build_sources: fetching.build_sources.append({ name: "assets", ref: "path:./assets" }) }) == ["nix"]
+		# A build in an environment with a Roc package makes its bundle a provider's.
+		and names({ ..fetching, builds: [{ name: "app", environment: "scripts", inputs: [], needs: [], run: ["true"], output: "out" }] }) == ["nix"]
+		and Realise.resolvers(sample, []).is_empty()
 }
 
 expect Realise.unknown_names(["nope", "gone"], ["nix", "roc"], ["roc-stable"]) == "no input or program named nope, gone; Blueprint.roc declares the inputs nix, roc and the programs roc-stable"
@@ -902,9 +902,9 @@ expect {
 	used = { ..declared, environments: declared.environments.append({ name: "host", parents: ["dev"], tools: [{ source: "nix", name: "zig" }], overlays: [] }), tasks: declared.tasks.append({ name: "host", environment: "host", run: ["zig", "build"] }) }
 	declared.sources.any(|source| (stub.realises)(source.provider))
 		and Realise.requirements(declared, "x86_64-linux", [], [stub]).map_ok(|needs| (needs.providers, needs.tasks.map(|entry| entry.providers))) == Ok(([], [[], [], []]))
-			and Realise.requirements(used, "x86_64-linux", [], [stub]).map_ok(|needs| (needs.providers, needs.tasks.map(|entry| entry.providers))) == Ok((["nix"], [[], [], [], ["nix"]]))
-				# Asked about the tasks that do not use it, the answer is still none.
-				and Realise.requirements(used, "x86_64-linux", ["hello", "check"], [stub]).map_ok(|needs| needs.providers) == Ok([])
+		and Realise.requirements(used, "x86_64-linux", [], [stub]).map_ok(|needs| (needs.providers, needs.tasks.map(|entry| entry.providers))) == Ok((["nix"], [[], [], [], ["nix"]]))
+		# Asked about the tasks that do not use it, the answer is still none.
+		and Realise.requirements(used, "x86_64-linux", ["hello", "check"], [stub]).map_ok(|needs| needs.providers) == Ok([])
 }
 
 # A tool declared for one System requires its provider there and nowhere else.

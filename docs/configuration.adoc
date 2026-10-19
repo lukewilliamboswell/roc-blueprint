@@ -12,7 +12,7 @@ import pf.Recipes
 config = [
 	Name("my-project"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-18-1df370f"))]),
 		Expect(["git"]),
 	]),
 	Shell("default", [Use("dev")]),
@@ -134,7 +134,7 @@ package source is involved and Nix is not started.
 ----
 Environment("dev", [
 	Programs([
-		Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287")),
+		Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-18-1df370f")),
 		Fetch("blueprint", Recipes.file("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-{system}")),
 	]),
 ]),
@@ -209,7 +209,7 @@ config = [
 	Systems(["x86_64-linux", "aarch64-linux", "aarch64-darwin"]),
 	Environment("dev", [
 		Programs([
-			Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287")),
+			Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-18-1df370f")),
 			Fetch("wasm-tools", wasm_tools),
 		]),
 	]),
@@ -272,7 +272,7 @@ app [config] { pf: platform "<the platform URL of a release>" }
 
 import pf.Recipes
 
-roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))
+roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-18-1df370f"))
 
 config = [
 	Name("my-project"),
@@ -526,7 +526,7 @@ run at all in a sandboxed build, which has no network:
 [source,roc]
 ----
 Environment("scripts", [
-	Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-13-b17d287"))]),
+	Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-18-1df370f"))]),
 	RocPackages([
 		"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 		"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
@@ -564,7 +564,7 @@ Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 Overlay("roc", "github:roc-lang/roc-overlay"),
 Environment("build-scripts", [
 	Overlays(["roc"]),
-	Command("roc-stable", "nix#rocpkgs.nightly-2026-10-13-b17d287"),
+	Command("roc-stable", "nix#rocpkgs.nightly-2026-10-18-1df370f"),
 	RocPackages([
 		"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 		"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",

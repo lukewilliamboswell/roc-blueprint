@@ -98,7 +98,7 @@ Lock := {
 			entry = held.find_first(|candidate| candidate.name == program.name and candidate.system == program.system)
 			match (update, entry) {
 				(All, Ok(found)) => {
-					$plan = $plan.append(if found.urls == program.urls Keep(found) else Obtain(program))
+					$plan = $plan.append(if (found.urls == program.urls) Keep(found) else Obtain(program))
 				}
 				(All, Err(_)) => {
 					$plan = $plan.append(Obtain(program))
@@ -173,7 +173,7 @@ Lock := {
 	stale : Lock, Spec -> Try({}, Str)
 	stale = |lock, spec| {
 		current = intent_of(spec)
-		changed = |what, same| if same [] else [what]
+		changed = |what, same| if (same) [] else [what]
 		differences = changed("sources", lock.intent.sources == current.sources)
 			.concat(changed("inputs", lock.intent.inputs == current.inputs))
 			.concat(changed("build sources", lock.intent.build_sources == current.build_sources))
@@ -228,7 +228,7 @@ Lock := {
 	fetched_for : Lock, Spec.Program -> Try(Fetched, [NotLocked, UrlsChanged(List(Str))])
 	fetched_for = |lock, program|
 		match lock.fetched.find_first(|entry| entry.name == program.name and entry.system == program.system) {
-			Ok(entry) => if entry.urls == program.urls Ok(entry) else Err(UrlsChanged(entry.urls))
+			Ok(entry) => if (entry.urls == program.urls) Ok(entry) else Err(UrlsChanged(entry.urls))
 			Err(_) => Err(NotLocked)
 		}
 }
@@ -295,7 +295,7 @@ expect {
 	with_input = { ..spec, inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }
 	lock.stale(spec) == Ok({})
 		and lock.stale(with_task) == Ok({})
-			and lock.stale(with_input) == Err("Blueprint.roc changed its inputs since the lock was resolved; run blueprint update")
+		and lock.stale(with_input) == Err("Blueprint.roc changed its inputs since the lock was resolved; run blueprint update")
 }
 
 # Declaration order is not intent; overlay order is.
@@ -314,8 +314,8 @@ expect {
 	linux = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc-linux.tar.gz"], unpack: TarGz, path: "roc/roc" }
 	sample.fetched_for(linux).map_ok(|entry| (entry.sha256, entry.size)) == Ok(("893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f", 69614310))
 		and sample.fetched_for({ ..linux, system: "aarch64-darwin", urls: ["https://example.test/roc-macos.tar.gz", "https://mirror.example.test/roc-macos.tar.gz"] }).map_ok(|entry| entry.sha256) == Ok("e0147f62f072a309519cbc2a6ebfa11e4bb8bac7903d5febaf7a112d1fc2842f")
-			# How the bytes are unpacked is not what was resolved.
-			and sample.fetched_for({ ..linux, unpack: File, path: "" }).map_ok(|entry| entry.sha256) == Ok("893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f")
+		# How the bytes are unpacked is not what was resolved.
+		and sample.fetched_for({ ..linux, unpack: File, path: "" }).map_ok(|entry| entry.sha256) == Ok("893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f")
 }
 
 # Changed URLs name the ones that were resolved; nothing else matches them.
@@ -325,10 +325,10 @@ expect {
 	macos = ["https://example.test/roc-macos.tar.gz", "https://mirror.example.test/roc-macos.tar.gz"]
 	sample.fetched_for({ ..linux, urls: ["https://example.test/newer.tar.gz"] }) == Err(UrlsChanged(["https://example.test/roc-linux.tar.gz"]))
 		and sample.fetched_for({ ..linux, urls: ["https://example.test/roc-linux.tar.gz", "https://mirror.example.test/roc-linux.tar.gz"] }) == Err(UrlsChanged(["https://example.test/roc-linux.tar.gz"]))
-			and sample.fetched_for({ ..linux, system: "aarch64-darwin", urls: ["https://example.test/roc-macos.tar.gz"] }) == Err(UrlsChanged(macos))
-				and sample.fetched_for({ ..linux, system: "aarch64-darwin", urls: ["https://mirror.example.test/roc-macos.tar.gz", "https://example.test/roc-macos.tar.gz"] }) == Err(UrlsChanged(macos))
-					and sample.fetched_for({ ..linux, system: "aarch64-linux" }) == Err(NotLocked)
-						and sample.fetched_for({ ..linux, name: "roc" }) == Err(NotLocked)
+		and sample.fetched_for({ ..linux, system: "aarch64-darwin", urls: ["https://example.test/roc-macos.tar.gz"] }) == Err(UrlsChanged(macos))
+		and sample.fetched_for({ ..linux, system: "aarch64-darwin", urls: ["https://mirror.example.test/roc-macos.tar.gz", "https://example.test/roc-macos.tar.gz"] }) == Err(UrlsChanged(macos))
+		and sample.fetched_for({ ..linux, system: "aarch64-linux" }) == Err(NotLocked)
+		and sample.fetched_for({ ..linux, name: "roc" }) == Err(NotLocked)
 }
 
 # Programs are not intent: declaring one leaves the pins of the Lock current.
@@ -348,7 +348,7 @@ expect {
 	built = { ..bundled, builds: [{ name: "app", environment: "dev", inputs: [], needs: [], run: ["true"], output: "out" }] }
 	Lock.intent_of(bundled).build_sources == []
 		and lock.stale(bundled) == Ok({})
-			and lock.stale(built) == Err("Blueprint.roc changed its build sources since the lock was resolved; run blueprint update")
+		and lock.stale(built) == Err("Blueprint.roc changed its build sources since the lock was resolved; run blueprint update")
 }
 
 # How a digest was obtained is written and read back. An entry from before
@@ -367,7 +367,7 @@ expect {
 	own = { sha256: "aa", size: 3 }
 	Lock.record(linux_tool, Ok(own), Ok(own)) == Ok({ name: "tool", system: "x86_64-linux", urls: linux_tool.urls, sha256: "aa", size: 3, obtained: Both })
 		and Lock.record(linux_tool, Ok(own), Err(NotPublished)).map_ok(|entry| entry.obtained) == Ok(Computed)
-			and Lock.record(linux_tool, Err(NotDownloaded), Ok(own)).map_ok(|entry| (entry.sha256, entry.size, entry.obtained)) == Ok(("aa", 3, Published))
+		and Lock.record(linux_tool, Err(NotDownloaded), Ok(own)).map_ok(|entry| (entry.sha256, entry.size, entry.obtained)) == Ok(("aa", 3, Published))
 }
 
 # Two digests that differ, or two lengths, record nothing and say both.
@@ -388,10 +388,10 @@ expect {
 		# A named program is obtained again on every System, changed or not; the
 		# others keep what they have, stale or not, and a new one waits.
 		and Lock.refresh([linux_tool, macos_tool, other], held, Named(["tool"])) == [Obtain(linux_tool), Obtain(macos_tool)]
-			and Lock.refresh([linux_tool, macos_tool, other], held, Named(["other"])) == [Keep(kept), Keep(moved), Obtain(other)]
-				# Naming no program keeps every entry of a declared program.
-				and Lock.refresh([linux_tool, macos_tool, other], held, Named([])) == [Keep(kept), Keep(moved)]
-					and Lock.refresh([linux_tool], [], All) == [Obtain(linux_tool)]
+		and Lock.refresh([linux_tool, macos_tool, other], held, Named(["other"])) == [Keep(kept), Keep(moved), Obtain(other)]
+		# Naming no program keeps every entry of a declared program.
+		and Lock.refresh([linux_tool, macos_tool, other], held, Named([])) == [Keep(kept), Keep(moved)]
+		and Lock.refresh([linux_tool], [], All) == [Obtain(linux_tool)]
 }
 
 # The hosts a lock's downloads name, alternates included, without ports; the
@@ -403,9 +403,9 @@ expect {
 	after = [entry(["https://example.test/b", "https://mirror.example.net/b"]), entry(["https://github.com/o/r/releases/download/1/t", "https://mirror.example.net/t"])]
 	Lock.hosts(after) == ["example.test", "mirror.example.net", "github.com"]
 		and Lock.new_hosts(before, after) == ["mirror.example.net", "github.com"]
-			and Lock.new_hosts([], after) == ["example.test", "mirror.example.net", "github.com"]
-				and Lock.new_hosts(after, after) == []
-					and Lock.new_hosts(after, before) == []
+		and Lock.new_hosts([], after) == ["example.test", "mirror.example.net", "github.com"]
+		and Lock.new_hosts(after, after) == []
+		and Lock.new_hosts(after, before) == []
 }
 
 # A Lock blueprint 0.5 wrote is known by the source every project had then.

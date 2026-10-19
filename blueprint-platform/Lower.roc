@@ -62,17 +62,17 @@ Lower :: [].{
 		# must refuse it by name instead.
 		requires_ =
 			[explicit_sources]
-				.concat(if acc.extensions.is_empty() [] else ["extensions"])
-				.concat(if acc.raw.is_empty() [] else ["raw"])
-				.concat(if acc.build_sources.is_empty() [] else ["sources"])
-				.concat(if acc.builds.is_empty() [] else ["builds"])
-				.concat(if acc.workflows.is_empty() [] else ["workflows"])
-				.concat(if acc.system_tools.is_empty() [] else ["system-tools"])
-				.concat(if acc.commands.is_empty() [] else ["commands"])
-				.concat(if acc.configured_tools.is_empty() [] else ["configured-tools"])
-				.concat(if acc.roc_packages.is_empty() [] else ["roc-packages"])
-				.concat(if programs.is_empty() and acc.environment_programs.is_empty() [] else ["programs"])
-				.concat(if acc.expects.is_empty() [] else ["expects"])
+				.concat(if (acc.extensions.is_empty()) [] else ["extensions"])
+				.concat(if (acc.raw.is_empty()) [] else ["raw"])
+				.concat(if (acc.build_sources.is_empty()) [] else ["sources"])
+				.concat(if (acc.builds.is_empty()) [] else ["builds"])
+				.concat(if (acc.workflows.is_empty()) [] else ["workflows"])
+				.concat(if (acc.system_tools.is_empty()) [] else ["system-tools"])
+				.concat(if (acc.commands.is_empty()) [] else ["commands"])
+				.concat(if (acc.configured_tools.is_empty()) [] else ["configured-tools"])
+				.concat(if (acc.roc_packages.is_empty()) [] else ["roc-packages"])
+				.concat(if (programs.is_empty() and acc.environment_programs.is_empty()) [] else ["programs"])
+				.concat(if (acc.expects.is_empty()) [] else ["expects"])
 		Project.validate(
 			Spec.{
 				format: Spec.current_format,
@@ -408,11 +408,11 @@ expect match Lower.lower([
 			{ name: "roc-abc123", ref: "tarball+${bundle_url("abc123")}" },
 			{ name: "roc-def456", ref: "tarball+${bundle_url("def456")}" },
 		]
-			and spec.roc_packages == [
-				{ environment: "base", name: "abc123", source: "roc-abc123" },
-				{ environment: "dev", name: "abc123", source: "roc-abc123" },
-				{ environment: "dev", name: "def456", source: "roc-def456" },
-			]
+		and spec.roc_packages == [
+			{ environment: "base", name: "abc123", source: "roc-abc123" },
+			{ environment: "dev", name: "abc123", source: "roc-abc123" },
+			{ environment: "dev", name: "def456", source: "roc-def456" },
+		]
 	Err(_) => False
 }
 
@@ -487,9 +487,9 @@ expect match Lower.lower([
 			{ name: "notes", system: "aarch64-linux", urls: ["https://example.test/notes-aarch64-linux.tar.xz"], unpack: TarXz, path: "notes/bin/notes" },
 			{ name: "notes", system: "x86_64-windows", urls: ["https://example.test/notes-x86_64-windows.tar.xz"], unpack: TarXz, path: "notes/bin/notes" },
 		]
-			# Validation gives the child its parent's programs first.
-			and spec.environment_programs == [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["roc-stable", "tool", "notes"] }]
-				and spec.expects == [{ environment: "base", programs: ["git"] }, { environment: "dev", programs: ["git", "gh"] }]
+		# Validation gives the child its parent's programs first.
+		and spec.environment_programs == [{ environment: "base", programs: ["roc-stable"] }, { environment: "dev", programs: ["roc-stable", "tool", "notes"] }]
+		and spec.expects == [{ environment: "base", programs: ["git"] }, { environment: "dev", programs: ["git", "gh"] }]
 	Err(_) => False
 }
 
@@ -523,11 +523,11 @@ expect Lower.lower([
 # Two recipes that answer differently are two programs, and cannot share a name.
 expect Lower.lower([Name("invalid"), Environment("one", [Programs([tool])]), Environment("two", [Programs([Fetch("tool", tool_release("1.3.0"))])])]) == Err("two different programs are named tool: their recipes do not give the same downloads")
 expect Lower.lower([Name("invalid"), Environment("dev", [Programs([tool, Fetch("tool", tool_release("1.3.0"))])])]) == Err("two different programs are named tool: their recipes do not give the same downloads")
-expect Lower.lower([Name("invalid"), Systems(["x86_64-linux", "x86_64-windows"]), Environment("one", [Programs([tool])]), Environment("two", [Programs([Fetch("tool", |system| if system == "x86_64-linux" File("https://example.test/releases/1.2.0/tool-x86_64-linux") else Unavailable)])])]) == Err("two different programs are named tool: their recipes do not give the same downloads")
+expect Lower.lower([Name("invalid"), Systems(["x86_64-linux", "x86_64-windows"]), Environment("one", [Programs([tool])]), Environment("two", [Programs([Fetch("tool", |system| if (system == "x86_64-linux") File("https://example.test/releases/1.2.0/tool-x86_64-linux") else Unavailable)])])]) == Err("two different programs are named tool: their recipes do not give the same downloads")
 
 # They are compared on the declared Systems alone: these differ on Windows,
 # which this project does not declare.
-expect Lower.lower([Name("shared"), Systems(["x86_64-linux"]), Environment("one", [Programs([tool])]), Environment("two", [Programs([Fetch("tool", |system| if system == "x86_64-windows" Unavailable else File("https://example.test/releases/1.2.0/tool-x86_64-linux"))])])]).map_ok(|spec| spec.programs.len()) == Ok(1)
+expect Lower.lower([Name("shared"), Systems(["x86_64-linux"]), Environment("one", [Programs([tool])]), Environment("two", [Programs([Fetch("tool", |system| if (system == "x86_64-windows") Unavailable else File("https://example.test/releases/1.2.0/tool-x86_64-linux"))])])]).map_ok(|spec| spec.programs.len()) == Ok(1)
 
 expect Lower.lower([Name("invalid"), Environment("dev", [Programs([]), Programs([])])]) == Err("DuplicatePrograms: environment dev")
 expect Lower.lower([Name("invalid"), Environment("dev", [Expect(["git"]), Expect(["gh"])])]) == Err("DuplicateExpect: environment dev")
