@@ -258,6 +258,21 @@ jobs:
             gh attestation verify "dist/release/$name" "${policy[@]}" --bundle "$BUNDLE"
             gh attestation verify "dist/release/$name" "${policy[@]}"
           done
+
+          # Exercise rejection too: a valid bundle cannot authorize other
+          # bytes, another source revision, or a different workflow.
+          must_reject() {
+            if gh attestation verify "$@" --repo "$GH_REPO" --bundle "$BUNDLE" > /dev/null 2>&1; then
+              echo "Provenance verification accepted an invalid artifact or identity" >&2
+              exit 1
+            fi
+          }
+          cp dist/release/blueprint-x86_64-linux dist/modified-binary
+          printf 'modified' >> dist/modified-binary
+          must_reject dist/modified-binary
+          must_reject dist/release/blueprint-x86_64-linux --source-digest 0000000000000000000000000000000000000000
+          must_reject dist/release/blueprint-x86_64-linux --signer-workflow "$GH_REPO/.github/workflows/ci.yml"
+
           printf '%s\n' roc-blueprint-provenance.sigstore.json >> dist/release-assets.txt
           LC_ALL=C sort -o dist/release-assets.txt dist/release-assets.txt
           test "$(LC_ALL=C ls dist/release)" = "$(cat dist/release-assets.txt)"
