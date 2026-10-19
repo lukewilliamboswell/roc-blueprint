@@ -15,6 +15,7 @@ permissions: {}
 
 jobs:
   build:
+    if: github.event_name != 'workflow_dispatch'
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -74,3 +75,45 @@ jobs:
         run: |
           chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
           dist/smoke-${{ matrix.system }} --floating dist/blueprint-${{ matrix.system }}
+
+  windows-diagnostic:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Compare native Windows compiler cache modes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $tag = 'nightly-2026-10-18-1df370f'
+          $archive = 'roc_nightly-windows_x86_64-2026-10-18-1df370f.zip'
+          Invoke-WebRequest "https://github.com/roc-lang/nightlies/releases/download/$tag/$archive" -OutFile roc.zip
+          if ((Get-FileHash roc.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '7acbefc4440c4d7977c47fefb2d8d683b289062c08b4733b9acfc071cb5511b5') { throw 'Compiler digest mismatch' }
+          Expand-Archive roc.zip compiler
+          $roc = (Get-ChildItem compiler -Filter roc.exe -Recurse | Select-Object -First 1).FullName
+          & $roc version
+          @'
+          app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst" }
+          import cli.Stdout
+          main! = |_args| Stdout.line!("Windows cached-object reproduction")
+          '@ | Set-Content -Encoding utf8 hello.roc
+          $app = (Resolve-Path hello.roc).Path
+          $variants = @(
+            @{ name = 'default'; flags = @() },
+            @{ name = 'no-cache'; flags = @('--no-cache') },
+            @{ name = 'one-worker'; flags = @('--jobs=1') }
+          )
+          foreach ($variant in $variants) {
+            $env:XDG_CACHE_HOME = Join-Path $env:RUNNER_TEMP $variant.name
+            $flags = $variant.flags
+            Write-Host "BEGIN $($variant.name)"
+            & $roc @flags $app
+            $cold = $LASTEXITCODE
+            & $roc @flags $app
+            $warm = $LASTEXITCODE
+            Write-Host "RESULT $($variant.name) cold=$cold warm=$warm"
+          }
+          exit 0
