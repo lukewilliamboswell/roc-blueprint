@@ -184,7 +184,7 @@ config = [
 	Overlay("roc", "github:roc-lang/roc-overlay"),
 	Environment("dev", [
 		Overlays(["roc"]),
-		Command("roc-stable", "rocpkgs.nightly-2026-10-18-1df370f"),
+		Command("roc-stable", "rocpkgs.nightly-2026-10-13-b17d287"),
 		Tools(["git", "gh"]),
 		RocPackages([
 			"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
@@ -229,7 +229,7 @@ config = [
 	Overlay("zig", "github:mitchellh/zig-overlay"),
 	Environment("dev", [
 		Overlays(["roc", "zig"]),
-		Command("roc-stable", "rocpkgs.nightly-2026-10-18-1df370f"),
+		Command("roc-stable", "rocpkgs.nightly-2026-10-13-b17d287"),
 		Tools(["git", "zigpkgs.\"0.16.0\""]),
 	]),
 	Task("check", [Use("dev"), Run(["scripts/check_all.roc"])]),
