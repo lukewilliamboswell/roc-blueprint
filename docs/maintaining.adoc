@@ -386,8 +386,9 @@ already loaded for CLI parsing, rather than running the configuration again.
 The loaded Spec is still needed for shared semantic validation and provider
 compatibility checks. Runtime validation also protects consumers from external
 Spec; it does not make major-1 platforms compatible with the current CLI. Loading the
-Spec still executes Roc, so retain compiler provisioning in the Nix wrapper and
-support for the `ROC` override.
+Spec still executes Roc, so retain embedded compiler bootstrap and support
+for the `ROC` override. The Nix wrapper supplies the archive tools bootstrap
+needs, including on a machine whose `PATH` holds only Nix.
 
 These remaining dependencies and workarounds still apply:
 

@@ -189,9 +189,14 @@
             installPhase = ''
               runHook preInstall
               install -Dm755 blueprint "$out/bin/blueprint"
-              # Builds run readlink; the host's own comes first.
+              # Bootstrap unpacks the embedded compiler with tar/gzip; builds
+              # observe namespaces with readlink. Host tools still come first.
               wrapProgram "$out/bin/blueprint" \
-                --suffix PATH : ${lib.makeBinPath [ pkgs.coreutils ]}
+                --suffix PATH : ${lib.makeBinPath [
+                  pkgs.coreutils
+                  pkgs.gnutar
+                  pkgs.gzip
+                ]}
               runHook postInstall
             '';
             meta = {

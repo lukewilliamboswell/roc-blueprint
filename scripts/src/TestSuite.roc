@@ -374,9 +374,9 @@ packaged! = |context| {
 	script!(context, "test_release", [Bundle.dry_run_version, "${package_path}/bin/blueprint"])
 }
 
-## A build observes its namespaces with `readlink`. The Nix package appends
-## coreutils to PATH for that, so the packaged CLI must build where PATH holds
-## only `nix`, and the same binary without its wrapper must not.
+## The package supplies tar/gzip for embedded compiler bootstrap and readlink
+## for namespace observations. Check with a fresh cache and only nix on PATH,
+## so an already installed compiler cannot hide a missing runtime dependency.
 packaged_build! : Context, Str, Str => Try({}, _)
 packaged_build! = |context, package_path, work| {
 	project = "${work}/project"
@@ -397,10 +397,10 @@ packaged_build! = |context, package_path, work| {
 	Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), TestSuite.packaged_project(platform_path, packages_ref))?
 	Path.write_utf8!(Path.utf8("${project}/message.txt"), "built by the packaged blueprint\n")?
 
-	inherited = Env.dict!().map(|(name, value)| (OsStr.display(name), OsStr.display(value))).keep_if(|(name, _)| name != "ROC" and name != "PATH")
+	inherited = Env.dict!().map(|(name, value)| (OsStr.display(name), OsStr.display(value))).keep_if(|(name, _)| name != "ROC" and name != "PATH" and name != "XDG_CACHE_HOME")
 	confined = |program, args, extra| {
 		job = Process.command(program, args, project)
-		{ ..job, cmd: job.cmd.clear_envs().envs(inherited.concat([("PATH", only_nix)]).concat(extra).map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) }
+		{ ..job, cmd: job.cmd.clear_envs().envs(inherited.concat([("PATH", only_nix), ("XDG_CACHE_HOME", "${work}/cache")]).concat(extra).map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) }
 	}
 	wrapped = "${package_path}/bin/blueprint"
 	_ = Process.succeed!(confined(wrapped, ["update"], []))?
@@ -408,7 +408,7 @@ packaged_build! = |context, package_path, work| {
 	artifact = Path.read_utf8!(Path.utf8(built.stdout.trim()))?
 	Process.check!(artifact == "built by the packaged blueprint\n", "the packaged blueprint built: ${artifact}")?
 
-	# The wrapper also supplies the compiler; give the bare binary that one.
+	# Give the bare binary a compiler explicitly to isolate missing readlink.
 	bare = "${package_path}/bin/.blueprint-wrapped"
 	compiler = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#packages.x86_64-linux.roc.outPath"], context.root))?.stdout.trim()
 	unwrapped = Process.traced!(confined(bare, ["build", "copy"], [("ROC", "${compiler}/bin/roc")]))?
