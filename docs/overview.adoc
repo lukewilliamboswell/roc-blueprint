@@ -54,7 +54,7 @@ by Nix, and whether a URL serves anything by `blueprint update`, not by Roc.
 == How it works
 
 The platform lowers and validates the whole configuration, then prints it as
-a *Spec*, a provider-neutral S-expression (format 2.7). The `blueprint`
+a *Spec*, a provider-neutral S-expression (format 2.8). The `blueprint`
 command runs Roc to get that Spec, validates it again through the same shared
 rules, plans the request, and owns every download, file write, the lock and
 execution. It fetches programs into a per-user store itself, and asks the Nix

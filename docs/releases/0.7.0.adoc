@@ -78,8 +78,31 @@ An entry's identity stays the same when an unrelated source, fetched program
 or task changes. Relative local sources retain their tree identity and have
 no portable `fetchTree` recipe. Fetched-program identities remain distinct
 from unpacked-tree identities. See
-xref:commands.adoc#read-committed-lock-entries[Read committed lock entries]
+xref:commands.adoc#inspect-committed-pins[Inspect committed pins]
 for the output schema and compatibility rule.
+
+== Reproducible build recipes
+
+Sandboxed builds use a versioned standalone runner from their locked package
+set. The derivation no longer includes the Blueprint executable or caller
+namespace identities. Runtime namespace observations are passed separately
+and still refuse execution when isolation cannot be verified.
+
+`Files([...])` selects a build's project files and directory trees; unrelated
+application edits do not change that recipe's input tree. Omit it for the
+existing whole-project snapshot. `Files([])` selects an empty project tree.
+Separate builds can share a recipe while declaring their own single output.
+
+`blueprint build NAME --rebuild` checks an existing output by rebuilding the
+same derivation and failing when the bytes differ. `--json` reports versioned
+provenance with the actual derivation, outputs and locked sources used by the
+build. `BLUEPRINT_TOOLS` exposes full roots of declared packages, so recipes
+can reach libraries and loaders as well as executables. See
+xref:builds.adoc#check-reproducibility-and-record-provenance[Build checks and provenance].
+
+The platform writes Spec format 2.8. Configurations that do not select new
+features retain their existing meaning; older consumers reject unsupported
+required features explicitly.
 
 == Native documentation builds
 
