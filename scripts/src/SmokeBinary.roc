@@ -32,8 +32,8 @@ import "../../fixtures/consumer/inputs.lock" as fixture_lock : Str
 ## all: its compiler is a fetched program, it expects `git` of the machine
 ## and names its Roc packages, and nothing in it is Nix's. The binary must
 ## update it, say that its tasks need no provider, and build, link and run a
-## basic-cli script with the fetched compiler, downloading that compiler once
-## and nothing the second time.
+## basic-cli script with the embedded compiler, verifying its actual version
+## against the reported tag and downloading nothing on the second run.
 SmokeBinary := [].{
 
 	## Where a `python3` started by the binary under test records its arguments.
@@ -101,6 +101,7 @@ SmokeBinary := [].{
 				"		Expect([\"git\"]),",
 				"		RocPackages([${Str.join_with(roc_packages.map(|url| "\"${url}\""), ", ")}]),",
 				"	]),",
+				"	Task(\"roc-version\", [Use(\"dev\"), Run([\"roc-stable\", \"version\"])]),",
 				"	Task(\"script\", [Use(\"dev\"), Run([\"roc-stable\", ${cache_flag}\"hello.roc\"])]),",
 				"]",
 				"",
@@ -132,6 +133,12 @@ SmokeBinary := [].{
 	## not that.
 	compiler_fetches : Str -> U64
 	compiler_fetches = |stderr| occurrences(stderr, "blueprint: fetching roc from ")
+
+	## Check the release tag against what the actual bundled executable says.
+	## The native no-Nix smoke jobs run it from the shared compiler archive,
+	## rather than trusting a PATH compiler or the compiler used for the build.
+	compiler_matches : Str, Str -> Bool
+	compiler_matches = |tag, actual| !tag.trim().is_empty() and actual.trim() == "Roc compiler version ${tag.trim()}"
 
 	## A package source, the Roc overlay and the compiler attribute in it.
 	References : { source : Str, overlay : Str, compiler : Str }
@@ -375,6 +382,15 @@ without_nix! = |project, binary, before| {
 	Process.check!(updated.stderr.contains("is the download of Roc this blueprint already holds; its digest is recorded from the store"), "the first update fetched roc-stable for this machine a second time, though it is the embedded compiler")?
 	Process.check!(Path.is_file!(Path.utf8("${project}/Blueprint.lock")) ?? False, "update wrote no Blueprint.lock")?
 
+	# The update's archive-reuse assertion above proves roc-stable comes from
+	# the embedded archive. Run that executable to validate the reported pin
+	# on each native target, including Windows and macOS.
+	reported = Process.succeed!(binary(["compiler-version"]))?
+	Process.check!(reported.stdout == "${roc_version.trim()}\n" and reported.stderr == "", "compiler-version does not report the release's pinned tag")?
+	actual = Process.succeed!(binary(["run", "roc-version"]))?
+	Stdout.write!(actual.stdout)?
+	Process.check!(SmokeBinary.compiler_matches(reported.stdout, actual.stdout), "bundled roc version disagrees with compiler-version: reported ${Str.inspect(reported.stdout)}, executable returned ${Str.inspect(actual.stdout)}")?
+
 	needs = Process.succeed!(binary(["requirements", "--json"]))?
 	Stdout.write!(needs.stdout)?
 	Process.check!(SmokeBinary.needs_no_provider(needs.stdout), "`blueprint requirements --json` does not say that the tasks need no provider and expect git")?
@@ -455,3 +471,10 @@ expect
 		"blueprint: fetching roc from https://github.com/roc-lang/nightlies/releases/download/t/roc_nightly-macos_apple_silicon-t.tar.gz\nblueprint: asking https://api.github.com/repos/roc-lang/nightlies/releases/tags/t what roc-lang/nightlies publishes for its release t\nblueprint: could not ask for the digests roc-lang/nightlies publishes for its release t: HTTP 403\nblueprint: roc-stable for aarch64-darwin is the download of Roc this blueprint already holds; its digest is recorded from the store\nblueprint: fetching roc-stable for x86_64-linux from https://github.com/roc-lang/nightlies/releases/download/t/roc_nightly-linux_x86_64-t.tar.gz to record its digest\n",
 	) == 1
 expect SmokeBinary.compiler_fetches("blueprint: fetching roc-stable from https://example.org/roc.tar.gz\n") == 0
+
+# A matching tag must be confirmed by roc's full version response; a stale
+# executable, an empty tag or extra output must fail the native smoke check.
+expect SmokeBinary.compiler_matches("nightly-a\n", "Roc compiler version nightly-a\n")
+expect !SmokeBinary.compiler_matches("nightly-a", "Roc compiler version nightly-b\n")
+expect !SmokeBinary.compiler_matches("nightly-a", "nightly-a\n") and !SmokeBinary.compiler_matches("", "Roc compiler version ")
+expect !SmokeBinary.compiler_matches("nightly-a", "Roc compiler version nightly-a\nextra")

@@ -285,6 +285,8 @@ the `build` job produced and no step that installs anything. It runs
 * gives the binary a store and a Roc package cache of its own, empty;
 * runs `blueprint update` and requires that the embedded compiler was
   installed exactly once, for reading `Blueprint.roc` and as `roc-stable` together;
+* runs the shared compiler as `roc-stable version` and requires its actual
+  response to match `blueprint compiler-version`;
 * requires that `blueprint requirements --json` names no provider;
 * runs the script as a task, which the embedded compiler builds, links and
   runs. On macOS that is the test that `roc` finds the `darwin` directory of

@@ -6,6 +6,7 @@ import CliHarness
 import Integrity
 import RocPackagesTest
 import Script
+import SmokeBinary
 import "../../blueprint-cli/compiler-version" as compiler_version : Str
 
 ## The real bundled compiler, with no roc on PATH and no project downloads.
@@ -89,6 +90,14 @@ bootstrap! = |bench| {
 	artifact = "${store}/v1/artifacts/sha256/${program.sha256}"
 	tree = "${store}/v1/trees/sha256/${program.sha256}.tar.gz"
 	CliHarness.check!(Integrity.digest(Path.read_bytes!(Path.utf8(artifact))?) == program.sha256, "embedded compiler has the wrong digest")?
+	# Check the actual executable extracted from the verified embedded archive,
+	# with no roc available on PATH and a cache owned by this test.
+	reported = CliHarness.invoke!({ ..call, args: ["compiler-version"] })?
+	CliHarness.exited!(reported, 0, "compiler-version after bootstrap")?
+	actual = CliHarness.invoke!({ ..call, program: "${tree}/${program.path}", args: ["version"] })?
+	CliHarness.exited!(actual, 0, "bundled roc version")?
+	CliHarness.check!(SmokeBinary.compiler_matches(reported.stdout, actual.stdout), "bundled roc version disagrees with compiler-version:\n${reported.stdout}${actual.stdout}${actual.stderr}")?
+	Script.pass!("bundled roc version confirms compiler-version: ${actual.stdout.trim()}")?
 	warm = CliHarness.invoke!(call)?
 	CliHarness.exited!(warm, 0, "warm bootstrap")?
 	CliHarness.check!(!warm.stderr.contains("installing") and !warm.stderr.contains("fetching"), "warm bootstrap reinstalled its compiler:\n${warm.stderr}")?

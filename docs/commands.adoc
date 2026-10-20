@@ -53,7 +53,9 @@ Run project commands in the directory containing `Blueprint.roc`, or set
 `blueprint compiler-version` prints one release tag and a newline, with no
 labels or colour. It reports this binary's pinned compiler even when `ROC`
 or `PATH` selects another executable. It works offline without a project,
-configuration evaluation, compiler installation or cache writes.
+configuration evaluation, compiler installation or cache writes. Native smoke
+tests run the actual bundled `roc version` and require it to match this tag
+on every released system.
 
 A CI check or commit hook can compare an installed automation compiler:
 

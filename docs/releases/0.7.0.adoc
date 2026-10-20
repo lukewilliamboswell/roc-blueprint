@@ -44,7 +44,9 @@ blueprint compiler-version
 This release reports `nightly-2026-10-18-1df370f`, followed by a newline. The
 output has no label or colour and always describes the bundled compiler,
 regardless of `ROC` or `PATH`. The command works in any directory, offline,
-without evaluating a project, installing Roc or writing a cache.
+without evaluating a project, installing Roc or writing a cache. Native smoke
+tests check the reported tag against the actual bundled `roc version` on
+each released system.
 
 A CI check or commit hook can compare the installed automation compiler:
 
