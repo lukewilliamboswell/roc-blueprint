@@ -188,11 +188,19 @@ Store := [].{
 	## and its tree made from that artifact if it is not there. The answer is
 	## the program's real path in the store; nothing is on PATH yet.
 	program! : Str, Steps.Program, Origin => Try(Str, Str)
-	program! = |store, program, origin| {
+	program! = |store, program, origin| program_with!(store, program, origin, Err(NotEmbedded))
+
+	## Install the compiler bundled with this executable, without a download.
+	## Its archive uses the same digest, tree and cache repair as a fetched one.
+	embedded_program! : Str, Steps.Program, List(U8) => Try(Str, Str)
+	embedded_program! = |store, program, bytes| program_with!(store, program, BuiltIn, Ok(bytes))
+
+	program_with! : Str, Steps.Program, Origin, Try(List(U8), [NotEmbedded]) => Try(Str, Str)
+	program_with! = |store, program, origin, embedded| {
 		if !digest(program.sha256) {
 			return Err("${program.name}: ${recorded(origin)} holds no SHA-256 for it")
 		}
-		artifact!(store, program, origin)?
+		artifact!(store, program, origin, embedded)?
 		file = program_path(store, program)
 		if regular!(file) {
 			return Ok(file)
@@ -321,20 +329,29 @@ fresh! = |directory| {
 ## is its name, otherwise the first URL whose bytes have that digest. Bytes
 ## under the name that are not the recorded ones are removed, and so is every
 ## tree that stood beside them, before anything is fetched.
-artifact! : Str, Steps.Program, Store.Origin => Try({}, Str)
-artifact! = |store, program, origin| {
+artifact! : Str, Steps.Program, Store.Origin, Try(List(U8), [NotEmbedded]) => Try({}, Str)
+artifact! = |store, program, origin, embedded| {
 	file = Store.artifact_path(store, program.sha256)
 	if regular!(file) {
 		match Store.file_digest!(file) {
 			Ok(found) if found.to_hex() == program.sha256 => return Ok({})
 			_ => {
-				_ = Stderr.line!("blueprint: the stored download of ${program.name} is not what its name says; fetching it again")
+				action = if (embedded.is_ok()) "restoring it from the embedded archive" else "fetching it again"
+				_ = Stderr.line!("blueprint: the stored download of ${program.name} is not what its name says; ${action}")
 				discard!(file)
 				for kind in [File, TarGz, TarXz, Zip] {
 					discard!(Store.tree_path(store, program.sha256, kind))
 				}
 			}
 		}
+	}
+	match embedded {
+		Ok(bytes) => {
+			verified!(bytes, "embedded archive", program, origin)?
+			_ = Stderr.line!("blueprint: installing embedded Roc compiler")
+			return keep!(Paths.parent(file), file, bytes)
+		}
+		Err(NotEmbedded) => {}
 	}
 	var $failures = []
 	for url in program.urls {
@@ -362,6 +379,13 @@ artifact! = |store, program, origin| {
 fetched! : Str, Steps.Program, Store.Origin => Try(List(U8), Str)
 fetched! = |url, program, origin| {
 	bytes = Download.get!(url).map_err(|reason| "could not download ${program.name} from ${url}: ${reason}")?
+	verified!(bytes, url, program, origin)?
+	Ok(bytes)
+}
+
+## Both embedded and downloaded archives must match their recorded identity.
+verified! : List(U8), Str, Steps.Program, Store.Origin => Try({}, Str)
+verified! = |bytes, url, program, origin| {
 	if program.size != 0 and bytes.len() != program.size {
 		return Err("${program.name} from ${url} is ${bytes.len().to_str()} bytes, not the ${program.size.to_str()} recorded in ${recorded(origin)}; nothing was unpacked")
 	}
@@ -369,7 +393,7 @@ fetched! = |url, program, origin| {
 	if actual != program.sha256 {
 		return Err("${program.name} from ${url} has SHA-256 ${actual}, not the ${program.sha256} in ${recorded(origin)}; nothing was unpacked. ${advice(origin, program.name)}")
 	}
-	Ok(bytes)
+	Ok({})
 }
 
 ## Write verified bytes under a fresh name beside their final one, then

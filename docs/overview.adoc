@@ -104,8 +104,8 @@ and the rules that keep it independent of any one package ecosystem.
 |===
 
 A `blueprint` binary is released for x86_64 Linux, arm64 Linux and Apple
-Silicon macOS. It needs no Roc and no Python: it downloads the Roc compiler
-that reads `Blueprint.roc`. It needs https://nixos.org/download[Nix] with
+Silicon macOS. It needs no Roc and no Python: it embeds the Roc compiler
+that reads `Blueprint.roc` and installs it into its cache on first use. It needs https://nixos.org/download[Nix] with
 flakes enabled where the table's last two columns apply, and `tar`, `ln` and
 `chmod` to unpack and link what it fetches.
 

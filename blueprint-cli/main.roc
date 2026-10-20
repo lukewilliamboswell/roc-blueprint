@@ -37,6 +37,7 @@ import Published
 import Store
 import nix.NixProvider
 import "compiler-version" as compiler_version : Str
+import "compiler-archive" as compiler_archive : List(U8)
 
 version : Str
 version = "0.6.0"
@@ -428,8 +429,8 @@ print_files! = |spec| {
 ## Probe identity before evaluating config with the selected compiler.
 ## A relative ROC executable belongs to the invocation directory, not root.
 ## An explicit ROC must be the compatible compiler. Otherwise a compatible
-## `roc` on PATH is used, and failing that the release this executable records
-## a download of is kept in the store, by its digest. No provider is asked:
+## `roc` on PATH is used, and failing that the compiler archive embedded in
+## this executable is kept in the store, by its digest. No provider is asked:
 ## reading a Blueprint.roc needs none installed.
 roc! : Context => Try(Str, _)
 roc! = |_ctx| {
@@ -466,8 +467,8 @@ roc! = |_ctx| {
 			system = host_system!()?
 			program = Bootstrap.compiler(tag, system)
 				.map_err(|_| CompilerFailed("this blueprint records no download of Roc ${tag} for ${system}"))?
-			store = Store.root!().map_err(|message| CompilerFailed("could not fetch Roc ${tag}: ${message}"))?
-			Store.program!(store, program, BuiltIn).map_err(|message| CompilerFailed("could not fetch Roc ${tag}: ${message}"))
+			store = Store.root!().map_err(|message| CompilerFailed("could not install embedded Roc ${tag}: ${message}"))?
+			Store.embedded_program!(store, program, compiler_archive).map_err(|message| CompilerFailed("could not install embedded Roc ${tag}: ${message}"))
 		}
 	}
 }

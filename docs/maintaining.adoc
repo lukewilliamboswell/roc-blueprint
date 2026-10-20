@@ -60,9 +60,9 @@ asset's `digest` and `size`. The entries are data and nothing else: no rule
 derives a URL. `scripts/test.roc static` fails until every system `blueprint`
 runs on has an entry of the nightly in `compiler-version`.
 
-With `ROC` unset and no matching `roc` on `PATH`, `blueprint` downloads its
-system's archive into the per-user store and checks it against the entry
-before using it; it starts no provider to read a `Blueprint.roc`. The entry
+With `ROC` unset and no matching `roc` on `PATH`, `blueprint` installs its
+system's embedded archive into the per-user store and checks it against the
+entry before using it; it starts no provider to read a `Blueprint.roc`. The entry
 names the same download as `Recipes.roc_nightly` of that tag, so a project
 that fetches that nightly as `roc-stable` holds it once, and
 `blueprint update` records its digest from the store without a second
@@ -179,12 +179,20 @@ is the x86_64 Linux compiler archive of the nightly in
 `blueprint-cli/compiler-version` with the
 `darwin/` sysroot of the Apple Silicon archive beside it, which Roc needs to
 link macOS programs. Both are fetched by the URL and hash the locked
-roc-overlay records. The package is not in the development shell, so only a
-release build downloads the macOS archive. The four CLI binaries are compiled
-at the same time, each about 2.3 GB at its peak.
+roc-overlay records. The cross compiler is not in the development shell.
 
-A binary downloads the compiler named in `blueprint-cli/compiler-version`
-by the digest it records; see <<the-bootstrap-table>>.
+The CLI binaries are compiled sequentially. Before each compilation,
+`scripts/embed_compiler.roc <system>` stages that target's complete archive as
+`blueprint-cli/compiler-archive`, after checking its size and digest against
+`Bootstrap.roc`. Downloads are cached in `.cache/compilers/`; the staged
+archive is ignored by Git. The local host's archive is restored afterwards,
+including when compilation fails. Smoke programs still compile in parallel.
+
+Each binary embeds only its own system's archive. On first use it installs
+that archive into the existing per-user store and verifies its recorded
+digest before extraction; see <<the-bootstrap-table>>. This removes the
+compiler download at runtime. Project packages and tools can still require
+the network. Release binaries grow by roughly 69–73 MB.
 
 === Write the release notes
 

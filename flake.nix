@@ -34,7 +34,7 @@
           lib = pkgs.lib;
 
           # The compiler the product is built with and that a released
-          # `blueprint` fetches: the nightly in blueprint-cli/compiler-version,
+          # `blueprint` embeds: the nightly in blueprint-cli/compiler-version,
           # from roc-overlay.
           rocTag = lib.trim (builtins.readFile ./blueprint-cli/compiler-version);
           roc = roc-overlay.packages.${system}.${rocTag};
@@ -163,16 +163,15 @@
               runHook preBuild
               export HOME="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache"
               ${lib.concatMapStrings unpackRocPackage rocPackages}
+              cp ${rocArchive system} blueprint-cli/compiler-archive
               roc build blueprint-cli/main.roc --output=blueprint
               runHook postBuild
             '';
             installPhase = ''
               runHook preInstall
               install -Dm755 blueprint "$out/bin/blueprint"
-              # Default to the pinned Roc; ROC in the environment still wins.
               # Builds run readlink; the host's own comes first.
               wrapProgram "$out/bin/blueprint" \
-                --set-default ROC ${lib.getExe roc} \
                 --suffix PATH : ${lib.makeBinPath [ pkgs.coreutils ]}
               runHook postInstall
             '';
@@ -205,6 +204,12 @@
           # start. `blueprint` itself is not here, so entering the
           # shell never compiles the CLI; `nix run` and `nix build` provide it.
           devShells.default = pkgs.mkShellNoCC {
+            # Ignored build input: every local CLI build embeds this host's archive.
+            shellHook = ''
+              cp ${rocArchive system} blueprint-cli/.compiler-archive.$$
+              chmod u+w blueprint-cli/.compiler-archive.$$
+              mv blueprint-cli/.compiler-archive.$$ blueprint-cli/compiler-archive
+            '';
             packages = [
               roc
               rocStable

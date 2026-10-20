@@ -267,7 +267,10 @@ unit! = |context| {
 
 	# Every core and Nix provider expect runs here too: the CLI imports both.
 	step!("CLI, provider and core tests")?
-	compiler!(context, ["test", "blueprint-cli/main.roc"])?
+	# The pinned compiler's native test backend crashes on the embedded
+	# archive's large byte constant. The interpreter runs the same expects;
+	# CLI integration tests exercise the actual native executable.
+	compiler!(context, ["test", "--opt=interpreter", "blueprint-cli/main.roc"])?
 
 	step!("Independent library consumer")?
 	compiler!(context, ["check", "fixtures/consumer/main.roc"])?
@@ -290,6 +293,9 @@ report_tests! = |scripts, outcomes|
 
 cli! : Context => Try({}, _)
 cli! = |context| {
+	step!("Embedded compiler bootstrap and cache repair")?
+	script!(context, "test_bootstrap", [])?
+
 	step!("CLI argument and validation regressions")?
 	script!(context, "test_cli", [])?
 

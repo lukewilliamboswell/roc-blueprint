@@ -11,7 +11,7 @@ import "../../flake.lock" as flake_lock : Str
 import "../../fixtures/consumer/inputs.lock" as fixture_lock : Str
 
 ## Run a built `blueprint` binary on this machine with no Roc of its own: it
-## must fetch its compiler, evaluate a `Blueprint.roc`, realise an environment
+## must install its embedded compiler, evaluate a `Blueprint.roc`, realise an environment
 ## and run a `roc-stable` script in it, all without a host Python.
 ##
 ## This program is cross-built for every released system, so a machine with
@@ -332,8 +332,8 @@ smoke! = |root, blueprint, work, mode| {
 		{ ..job, cmd: job.cmd.clear_envs().envs(variables.map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) }
 	}
 
-	# Every command reads Blueprint.roc first, so this one fetches the
-	# compiler when there is none: its standard error says so.
+	# Every command reads Blueprint.roc first, so this one installs the
+	# embedded compiler when there is none: its standard error says so.
 	version = Process.succeed!(binary(["--version"]))?
 	Stdout.write!(version.stderr)?
 	Stdout.write!(version.stdout)?
@@ -351,7 +351,7 @@ smoke! = |root, blueprint, work, mode| {
 		}
 		NoNix => {
 			without_nix!(project, binary, version.stderr)?
-			"no Nix: one download of the compiler, no provider required, a script built and linked, and nothing downloaded the second time"
+			"no Nix: embedded compiler, no provider required, a script built and linked, and nothing downloaded the second time"
 		}
 	}
 	if Path.exists!(Path.utf8(witness))? {
@@ -370,8 +370,9 @@ without_nix! = |project, binary, before| {
 	updated = Process.succeed!(binary(["update"]))?
 	Stdout.write!(updated.stderr)?
 	Stdout.write!(updated.stdout)?
-	Process.check!(SmokeBinary.compiler_fetches("${before}${updated.stderr}") == 1, "the compiler was not fetched exactly once before the first run")?
-	Process.check!(updated.stderr.contains("is the download of Roc this blueprint already holds; its digest is recorded from the store"), "the first update fetched roc-stable for this machine a second time, though it is the compiler it had just fetched")?
+	Process.check!(SmokeBinary.compiler_fetches("${before}${updated.stderr}") == 0, "the embedded compiler was downloaded")?
+	Process.check!(SmokeBinary.occurrences("${before}${updated.stderr}", "blueprint: installing embedded Roc compiler") == 1, "the embedded compiler was not installed exactly once")?
+	Process.check!(updated.stderr.contains("is the download of Roc this blueprint already holds; its digest is recorded from the store"), "the first update fetched roc-stable for this machine a second time, though it is the embedded compiler")?
 	Process.check!(Path.is_file!(Path.utf8("${project}/Blueprint.lock")) ?? False, "update wrote no Blueprint.lock")?
 
 	needs = Process.succeed!(binary(["requirements", "--json"]))?

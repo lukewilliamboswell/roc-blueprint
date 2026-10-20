@@ -51,8 +51,8 @@ Each
 [release](https://github.com/lukewilliamboswell/roc-blueprint/releases/latest)
 attaches a `blueprint` binary for x86_64 Linux, arm64 Linux, Apple Silicon
 macOS and x86_64 Windows, with SHA-256 sums in `blueprint.sha256` and build
-provenance in `roc-blueprint-provenance.sigstore.json`. It needs no Roc: it downloads
-the compiler that reads `Blueprint.roc`. [Nix](https://nixos.org/download)
+provenance in `roc-blueprint-provenance.sigstore.json`. It needs no Roc: it embeds
+the compiler that reads `Blueprint.roc` and installs it into its cache on first use. [Nix](https://nixos.org/download)
 with flakes enabled is needed for tools from a Nix package source and for
 sandboxed builds, and where it is installed `blueprint` also runs from the
 flake:

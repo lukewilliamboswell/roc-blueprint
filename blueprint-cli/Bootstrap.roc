@@ -1,7 +1,7 @@
 import core.Steps
 
-## The compiler that reads a Blueprint.roc, as downloads this executable
-## holds: a project has no Lock until it has been read, so the digests cannot
+## The compiler that reads a Blueprint.roc, as archives this executable
+## embeds: a project has no Lock until it has been read, so the digests cannot
 ## come from one. They are data and nothing else: no rule here derives a URL
 ## or a name. Each entry is what the release of roc-lang/nightlies with that
 ## tag reports for the archive, and is the same download a project declares

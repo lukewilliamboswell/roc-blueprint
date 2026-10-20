@@ -160,10 +160,10 @@ jobs:
 
   # A project that takes nothing from Nix, on machines that have none: no step
   # here installs Nix, and the smoke program refuses to start when `nix` is on
-  # PATH. The binary fetches its compiler, writes the lock, says the project's
-  # tasks need no provider, and builds, links and runs a basic-cli script with
-  # the fetched compiler, which it must download once and not again. This is
-  # the only job that links with a fetched `roc` on macOS, where the compiler
+  # PATH. The binary installs its embedded compiler, writes the lock, reports
+  # that tasks need no provider, and builds and runs a basic-cli script. It must
+  # install the compiler once without downloading it. This is the only job that
+  # links with the embedded `roc` on macOS, where the compiler
   # needs the `darwin` directory of its archive beside it.
   no-nix:
     permissions:

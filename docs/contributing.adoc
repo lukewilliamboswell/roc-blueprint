@@ -23,7 +23,8 @@ blueprint-nix/           importable pure Nix provider (depends only on blueprint
 blueprint-cli/           the blueprint CLI (basic-cli + weaver); as `blueprint __build-runner`
                          it is also each build's in-derivation argv/output/isolation check
   Store.roc, Download.roc  the per-user store of downloads and the HTTPS client that fills it
-  Bootstrap.roc          the recorded download of the compiler that reads a Blueprint.roc
+  Bootstrap.roc          identity of the compiler archive embedded in each CLI
+  compilers.roc          the same metadata as a package for build tooling
   Published.roc          what a release publishes as the digest of an asset, asked by update
 fixtures/consumer/       independent consumer of the Spec and Nix packages
 fixtures/overlays/       overlay flakes for scripts/test_scenarios.roc
@@ -35,6 +36,8 @@ scripts/                 Roc scripts, run from the repository root; their module
   test.roc               everything CI checks, in groups; runs the test_*.roc suites
   link_inputs.roc        fetch or check the platform's linker inputs
   bundle.roc             bundle core and the platform into dist/ and smoke-test the pair
+  embed_compiler.roc     stage and verify one target's compiler archive for embedding
+  test_bootstrap.roc     test embedded compiler installation, repair and concurrency
   build_release.roc      cross-build the CLI and its smoke-test program for each released system
   smoke_binary.roc       run a built CLI with no Roc and no Python of its own; with --no-nix, with no Nix either
   fuzz.roc               replay or fuzz the roc-fuzz targets
@@ -72,7 +75,7 @@ https://github.com/roc-lang/roc-overlay[roc-overlay], Zig 0.16 and the
 programs the scripts start: coreutils, git, curl, tar, gzip, zip, unzip and gh. It has no
 Python. `roc` is the product compiler, the nightly in
 `blueprint-cli/compiler-version`: it builds and tests the CLI, the packages and
-the platform, and a released `blueprint` fetches it. `roc-stable` is the
+the platform, and a released `blueprint` embeds it. `roc-stable` is the
 nightly `rocStableTag` names in `flake.nix`: the scripts in `scripts/` start
 with `#!/usr/bin/env roc-stable` and run on it, so they keep working while the
 product moves to a newer nightly. The scripts reach the product compiler
@@ -80,6 +83,13 @@ through `ROC`, or `roc` on `PATH`. This shell is the one definition of the toolc
 every CI job runs its scripts through `nix develop -c`, so what passes in the
 shell is what CI runs. `blueprint` is not in the shell, so entering it never
 compiles the CLI; build it as below, or use `nix run .`.
+
+The shell stages this host's pinned compiler archive as the ignored file
+`blueprint-cli/compiler-archive`. Roc imports its bytes into the CLI at build
+time. Outside the shell, stage an archive first with
+`scripts/embed_compiler.roc <system>`; the script checks its size and digest
+against `Bootstrap.roc`. Keep the complete archive: macOS Roc needs the
+`darwin/` sysroot beside its executable.
 
 `blueprint-cli/main.roc` uses the released basic-cli platform by URL. Roc
 downloads it on first use outside Nix; the Nix blueprint package fetches the same
@@ -93,7 +103,7 @@ archive by hash, so its sandboxed build needs no network.
 scripts/link_inputs.roc fetch             # the musl runtime files the platform links
 (cd blueprint-platform && zig build)      # libhost.a or host.lib for all five hosts
 roc test blueprint-core/main.roc      # Spec round trips and format tests
-roc test blueprint-cli/main.roc             # the CLI's, the Nix provider's and every core expect
+roc test --opt=interpreter blueprint-cli/main.roc # CLI, provider and core expects
 roc build blueprint-cli/main.roc --output=./blueprint
 (cd examples/all-settings && ../../blueprint run --help) # try the CLI
 scripts/test.roc                            # everything CI runs
@@ -101,6 +111,10 @@ scripts/test.roc unit cli                   # or only some groups: static, unit,
                                             # cli, scenarios, builds, package, glue, fuzz
 scripts/fuzz.roc 300                        # fuzz each target for 5 minutes
 ----
+
+The CLI unit tests use interpreter mode because the pinned compiler's
+native test backend crashes on the large embedded byte constant. Integration
+tests run the compiled executable.
 
 The `.roc` files in `scripts/` are Roc programs; they start other programs by
 argument list, not through a shell. Run one from the repository root with the
@@ -269,10 +283,10 @@ the `build` job produced and no step that installs anything. It runs
   in `blueprint-cli/compiler-version`, with `Expect(["git"])` and the Roc
   packages of a basic-cli script, against this checkout's platform;
 * gives the binary a store and a Roc package cache of its own, empty;
-* runs `blueprint update` and requires that the compiler was fetched exactly
-  once, for reading `Blueprint.roc` and as `roc-stable` together;
+* runs `blueprint update` and requires that the embedded compiler was
+  installed exactly once, for reading `Blueprint.roc` and as `roc-stable` together;
 * requires that `blueprint requirements --json` names no provider;
-* runs the script as a task, which the fetched compiler builds, links and
+* runs the script as a task, which the embedded compiler builds, links and
   runs. On macOS that is the test that `roc` finds the `darwin` directory of
   its archive through the link it is started by;
 * runs the task again and requires that nothing is downloaded, and that no
