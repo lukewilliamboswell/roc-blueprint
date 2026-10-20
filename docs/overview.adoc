@@ -14,23 +14,19 @@ A project's `Blueprint.roc` is a Roc program that describes:
 The `blueprint` command reads that file and carries it out. Everything an
 environment has comes from a place the file names:
 
-[cols="2,3,3",options="header"]
+[cols="2,3",options="header"]
 |===
 | Written as
-| Where it comes from
-| What fixes it
+| Source and version pin
 
 | `Programs([Fetch(name, recipe)])`
-| A download, from the URL the recipe gives for each system.
-| The SHA-256 of the download, in `Blueprint.lock`.
+| A download, from the URL the recipe gives for each system. Its SHA-256 is recorded in `Blueprint.lock`.
 
 | `Expect([name])`
-| The machine. `blueprint` checks that it is on `PATH` and installs nothing.
-| Nothing: its version is the machine's.
+| The machine. `blueprint` checks that it is on `PATH` and installs nothing. Its version is the machine's; Blueprint does not pin it.
 
 | `Tools(["<source>#<name>"])`
-| A Nix package source the project declares with `Packages`.
-| The source's revision and digest, in `Blueprint.lock`.
+| A Nix package source the project declares with `Packages`. The source's revision and digest are recorded in `Blueprint.lock`.
 |===
 
 The project commits `Blueprint.lock`, so a contributor's machine and a CI
