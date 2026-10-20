@@ -165,10 +165,13 @@ its files, then invoke its argv; stop immediately on failure. The entire plan
 must succeed before effects.
 The caller owns all effects; no provider registry or serialized config recipes
 are involved. `blueprint-core/Provider.roc` is the Core/Provider contract: a
-`name`, the `features` the provider implements, `render`, `preflight`,
+`name`, the `features` the provider implements, `render`, `inspect_lock`, `preflight`,
 `realises` (which package sources it supplies), `realise` (Steps from the
 Lock) and `resolve` plus `lock_from_native` (the programs the machine must
-have, and what to stage and run to produce new pins). Resolve asks a provider
+have, and what to stage and run to produce new pins). `inspect_lock` validates
+and projects committed provider authority into per-source content identities
+and generic `Value` metadata, without a Spec, host context or effects. The
+Core uses this for the versioned `lock show` report. Resolve asks a provider
 only when the Spec declares something it resolves (`Realise.resolvers`); the
 digests of fetched programs are the Core's own to obtain. The CLI uses only
 that record; `scripts/test.roc` fails if it

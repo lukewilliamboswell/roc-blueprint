@@ -6,6 +6,7 @@ import Request
 import Layout
 import Steps
 import Lock
+import Value
 
 Provider := {
 	## Short name, e.g. "nix". Spec `raw` entries naming it are for this provider.
@@ -22,6 +23,11 @@ Provider := {
 
 	## Inspect: the files this provider would generate for the whole Spec.
 	render : Spec -> Try(List(File), Str),
+
+	## Read committed authority without a Spec, filesystem, host or effects.
+	## Entries carry content identities and provider metadata for external
+	## consumers. The provider validates its private hints before projecting.
+	inspect_lock : Lock -> Try(List(LockedSource), Str),
 
 	## Reject a request this provider cannot realise, before any effect.
 	preflight : Spec, Request, Str, Layout -> Try({}, Str),
@@ -44,6 +50,8 @@ Provider := {
 
 	## Inspection returns relative names; executable Steps files are absolute.
 	File : { path : Str, contents : Str }
+
+	LockedSource : { name : Str, identity : Str, metadata : List({ name : Str, value : Value }) }
 
 	## Which pins an update resolves again. `Named` moves only the inputs with
 	## these names and keeps every other pin of the Lock, which the Core has

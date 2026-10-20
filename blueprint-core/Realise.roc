@@ -518,6 +518,7 @@ stub = Provider.{
 			_ => False
 		},
 	render: |_spec| Ok([]),
+	inspect_lock: |_lock| Ok([]),
 	preflight: |_spec, _request, _system, _layout| Ok({}),
 	realise: |_spec, request, system, layout, _lock|
 		match request {

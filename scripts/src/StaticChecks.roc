@@ -39,6 +39,16 @@ StaticChecks := [].{
 		}
 	}
 
+	## Inspector projections follow the same provider boundary, and have no
+	## platform imports through which they could evaluate or mutate a project.
+	lock_inspector_contract_problem : Str -> Str
+	lock_inspector_contract_problem = |source| {
+		import_lines = source.split_on("\n").keep_if(|line| line.starts_with("import "))
+		if import_lines.any(|line| !line.starts_with("import core.")) or !provider_references(source).is_empty() {
+			"blueprint-cli/LockReport.roc must inspect only through the pure Provider contract"
+		} else ""
+	}
+
 	## Every use of a member of a provider module: the identifier `Locks`, or
 	## one starting `Nix` and made of letters, followed by a dot.
 	provider_references : Str -> List(Str)
@@ -290,3 +300,7 @@ expect StaticChecks.core_modules_problem(["main.roc", "Spec.roc", "New.roc"], ["
 expect StaticChecks.version_problem("  version = \"0.4.0\";\n", "version = \"0.4.0\"\n") == ""
 expect StaticChecks.version_problem("  version = \"0.4.0\";\n", "version = \"0.4.1\"\n") == "flake.nix packages version 0.4.0, but blueprint-cli/main.roc reports 0.4.1"
 expect StaticChecks.version_problem("", "version = \"0.4.1\"\n") != ""
+
+expect StaticChecks.lock_inspector_contract_problem("import core.Lock\nimport core.Provider\n") == ""
+expect !StaticChecks.lock_inspector_contract_problem("import nix.Locks\n").is_empty()
+expect !StaticChecks.lock_inspector_contract_problem("import pf.Path\n").is_empty()

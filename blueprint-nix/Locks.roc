@@ -180,6 +180,37 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 		Ok(locks)
 	}
 
+	## A supported read-only view of declared pins. Resolve aliases using the
+	## native graph, but never expose its node names as consumer identities.
+	inspect : Lock -> Try(List({ name : Str, fetch_tree : LockJson, identity : Str }), Str)
+	inspect = |lock| {
+		owned = { ..lock, sources: lock.sources.keep_if(|source| source.provider == "nix") }
+		locks = from_lock(owned)?
+		root = LockJson.string(LockJson.field(locks.graph, "root")?)?
+		nodes = LockJson.field(locks.graph, "nodes")?
+		var $entries = []
+		for source in owned.sources {
+			resolved = resolve_edge(locks.graph, (root, source.name), { remaining: 16384, resolved: [] }, [])?
+			locked = LockJson.field(LockJson.field(nodes, resolved.name)?, "locked")?
+			kind = LockJson.string(LockJson.field(locked, "type")?)?
+			# `dir` selects a flake within a tree, not a fetchTree argument.
+			# Relative local paths require a project location and must not be
+			# advertised as portable fetchTree recipes.
+			fetch_tree = if kind == "path" {
+				LockJson.Null
+			} else {
+				LockJson.Object(LockJson.object(locked)?.keep_if(|field| field.name != "dir"))
+			}
+			identity = if kind == "path" {
+				source.digest
+			} else {
+				sri_to_hex(LockJson.string(LockJson.field(locked, "narHash")?)?)
+			}
+			$entries = $entries.append({ name: source.name, fetch_tree, identity })
+		}
+		Ok($entries)
+	}
+
 	encode : Locks -> Str
 	encode = |locks| Lock.to_str(to_lock(locks))
 
@@ -1454,4 +1485,22 @@ expect match locked_fixture {
 		assets.map_ok(|s| s.digest) == Ok(assets_tree)
 	}
 	Err(_) => False
+}
+
+# Inspector preserves remote fetch attributes, uses the local tree identity,
+# and never emits relative path markers as runnable fetchTree recipes.
+expect match locked_fixture {
+	Ok(locks) => match Locks.inspect(Locks.to_lock(locks)) {
+		Ok(entries) => entries.find_first(|entry| entry.name == "assets").map_ok(|entry| (entry.fetch_tree, entry.identity)) == Ok((LockJson.Null, assets_tree))
+			and entries.find_first(|entry| entry.name == "default").map_ok(|entry| LockJson.field(entry.fetch_tree, "narHash")) == Ok(Ok(LockJson.String("sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=")))
+		Err(_) => False
+	}
+	Err(_) => False
+}
+
+# Native graph aliases introduced by a different writer are not consumer
+# identities: inspecting either committed representation yields the same pins.
+expect match (aliased_locks, locked_fixture) {
+	(Ok(aliased), Ok(original_)) => Locks.inspect(Locks.to_lock(aliased)) == Locks.inspect(Locks.to_lock(original_))
+	_ => False
 }

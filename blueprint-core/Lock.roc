@@ -11,7 +11,7 @@ import Value
 ##   before anything else is read, unknown fields are ignored and optional
 ##   fields default to empty.
 ## - `sources` — one pinned Source per declared input: `{ name, provider,
-##   ref, rev, digest }`. `digest` is an SRI string (e.g. `sha256-…`); `rev`
+##   ref, rev, digest }`. `digest` is a content identity (`sha256:<hex>`); `rev`
 ##   is empty when the source has none. Providers must keep these consistent
 ##   with their hints.
 ## - `intent` — the parts of the Spec that Resolve consumed: source and input

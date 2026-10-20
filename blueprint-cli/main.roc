@@ -35,6 +35,7 @@ import Download
 import Paths
 import Published
 import Store
+import LockReport
 import nix.NixProvider
 import "compiler-version" as compiler_version : Str
 import "compiler-archive" as compiler_archive : List(U8)
@@ -57,6 +58,7 @@ provider_names = Str.join_with(providers.map(|provider| provider.name), ", ")
 
 Command : [
 	CompilerVersion,
+	LockShow({ json : Bool, names : List(Str) }),
 	Gen,
 	Shell(Str),
 	Run({ task : Str, args : List(Str) }),
@@ -107,6 +109,18 @@ cli_for = |loaded| {
 			|names| Update(names),
 		),
 		{ name: "update", description: "Update Blueprint.lock: the latest inputs, and the digests of fetched programs", mapper: |c| c },
+	)
+	lock_cmd = SubCmd.finish(
+		SubCmd.required([
+			SubCmd.finish(
+				{
+					json: Opt.flag({ short: "", long: "json", help: "Print the versioned JSON lock report." }),
+					names: Param.str_list({ name: "names", help: "Locked sources or programs; all when omitted." }),
+				}.Cli,
+				{ name: "show", description: "Inspect committed pins without evaluating Blueprint.roc", mapper: |r| LockShow(r) },
+			),
+		]),
+		{ name: "lock", description: "Read committed pins without evaluating the project", mapper: |c| c },
 	)
 	requirements_cmd = SubCmd.finish(
 		{
@@ -188,6 +202,7 @@ cli_for = |loaded| {
 				workflow_cmd,
 				SubCmd.empty({ name: "tasks", description: "List the tasks", value: Tasks }),
 				update_cmd,
+				lock_cmd,
 				requirements_cmd,
 				SubCmd.empty({ name: "check", description: "Validate Blueprint.roc", value: Check }),
 				SubCmd.empty({ name: "spec", description: "Print the Spec", value: PrintSpec }),
@@ -240,13 +255,13 @@ main! = |raw_args| {
 		[first, .. as rest] if first.to_bytes() == "__build-runner".to_utf8() => return build_runner!(rest)
 		_ => {}
 	}
-	# Compiler metadata belongs to this executable. It must be available even
-	# when project paths, configuration or compiler overrides are unusable.
-	compiler_query = match raw_args {
-		[first, ..] => first.to_bytes() == "compiler-version".to_utf8()
+	# These inspectors must parse before project paths, configuration, host or
+	# compiler overrides are observed. LockShow selects only its lock path.
+	independent_query = match raw_args {
+		[first, ..] => first.to_bytes() == "compiler-version".to_utf8() or first.to_bytes() == "lock".to_utf8()
 		_ => False
 	}
-	context = if (compiler_query) Err(NoBlueprint) else context!()
+	context = if (independent_query) Err(NoBlueprint) else context!()
 	loaded = match context {
 		Ok(ctx) => evaluate!(ctx)
 		Err(err) => Err(err)
@@ -271,12 +286,14 @@ main! = |raw_args| {
 
 run! = |command, loaded, context| {
 	match command {
+		LockShow({ json, names }) => inspect_lock!(json, names)
 		CompilerVersion => Stdout.line!(compiler_version.trim())
 		Check => check!(loaded, context?)
 		_ => {
 			ctx = context?
 			spec = loaded?
 			match command {
+				LockShow({ json, names }) => inspect_lock!(json, names)
 				CompilerVersion => Stdout.line!(compiler_version.trim())
 				Gen => realise!(spec, Request.Generate, ctx)
 				Shell(name) => realise!(spec, Request.Shell(name), ctx)
@@ -292,6 +309,17 @@ run! = |command, loaded, context| {
 			}
 		}
 	}
+}
+
+## This path intentionally avoids Context, host probing and project evaluation.
+inspect_lock! = |json, names| {
+	cwd = Paths.portable(Env.cwd!()?.to_str()?)
+	root = Paths.resolve(cwd, Env.var_str!("BLUEPRINT_ROOT") ?? cwd)
+	file = Paths.resolve(root, Env.var_str!("BLUEPRINT_LOCK") ?? "Blueprint.lock")
+	text = path(file).read_utf8!()?
+	lock = Lock.parse(text).map_err(|_| LockFailed("unsupported or malformed Blueprint.lock"))?
+	report = LockReport.render(lock, names, json, providers).map_err(|message| LockFailed(message))?
+	Stdout.write!(report)
 }
 
 ## Type-check Blueprint.roc (including whole-config validation), then reuse
@@ -1976,3 +2004,78 @@ describe = |err, provider|
 		CommandFailed(argv, code) => "`${Str.join_with(argv, " ")}` exited with code ${code.to_str()}"
 		other => Str.inspect(other)
 	}
+
+import "../fixtures/consumer/authority.lock" as lock_report_authority : Str
+
+# The supported projection exposes exact locked Nix attributes, without
+# registry resolution, while narrowing output to the names requested.
+expect match Lock.parse(lock_report_authority) {
+	Ok(lock) => match LockReport.render(lock, ["nixpkgs"], True, providers) {
+		Ok(text) => {
+			decoded : Try({ format : U64, sources : { nixpkgs : { identity : Str, fetchTree : { rev : Str, narHash : Str, lastModified : U64, owner : Str } } }, fetched : List(Str) }, _)
+			decoded = Json.parse(text)
+			match decoded {
+				Ok(read) => read.format == 1 and read.sources.nixpkgs.fetchTree == { rev: "4975466d324710c576dc11ad614684e6bd8cad8e", narHash: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=", lastModified: 1790185690, owner: "NixOS" } and read.sources.nixpkgs.identity == "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5" and read.fetched.is_empty() and !text.contains("roc-overlay")
+				Err(_) => False
+			}
+		}
+		Err(_) => False
+	}
+	Err(_) => False
+}
+
+# Updating another program, adding/removing tasks, and a future minor lock
+# encoding leave a selected source and its content identity unchanged.
+expect match Lock.parse(lock_report_authority) {
+	Ok(lock) => {
+		before = LockReport.render(lock, ["nixpkgs"], True, providers)
+		future = match Lock.parse(lock.to_str().replace_each("(minor 1)", "(minor 9)")) {
+			Ok(parsed) => LockReport.render(parsed, ["nixpkgs"], True, providers)
+			Err(_) => Err("future minor did not parse")
+		}
+		program = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc"], sha256: "1111", size: 4, obtained: Computed }
+		spec = Spec.empty("test")
+		with_task = { ..spec, tasks: [{ name: "check", environment: "dev", run: ["check"] }] }
+		Lock.intent_of(spec) == Lock.intent_of(with_task)
+			and before.is_ok()
+			and before == LockReport.render({ ..lock, fetched: [program] }, ["nixpkgs"], True, providers)
+			and before == LockReport.render({ ..lock, fetched: [{ ..program, sha256: "2222" }] }, ["nixpkgs"], True, providers)
+			and before == LockReport.render({ ..lock, intent: Lock.intent_of(with_task) }, ["nixpkgs"], True, providers)
+			and before == LockReport.render({ ..lock, intent: Lock.intent_of(spec) }, ["nixpkgs"], True, providers)
+			and before == future
+	}
+	Err(_) => False
+}
+
+expect match Lock.parse(lock_report_authority) {
+	Ok(lock) => LockReport.render(lock, ["missing"], True, providers) == Err("unknown locked entry: missing")
+		and LockReport.render(lock, ["nixpkgs"], False, providers).map_ok(|text| text.starts_with("source nixpkgs [nix]")) == Ok(True)
+	Err(_) => False
+}
+
+# Updating a different remote source preserves the selected identity; changing
+# that source's own NAR content changes it, with no graph-layout fingerprint.
+expect {
+	changed = |sri, hex| {
+		text = lock_report_authority.replace_each(sri, "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").replace_each(hex, "sha256:0000000000000000000000000000000000000000000000000000000000000000")
+		match Lock.parse(text) {
+			Ok(lock) => lock_pin_identity(lock)
+			Err(_) => Err("invalid fixture")
+		}
+	}
+	before = match Lock.parse(lock_report_authority) {
+		Ok(lock) => lock_pin_identity(lock)
+		Err(_) => Err("invalid fixture")
+	}
+	before.is_ok()
+		and before == changed("sha256-fhatlsqelliHOfoT723TYQb8DzxSn698DpobgiARHIM=", "sha256:7e16ad96ca9e96588739fa13ef6dd36106fc0f3c529faf7c0e9a1b8220111c83")
+		and before != changed("sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=", "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5")
+}
+
+lock_pin_identity : Lock -> Try(Str, Str)
+lock_pin_identity = |lock| {
+	text = LockReport.render(lock, ["nixpkgs"], True, providers)?
+	decoded : Try({ sources : { nixpkgs : { identity : Str } } }, _)
+	decoded = Json.parse(text)
+	decoded.map_ok(|read| read.sources.nixpkgs.identity).map_err(|_| "invalid inspector JSON")
+}

@@ -33,6 +33,21 @@ NixProvider :: [].{
 				Ok([])
 			}
 		},
+		inspect_lock: |lock| {
+			entries = Locks.inspect(lock)?
+			Ok(
+				entries.map(
+					|entry| {
+						name: entry.name,
+						identity: entry.identity,
+						metadata: match entry.fetch_tree {
+							LockJson.Null => []
+							value => [{ name: "fetchTree", value: Locks.to_value(value) }]
+						},
+					},
+				),
+			)
+		},
 		preflight,
 		realise: |spec, request, target, layout, text| {
 			lock = Locks.from_lock(text).map_err(|m| InvalidLock(m))?

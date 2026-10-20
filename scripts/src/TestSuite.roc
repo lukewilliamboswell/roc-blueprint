@@ -211,6 +211,8 @@ static! = |context| {
 	step!("The CLI reaches providers only through the Provider contract")?
 	cli_source = read!(context, "blueprint-cli/main.roc")?
 	problem!(StaticChecks.provider_contract_problem(cli_source))?
+	lock_inspector = read!(context, "blueprint-cli/LockReport.roc")?
+	problem!(StaticChecks.lock_inspector_contract_problem(lock_inspector))?
 
 	step!("The CLI records a download of its compiler for every system it runs on")?
 	problem!(StaticChecks.bootstrap_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-cli/Bootstrap.roc")?))?
@@ -295,6 +297,9 @@ cli! : Context => Try({}, _)
 cli! = |context| {
 	step!("Embedded compiler bootstrap and cache repair")?
 	script!(context, "test_bootstrap", [])?
+
+	step!("Offline committed lock inspector")?
+	script!(context, "test_lock", [])?
 
 	step!("CLI argument and validation regressions")?
 	script!(context, "test_cli", [])?
