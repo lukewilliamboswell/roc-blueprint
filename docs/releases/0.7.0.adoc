@@ -9,7 +9,7 @@ The new `blueprint compiler-version` command exposes the exact bundled Roc
 release tag, so downstream projects can check that their automation compiler
 pin matches Blueprint's.
 
-== Use this release
+== Use 0.7.0
 
 [source,roc,snippet=unchecked]
 ----
@@ -64,3 +64,16 @@ A project that declares the matching nightly through `Recipes.roc_nightly`
 can reuse the archive Blueprint installed in its store for `roc-stable`.
 An independently installed compiler, including one supplied by Nix, uses its
 own installation; matching the version alone does not share that executable.
+
+== Native documentation builds
+
+The website and PDF manual now use the shared native `roc-docs` renderer
+from roc-automation `tools-0.1.0-rc.1`, with reviewed executable checksums.
+Documentation and release jobs use the matching shared action revision and
+retain the generated API reference, PDF download and documentation archive.
+Rendering no longer starts a Docker container.
+
+The illustration and architecture diagram have prepared PNG assets. The
+manual keeps its explicit section anchors and uses narrower responsibility
+tables so their full contents fit the PDF. The API reference link uses its
+published absolute URL; publication does not depend on `--site-url` support.

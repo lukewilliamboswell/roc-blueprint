@@ -310,21 +310,39 @@ The manual is the AsciiDoc in `docs/`. `index.adoc` is a book that includes
 one chapter per top-level `.adoc` file; `.github/workflows/docs.yml` renders
 it as a site and a PDF with the shared
 https://lukewilliamboswell.github.io/roc-automation/actions.html#build-docs[`build-docs`]
-action, on every pull request, and deploys the site from `main`. Every
-Asciidoctor warning fails the build.
+action, on every pull request, and deploys the site from `main`. The action
+and renderer are paired at `tools-0.1.0-rc.1`; `flake.nix` checks the released
+renderer binary's SHA-256 for each supported host. Rendering uses the native
+Roc utility. API generation uses this repository's pinned Roc compiler.
 
-To render it as CI does, with Docker and a checkout of
-https://github.com/lukewilliamboswell/roc-automation[roc-automation] beside
-this one:
+To render the same outputs locally, inside `nix develop`:
 
 [source,sh]
 ----
 scripts/docs_snippet.roc    # docs/generated/, from the latest release; needs a logged-in gh
-python3 ../roc-automation/actions/build-docs/build_docs.py --workspace . --pdf-filename roc-blueprint.pdf
+renderer=$(nix build .#roc-docs --no-link --print-out-paths)/bin/roc-docs
+"$renderer" build --workspace "$PWD" --pdf-filename roc-blueprint.pdf \
+  --docs-version main --api-entrypoint blueprint-platform/main.roc \
+  --roc-command "$(command -v roc)"
 ----
 
 The site is `.docs-out/site/` and the PDF `.docs-out/roc-blueprint.pdf`;
-neither is committed.
+neither is committed. Publication links use explicit URLs; this action and
+renderer pair does not need a `site-url` option.
+
+Keep PSV table cells on complete physical lines. The stage responsibilities
+use separate input/output, execution and invariant tables so the PDF can fit all text.
+Stable explicit anchors preserve links when a heading's wording changes.
+
+Native images are non-interlaced RGB/RGBA PNGs. The manual's illustration is
+converted from the original JPEG; its source hash and conversion command are
+in `docs/images/blueprint-illustration.provenance.json`. The architecture flow
+uses the checked-in published SVG and its prepared PNG, with provenance in
+`docs/images/blueprint-flow.provenance.json`. Its Mermaid source stays in
+`architecture.adoc`; `docs/prepared-diagrams.json` binds its exact source and
+PNG hashes. Update the figure and registration together when editing the
+Mermaid block. These prepared assets let ordinary documentation builds run
+without a browser, image converter or diagram tool.
 
 The manual describes the tool as it is: one recommended way to do each thing,
 in the present tense. What changed between versions belongs in the release

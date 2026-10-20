@@ -72,6 +72,25 @@
             cp -r sysroot/darwin "$out/darwin"
           '';
 
+          # Released native documentation renderer, paired with the shared
+          # build-docs action at the tools-0.1.0-rc.1 release commit. Never
+          # patch its bytes: these hashes identify the published executables.
+          rocDocsVersion = "0.1.0-rc.1";
+          rocDocsHashes = {
+            "x86_64-linux" = "sha256-lpuU3rMVjp3yMbmJmF6HIlV4h56bb3+59KtGsor01YY=";
+            "aarch64-linux" = "sha256-AIQ4qz/ON3zXw7Vy2nLQKz9y/nk0W8Fx0iG8DwVKcLI=";
+            "aarch64-darwin" = "sha256-gGiXT38sIgM/EspTfiv1ZYr7RVTuL1G3XS4OQ3ZJWho=";
+          };
+          rocDocsArchive = pkgs.fetchurl {
+            url = "https://github.com/lukewilliamboswell/roc-automation/releases/download/tools-${rocDocsVersion}/roc-docs-${system}";
+            hash = rocDocsHashes.${system};
+          };
+          rocDocs = pkgs.runCommand "roc-docs-${rocDocsVersion}" {
+            meta.mainProgram = "roc-docs";
+          } ''
+            install -Dm755 ${rocDocsArchive} "$out/bin/roc-docs"
+          '';
+
           # The specification `roc glue` writes the platform host's Zig
           # bindings from. The compiler archives do not ship it, so it comes
           # from the same nightly's source archive, of which this is the one
@@ -187,6 +206,7 @@
             inherit blueprint roc;
             default = blueprint;
             roc-glue-spec = rocGlueSpec;
+            roc-docs = rocDocs;
           }
           # Not in the development shell: only a release build needs it, and
           # with it the macOS archive.

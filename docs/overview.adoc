@@ -1,6 +1,6 @@
 = What Blueprint is
 
-image::blueprint-gemini-gen.jpeg[Blueprint illustration of robotic arms,560,align=center]
+image::images/blueprint-illustration.png[Blueprint illustration of robotic arms,560,align=center]
 
 A project's `Blueprint.roc` is a Roc program that describes:
 

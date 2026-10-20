@@ -7,6 +7,7 @@ archive of the examples.
 
 A `Blueprint.roc` written for 0.4 needs only the new platform URL.
 
+[#use-this-release-2]
 == Use this release
 
 [source,roc,snippet=unchecked]

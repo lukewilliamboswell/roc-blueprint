@@ -19,7 +19,7 @@ out, and starts Nix only for what a project takes from Nix.
 
 ifdef::backend-html5[]
 link:roc-blueprint.pdf[Download this manual as a PDF] ·
-link:api/index.html[Platform API reference] ·
+https://lukewilliamboswell.github.io/roc-blueprint/api/index.html[Platform API reference] ·
 https://github.com/lukewilliamboswell/roc-blueprint[View roc-blueprint on GitHub].
 endif::[]
 
