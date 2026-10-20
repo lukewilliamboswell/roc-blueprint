@@ -65,6 +65,22 @@ can reuse the archive Blueprint installed in its store for `roc-stable`.
 An independently installed compiler, including one supplied by Nix, uses its
 own installation; matching the version alone does not share that executable.
 
+== Read committed pins from external tools
+
+`blueprint lock show --json [NAME...]` exposes the entries in `Blueprint.lock`
+without evaluating `Blueprint.roc`, starting a provider, accessing the network
+or creating cache state. Its documented JSON format 1 includes exact remote
+Nix `fetchTree` attributes and per-entry content identities, so external
+scripts can use the locked revision and `narHash` without parsing the lock's
+internal representation or maintaining a second pin.
+
+An entry's identity stays the same when an unrelated source, fetched program
+or task changes. Relative local sources retain their tree identity and have
+no portable `fetchTree` recipe. Fetched-program identities remain distinct
+from unpacked-tree identities. See
+xref:commands.adoc#read-committed-lock-entries[Read committed lock entries]
+for the output schema and compatibility rule.
+
 == Native documentation builds
 
 The website and PDF manual now use the shared native `roc-docs` renderer
