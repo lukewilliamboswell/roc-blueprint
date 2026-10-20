@@ -1,6 +1,7 @@
 = Run blueprint
 
-Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
+Run project commands in the directory containing `Blueprint.roc`, or set
+`BLUEPRINT_ROOT`. `compiler-version` works in any directory.
 
 [cols="3,5",options="header"]
 |===
@@ -40,9 +41,36 @@ Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 | `blueprint spec` / `blueprint flake`
 | Print the Spec or the generated flake
 
+| `blueprint compiler-version`
+| Print the exact Roc release tag bundled with this Blueprint binary, for automation
+
 | `blueprint --help`
 | Project help; subcommand help lists tasks, aliases and builds
 |===
+
+== Align an automation compiler
+
+`blueprint compiler-version` prints one release tag and a newline, with no
+labels or colour. It reports this binary's pinned compiler even when `ROC`
+or `PATH` selects another executable. It works offline without a project,
+configuration evaluation, compiler installation or cache writes.
+
+A CI check or commit hook can compare an installed automation compiler:
+
+[source,sh]
+----
+test "$(roc-stable version)" = \
+  "Roc compiler version $(blueprint compiler-version)"
+----
+
+A project can also compare its committed compiler pin with the reported tag
+before installing tools. Keep upgrades explicit: align that pin when the
+project's automation is ready for the new compiler.
+
+When a project fetches the same nightly with `Recipes.roc_nightly`, it can
+reuse the compiler archive Blueprint installed in its store. Matching tags
+does not make an independently installed `roc-stable`, such as a Nix package,
+reuse Blueprint's cached executable.
 
 == What a run does, in order
 

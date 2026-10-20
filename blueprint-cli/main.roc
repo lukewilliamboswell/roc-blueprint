@@ -40,7 +40,7 @@ import "compiler-version" as compiler_version : Str
 import "compiler-archive" as compiler_archive : List(U8)
 
 version : Str
-version = "0.6.0"
+version = "0.7.0"
 
 ## The providers a request may be planned with. This is the only reference to
 ## a concrete provider: everything else uses the Provider contract
@@ -56,6 +56,7 @@ provider_names : Str
 provider_names = Str.join_with(providers.map(|provider| provider.name), ", ")
 
 Command : [
+	CompilerVersion,
 	Gen,
 	Shell(Str),
 	Run({ task : Str, args : List(Str) }),
@@ -175,6 +176,7 @@ cli_for = |loaded| {
 	Cli.assert_valid(
 		Cli.finish(
 			SubCmd.optional([
+				SubCmd.empty({ name: "compiler-version", description: "Print the bundled Roc compiler release tag", value: CompilerVersion }),
 				SubCmd.empty({
 					name: "gen",
 					description: "Generate the Nix files from the lock (the default)",
@@ -238,7 +240,13 @@ main! = |raw_args| {
 		[first, .. as rest] if first.to_bytes() == "__build-runner".to_utf8() => return build_runner!(rest)
 		_ => {}
 	}
-	context = context!()
+	# Compiler metadata belongs to this executable. It must be available even
+	# when project paths, configuration or compiler overrides are unusable.
+	compiler_query = match raw_args {
+		[first, ..] => first.to_bytes() == "compiler-version".to_utf8()
+		_ => False
+	}
+	context = if (compiler_query) Err(NoBlueprint) else context!()
 	loaded = match context {
 		Ok(ctx) => evaluate!(ctx)
 		Err(err) => Err(err)
@@ -262,12 +270,14 @@ main! = |raw_args| {
 }
 
 run! = |command, loaded, context| {
-	ctx = context?
 	match command {
-		Check => check!(loaded, ctx)
+		CompilerVersion => Stdout.line!(compiler_version.trim())
+		Check => check!(loaded, context?)
 		_ => {
+			ctx = context?
 			spec = loaded?
 			match command {
+				CompilerVersion => Stdout.line!(compiler_version.trim())
 				Gen => realise!(spec, Request.Generate, ctx)
 				Shell(name) => realise!(spec, Request.Shell(name), ctx)
 				Run({ task, args }) => realise!(spec, Request.Run(task, args), ctx)

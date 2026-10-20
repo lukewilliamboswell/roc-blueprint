@@ -13,10 +13,55 @@ CliBootstrapTest := [].{
 	run! : Path => Try({}, _)
 	run! = |repository| {
 		bench = CliHarness.open!(repository, "blueprint-bootstrap-", [])?
-		result = bootstrap!(bench)
+		result = cases!(bench)
 		CliHarness.close!(bench)
 		result
 	}
+}
+
+cases! : CliHarness.Bench => Try({}, _)
+cases! = |bench| {
+	compiler_version!(bench)?
+	bootstrap!(bench)
+}
+
+## A metadata query must not resolve project paths, evaluate configuration,
+## probe ROC or PATH, or create a cache, including for help and usage errors.
+compiler_version! : CliHarness.Bench => Try({}, _)
+compiler_version! = |bench| {
+	cwd = "${bench.work}/metadata"
+	cache = "${bench.work}/metadata-cache"
+	Path.create_all!(Path.utf8(cwd))?
+	env = CliHarness.setting(
+		bench.env,
+		[
+			("PATH", ""),
+			("ROC", "${bench.work}/missing-roc"),
+			("BLUEPRINT_ROOT", "${bench.work}/missing-root"),
+			("XDG_CACHE_HOME", cache),
+		],
+	)
+	call = { program: bench.blueprint, args: ["compiler-version"], cwd, env }
+	for config in [Err(NoConfig), Ok("this is not a Roc program")] {
+		match config {
+			Ok(text) => Path.write_utf8!(Path.utf8("${cwd}/Blueprint.roc"), text)?
+			Err(NoConfig) => {}
+		}
+		query = CliHarness.invoke!(call)?
+		CliHarness.exited!(query, 0, "compiler-version")?
+		CliHarness.check!(query.stdout == "${compiler_version.trim()}\n" and query.stderr == "", "compiler-version did not print exactly the bundled release tag:\n${query.stdout}${query.stderr}")?
+	}
+	# A malformed project in the actual selected root must also be ignored.
+	local = { ..call, env: CliHarness.unsetting(env, ["BLUEPRINT_ROOT"]) }
+	query = CliHarness.invoke!(local)?
+	CliHarness.check!(query.code == 0 and query.stdout == "${compiler_version.trim()}\n" and query.stderr == "", "compiler-version evaluated a malformed project")?
+	help = CliHarness.invoke!({ ..call, args: ["compiler-version", "--help"] })?
+	CliHarness.exited!(help, 0, "compiler-version --help")?
+	CliHarness.contains!(help.stdout, "bundled Roc compiler release tag", "compiler-version help")?
+	invalid = CliHarness.invoke!({ ..call, args: ["compiler-version", "unexpected"] })?
+	CliHarness.exited!(invalid, 2, "compiler-version with an unexpected argument")?
+	CliHarness.check!(invalid.stdout == "" and !CliHarness.present!(cache) and !CliHarness.present!("${cwd}/.blueprint"), "compiler-version created state or printed a tag for invalid usage")?
+	Script.pass!("compiler-version reports the bundled tag without a project, compiler, cache or valid overrides; malformed projects are ignored and extra arguments refused")
 }
 
 bootstrap! : CliHarness.Bench => Try({}, _)

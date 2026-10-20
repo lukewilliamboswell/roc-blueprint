@@ -1,0 +1,64 @@
+= roc-blueprint 0.7.0
+
+Blueprint now carries the Roc compiler it needs inside each released binary.
+The first command that reads `Blueprint.roc` installs that compiler from the
+binary into Blueprint's store, instead of downloading it from GitHub. A fresh
+machine can bootstrap the compiler even when GitHub is unavailable.
+
+The new `blueprint compiler-version` command exposes the exact bundled Roc
+release tag, so downstream projects can check that their automation compiler
+pin matches Blueprint's.
+
+== Use this release
+
+[source,roc,snippet=unchecked]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+Binaries are attached for x86_64 Linux, arm64 Linux, Apple Silicon macOS and
+x86_64 Windows, with SHA-256 sums in `blueprint.sha256`. Use this release's
+binary with its platform URL. The importable core package is `{core-url}`.
+Existing 0.6 configurations and lock files remain supported.
+
+== Compiler available on first use
+
+Each binary embeds only its own system's complete compiler archive, including
+the supporting files Roc needs to link programs. The archive adds roughly
+69–73 MB to the binary. It is installed into the existing content-addressed
+store, checked against its recorded SHA-256 before extraction, and reused on
+later runs. A damaged cached archive is restored from the embedded copy.
+
+An explicit compatible `ROC` override still takes precedence, followed by a
+compatible `roc` on `PATH`. Project packages and tools can still require
+network downloads. Nix is required for tools from Nix package sources and
+for sandboxed builds.
+
+== Check an automation compiler pin
+
+[source,sh]
+----
+blueprint compiler-version
+----
+
+This release reports `nightly-2026-10-18-1df370f`, followed by a newline. The
+output has no label or colour and always describes the bundled compiler,
+regardless of `ROC` or `PATH`. The command works in any directory, offline,
+without evaluating a project, installing Roc or writing a cache.
+
+A CI check or commit hook can compare the installed automation compiler:
+
+[source,sh]
+----
+test "$(roc-stable version)" = \
+  "Roc compiler version $(blueprint compiler-version)"
+----
+
+Consumers can also compare a committed compiler pin against that tag before
+installing tools. Keep pin updates explicit so automation scripts can be
+tested before adopting a new Roc release.
+
+A project that declares the matching nightly through `Recipes.roc_nightly`
+can reuse the archive Blueprint installed in its store for `roc-stable`.
+An independently installed compiler, including one supplied by Nix, uses its
+own installation; matching the version alone does not share that executable.
