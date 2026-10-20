@@ -128,6 +128,7 @@ jobs:
           backend: roc
           renderer-binary: ${{ steps.roc.outputs.renderer }}
           pdf-filename: roc-blueprint.pdf
+          pdf-image-dpi: "300"
           docs-version: ${{ needs.validate.outputs.version }}
           api-entrypoint: blueprint-platform/main.roc
           roc-command: ${{ steps.roc.outputs.command }}

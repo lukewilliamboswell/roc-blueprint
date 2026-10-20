@@ -322,12 +322,14 @@ To render the same outputs locally, inside `nix develop`:
 scripts/docs_snippet.roc    # docs/generated/, from the latest release; needs a logged-in gh
 renderer=$(nix build .#roc-docs --no-link --print-out-paths)/bin/roc-docs
 "$renderer" build --workspace "$PWD" --pdf-filename roc-blueprint.pdf \
+  --pdf-image-dpi 300 \
   --docs-version main --api-entrypoint blueprint-platform/main.roc \
   --roc-command "$(command -v roc)"
 ----
 
 The site is `.docs-out/site/` and the PDF `.docs-out/roc-blueprint.pdf`;
-neither is committed. Publication links use explicit URLs; this action and
+neither is committed. Both workflows use 300 DPI for PDF image preparation
+so the architecture diagram retains detail when zoomed. Publication links use explicit URLs; this action and
 renderer pair does not need a `site-url` option.
 
 Keep PSV table cells on complete physical lines. The stage responsibilities
