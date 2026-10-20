@@ -332,9 +332,21 @@ neither is committed. Both workflows use 300 DPI for PDF image preparation
 so the architecture diagram retains detail when zoomed. Publication links use explicit URLs; this action and
 renderer pair does not need a `site-url` option.
 
-Keep PSV table cells on complete physical lines. The stage responsibilities
-use separate input/output, execution and invariant tables so the PDF can fit all text.
+Keep PSV table cells on complete physical lines. HTML honours the declared
+column proportions; this renderer release's PDF sizes earlier columns to
+their content and gives the last column the remaining space. Keep long
+explanations together: the overview combines each source and its version pin,
+and the configuration checks use labelled paragraphs. Stage responsibilities
+use separate input/output, execution and invariant tables. Review both
+outputs after changing a table; column proportions alone do not establish
+that its PDF is readable.
+
 Stable explicit anchors preserve links when a heading's wording changes.
+Invariant headings use words before their numbers because numeric-leading
+headings exceed this release's native inline profile. The historical
+`use-this-release-2` release anchor remains explicit. Prepared figures replace
+render-time Mermaid and JPEG conversion, with their source and asset digests
+recorded below. These are authoring changes, rather than renderer patches.
 
 Native images are non-interlaced RGB/RGBA PNGs. The manual's illustration is
 converted from the original JPEG; its source hash and conversion command are
