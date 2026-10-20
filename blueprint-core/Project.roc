@@ -292,6 +292,22 @@ Project :: [].{
 		if !spec.build_sources.is_empty() and !spec.requires_.contains("sources") {
 			return Err("build sources require feature: sources")
 		}
+		if !spec.build_files.is_empty() and !spec.requires_.contains("build-files") {
+			return Err("build files require feature: build-files")
+		}
+		for selected in spec.build_files {
+			if !spec.builds.any(|build| build.name == selected.build) {
+				return Err("unknown build for Files: ${selected.build}")
+			}
+			if spec.build_files.keep_if(|other| other.build == selected.build).len() > 1 {
+				return Err("DuplicateFiles: build ${selected.build}")
+			}
+			for file in selected.paths {
+				if !valid_output(file) {
+					return Err("invalid selected build path: ${file}")
+				}
+			}
+		}
 		if !spec.builds.is_empty() and !spec.requires_.contains("builds") {
 			return Err("builds require feature: builds")
 		}
@@ -535,7 +551,7 @@ Project :: [].{
 				return Err("empty Raw provider or target")
 			}
 		}
-		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: $environment_programs, expects: $expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
+		Ok(Spec.{ build_files: spec.build_files, format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: $environment_programs, expects: $expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
 	}
 
 	## A tool names a source the project does not declare. The sources it
@@ -1045,6 +1061,7 @@ expect Project.check_tool(Guix, "g++@12.3:lib").is_ok()
 # These fixtures use the public Spec and validation boundary, not resolve internals.
 fixture : List(Spec.Environment) -> Spec
 fixture = |environments| Spec.{
+	build_files: [],
 	format: Spec.current_format,
 	name: "semantic tests",
 	requires_: [],
@@ -1187,6 +1204,7 @@ expect Project.valid_task_name("check.fmt") and !Project.valid_task_name("check.
 
 build_fixture : List(Spec.Build) -> Spec
 build_fixture = |builds| Spec.{
+	build_files: [],
 	format: Spec.current_format,
 	name: "build tests",
 	requires_: ["sources", "builds"],
@@ -1325,7 +1343,7 @@ expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../esc
 build_source_fixture : List(Spec.BuildSource), List(Str) -> Spec
 build_source_fixture = |build_sources, requires_| {
 	spec = build_fixture([library])
-	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
+	Spec.{ build_files: spec.build_files, format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
 }
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["builds"])) == Err("build sources require feature: sources")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["sources"])) == Err("builds require feature: builds")
@@ -1380,6 +1398,7 @@ workflow_fixture = |workflows| workflow_features(workflows, ["workflows"])
 
 workflow_features : List(Spec.Workflow), List(Str) -> Spec
 workflow_features = |workflows, features| Spec.{
+	build_files: [],
 	format: Spec.current_format,
 	name: "workflow tests",
 	requires_: ["sources", "builds"].concat(features),

@@ -110,5 +110,5 @@ Config :: [].{
 	## Builds require Use, Run and one relative Output. Optional Inputs select
 	## locked non-flake Sources; Needs selects build artifacts, not task names.
 	## Sources and artifacts remain separate read-only inputs, never merged.
-	BuildSetting : [Use(EnvName), Inputs(List(InputName)), Needs(List(InputName)), Run(List(Str)), Output(Str)]
+	BuildSetting : [Files(List(Str)), Use(EnvName), Inputs(List(InputName)), Needs(List(InputName)), Run(List(Str)), Output(Str)]
 }

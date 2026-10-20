@@ -109,6 +109,7 @@ TestData :: [].{
 
 	project : Data -> Spec
 	project = |t| Spec.{
+		build_files: [],
 		format: Spec.current_format,
 		name: "plan fixture",
 		systems: t.systems,

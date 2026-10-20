@@ -62,7 +62,7 @@ Command : [
 	Gen,
 	Shell(Str),
 	Run({ task : Str, args : List(Str) }),
-	Build(Str),
+	Build({ name : Str, json : Bool, rebuild : Bool }),
 	Workflow(Str),
 	Tasks,
 	Update(List(Str)),
@@ -89,19 +89,12 @@ cli_for = |loaded| {
 		{ name: "run", description: "Run a task in its environment", mapper: |r| Run(r) },
 	)
 	generic_build_cmd = SubCmd.finish(
-		Cli.map(
-			Param.str({
-				name: "name",
-				help: "The artifact to build.",
-				default: NoDefault,
-			}),
-			|name| Build(name),
-		),
 		{
-			name: "build",
-			description: "Build a sandboxed artifact and its dependencies",
-			mapper: |c| c,
-		},
+			json: Opt.flag({ short: "", long: "json", help: "Emit versioned build provenance as JSON." }),
+			rebuild: Opt.flag({ short: "", long: "rebuild", help: "Rebuild an existing derivation and fail if its output differs." }),
+			target: Param.str({ name: "name", help: "The artifact to build.", default: NoDefault }),
+		}.Cli,
+		{ name: "build", description: "Build a sandboxed artifact and its dependencies", mapper: |options| Build({ name: options.target, json: options.json, rebuild: options.rebuild }) },
 	)
 	update_cmd = SubCmd.finish(
 		Cli.map(
@@ -140,18 +133,16 @@ cli_for = |loaded| {
 		Ok(spec) if !spec.builds.is_empty() => SubCmd.finish(
 			SubCmd.required(
 				spec.builds.map(
-					|build| SubCmd.empty({
-						name: build.name,
-						description: "${build.output} [${build.environment}]",
-						value: Build(build.name),
-					}),
+					|build| SubCmd.finish(
+						{
+							json: Opt.flag({ short: "", long: "json", help: "Emit versioned build provenance as JSON." }),
+							rebuild: Opt.flag({ short: "", long: "rebuild", help: "Rebuild an existing derivation and fail if its output differs." }),
+						}.Cli,
+						{ name: build.name, description: "${build.output} [${build.environment}]", mapper: |options| Build({ name: build.name, json: options.json, rebuild: options.rebuild }) },
+					),
 				),
 			),
-			{
-				name: "build",
-				description: "Build a sandboxed artifact and its dependencies",
-				mapper: |c| c,
-			},
+			{ name: "build", description: "Build a sandboxed artifact and its dependencies", mapper: |c| c },
 		)
 		_ => generic_build_cmd
 	}
@@ -298,7 +289,7 @@ run! = |command, loaded, context| {
 				Gen => realise!(spec, Request.Generate, ctx)
 				Shell(name) => realise!(spec, Request.Shell(name), ctx)
 				Run({ task, args }) => realise!(spec, Request.Run(task, args), ctx)
-				Build(name) => realise!(spec, Request.Build(name), ctx)
+				Build(options) => realise!(spec, Request.Build(options.name), { ..ctx, build_json: options.json, rebuild: options.rebuild })
 				Workflow(name) => realise!(spec, Request.Workflow(name), ctx)
 				Tasks => list_tasks!(spec)
 				Update(names) => resolve!(spec, names, ctx)
@@ -511,7 +502,7 @@ roc! = |_ctx| {
 	}
 }
 
-Context : { layout : Layout, target : Str }
+Context : { layout : Layout, target : Str, build_json : Bool, rebuild : Bool, build_sources : List(Lock.Source) }
 
 ## Caller paths are observations, resolved once against the selected root.
 context! : () => Try(Context, _)
@@ -541,6 +532,9 @@ context! = || {
 		),
 	)
 	Ok({
+		build_json: False,
+		rebuild: False,
+		build_sources: [],
 		layout: Layout.{
 			project_root: root,
 			workspace,
@@ -597,7 +591,7 @@ runner_host = |host, system|
 	} else {
 		Err(
 			Refused(
-				"sandboxed builds run blueprint itself as their builder, so "
+				"sandboxed builds verify isolation on the local kernel, so "
 					.concat("blueprint must run on ${system}; this host is ")
 					.concat(host ?? "unsupported"),
 			),
@@ -782,6 +776,7 @@ BuildSpec : {
 	output : Str,
 	path : Str,
 	inputs : Str,
+	tools : Try(Str, [Missing]),
 	artifacts : Str,
 	readlink : Str,
 	chmod : Str,
@@ -851,6 +846,7 @@ run_build! = |file| {
 				.env(OsStr.from_str("PATH"), OsStr.from_str(spec.path))
 				.env(OsStr.from_str("HOME"), home.to_os_str())
 				.env(OsStr.from_str("BLUEPRINT_INPUTS"), OsStr.from_str(spec.inputs))
+				.env(OsStr.from_str("BLUEPRINT_TOOLS"), OsStr.from_str(spec.tools ?? ""))
 				.env(OsStr.from_str("BLUEPRINT_ARTIFACTS"), OsStr.from_str(spec.artifacts))
 			# Only the user command sees the cache, and only when there is one.
 			command = match cache {
@@ -1093,7 +1089,11 @@ realise! = |spec, request, ctx| {
 	present!(steps.steps, request)?
 	fetched = fetch_programs!(steps.steps)?
 	for step in steps.steps {
-		execute_step!(step, fetched, ctx)?
+		used = match step.action {
+			Build(name) => NixProvider.provenance_sources(spec, name).map_err(|message| RenderFailed(message))?
+			_ => []
+		}
+		execute_step!(step, fetched, { ..ctx, build_sources: lock.sources.keep_if(|source| used.contains(source.name)) })?
 	}
 	Ok({})
 }
@@ -1181,7 +1181,8 @@ fetch_programs! = |steps| {
 execute_step! : Steps.Step, List(Fetched), Context => Try({}, _)
 execute_step! = |step, fetched, ctx| {
 	layout = ctx.layout
-	var $files = step.files
+	files = step.files
+	var $argv = step.argv
 	var $roc_bundles = []
 	var $programs = []
 	for operation in step.operations {
@@ -1196,23 +1197,19 @@ execute_step! = |step, fetched, ctx| {
 					)
 				}
 			}
-			Isolation(placeholder) => {
+			Isolation(_) => {
 				mnt = namespace!("mnt")?
 				net = namespace!("net")?
-				$files = $files.map(
-					|file| {
-						..file,
-						contents: file.contents.replace_each(placeholder.mnt, mnt)
-							.replace_each(placeholder.net, net),
-					},
-				)
+				directory = "${layout.generated_root}/isolation"
+				safe_path!(directory)?
+				path(directory).create_all!()?
+				atomic_write!("${directory}/witness", "${mnt}\n${net}\n")?
+				$argv = $argv.map(|arg| arg.replace_each("@blueprint-isolation-source@", directory))
 			}
-			Runner({ executable, system }) => {
-				own = runner_executable!(system)?
-				$files = $files.map(
-					|file| { ..file, contents: file.contents.replace_each(executable, own) },
-				)
+			Runner({ system, .. }) => {
+				runner_host(host_system!(), system)?
 			}
+
 			RocBundles(bundles) => {
 				$roc_bundles = $roc_bundles.concat(bundles)
 			}
@@ -1227,10 +1224,10 @@ execute_step! = |step, fetched, ctx| {
 			}
 		}
 	}
-	stage!($files, layout)?
+	stage!(files, layout)?
 	publish_roc_bundles!($roc_bundles, ctx)?
 	if $programs.is_empty() {
-		start!(step, [], "", layout)
+		start!({ ..step, argv: $argv }, [], "", ctx)
 	} else {
 		# The step's own directory of links, first on its PATH and gone when
 		# it ends, however it ends.
@@ -1245,7 +1242,7 @@ execute_step! = |step, fetched, ctx| {
 			for program in $programs {
 				Store.expose!(bin, program.name, program.file).map_err(|message| FetchFailed(message))?
 			}
-			start!(step, $programs.map(|program| program.name), bin, layout)
+			start!({ ..step, argv: $argv }, $programs.map(|program| program.name), bin, ctx)
 		}
 		result = linked!()
 		_ = run.delete_all!()
@@ -1258,11 +1255,12 @@ execute_step! = |step, fetched, ctx| {
 ## that is one of them is started from `bin` itself, whatever the caller's
 ## PATH would have found. A shell with no argv is the caller's own: `SHELL`,
 ## or `/bin/sh`.
-start! : Steps.Step, List(Str), Str, Layout => Try({}, _)
-start! = |step, names, bin, layout| {
+start! : Steps.Step, List(Str), Str, Context => Try({}, _)
+start! = |step, names, bin, ctx| {
+	layout = ctx.layout
 	directories = if (bin.is_empty()) [] else [bin]
 	match step.action {
-		Build(name) => report_build!(step, name, layout.project_root)
+		Build(name) => report_build!(step, name, ctx)
 		Shell(_) if step.argv.is_empty() => {
 			shell = match Env.var_str!("SHELL") {
 				Ok(value) if !value.is_empty() => value
@@ -1512,8 +1510,9 @@ copy_roc_package! = |source, target| {
 
 ## Resolve the selected installable with the exact planned build command.
 ## Dependency metadata stays descriptive; no store paths are guessed for it.
-report_build! : Steps.Step, Str, Str => Try({}, _)
-report_build! = |plan, name, root| {
+report_build! : Steps.Step, Str, Context => Try({}, _)
+report_build! = |plan, name, ctx| {
+	root = ctx.layout.project_root
 	for artifact in plan.artifacts {
 		Stderr.line!(
 			"building ${artifact.name}: ${artifact.installable} "
@@ -1524,9 +1523,19 @@ report_build! = |plan, name, root| {
 		.map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
 	match plan.argv {
 		[program, .. as args] => {
-			result = native_command!(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(root))
+			extra = (if (ctx.rebuild) ["--rebuild"] else []).concat(if (ctx.build_json) ["--json"] else [])
+			result = native_command!(OsStr.from_str(program)).args(args.concat(extra).map(OsStr.from_str)).cwd(path(root))
 				.stderr(Inherit).capture!()?
-			Stdout.write!(result)?
+			reported = if ctx.build_json {
+				records : Try(List({ drvPath : Str, outputs : { out : Str } }), _)
+				records = Json.parse(result)
+				built = records.map_err(|_| RenderFailed("Nix returned invalid build JSON"))?
+				record = built.first().map_err(|_| RenderFailed("Nix returned no build result"))?
+				Json.to_str({ schema_version: 1.U64, name, system: ctx.target, derivation: record.drvPath, outputs: [{ name: "out", path: record.outputs.out }], sources: ctx.build_sources }).concat("\n")
+			} else {
+				result
+			}
+			Stdout.write!(reported)?
 			Stderr.line!(
 				"built ${artifact.name}: ${artifact.installable} -> "
 					.concat(result.trim()),

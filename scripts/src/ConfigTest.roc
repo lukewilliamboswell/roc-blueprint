@@ -42,11 +42,11 @@ ConfigTest := [].{
 	markers : List((Str, List(Str)))
 	markers = [
 		("Valid", ["(requires (\"explicit-sources\"))", "(provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\"))"]),
-		("Builds", ["(minor 7)", "(requires (\"explicit-sources\" \"sources\" \"builds\"))", "(build_sources ", "(builds "]),
+		("Builds", ["(minor 8)", "(requires (\"explicit-sources\" \"sources\" \"builds\"))", "(build_sources ", "(builds "]),
 		(
 			"Workflows",
 			[
-				"(minor 7)",
+				"(minor 8)",
 				"(requires (\"explicit-sources\" \"builds\" \"workflows\"))",
 				"(workflows ",
 				"(RunTask \"check.all\" (\"\" \"two words\" \"\\\"quoted\\\"\" \"\$HOME\" \"line\\nbreak\" \"--flag\"))",

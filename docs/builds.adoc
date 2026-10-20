@@ -51,9 +51,14 @@ more than the build was given: the Roc compiler's package puts coreutils and
 a C compiler on the `PATH` of a script it runs. An environment with fetched
 programs or expected tools cannot be a build's: a sandbox holds only what its
 package sources supply, and the build is refused when it is planned.
-The `blueprint` executable is itself each build's builder inside the sandbox,
-so `blueprint build` refuses to run unless that executable is an x86_64 Linux
-one.
+A versioned standalone runner executes builds using only the locked package
+set. Its bytes are independent of the Blueprint CLI executable. Caller namespace
+identities are mounted as an authorization witness at execution time, outside
+the derivation; they do not change the derivation identity. Both mount and
+network namespaces must differ from the caller before the runner creates a
+workspace or starts the command. A missing mount, disabled sandbox, invalid
+witness or shared namespace fails closed. Builds run locally on x86_64 Linux;
+remote Nix builders are disabled for this isolation contract.
 See the https://github.com/lukewilliamboswell/roc-blueprint/blob/main/examples/artifacts/README.md[complete runnable example],
 https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/builds/README.md[real build fixture].
 
@@ -75,3 +80,47 @@ unchanged inputs, but Blueprint never caches artifact results across tasks.
 Locked sources are verified again; task edits to them require explicit update.
 Cycles and excessive depth/expansion fail during configuration validation.
 See the https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/workflows/README.md[real workflow fixture].
+
+== Select a recipe's project files
+
+`Files(["scripts/producer.sh", "dependencies/shared"])` on a `Build` selects
+only those project files and directory trees for that build. Paths are relative
+to the project root; absolute paths, `.` and `..` components are refused.
+A selected path must exist. The usual generated-root, authority, VCS and locked
+local-source exclusions still apply. Omit `Files` to retain the whole-project
+snapshot; `Files([])` gives the command an empty writable workspace.
+
+Give each component its own single-output build with its own `Files` list.
+The builds share their locked package sets and any identical selected trees in
+the Nix store; an unrelated application edit does not change their snapshots.
+
+== Reach a tool's libraries
+
+`BLUEPRINT_TOOLS` is a read-only directory of complete package roots. A plain
+or configured tool `nix#glibc` is at `$BLUEPRINT_TOOLS/nix#glibc`, so a producer
+can use `$BLUEPRINT_TOOLS/nix#glibc/lib/ld-linux-x86-64.so.2` without guessing a
+store path. A `Command("cc", "nix#clang")` exposes its underlying package root
+at `$BLUEPRINT_TOOLS/cc`. These paths do not add tools to `PATH`, enable
+network access or opt into `stdenv` setup. Quote paths as usual in a shell.
+
+== Check reproducibility and record provenance
+
+`blueprint build NAME --rebuild` asks Nix to rebuild the existing derivation
+and compare its output. Nix fails when the output differs. Build it once
+before asking for this check; a missing prior output is not a reproducibility
+comparison. Run this for each component in CI.
+
+`blueprint build NAME --json` prints one JSON object and keeps build progress
+on stderr. Both flags may be combined. Version 1 has these fields:
+
+* `schema_version`: `1`.
+* `name` and `system`: the requested build and target system.
+* `derivation`: the actual builder derivation path reported by Nix.
+* `outputs`: a list of `{ "name": "out", "path": "..." }` records.
+* `sources`: the root lock entries used by this build and its dependencies,
+  each with `name`, `provider`, `ref`, `rev` and `digest`. Sources without a
+  revision have an empty `rev`; these digests retain the lock's representation.
+
+Consumers should reject unsupported schema versions and tolerate additional
+fields. Derivation and output identities come from Nix; Blueprint does not
+infer them from the declared output name.

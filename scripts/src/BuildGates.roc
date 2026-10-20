@@ -6,6 +6,7 @@ import cli.Random
 import BuildHarness
 import Integrity
 import Script
+import ReproducibleGates
 
 ## The sandboxed-build gates, against the real `./blueprint` and real Nix.
 ##
@@ -105,6 +106,7 @@ position = |whole, part| (whole.split_on(part).first() ?? "").to_utf8().len()
 gates! : BuildHarness.Suite => Try({}, _)
 gates! = |suite| {
 	BuildHarness.warm!(suite)?
+	ReproducibleGates.run!(suite)?
 	payload = "${suite.tools}/runner-payload"
 	BuildHarness.build_tool!(suite, "fixtures/builds/runner_payload.roc", payload)?
 	base = host_specification!(suite)?
@@ -444,8 +446,8 @@ reject_unsandboxed_runner! = |suite, state, base| {
 	_ = build!(suite, state.place, "library", NoService)?
 	staged = read!(flake)?
 	BuildHarness.require!(
-		text(staged).contains("isolation = { mnt = \"${mnt}\"; net = \"${net}\"; };"),
-		"staged build did not capture caller namespaces",
+		text(read!("${state.place.generated}/isolation/witness")?) == "${mnt}\n${net}\n",
+		"runtime witness did not capture caller namespaces",
 	)?
 	BuildHarness.require!(!text(staged).contains("@blueprint-caller"), "staged build kept an unobserved placeholder")?
 	_ = build!(suite, state.place, "library", NoService)?
