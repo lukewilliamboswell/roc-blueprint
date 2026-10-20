@@ -135,7 +135,7 @@ SmokeBinary := [].{
 	compiler_fetches = |stderr| occurrences(stderr, "blueprint: fetching roc from ")
 
 	## Check the release tag against what the actual bundled executable says.
-	## The native no-Nix smoke jobs run it from the shared compiler archive,
+	## Native smoke jobs run it from the shared compiler archive,
 	## rather than trusting a PATH compiler or the compiler used for the build.
 	compiler_matches : Str, Str -> Bool
 	compiler_matches = |tag, actual| !tag.trim().is_empty() and actual.trim() == "Roc compiler version ${tag.trim()}"
@@ -174,12 +174,14 @@ SmokeBinary := [].{
 	blueprint_roc : Str, References -> Str
 	blueprint_roc = |platform_path, inputs| {
 		Str.join_with(
-			["app [config] { pf: platform \"${platform_path}\" }", "", "config = [", "	Name(\"smoke\"),"]
+			["app [config] { pf: platform \"${platform_path}\" }", "", "import pf.Recipes", "", "config = [", "	Name(\"smoke\"),"]
 				.concat([
 					"	Packages(\"default\", From(NixPackages(\"${inputs.source}\"))),",
 					"	Overlay(\"roc\", \"${inputs.overlay}\"),",
 					"	Environment(\"dev\", [Tools([\"default#git\"]), Overlays([\"roc\"]), Command(\"roc-stable\", \"default#${inputs.compiler}\")]),",
 					"	Shell(\"default\", [Use(\"dev\")]),",
+					"	Environment(\"compiler-probe\", [Programs([Fetch(\"roc-stable\", Recipes.roc_nightly(\"${roc_version.trim()}\"))])]),",
+					"	Task(\"roc-version\", [Use(\"compiler-probe\"), Run([\"roc-stable\", \"version\"])]),",
 					"	Task(\"git\", [Use(\"dev\"), Run([\"git\", \"--version\"])]),",
 					"	Task(\"script\", [Use(\"dev\"), Run([\"./hello.roc\"])]),",
 					"]",
@@ -347,6 +349,7 @@ smoke! = |root, blueprint, work, mode| {
 	described = match mode {
 		Nix(inputs) => {
 			_ = Process.succeed!(binary(["update"]))?
+			verify_compiler!(binary)?
 			git = Process.succeed!(binary(["run", "git"]))?
 			Process.check!(git.stdout.split_on("\n").any(|line| line.starts_with("git version ")), "`blueprint run git` printed: ${git.stdout}")?
 			script = Process.succeed!(binary(["run", "script"]))?
@@ -369,6 +372,18 @@ smoke! = |root, blueprint, work, mode| {
 	Script.pass!("blueprint binary smoke test passed on ${Str.inspect(machine.os)} ${Str.inspect(machine.arch)} with ${described}, no roc and ${python} on PATH")
 }
 
+## Both release smoke modes fetch this task's compiler from the same
+## archive as bootstrap, so this verifies the embedded executable even when
+## the rest of the project takes its automation tools from Nix.
+verify_compiler! : (List(Str) -> Process.Job) => Try({}, _)
+verify_compiler! = |binary| {
+	reported = Process.succeed!(binary(["compiler-version"]))?
+	Process.check!(reported.stdout == "${roc_version.trim()}\n" and reported.stderr == "", "compiler-version does not report the release's pinned tag")?
+	actual = Process.succeed!(binary(["run", "roc-version"]))?
+	Stdout.write!(actual.stdout)?
+	Process.check!(SmokeBinary.compiler_matches(reported.stdout, actual.stdout), "bundled roc version disagrees with compiler-version: reported ${Str.inspect(reported.stdout)}, executable returned ${Str.inspect(actual.stdout)}")
+}
+
 ## The Nix-free project, on a machine that has no `nix`: what each command
 ## printed on standard error is shown, since it says what was downloaded.
 ## `before` is what the first command of the run printed there.
@@ -382,14 +397,7 @@ without_nix! = |project, binary, before| {
 	Process.check!(updated.stderr.contains("is the download of Roc this blueprint already holds; its digest is recorded from the store"), "the first update fetched roc-stable for this machine a second time, though it is the embedded compiler")?
 	Process.check!(Path.is_file!(Path.utf8("${project}/Blueprint.lock")) ?? False, "update wrote no Blueprint.lock")?
 
-	# The update's archive-reuse assertion above proves roc-stable comes from
-	# the embedded archive. Run that executable to validate the reported pin
-	# on each native target, including Windows and macOS.
-	reported = Process.succeed!(binary(["compiler-version"]))?
-	Process.check!(reported.stdout == "${roc_version.trim()}\n" and reported.stderr == "", "compiler-version does not report the release's pinned tag")?
-	actual = Process.succeed!(binary(["run", "roc-version"]))?
-	Stdout.write!(actual.stdout)?
-	Process.check!(SmokeBinary.compiler_matches(reported.stdout, actual.stdout), "bundled roc version disagrees with compiler-version: reported ${Str.inspect(reported.stdout)}, executable returned ${Str.inspect(actual.stdout)}")?
+	verify_compiler!(binary)?
 
 	needs = Process.succeed!(binary(["requirements", "--json"]))?
 	Stdout.write!(needs.stdout)?
@@ -412,7 +420,7 @@ expect SmokeBinary.is_python("python3") and SmokeBinary.is_python("/tmp/work/no-
 expect !SmokeBinary.is_python("smoke-x86_64-linux") and !SmokeBinary.is_python("dist/smoke-aarch64-darwin") and !SmokeBinary.is_python("")
 # The floating project is what a new user's holds: a branch of nixpkgs, the
 # overlay's default branch and its newest nightly.
-expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nconfig = [\n\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),\n\tOverlay(\"roc\", \"github:roc-lang/roc-overlay\"),\n")
+expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),\n\tOverlay(\"roc\", \"github:roc-lang/roc-overlay\"),\n")
 expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly\")")
 
 sample_pins : SmokeBinary.References

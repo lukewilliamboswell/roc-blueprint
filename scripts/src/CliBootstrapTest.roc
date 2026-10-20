@@ -118,6 +118,13 @@ bootstrap! = |bench| {
 	CliHarness.exited!(CliHarness.finish!(two, "second concurrent bootstrap")?, 0, "second concurrent bootstrap")?
 	CliHarness.check!(CliHarness.names!("${store}/v1/artifacts/sha256")? == [program.sha256], "concurrent bootstrap did not keep one compiler artifact")?
 	CliHarness.check!(CliHarness.names!("${store}/v1/trees/sha256")? == ["${program.sha256}.tar.gz"], "concurrent bootstrap left an incomplete tree")?
+	# The Nix-enabled release fixture also includes a fetched compiler probe;
+	# validate that mixed configuration without needing Nix on this machine.
+	release_project = "${bench.work}/release-smoke"
+	Path.create_all!(Path.utf8(release_project))?
+	release_platform = RocPackagesTest.relative(release_project, "${bench.root}/blueprint-platform/main.roc")
+	Path.write_utf8!(Path.utf8("${release_project}/Blueprint.roc"), SmokeBinary.blueprint_roc(release_platform, SmokeBinary.pinned?))?
+	CliHarness.exited!(CliHarness.invoke!({ ..call, cwd: release_project })?, 0, "Nix-enabled release smoke configuration")?
 	Script.pass!("embedded compiler: cold install, cache reuse, corruption repair and concurrent installs, with no roc on PATH or compiler download")
 }
 
