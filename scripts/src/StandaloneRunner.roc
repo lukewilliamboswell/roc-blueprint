@@ -59,7 +59,9 @@ StandaloneRunner := [].{
 		gid = Cmd.new("id").arg("-g").capture!()?.trim()
 		setpriv = BuildHarness.which!("setpriv")?
 		unprivileged = [setpriv, "--reuid=${uid}", "--regid=${gid}", "--clear-groups"].concat(argv)
-		result = Cmd.new("sudo").args(["-n", "--", bwrap, "--die-with-parent", "--unshare-net", "--ro-bind", "/", "/", "--bind", context.work, context.work, "--tmpfs", "/blueprint-isolation", "--ro-bind", "${top}/witness", "/blueprint-isolation", "--chdir", build, "--clearenv", "--setenv", "ROC_BUILD_RUNNER_WITNESS", "/blueprint-isolation/witness", "--setenv", "ROC_BUILD_RUNNER_READLINK", readlink, "--setenv", "runnerSpecPath", "${top}/spec.json", "--setenv", "out", "${top}/out", "--"].concat(unprivileged).map(OsStr.from_str)).run!()?
+		# Create witness mountpoints inside private tmpfs, never the host root.
+		# The suite's own writable directory is rebound after hiding /tmp.
+		result = Cmd.new("sudo").args(["-n", "--", bwrap, "--die-with-parent", "--unshare-net", "--ro-bind", "/", "/", "--tmpfs", "/tmp", "--bind", context.work, context.work, "--tmpfs", "/tmp/roc-build-runner-isolation", "--ro-bind", "${top}/witness", "/tmp/roc-build-runner-isolation", "--chdir", build, "--clearenv", "--setenv", "ROC_BUILD_RUNNER_WITNESS", "/tmp/roc-build-runner-isolation/witness", "--setenv", "ROC_BUILD_RUNNER_READLINK", readlink, "--setenv", "runnerSpecPath", "${top}/spec.json", "--setenv", "out", "${top}/out", "--"].concat(unprivileged).map(OsStr.from_str)).run!()?
 		code = match result.status {
 			Exited(value) => value
 			Signaled(signal) => 128 + signal
