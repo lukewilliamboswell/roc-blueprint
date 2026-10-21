@@ -205,6 +205,13 @@ workspace, target and compiler settings have no effect. It reports committed
 authority even when a working configuration has changed. Run `blueprint gen`
 when you need the ordinary freshness checks.
 
+The stable S-expression lock remains the authority and is directly readable
+through `core.Lock`. The optional JSON projection gives Python, `jq`, Nix and
+other consumers public provider-qualified identities, digest kinds and native
+metadata without decoding private provider hints. See
+xref:lock-snapshot.adoc#choose-the-authority-or-its-public-projection[Choose the authority or its public projection]
+for when to use each interface and the projection's compatibility boundary.
+
 Names select package sources, inputs, overlays, build sources, or fetched
 programs. With no names, every entry is included. A program name selects all
 its systems. Unknown names, unreadable locks, unsupported lock major versions
