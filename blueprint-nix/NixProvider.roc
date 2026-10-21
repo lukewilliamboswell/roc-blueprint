@@ -30,7 +30,10 @@ NixProvider :: [].{
 		build_prepared,
 		build_execute_argv,
 		build_result,
+		build_inputs: direct_sources,
 		build_sources: provenance_sources,
+		build_capabilities: ["builds", "build-files", "dependency-builds", "prepare", "checked-rebuild"],
+		build_guarantees: ["captured-declared-inputs", "sandboxed-filesystem", "sandboxed-network", "checked-rebuild-comparison"],
 		build_exclusions: |spec, layout| {
 			project = Project.validate(spec)?
 			Ok(excluded(layout, Locks.inputs(project)?))
@@ -983,19 +986,33 @@ NixProvider :: [].{
 		}
 	}
 
-	## Exactly the root lock entries imported by a build and its dependencies.
+	## Direct imported pins belong to one node; closure provenance is their union.
+	direct_sources : Spec, Str -> Try(List(Str), Str)
+	direct_sources = |spec, name| {
+		project = Project.validate(spec)?
+		build = project.builds.find_first(|entry| entry.name == name).map_err(|_| "unknown build ${name}")?
+		env = project.environments.find_first(|entry| entry.name == build.environment).map_err(|_| "unknown build environment")?
+		executor = Project.build_executor(project, name)?
+		builder = if executor.source.is_empty() {
+			[]
+		} else {
+			[executor.source]
+		}
+		Ok(
+			Project.unique(
+				source_names(env, project.system_tools, project.commands, project.configured_tools, builder)
+					.concat(env.overlays).concat(build.inputs)
+					.concat(project.roc_packages.keep_if(|entry| entry.environment == env.name).map(|entry| entry.source)),
+			),
+		)
+	}
+
 	provenance_sources : Spec, Str -> Try(List(Str), Str)
 	provenance_sources = |spec, name| {
-		project = Project.validate(spec)?
-		closure = Project.build_closure(project, name)?
+		closure = Project.build_closure(spec, name)?
 		var $names = []
 		for build in closure {
-			env = project.environments.find_first(|entry| entry.name == build.environment).map_err(|_| "unknown build environment")?
-			executor = Project.build_executor(project, build.name)?
-			imported = Project.unique([executor.source].concat(source_names(env, project.system_tools, project.commands, project.configured_tools, [executor.source])))
-				.concat(env.overlays).concat(build.inputs)
-				.concat(project.roc_packages.keep_if(|entry| entry.environment == env.name).map(|entry| entry.source))
-			$names = Project.unique($names.concat(imported))
+			$names = Project.unique($names.concat(direct_sources(spec, build.name)?))
 		}
 		Ok($names)
 	}

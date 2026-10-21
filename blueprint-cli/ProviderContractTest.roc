@@ -7,6 +7,7 @@ import core.Steps
 import core.Realise
 import core.Project
 import core.Value
+import core.BuildModel
 import BuildReport
 import LockReport
 
@@ -50,6 +51,12 @@ provider = Provider.{
 		Ok({ build_identity: wire.recipe, outputs: [{ name: "artifact", path: wire.artifact }], metadata: [{ name: "substituted", value: Value.Bool(False) }, { name: "attempts", value: Value.Int(2) }] })
 	},
 	build_exclusions: |_spec, _layout| Ok([]),
+	build_capabilities: ["builds", "build-files", "dependency-builds", "prepare"],
+	build_guarantees: ["captured-declared-inputs"],
+	build_inputs: |project, name| {
+		selected = project.builds.find_first(|entry| entry.name == name).map_err(|_| "missing build")?
+		Ok(["channel"].concat(selected.inputs))
+	},
 	build_sources: |_spec, _name| Ok(["channel", "archive"]),
 	resolve: |_spec, _system, layout, _update| Ok({ present: [{ program: "guix-fixture", because: "resolve channel" }], files: [], locals: [], argv: ["guix-fixture", "describe", "--save", "${layout.generated_root}/channel.lock"], native_lock: "${layout.generated_root}/channel.lock" }),
 	lock_from_native: |spec, _layout, native, _trees| Ok(Lock.{ format: Lock.current_format, intent: Lock.intent_of(spec), sources: [{ name: "channel", provider: "guix", ref: "https://example.test/channel.git", rev: "abc", digest: "guix:commit:abc" }], hints: [{ provider: "guix", value: Value.Str(native) }], fetched: [] }),
@@ -177,4 +184,25 @@ expect {
 	built = { build_identity: "opaque", outputs: [], metadata: [] }
 	BuildReport.render("app", "x86_64-linux", "", built, []) == Err("build report has no provider identity")
 		and BuildReport.render("app", "x86_64-linux", "guix", { ..built, build_identity: " " }, []) == Err("build report has no build identity")
+}
+
+# Dependency-only archive pins appear at the producer, never as direct app inputs.
+expect {
+	result = || {
+		lock = locked?
+		project = Project.validate(spec)?
+		closure = Project.build_closure(project, "app")?
+		capture = |pins| {
+			var $nodes = []
+			for selected in closure {
+				inputs = (provider.build_inputs)(project, selected.name)?
+				$nodes = $nodes.append(BuildModel.capture_node(project, selected, "x86_64-linux", [], inputs, pins)?)
+			}
+			Ok({ name: "app", system: "x86_64-linux", provider: "guix", nodes: $nodes })
+		}
+		before = capture(lock.sources)?
+		after = capture(lock.sources.map(|source| if (source.name == "archive") { ..source, digest: "sha256:changed" } else source))?
+		Ok(BuildModel.compare(before, after) == Ok([{ build: "base", dependency_path: ["app", "base"], kind: "input-changed", name: "archive" }]))
+	}
+	result() == Ok(True)
 }

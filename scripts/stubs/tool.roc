@@ -8,6 +8,7 @@ import cli.Cmd
 import cli.Env
 import cli.OsStr
 import cli.Path
+import cli.Random
 import cli.Sleep
 import cli.Stderr
 import cli.Stdout
@@ -28,7 +29,7 @@ import StubTool
 ##   nix         record; `flake update [INPUT...]` writes a `flake.lock` from `STUB_NIX_FIXTURE`
 ##               as `STUB_NIX_MODE` says (`declared` or `local`, the latter with
 ##               `STUB_NIX_REV`), after waiting at `STUB_NIX_PAUSE` if set;
-##               `build` prints `STUB_NIX_OUT`; `develop` exits 23 if `STUB_NIX_FAIL`,
+##               `derivation show` returns a static prepared recipe; `build` returns native JSON for that recipe; `develop` exits 23 if `STUB_NIX_FAIL`,
 ##               and with `STUB_NIX_RUN` runs what follows `--command`, as it is
 ##               found on this process's PATH
 ##   guix        record, exit 99
@@ -93,7 +94,7 @@ act! = |role, args| {
 			}
 		}
 		Nix => {
-			record!("nix-calls", argv)?
+			record!(optional!("STUB_NIX_CALLS") ?? "nix-calls", argv)?
 			match argv {
 				["flake", "update", "--flake", target] => flake_update!(target, [])
 				["flake", "update", .. as rest] =>
@@ -101,7 +102,20 @@ act! = |role, args| {
 						["--flake", target] => flake_update!(target, rest.drop_last(2))
 						_ => Err("unexpected nix flake update arguments: ${Str.join_with(rest, " ")}")
 					}
+				["derivation", "show", ..] => {
+					if !argv.contains("allow-import-from-derivation") or !argv.contains("false") or argv.contains("extra-sandbox-paths") {
+						return Err("preparation must forbid IFD and omit runtime isolation mounts")
+					}
+					drv = optional!("STUB_NIX_DRV") ?? "/nix/store/00000000000000000000000000000000-blueprint-app.drv"
+					output = variable!("STUB_NIX_OUT")?
+					written!("{${Json.to_str(drv)}:${Json.to_str({ outputs: { out: { path: output } } })}}\n")
+				}
 				["build", ..] => {
+					drv = optional!("STUB_NIX_DRV") ?? "/nix/store/00000000000000000000000000000000-blueprint-app.drv"
+					if !argv.contains("${drv}^*") or !argv.contains("--json") or argv.any(|argument| argument.contains("#packages.")) {
+						return Err("execution must select the exact prepared derivation and decode native JSON")
+					}
+
 					# Record the witness before the CLI cleans its private directory.
 					match optional!("STUB_NIX_ISOLATION_LOG") {
 						Ok(log) => {
@@ -114,7 +128,7 @@ act! = |role, args| {
 						}
 						Err(_) => {}
 					}
-					written!("${variable!("STUB_NIX_OUT")?}\n")
+					written!(Json.to_str([{ drvPath: optional!("STUB_NIX_RESULT_DRV") ?? drv, outputs: { out: variable!("STUB_NIX_OUT")? } }]).concat("\n"))
 				}
 				["develop", ..] =>
 					if optional!("STUB_NIX_FAIL").is_ok() {
@@ -191,8 +205,7 @@ written! = |output| {
 ## append to a file, and two stubs running at once must not lose a record.
 record! : Str, List(Str) => Try({}, Str)
 record! = |directory, argv| {
-	self = Path.canonicalize!(Path.utf8("/proc/self")).map_ok(Path.display).map_err(|_| "cannot read /proc/self")?
-	pid = self.split_on("/").last() ?? ""
+	pid = Random.seed_u64!().map_err(|_| "cannot generate a unique invocation name")?.to_str()
 	Path.create_all!(Path.utf8(directory)).map_err(|_| "cannot create ${directory}")?
 	file = "${directory}/${StubTool.record_file(Utc.now!().to_nanos_since_epoch(), pid)}"
 	Path.write_utf8!(Path.utf8(file), StubTool.record(argv)).map_err(|_| "cannot write ${file}")

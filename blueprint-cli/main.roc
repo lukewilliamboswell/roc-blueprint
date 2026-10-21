@@ -945,18 +945,7 @@ expect !source_is_embedded_compiler("different bytes", "x86_64-linux")
 ## effect.
 execute_step! : Steps.Step, List(Fetched), Context => Try({}, _)
 execute_step! = |step, fetched, ctx| {
-	# Refuse stale local trees before creating any caller-generated state.
-	for operation in step.operations {
-		match operation {
-			VerifyTree({ path: local, digest }) => {
-				safe_source!(local)?
-				if tree_digest!(local)? != digest {
-					return Err(LockFailed("local source ${local} changed; run `blueprint update`"))
-				}
-			}
-			_ => {}
-		}
-	}
+	verify_tree_operations!(step.operations)?
 	isolation = step.operations.find_first(
 		|operation| match operation {
 			Isolation(_) => True
@@ -977,6 +966,22 @@ execute_step! = |step, fetched, ctx| {
 		}
 		_ => execute_prepared!(step, fetched, ctx, "")
 	}
+}
+
+verify_tree_operations! : List(Steps.Operation) => Try({}, _)
+verify_tree_operations! = |operations| {
+	for operation in operations {
+		match operation {
+			VerifyTree({ path: local, digest }) => {
+				safe_source!(local)?
+				if tree_digest!(local)? != digest {
+					return Err(LockFailed("local source ${local} changed; run `blueprint update`"))
+				}
+			}
+			_ => {}
+		}
+	}
+	Ok({})
 }
 
 execute_prepared! : Steps.Step, List(Fetched), Context, Str => Try({}, _)
@@ -1385,6 +1390,12 @@ inspect_build! = |spec, options, ctx| {
 		adapter = providers.find_first(|candidate| candidate.name == executor.provider).map_err(|_| RenderFailed("no build executor provider"))?
 		lock = Lock.parse(path(ctx.layout.lock_path).read_utf8!()?).map_err(|_| LockFailed("unsupported Blueprint.lock; run blueprint lock migrate"))?
 		lock.stale(spec).map_err(|message| LockFailed(message))?
+		# Provider plans are pure. Observe only pinned local-tree checks; never
+		# require native programs, fetch original files or authorize execution.
+		steps = Realise.plan(validated, Request.Build(options.name), ctx.target, ctx.layout, lock, providers).map_err(|problems| PlanFailed(problems))?
+		for step in steps.steps {
+			verify_tree_operations!(step.operations)?
+		}
 		snapshot = build_snapshot!(validated, options.name, adapter, snapshot_pins(lock, ctx.target, adapter).map_err(|message| RenderFailed(message))?, ctx)?
 		render_build_inspection!(snapshot, { build_identity: "", outputs: [] }, False, options.explain, { ..ctx, build_json: options.json })
 	}
@@ -1432,8 +1443,8 @@ build_snapshot! = |input_spec, name, adapter, pins, ctx| {
 				Ok({ path: entry.path, digest })
 			},
 		).fold(Ok([]), |acc, item| Ok(acc?.append(item?)))?
-		sources = (adapter.build_sources)(spec, build.name).map_err(|message| RenderFailed(message))?
-		$nodes = $nodes.append(BuildModel.capture_node(spec, build, ctx.target, files, sources, pins))
+		sources = (adapter.build_inputs)(spec, build.name).map_err(|message| RenderFailed(message))?
+		$nodes = $nodes.append(BuildModel.capture_node(spec, build, ctx.target, files, sources, pins).map_err(|message| RenderFailed(message))?)
 	}
 	Ok({ name, system: ctx.target, provider: adapter.name, nodes: $nodes })
 }
@@ -1508,12 +1519,16 @@ render_build_inspection! = |snapshot, prepared, exact, explain, ctx| {
 			_ => "unavailable"
 		}
 	}
+	adapter = providers.find_first(|candidate| candidate.name == snapshot.provider).map_err(|_| RenderFailed("unknown build provider"))?
+	required = BuildModel.required_capabilities(snapshot)
 	if ctx.build_json {
 		inspection : BuildModel.Inspection
-		inspection = { schema_version: 1, name: snapshot.name, system: snapshot.system, provider: snapshot.provider, prepared: exact, build_identity: prepared.build_identity, outputs: prepared.outputs, snapshot_digest: BuildModel.digest(snapshot), snapshot, baseline: status, baseline_reason: reason, build_identity_status: identity_status, changes }
+		inspection = { required_capabilities: required, provider_capabilities: adapter.build_capabilities, supported_guarantees: adapter.build_guarantees, schema_version: 1, name: snapshot.name, system: snapshot.system, provider: snapshot.provider, prepared: exact, build_identity: prepared.build_identity, outputs: prepared.outputs, snapshot_digest: BuildModel.digest(snapshot), snapshot, baseline: status, baseline_reason: reason, build_identity_status: identity_status, changes }
 		Stdout.line!(Json.to_str(inspection))
 	} else {
 		Stdout.line!("build ${snapshot.name} [${snapshot.system}] via ${snapshot.provider}")?
+		Stdout.line!("required capabilities: ${Str.join_with(required, ", ")}")?
+		Stdout.line!("supported guarantees: ${Str.join_with(adapter.build_guarantees, ", ")}")?
 		for node in snapshot.nodes {
 			Stdout.line!("  ${node.name}: ${Json.to_str(node.command)} [${node.environment}; executor ${node.executor}] -> ${node.output}")?
 			Stdout.line!("  ${node.name}: ${node.files.len().to_str()} selected entries; inputs ${Str.join_with(node.inputs.map(|input| input.name), ", ")}; needs ${Str.join_with(node.dependencies, ", ")}")?

@@ -14,6 +14,8 @@ Provider := {
 
 	## The Spec `requires` features this provider implements.
 	features : List(Str),
+	build_capabilities : List(Str),
+	build_guarantees : List(Str),
 
 	## Whether this provider supplies the tools of a package source with this
 	## intent. The Core asks a provider to realise an environment only when
@@ -50,6 +52,7 @@ Provider := {
 	build_prepared : Str -> Try(PreparedBuild, Str),
 	build_execute_argv : Steps.Step, PreparedBuild, BuildOptions -> Try(List(Str), Str),
 	build_result : Str -> Try(BuildResult, Str),
+	build_inputs : Spec, Str -> Try(List(Str), Str),
 	build_sources : Spec, Str -> Try(List(Str), Str),
 	build_exclusions : Spec, Layout -> Try(List(Str), Str),
 

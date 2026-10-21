@@ -8,17 +8,22 @@ import Sexpr
 BuildModel := [].{
 	Input : { name : Str, provider : Str, content_identity : Str }
 	File : { path : Str, digest : Str }
-	Node : { name : Str, command : List(Str), environment : Str, executor : Str, output : Str, dependencies : List(Str), declarations : Str, files : List(File), inputs : List(Input) }
+	Node : { name : Str, selected_files : Bool, command : List(Str), environment : Str, executor : Str, output : Str, dependencies : List(Str), declarations : Str, files : List(File), inputs : List(Input) }
 	Snapshot : { name : Str, system : Str, provider : Str, nodes : List(Node) }
 	Record : { schema_version : U64, snapshot : Snapshot, build_identity : Str, outputs : List({ name : Str, path : Str }) }
-	Inspection : { schema_version : U64, name : Str, system : Str, provider : Str, prepared : Bool, build_identity : Str, outputs : List({ name : Str, path : Str }), snapshot_digest : Str, snapshot : Snapshot, baseline : Str, baseline_reason : Str, build_identity_status : Str, changes : List(Change) }
+	Inspection : { required_capabilities : List(Str), provider_capabilities : List(Str), supported_guarantees : List(Str), schema_version : U64, name : Str, system : Str, provider : Str, prepared : Bool, build_identity : Str, outputs : List({ name : Str, path : Str }), snapshot_digest : Str, snapshot : Snapshot, baseline : Str, baseline_reason : Str, build_identity_status : Str, changes : List(Change) }
 	Change : { build : Str, dependency_path : List(Str), kind : Str, name : Str }
 
 	## The host supplies selected file measurements and adapter-selected source names.
-	capture_node : Spec, Spec.Build, Str, List(File), List(Str), List(Lock.Source) -> Node
+	capture_node : Spec, Spec.Build, Str, List(File), List(Str), List(Lock.Source) -> Try(Node, Str)
 	capture_node = |spec, build, system, files, selected_sources, pins| {
 		program_names = spec.environment_programs.keep_if(|entry| entry.environment == build.environment).fold([], |names, entry| names.concat(entry.programs))
 		all_sources = Project.unique(selected_sources.concat(program_names))
+		for selected in all_sources {
+			if !pins.any(|pin| pin.name == selected) {
+				return Err("missing locked build input: ${selected}")
+			}
+		}
 		environment = spec.environments.keep_if(|entry| entry.name == build.environment)
 		declarations = Sexpr.to_str({
 			build,
@@ -36,8 +41,9 @@ BuildModel := [].{
 			executors: spec.executors.keep_if(|entry| spec.build_executors.any(|selection| selection.build == build.name and selection.executor == entry.name)),
 			build_files: spec.build_files.keep_if(|entry| entry.build == build.name),
 		})
-		{
+		Ok({
 			name: build.name,
+			selected_files: spec.build_files.any(|entry| entry.build == build.name),
 			command: build.run,
 			environment: build.environment,
 			executor: spec.build_executors.find_first(|entry| entry.build == build.name).map_ok(|entry| entry.executor) ?? "",
@@ -46,8 +52,13 @@ BuildModel := [].{
 			declarations,
 			files: files.sort_with(|a, b| Project.bytewise(a.path, b.path)),
 			inputs: pins.keep_if(|source| all_sources.contains(source.name)).map(|source| { name: source.name, provider: source.provider, content_identity: source.digest }).sort_with(|a, b| Project.bytewise(a.name, b.name)),
-		}
+		})
 	}
+
+	required_capabilities : Snapshot -> List(Str)
+	required_capabilities = |snapshot| ["builds"]
+		.concat(if (snapshot.nodes.any(|node| node.selected_files)) ["build-files"] else [])
+		.concat(if (snapshot.nodes.any(|node| !node.dependencies.is_empty())) ["dependency-builds"] else [])
 
 	digest : Snapshot -> Str
 	digest = |snapshot| "sha256:${Crypto.SHA256.hash(Sexpr.to_str(snapshot).to_utf8()).to_hex()}"
@@ -145,7 +156,7 @@ BuildModel := [].{
 					if old.dependencies != node.dependencies {
 						$changes = $changes.append(change("dependencies-changed", node.name))
 					}
-					if old.declarations != node.declarations or old.command != node.command or old.environment != node.environment or old.executor != node.executor or old.output != node.output {
+					if old.declarations != node.declarations or old.command != node.command or old.environment != node.environment or old.executor != node.executor or old.output != node.output or old.selected_files != node.selected_files {
 						$changes = $changes.append(change("declaration-changed", node.name))
 					}
 					for file in node.files {
@@ -173,7 +184,7 @@ BuildModel := [].{
 		}
 		for node in before.nodes {
 			if !after.nodes.any(|entry| entry.name == node.name) {
-				$changes = $changes.append({ build: node.name, dependency_path: [after.name, node.name], kind: "dependency-removed", name: node.name })
+				$changes = $changes.append({ build: node.name, dependency_path: dependency_path(before, node.name, [before.name], before.nodes.len() + 1), kind: "dependency-removed", name: node.name })
 			}
 		}
 		Ok($changes)
@@ -211,8 +222,8 @@ base = {
 	system: "linux",
 	provider: "example",
 	nodes: [
-		{ name: "lib", command: ["compile"], environment: "dev", executor: "native", output: "lib", dependencies: [], declarations: "compile", files: [{ path: "lib.c", digest: "a" }], inputs: [{ name: "compiler", provider: "example", content_identity: "v1" }] },
-		{ name: "app", command: ["link"], environment: "dev", executor: "native", output: "app", dependencies: ["lib"], declarations: "link", files: [], inputs: [] },
+		{ name: "lib", selected_files: True, command: ["compile"], environment: "dev", executor: "native", output: "lib", dependencies: [], declarations: "compile", files: [{ path: "lib.c", digest: "a" }], inputs: [{ name: "compiler", provider: "example", content_identity: "v1" }] },
+		{ name: "app", selected_files: False, command: ["link"], environment: "dev", executor: "native", output: "app", dependencies: ["lib"], declarations: "link", files: [], inputs: [] },
 	],
 }
 
@@ -248,4 +259,13 @@ expect {
 	changed = { ..base, nodes: base.nodes.map(|node| if (node.name == "lib") { ..node, inputs: [{ name: "compiler", provider: "example", content_identity: "v2" }] } else node) }
 	BuildModel.compare(base, changed) == Ok([{ build: "lib", dependency_path: ["app", "lib"], kind: "input-changed", name: "compiler" }])
 		and BuildModel.compare(base, { ..base, provider: "another" }).is_err()
+}
+
+expect BuildModel.capture_node(Spec.empty("missing"), { name: "app", environment: "producer", inputs: [], needs: [], run: ["compile"], output: "out" }, "linux", [], ["compiler"], []) == Err("missing locked build input: compiler")
+
+expect {
+	root = { name: "root", selected_files: False, command: ["assemble"], environment: "dev", executor: "native", output: "root", dependencies: ["app"], declarations: "assemble", files: [], inputs: [] }
+	before = { ..base, name: "root", nodes: base.nodes.append(root) }
+	without_lib = { ..before, nodes: before.nodes.keep_if(|node| node.name != "lib").map(|node| if (node.name == "app") { ..node, dependencies: [] } else node) }
+	BuildModel.compare(before, without_lib).map_ok(|changes| changes.any(|change| change.kind == "dependency-removed" and change.dependency_path == ["root", "app", "lib"])) == Ok(True)
 }

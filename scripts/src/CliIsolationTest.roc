@@ -3,6 +3,8 @@ import cli.OsStr
 import cli.Path
 import cli.Stdout
 import core.Project
+import core.Spec
+import core.BuildModel
 import CliHarness
 import Integrity
 import Script
@@ -36,8 +38,8 @@ CliIsolationTest := [].{
 		\\(sources (((name "default") (provider ((name "nix") (ref "github:NixOS/nixpkgs/nixos-unstable") (version 1))))))
 		\\(environments (((name "ci") (parents ()) (tools ()) (overlays ()))))
 		\\(shells (((name "default") (environment "ci"))))
-		\\(executors (((name "native") (provider "nix") (source "default")))))
-		\\(build_executors (((build "app") (executor "native")))))
+		\\(executors (((name "native") (provider "nix") (source "default"))))
+		\\(build_executors (((build "app") (executor "native"))))
 		\\(builds (((name "app") (environment "ci") (inputs ()) (needs ())
 		\\          (run ("true")) (output "result")))))
 
@@ -67,7 +69,7 @@ run! = |test, root, args, extra|
 
 ## How many times the provider was asked to build in this project.
 builds! : Str => Try(U64, _)
-builds! = |root| Ok(CliHarness.calls!("${root}/nix-calls")?.keep_if(|call| call.first() == Ok("build")).len())
+builds! = |root| Ok(CliHarness.calls!("${root}/.blueprint/nix-calls")?.keep_if(|call| call.first() == Ok("build")).len())
 
 ## A project with a resolved lock.
 project! : Test, Str => Try(Str, _)
@@ -153,6 +155,7 @@ cases! = |bench| {
 				("STUB_NIX_OUT", CliIsolationTest.store),
 				("STUB_NIX_FIXTURE", "${bench.root}/blueprint-nix/tests/local.nix-lock.json"),
 				("STUB_NIX_MODE", "local"),
+				("STUB_NIX_CALLS", ".blueprint/nix-calls"),
 				("STUB_PYTHON_LOG", python_log),
 				("STUB_NIX_ISOLATION_LOG", "${bench.work}/runtime-witness.json"),
 			],
@@ -176,6 +179,12 @@ cases! = |bench| {
 	}
 	Path.write_utf8!(Path.utf8("${root}/.blueprint/excluded-secret"), "workspace excluded\n")?
 	before = builds!(root)?
+	planned = run!(test, root, ["plan", "build", "app", "--prepare", "--json"], [])?
+	CliHarness.exited!(planned, 0, "prepare build without execution")?
+	prepared : BuildModel.Inspection
+	prepared = Json.parse(planned.stdout).map_err(|_| ScriptFailed)?
+	CliHarness.check!(prepared.prepared and prepared.build_identity.ends_with(".drv") and prepared.baseline == "unavailable" and prepared.outputs == [{ name: "out", path: CliIsolationTest.store }] and builds!(root)? == before, "native preparation built an artifact or advanced the baseline")?
+	CliHarness.check!(!CliHarness.present!("${bench.work}/runtime-witness.json"), "preparation observed runtime execution namespaces")?
 	built = run!(test, root, ["build", "app"], [])?
 	CliHarness.exited!(built, 0, "blueprint build app")?
 	CliHarness.check!(built.stdout == "${CliIsolationTest.store}\n", "build app printed ${Str.inspect(built.stdout)}, not the artifact")?
@@ -194,7 +203,7 @@ cases! = |bench| {
 	generated = CliHarness.names!("${root}/.blueprint")?.sort_with(Project.bytewise)
 	source_files = generated.keep_if(|name| name.starts_with("source-file-") and name.ends_with(".json"))
 	CliHarness.check!(source_files.len() == 1, "the runner compiler needs exactly one original-file path record")?
-	CliHarness.check!(generated.keep_if(|name| !source_files.contains(name)) == [".gitignore", "excluded-secret", "flake.lock", "flake.nix"], "the generated root holds ${Str.join_with(generated, " ")}")?
+	CliHarness.check!(generated.keep_if(|name| !source_files.contains(name)) == [".gitignore", "build-records", "excluded-secret", "flake.lock", "flake.nix", "nix-calls"], "the generated root holds ${Str.join_with(generated, " ")}")?
 	for source in sources {
 		kept = CliHarness.stat!("%a %h", "${root}/${source.file}")?
 		CliHarness.check!(kept == "${source.mode} 1", "${source.file} now has mode and link count ${kept}, not ${source.mode} 1")?
@@ -204,6 +213,10 @@ cases! = |bench| {
 	CliHarness.check!(Path.read_utf8!(Path.utf8("${root}/.blueprint/flake.nix"))? == flake, "a second build staged a different flake")?
 	second = captured!(test)?
 	CliHarness.check!(second.directory != observed.directory and !CliHarness.present!(second.directory), "two builds reused a mutable witness or left it behind")?
+	baseline_path = "${root}/.blueprint/build-records/x86_64-linux/app.scm"
+	baseline_before = Path.read_bytes!(Path.utf8(baseline_path))?
+	invalid_result = run!(test, root, ["build", "app"], [("STUB_NIX_RESULT_DRV", "/nix/store/wrong-recipe.drv")])?
+	CliHarness.check!(invalid_result.code == 1 and invalid_result.stderr.contains("does not match the prepared build") and Path.read_bytes!(Path.utf8(baseline_path))? == baseline_before, "invalid provider result advanced successful build evidence")?
 	Script.pass!("build app: private caller witness is cleaned; derivation excludes namespace/CLI identity and stays unchanged across invocations")?
 
 	# Isolation that cannot be observed or is malformed stops before staging.
@@ -259,3 +272,5 @@ captured! = |test| {
 }
 
 expect CliIsolationTest.wire.contains("(builds (((name \"app\")") and CliIsolationTest.wire.contains("(requires (\"explicit-sources\" \"builds\"))")
+
+expect Spec.parse(CliIsolationTest.wire).is_ok()

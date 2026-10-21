@@ -333,6 +333,9 @@ cli! = |context| {
 	step!("Explicit update source safety and concurrent authority publication")?
 	script!(context, "test_update", [])?
 
+	step!("Structural build plans and dependency explanations without Nix")?
+	script!(context, "test_build_planning", [])?
+
 	step!("Staged isolation witness, build runner path and refusals")?
 	script!(context, "test_isolation", [])?
 
