@@ -171,7 +171,7 @@ Where CycloneDX loses meaning:
   `blueprint:` properties, which standard CycloneDX tools ignore.
 
 Nothing is changed silently. Blueprint reads its own CycloneDX back from the
-`blueprint:` properties, and `scripts/check_sbom.roc` refuses a BOM whose
+`blueprint:` properties, and the tool's `check` refuses a BOM whose
 standard dependencies or scopes disagree with them, or whose graph differs
 from the SPDX renderings of the same document. The checks compare
 identities, relationships, coverage and subjects, not bytes.
@@ -294,15 +294,14 @@ roc run <tool> -- bind sbom/inventory.json sbom/subject.json sbom/context.json d
 roc run <tool> -- bind sbom/inventory.json sbom/subject.json sbom/context.json dist/my-app dist/my-app.spdx-2.3.json --spdx-2.3
 ----
 
-. *Check.* `scripts/check_sbom.roc` checks each sidecar against its format's
-  specification and the profile. It confirms that each sidecar describes the
-  actual file, matches the inventory, and states the same graph as the other
-  renderings. Run it from a checkout of the Blueprint repository at the
-  release you used:
+. *Check.* `check` holds each sidecar to its format's specification and the
+  profile. With `--artifacts` it confirms each describes the actual file, with
+  `--inventory` that it matches the inventory, and it requires the renderings
+  of one document to state the same graph:
 +
 [source,console]
 ----
-nix develop -c scripts/check_sbom.roc --inventory /path/to/sbom/inventory.json --artifacts /path/to/dist /path/to/dist/my-app.spdx.json /path/to/dist/my-app.cdx.json
+roc run <tool> -- check --inventory sbom/inventory.json --artifacts dist dist/my-app.spdx.json dist/my-app.cdx.json
 ----
 
 . *Publish beside the artifact.* Upload the sidecars to the same place as
@@ -380,6 +379,45 @@ An SBOM is only useful if it is accurate. Before you publish, check:
 
 The rest of this chapter is reference material.
 
+[#build-and-development-environments]
+=== What about build and development environments?
+
+An SBOM describes the file you deliver. Your build and development
+environments matter to your supply chain too, but they answer different
+questions, and mixing them into a delivered file's SBOM makes it worse.
+
+*Tools that built the file* appear only where they shaped it: the compiler
+and the pinned sources of the build environment are `dependsOn` with scope
+`build` (CycloneDX scope `excluded`), never `contains`. A recipient then knows
+which toolchain produced the bytes without reading it as shipped code. What
+the toolchain copies into the file is different: a statically linked library,
+or a runtime the linker adds, ships, so it is `contains`.
+
+*Everything else your environments provide* is a known input that needs a
+disposition. Every tool, task and build your Spec declares, a linter or test
+runner in a development shell included, must be listed in `inputs`, with the
+component it became or a reason it is excluded, such as "development only;
+does not reach the file". Nothing vanishes silently, and nothing that does
+not ship is listed as if it did. Listing every development tool as a
+component would make scanners report vulnerabilities in software your users
+never receive.
+
+*How the file was built* is provenance, not composition. A build attestation
+(such as SLSA provenance, or the GitHub attestation Blueprint's own releases
+carry) records which workflow, inputs and environment produced which bytes.
+Publish it beside the SBOM; neither replaces the other.
+
+*The full toolchain closure* — every package in the build environment, and
+what each of those contains — is usually more than a composition lists. Say
+so with an `incomplete` coverage scope, as Blueprint's own release SBOMs do
+for their native and compiler closure. Where a tool can describe that closure
+as an SBOM of its own, it can be imported as an unbound document (see
+<<import-inert-verified-upstream-graphs>>).
+
+*An SBOM of a development environment itself*, such as for an internal audit
+of the tools developers and CI run, is a separate document about that
+environment. Keep it out of the SBOMs you deliver.
+
 == Assign the knowledge to its owner
 
 Blueprint collects resolved identities and build relationships and emits the
@@ -409,10 +447,12 @@ The compiler pin matches `blueprint compiler-version` for that release.
 roc run <immutable-tool-bundle-url> -- inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
 roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary
 roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx-2.3.json --spdx-2.3
+roc run <immutable-tool-bundle-url> -- check --inventory inventory.json --artifacts dist dist/my-binary.spdx.json dist/my-binary.cdx.json dist/my-binary.spdx-2.3.json
 ----
 
 The first `bind` writes `dist/my-binary.spdx.json` and `dist/my-binary.cdx.json`;
-the second adds the SPDX 2.3 rendering. See <<bind-the-final-bytes-separately>>.
+the second adds the SPDX 2.3 rendering, and `check` checks all three. See
+<<bind-the-final-bytes-separately>>.
 
 No Blueprint project is required; even an unrelated invalid `Blueprint.roc`
 in the working directory is ignored. Supply the already evaluated Spec and
@@ -723,8 +763,7 @@ nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json di
 ----
 
 Bind every format from the same inventory, subject and context: they are then
-renderings of one document, and `scripts/check_sbom.roc` requires them to
-agree (see <<read-the-cyclonedx-rendering>>).
+renderings of one document, and `check` requires them to agree (see <<read-the-cyclonedx-rendering>>).
 
 `subject.json` contains `filename`, `version`, `target`, `sha256` and `url`.
 An empty SHA-256 asks the binder to compute it; a supplied digest must match.
@@ -833,7 +872,8 @@ they do not claim all resolved crates ship in every target. Unknown license
 and optimized native/compiler closure scopes retain explicit gaps.
 
 Every release subject has all three sidecars: `.spdx.json`, `.spdx-2.3.json`
-and `.cdx.json`. `scripts/check_sbom.roc` checks them offline before the
+and `.cdx.json`. `scripts/check_sbom.roc` runs the same checks as the tool's
+`check`, plus checks against this repository's release authorities, offline before the
 release job gathers them into the same tested asset set: each must be valid
 SPDX or CycloneDX of its version, meet the profile, describe the actual
 artifact bytes, account for the release's observed inputs, and state the same

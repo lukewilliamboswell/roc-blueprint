@@ -80,6 +80,15 @@ cases! = |tool, fixtures, work| {
 	}
 	call!(base, False)?
 	call!(base.concat(["new.cdx.json", "--cyclonedx"]), True)?
+	# The tool checks what it bound: profile, artifact bytes, inventory, and one
+	# graph across formats; a tampered sidecar does not pass.
+	call!(["check", "--artifacts", ".", "--inventory", "inventory.json", "sample-artifact.spdx.json", "sample-artifact.cdx.json", "new.spdx-2.3.json"], True)?
+	Path.write_utf8!(Path.utf8("${work}/tampered.cdx.json"), bom.replace_each("\"scope\":\"excluded\"", "\"scope\":\"required\""))?
+	if !bom.contains("\"scope\":\"excluded\"") {
+		return Script.fail!("the bound CycloneDX sidecar has no build-only component to tamper with")
+	}
+	call!(["check", "tampered.cdx.json"], False)?
+	call!(["check", "--artifacts", "nested", "sample-artifact.spdx.json"], False)?
 	if Path.read_utf8!(Path.utf8("${work}/new.cdx.json"))? != bom {
 		return Script.fail!("the default CycloneDX sidecar differs from an explicit one")
 	}

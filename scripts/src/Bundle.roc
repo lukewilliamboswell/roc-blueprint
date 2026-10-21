@@ -417,7 +417,12 @@ bundle_sbom! = |root, paths, core_server, release, core, cache| {
 			_ => return Script.fail!("SBOM app bundle did not report an outcome")
 		}
 	}
-	_ = Process.succeed!(Process.command("roc-stable", ["scripts/check_sbom.roc", "--inventory", "${workspace}/inventory.json", "--artifacts", workspace, "${workspace}/sample-artifact.spdx.json", "${workspace}/sample-artifact.spdx-2.3.json", "${workspace}/sample-artifact.cdx.json"], root))?
+	# The released app checks its own sidecars, with nothing from this checkout.
+	checked = server.drive!([invoke(["check", "--inventory", "inventory.json", "--artifacts", ".", "sample-artifact.spdx.json", "sample-artifact.spdx-2.3.json", "sample-artifact.cdx.json"])])?
+	match checked {
+		[outcome] => Process.check!(outcome.code == 0, "SBOM app check failed: ${outcome.stdout}${outcome.stderr}")?
+		_ => return Script.fail!("SBOM app check did not report an outcome")
+	}
 	Script.pass!("released SBOM app inspected/bound inputs without project evaluation; SPDX 3.0.1, SPDX 2.3 and CycloneDX sidecars and exact artifact verified")?
 	Ok(name)
 }
