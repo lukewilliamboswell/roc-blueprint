@@ -77,6 +77,13 @@ Provider-specific details are namespaced, such as
 `metadata.nix.fetchTree`; the common report does not require every provider
 to use Nix retrieval recipes or tree identities.
 
+Pure Roc consumers can import `LockSnapshot` from the existing core bundle:
+its bounded typed decoder, pure projection and encoder share the CLI's report
+model. It preserves unknown provider metadata, null and exact numeric lexemes.
+The bundle includes the versioned JSON Schema; the published consumer example
+is tested with both this release's compiler and the script compiler. See
+xref:lock-snapshot.adoc#consume-lock-inspection-in-roc[the library contract].
+
 An entry's identity stays the same when an unrelated source, fetched program
 or task changes. Relative local sources retain their tree identity and have
 no portable `fetchTree` recipe. Fetched-program identities remain distinct

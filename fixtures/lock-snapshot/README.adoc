@@ -1,0 +1,91 @@
+= Official pure lock-report consumer
+
+This example uses `core.LockSnapshot` from the existing `roc-blueprint-core`
+package. `Checks.roc` contains pure policy helpers; `main.roc` supplies bounded
+file reads and stdout. `pure.roc` is a platform-free test entry point. The
+release-bundle smoke imports these unchanged pure checks from the actual core
+archive with both supported compiler pins and independent empty caches.
+
+Read the manual's
+https://lukewilliamboswell.github.io/roc-blueprint/#choose-the-authority-or-its-public-projection[authority-versus-projection rationale]
+when choosing an interface: `core.Lock` reads stable authoritative
+S-expressions directly, while this optional JSON view shares public projected
+identities and metadata across Roc, Python, `jq`, Nix and other tools.
+
+== Run from a Blueprint checkout
+
+Run these commands at the repository root. Use product compiler
+`nightly-2026-10-18-1df370f` as `roc`; the pure consumer is also tested with
+script compiler `nightly-2026-10-13-b17d287`. The compiler may prepare its
+pinned basic-cli dependency; the pure functions perform no I/O.
+
+[source,sh]
+----
+mkdir -p .cache/lock-snapshot
+roc build fixtures/lock-snapshot/main.roc --output=.cache/lock-snapshot/consumer
+BLUEPRINT_ROOT=/absolute/path/to/project blueprint lock show --json > lock-export.json
+.cache/lock-snapshot/consumer lock-export.json > lock-roundtrip.json
+roc test fixtures/lock-snapshot/pure.roc
+----
+
+Replace `/absolute/path/to/project` with a project containing a committed
+`Blueprint.lock`, and use a Blueprint version that emits report format 1.
+The lock export does not evaluate `Blueprint.roc`, run providers or fetch.
+The executable accepts exactly one file argument, validates and re-encodes the
+snapshot, then writes JSON. Invalid input exits unsuccessfully. No arguments
+emits illustrative test data; more than one argument exits unsuccessfully.
+It does not implement a command-line pin check or dependency comparison.
+
+== Use the pure policy helpers
+
+The checked expectations at the bottom of `Checks.roc` exercise these calls:
+
+[source,roc]
+----
+expect Checks.pin_matches(Checks.example, "roc-stable", "x86_64-linux", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+expect Checks.same_source(Checks.example, Checks.example, "nix") == Ok(True)
+expect Checks.fetch_attributes(Checks.example, "nix").is_ok()
+----
+
+In your own app, first parse a saved export with
+`LockSnapshot.parse_json(text)`, then pass the resulting snapshot to
+`Checks.pin_matches(snapshot, name, system, expected_sha256)`. Supply your
+reviewed expected digest; the all-`a` example digest is test data.
+For two parsed exports, `Checks.same_source(before, after, name)` compares
+opaque provider-qualified identities and returns a typed missing-source error.
+`Checks.fetch_attributes` explicitly selects Nix metadata as inert JSON; it
+performs no evaluation or fetch. Decide at your outer I/O boundary whether a
+mismatch, missing entry or malformed report should fail your hook or command.
+
+== Pin the official release bundle downstream
+
+Copy `main.roc` and `Checks.roc` to the same directory in your downstream
+project. In `main.roc`, replace only the local `core` dependency with the
+complete published core asset URL from your selected Blueprint release:
+
+[source,text]
+----
+core: "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.7.0/roc-blueprint-core-<content-hash>.tar.zst",
+----
+
+`<content-hash>` is a placeholder, not a published asset name. Get the exact
+`roc-blueprint-core-*.tar.zst` URL from the release's assets once that release
+is published; do not use a branch URL or the configuration-platform bundle.
+Keep the basic-cli platform dependency pinned as in the checked example, and
+pin a compatible compiler in your own toolchain. The Blueprint executable's
+embedded compiler is not a standalone compiler for your app.
+
+In that directory, after replacing the URL:
+
+[source,sh]
+----
+roc test main.roc
+roc build main.roc --output=lock-inspect
+./lock-inspect /absolute/path/to/lock-export.json
+----
+
+The compiled consumer needs neither Roc nor Nix at runtime. Treat exported
+reports as inspection data, not authoritative lock state or authenticated
+provenance. Selected-name reports may omit entries. See the manual's
+https://lukewilliamboswell.github.io/roc-blueprint/#consume-lock-inspection-in-roc[lock inspection chapter]
+for format compatibility, exact-number metadata, errors and resource bounds.
