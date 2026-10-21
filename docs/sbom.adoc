@@ -127,6 +127,65 @@ CycloneDX it is the `metadata.component`.
 Do not edit one rendering by hand. Change the inventory and bind again, so
 every format stays the same.
 
+[#what-each-format-can-say]
+=== What each format can say
+
+All three files are rendered from one inventory, so they share the same
+identities, relationships, coverage and subject. Each format spells them
+differently, and CycloneDX cannot spell all of them in its standard fields.
+
+[cols="2,2,2,2",options="header"]
+|===
+| Information | SPDX 3.0.1 | SPDX 2.3 | CycloneDX 1.7
+
+| Delivered file, its version and SHA-256 | Root `software_Package` with a `Hash` | Package named by `DESCRIBES`, with a checksum | `metadata.component` with `hashes`
+
+| Component identity | `NAMESPACE#name`; purl as `software_packageUrl` | `SPDXRef-name`; purl as an external reference | `bom-ref` and `purl`; the full identity as a `blueprint:identity` property
+
+| Archive or file SHA-256 | `verifiedUsing` | `checksums` | `hashes`
+
+| Supplier | `suppliedBy` an agent | `supplier` | `supplier` (organization) or `authors` (person)
+
+| Declared license, including `NOASSERTION` and `NONE` | `hasDeclaredLicense`, with named individuals for both | `licenseDeclared` | `licenses` expression; `NOASSERTION` is omitted and `NONE` is a `blueprint:license` property
+
+| Shipped code (`contains`) | `contains` | `CONTAINS` | a dependency, and `scope` `required`
+
+| Build, test and development tools | `dependsOn` with a lifecycle scope | `BUILD_DEPENDENCY_OF` and its siblings | a dependency, and `scope` `excluded`
+
+| `generates`, `patchedBy`, `hasVariant`, `copiedTo`, `other` | the same relationship types | `GENERATES`, `PATCH_FOR`, `VARIANT_OF`, `COPY_OF`, `OTHER` | `blueprint:relationship` properties only
+
+| Coverage, input dispositions and reasons | an `Annotation` | an `OTHER` annotation | a `blueprint:evidence` property
+|===
+
+Where CycloneDX loses meaning:
+
+* *A dependency is not containment.* CycloneDX `dependencies` say only that
+  one component needs another. Read `scope` to tell shipped code from tools:
+  `required` is reached through shipped or run-time edges, `excluded` is only
+  a build, test or development dependency, and `optional` is anything else,
+  such as an unresolved resolution candidate.
+* *Scope belongs to a component, not to an edge.* A component that is a
+  build tool for one part and shipped by another is `required`. The
+  per-edge scopes are in the `blueprint:relationship` properties.
+* *Some relationship types have no CycloneDX field.* They stay only in
+  `blueprint:` properties, which standard CycloneDX tools ignore.
+
+Nothing is changed silently. Blueprint reads its own CycloneDX back from the
+`blueprint:` properties, and `scripts/check_sbom.roc` refuses a BOM whose
+standard dependencies or scopes disagree with them, or whose graph differs
+from the SPDX renderings of the same document. The checks compare
+identities, relationships, coverage and subjects, not bytes.
+
+What no format claims:
+
+* A tree or NAR digest of a source is its identity, not the SHA-256 of an
+  archive or file. It appears in the component's identity, never as a hash.
+* A Lock alone does not establish what an artifact contains. Composition
+  comes from the reviewed composition, and unknown parts are recorded as
+  `incomplete` coverage rather than left out.
+* `blueprint lock show --json` reports committed pins for scripts. It is not
+  an SBOM, and it does not show that a build happened or what it contains.
+
 [#publish-an-sbom]
 == From a project to published sidecars
 

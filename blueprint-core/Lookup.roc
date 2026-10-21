@@ -1,9 +1,10 @@
 import Project
 
 ## Values by text key, sorted for binary search: the identifier indexes of the
-## SPDX validators and reader. It stands in for a `Dict`, whose lookups missed
-## keys just inserted in a bundled app under `roc run` on x86_64 Linux with
-## nightly-2026-10-18-1df370f.
+## SPDX validators and reader. It stands in for a `Dict`: in the bundled SBOM
+## app, `roc run` reusing cached dev-backend objects for these modules made
+## `Dict.contains` miss keys just inserted (nightly-2026-10-18-1df370f and
+## nightly-2026-10-20-7a8a800, on Linux and macOS alike).
 Lookup := [].{
 	Entry(v) : { key : Str, value : v }
 

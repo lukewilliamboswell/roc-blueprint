@@ -434,6 +434,7 @@ expect {
 }
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each(",\"compiler\"]", "]")).is_err()
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("blueprint:namespace", "other:namespace")).is_err()
+expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"scope\":\"excluded\"", "\"scope\":\"required\"")).is_err()
 expect Sbom.read(fixture_native_linux_cdx).is_err()
 
 # The CycloneDX validator follows the vendored, digest-pinned 1.7 schema.

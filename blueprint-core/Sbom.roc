@@ -320,7 +320,7 @@ Sbom := [].{
 
 	## The package graph of a CycloneDX BOM that `render_cyclonedx` wrote,
 	## after checking it against CycloneDX 1.7 and checking that its
-	## dependencies are what its relationships state. A BOM without the
+	## dependencies and scopes are what its relationships state. A BOM without the
 	## `blueprint:` properties is not one of these and is refused.
 	read_cyclonedx : Str -> Try(Document, Str)
 	read_cyclonedx = |text| {
@@ -1091,6 +1091,15 @@ read_bom = |tree| {
 	}
 	if listed(tree, "dependencies").len() != ids.len() {
 		return Err("every component needs a dependency entry")
+	}
+	# The standard fields must say what the relationships say, so a reader of
+	# plain CycloneDX learns the same thing this reader does.
+	required = shipped($edges)
+	for component in listed(tree, "components") {
+		ref = field_text(component, "bom-ref")
+		if field_text(component, "scope") != cyclonedx_scope($edges, required, ref) {
+			return Err("the scope of ${ref} differs from its relationships")
+		}
 	}
 	Ok({ version: "${CycloneDx.format}-${CycloneDx.version}", namespace: only(metadata, "blueprint:namespace")?, name: subject_package.name, roots: [subject_id], packages_: $found, relationships: $edges, evidence: values(metadata, "blueprint:evidence") })
 }
