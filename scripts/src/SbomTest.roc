@@ -1,7 +1,7 @@
 import core.Spec
 import core.Lock
 import core.Project
-import core.JsonTree
+import core.JsonData
 import core.Sbom
 import core.Spdx2
 import core.Spdx3
@@ -399,11 +399,11 @@ expect Crypto.SHA256.hash(schema_2.to_utf8()).to_hex() == "4126dc29f15e92feec92e
 
 sorted = |values| values.sort_with(Project.bytewise)
 
-enumeration : JsonTree -> List(Str)
-enumeration = |tree| ((tree.field("enum") ?? JsonTree.Array([])).items() ?? []).map(|value| value.text() ?? "")
+enumeration : JsonData -> List(Str)
+enumeration = |tree| ((tree.field("enum") ?? JsonData.Array([])).array() ?? []).map(|value| value.string() ?? "")
 
-definitions_3 : JsonTree
-definitions_3 = (JsonTree.parse(schema_3) ?? crash "schema is not JSON").field("$defs") ?? crash "schema has no $defs"
+definitions_3 : JsonData
+definitions_3 = (JsonData.decode_with(schema_3, { ..JsonData.documents, duplicates: CollapseIdentical }) ?? crash "schema is not JSON").field("$defs") ?? crash "schema has no $defs"
 
 ## The properties a 3.0.1 class has, through its `_props` chain of `allOf`.
 schema_properties : Str -> List(Str)
@@ -413,14 +413,14 @@ schema_properties = |definition| {
 	while !$pending.is_empty() {
 		name = $pending.first() ?? ""
 		$pending = $pending.drop_first(1)
-		parts = ((definitions_3.field(name) ?? JsonTree.Null).field("allOf") ?? JsonTree.Array([])).items() ?? []
+		parts = ((definitions_3.field(name) ?? JsonData.Null).field("allOf") ?? JsonData.Array([])).array() ?? []
 		for part in parts {
 			match part.field("$ref") {
-				Ok(Text(reference)) => {
+				Ok(String(reference)) => {
 					$pending = $pending.append(reference.drop_prefix("#/$defs/"))
 				}
 				_ => {
-					$found = $found.concat((part.field("properties") ?? JsonTree.Null).keys())
+					$found = $found.concat((part.field("properties") ?? JsonData.Null).keys())
 				}
 			}
 		}
@@ -428,21 +428,21 @@ schema_properties = |definition| {
 	$found
 }
 
-expect Spdx3.vocabularies.all(|vocabulary| sorted(enumeration(definitions_3.field(vocabulary.definition) ?? JsonTree.Null)) == sorted(vocabulary.values))
+expect Spdx3.vocabularies.all(|vocabulary| sorted(enumeration(definitions_3.field(vocabulary.definition) ?? JsonData.Null)) == sorted(vocabulary.values))
 expect Spdx3.classes.all(|class| definitions_3.field(class.name).is_ok() and class.properties.all(|property| schema_properties("${class.name}_props").contains(property)))
 
 ## The schema object at `path` through `properties` and `items`.
-at_2 : List(Str) -> JsonTree
+at_2 : List(Str) -> JsonData
 at_2 = |path| path.fold(
-	JsonTree.parse(schema_2) ?? crash "schema is not JSON",
+	JsonData.decode_with(schema_2, JsonData.documents) ?? crash "schema is not JSON",
 	|node, step| {
-		child = (node.field("properties") ?? JsonTree.Null).field(step) ?? JsonTree.Null
+		child = (node.field("properties") ?? JsonData.Null).field(step) ?? JsonData.Null
 		child.field("items") ?? child
 	},
 )
 
 expect Spdx2.vocabularies.all(|vocabulary| sorted(enumeration(at_2(vocabulary.path))) == sorted(vocabulary.values))
-expect Spdx2.objects.all(|object| sorted((at_2(object.path).field("properties") ?? JsonTree.Null).keys()) == sorted(object.members))
+expect Spdx2.objects.all(|object| sorted((at_2(object.path).field("properties") ?? JsonData.Null).keys()) == sorted(object.members))
 
 # CycloneDX carries the same graph: Blueprint reads its own BOM back to the
 # package graph either SPDX rendering states, and a consumer that reads only
@@ -455,16 +455,16 @@ expect SbomTest.cases.all(
 	},
 )
 expect {
-	bom = JsonTree.parse(fixture_native_linux_cdx) ?? crash "fixture"
-	components = (bom.field("components") ?? JsonTree.Null).items() ?? []
-	scope = |ref| components.find_first(|entry| entry.field("bom-ref") == Ok(JsonTree.Text(ref))).map_ok(|entry| (entry.field("scope") ?? JsonTree.Null).text() ?? "") ?? ""
+	bom = JsonData.decode_with(fixture_native_linux_cdx, JsonData.documents) ?? crash "fixture"
+	components = (bom.field("components") ?? JsonData.Null).array() ?? []
+	scope = |ref| components.find_first(|entry| entry.field("bom-ref") == Ok(JsonData.String(ref))).map_ok(|entry| (entry.field("scope") ?? JsonData.Null).string() ?? "") ?? ""
 	scope("native") == "required" and scope("platform") == "required" and scope("restricted") == "required" and scope("compiler") == "excluded"
 }
 expect {
-	bom = JsonTree.parse(fixture_native_linux_cdx) ?? crash "fixture"
-	serial = (bom.field("serialNumber") ?? JsonTree.Null).text() ?? ""
-	other = JsonTree.parse(fixture_verified_empty_cdx) ?? crash "fixture"
-	serial.starts_with("urn:uuid:") and serial.to_utf8().get(23) == Ok('8') and other.field("serialNumber") != bom.field("serialNumber") and bom.field("version") == Ok(JsonTree.Num(1))
+	bom = JsonData.decode_with(fixture_native_linux_cdx, JsonData.documents) ?? crash "fixture"
+	serial = (bom.field("serialNumber") ?? JsonData.Null).string() ?? ""
+	other = JsonData.decode_with(fixture_verified_empty_cdx, JsonData.documents) ?? crash "fixture"
+	serial.starts_with("urn:uuid:") and serial.to_utf8().get(23) == Ok('8') and other.field("serialNumber") != bom.field("serialNumber") and bom.field("version") == Ok(JsonData.Number("1"))
 }
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each(",\"compiler\"]", "]")).is_err()
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("blueprint:namespace", "other:namespace")).is_err()
@@ -474,25 +474,25 @@ expect Sbom.read(fixture_native_linux_cdx) == Sbom.read_cyclonedx(fixture_native
 # The CycloneDX validator follows the vendored, digest-pinned 1.7 schema.
 expect Crypto.SHA256.hash(schema_cdx.to_utf8()).to_hex() == "73308edec3ab2d38bfffd993e96a042b594314143b6971a6e9ed98bbb6bd76ce"
 
-definitions_cdx : JsonTree
-definitions_cdx = (JsonTree.parse(schema_cdx) ?? crash "schema is not JSON").field("definitions") ?? crash "schema has no definitions"
+definitions_cdx : JsonData
+definitions_cdx = (JsonData.decode_with(schema_cdx, JsonData.documents) ?? crash "schema is not JSON").field("definitions") ?? crash "schema has no definitions"
 
-at_cdx : List(Str) -> JsonTree
+at_cdx : List(Str) -> JsonData
 at_cdx = |path|
 	match path {
 		[definition, .. as rest] => rest.fold(
-			definitions_cdx.field(definition) ?? JsonTree.Null,
+			definitions_cdx.field(definition) ?? JsonData.Null,
 			|node, step| {
-				child = (node.field("properties") ?? JsonTree.Null).field(step) ?? JsonTree.Null
+				child = (node.field("properties") ?? JsonData.Null).field(step) ?? JsonData.Null
 				child.field("items") ?? child
 			},
 		)
-		[] => JsonTree.Null
+		[] => JsonData.Null
 	}
 
 expect CycloneDx.vocabularies.all(|vocabulary| sorted(enumeration(at_cdx(vocabulary.path))) == sorted(vocabulary.values))
-expect CycloneDx.objects.all(|object| object.members.all(|name| (at_cdx([object.definition]).field("properties") ?? JsonTree.Null).keys().contains(name)))
-expect CycloneDx.objects.all(|object| sorted((at_cdx([object.definition]).field("properties") ?? JsonTree.Null).keys()) == sorted(object.members))
+expect CycloneDx.objects.all(|object| object.members.all(|name| (at_cdx([object.definition]).field("properties") ?? JsonData.Null).keys().contains(name)))
+expect CycloneDx.objects.all(|object| sorted((at_cdx([object.definition]).field("properties") ?? JsonData.Null).keys()) == sorted(object.members))
 
 # What real generators publish imports: Syft and Trivy, in CycloneDX and SPDX.
 # What the profile cannot carry is counted in the document's gaps and stated

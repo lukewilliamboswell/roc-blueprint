@@ -6,7 +6,7 @@ app [target] {
 
 import pf.Fuzz
 import core.CycloneDx
-import core.JsonTree
+import core.JsonData
 import core.Sbom
 import core.Spdx3
 
@@ -42,11 +42,11 @@ test = |input| {
 		Ok(text) => text
 		Err(problem) => crash "render_spdx2 refused what render accepted: ${problem}"
 	}
-	tree = match JsonTree.parse(three) {
+	tree = match JsonData.decode_with(three, JsonData.documents) {
 		Ok(parsed) => parsed
-		Err(problem) => crash "SPDX 3.0.1 rendering is not JSON: ${problem}"
+		Err(problem) => crash "SPDX 3.0.1 rendering is not JSON: ${JsonData.message(problem)}"
 	}
-	if "${tree.to_str()}\n" != three {
+	if "${encoded(tree)}\n" != three {
 		crash "SPDX 3.0.1 rendering is not canonical JSON"
 	}
 	match Spdx3.check(tree) {
@@ -64,11 +64,11 @@ test = |input| {
 		Ok(text) => text
 		Err(problem) => crash "render_cyclonedx refused what render accepted: ${problem}"
 	}
-	bom = match JsonTree.parse(bom_text) {
+	bom = match JsonData.decode_with(bom_text, JsonData.documents) {
 		Ok(parsed) => parsed
-		Err(problem) => crash "CycloneDX rendering is not JSON: ${problem}"
+		Err(problem) => crash "CycloneDX rendering is not JSON: ${JsonData.message(problem)}"
 	}
-	if "${bom.to_str()}\n" != bom_text {
+	if "${encoded(bom)}\n" != bom_text {
 		crash "CycloneDX rendering is not canonical JSON"
 	}
 	match CycloneDx.check(bom) {
@@ -84,18 +84,18 @@ test = |input| {
 	# A consumer of plain CycloneDX, without Blueprint's properties, imports
 	# what the projection below says, and nothing else.
 	plain = strip_properties(bom)
-	if Sbom.read(plain.to_str()) != Ok(projected(inventory, subject, (bom.field("serialNumber") ?? JsonTree.Null).text() ?? "")) {
-		crash "plain CycloneDX imports differently:\n${Str.inspect(Sbom.read(plain.to_str()))}\n${Str.inspect(projected(inventory, subject, (bom.field("serialNumber") ?? JsonTree.Null).text() ?? ""))}"
+	if Sbom.read(encoded(plain)) != Ok(projected(inventory, subject, (bom.field("serialNumber") ?? JsonData.Null).string() ?? "")) {
+		crash "plain CycloneDX imports differently:\n${Str.inspect(Sbom.read(encoded(plain)))}\n${Str.inspect(projected(inventory, subject, (bom.field("serialNumber") ?? JsonData.Null).string() ?? ""))}"
 	}
 	# Files beside the packages, as generators write them, change nothing in
 	# the package graph and are counted in its gaps.
 	with_file_3 = add_file_3(tree, context.namespace)
-	if Sbom.read(with_file_3.to_str()) != Ok({ ..wanted, gaps: ["1 × file", "1 × relationship to an element that is not a package"] }) {
-		crash "SPDX 3.0.1 with a file reads differently: ${Str.inspect(Sbom.read(with_file_3.to_str()))}"
+	if Sbom.read(encoded(with_file_3)) != Ok({ ..wanted, gaps: ["1 × file", "1 × relationship to an element that is not a package"] }) {
+		crash "SPDX 3.0.1 with a file reads differently: ${Str.inspect(Sbom.read(encoded(with_file_3)))}"
 	}
-	two_tree = JsonTree.parse(two) ?? crash "SPDX 2.3 rendering is not JSON"
-	if Sbom.read(add_file_2(two_tree).to_str()) != Ok({ ..wanted, version: "SPDX-2.3", gaps: ["1 × file", "1 × relationship to a file or snippet"] }) {
-		crash "SPDX 2.3 with a file reads differently: ${Str.inspect(Sbom.read(add_file_2(two_tree).to_str()))}"
+	two_tree = JsonData.decode_with(two, JsonData.documents) ?? crash "SPDX 2.3 rendering is not JSON"
+	if Sbom.read(encoded(add_file_2(two_tree))) != Ok({ ..wanted, version: "SPDX-2.3", gaps: ["1 × file", "1 × relationship to a file or snippet"] }) {
+		crash "SPDX 2.3 with a file reads differently: ${Str.inspect(Sbom.read(encoded(add_file_2(two_tree))))}"
 	}
 	bom_violation = bom_violations.get(input.bom_violation.to_u64() % bom_violations.len()) ?? crash "no violations"
 	match (bom_violation.apply)(bom, input.pick) {
@@ -180,11 +180,11 @@ standard = |inventory, subject| {
 
 ## A BOM with every `properties` member removed, as a plain CycloneDX
 ## consumer that ignores them sees it.
-strip_properties : JsonTree -> JsonTree
+strip_properties : JsonData -> JsonData
 strip_properties = |tree|
 	match tree {
-		Object(members) => JsonTree.Object(members.drop_if(|entry| entry.key == "properties").map(|entry| { key: entry.key, value: strip_properties(entry.value) }))
-		Array(items) => JsonTree.Array(items.map(strip_properties))
+		Object(members) => JsonData.Object(members.drop_if(|entry| entry.name == "properties").map(|entry| { name: entry.name, value: strip_properties(entry.value) }))
+		Array(items) => JsonData.Array(items.map(strip_properties))
 		_ => tree
 	}
 
@@ -245,33 +245,33 @@ projected = |inventory, subject, serial| {
 
 ## An SPDX 3.0.1 rendering with a file in its graph and a relationship from
 ## the subject to it.
-add_file_3 : JsonTree, Str -> JsonTree
+add_file_3 : JsonData, Str -> JsonData
 add_file_3 = |tree, namespace| {
 	objects = graph(tree)
-	file = JsonTree.Object([{ key: "type", value: JsonTree.Text("software_File") }, { key: "spdxId", value: JsonTree.Text("${namespace}#spdx/file/added") }, { key: "creationInfo", value: JsonTree.Text("_:creationinfo") }, { key: "name", value: JsonTree.Text("./README") }])
-	relation = JsonTree.Object([{ key: "type", value: JsonTree.Text("Relationship") }, { key: "spdxId", value: JsonTree.Text("${namespace}#spdx/relationship/added") }, { key: "creationInfo", value: JsonTree.Text("_:creationinfo") }, { key: "from", value: JsonTree.Text("${namespace}#Subject") }, { key: "relationshipType", value: JsonTree.Text("contains") }, { key: "to", value: JsonTree.Array([JsonTree.Text("${namespace}#spdx/file/added")]) }])
+	file = JsonData.Object([{ name: "type", value: JsonData.String("software_File") }, { name: "spdxId", value: JsonData.String("${namespace}#spdx/file/added") }, { name: "creationInfo", value: JsonData.String("_:creationinfo") }, { name: "name", value: JsonData.String("./README") }])
+	relation = JsonData.Object([{ name: "type", value: JsonData.String("Relationship") }, { name: "spdxId", value: JsonData.String("${namespace}#spdx/relationship/added") }, { name: "creationInfo", value: JsonData.String("_:creationinfo") }, { name: "from", value: JsonData.String("${namespace}#Subject") }, { name: "relationshipType", value: JsonData.String("contains") }, { name: "to", value: JsonData.Array([JsonData.String("${namespace}#spdx/file/added")]) }])
 	with_graph(tree, objects.concat([file, relation]))
 }
 
 ## An SPDX 2.3 rendering with a file and the subject's CONTAINS of it.
-add_file_2 : JsonTree -> JsonTree
+add_file_2 : JsonData -> JsonData
 add_file_2 = |tree| {
-	file = JsonTree.Object([{ key: "SPDXID", value: JsonTree.Text("SPDXRef-File-added") }, { key: "fileName", value: JsonTree.Text("./README") }, { key: "checksums", value: JsonTree.Array([JsonTree.Object([{ key: "algorithm", value: JsonTree.Text("SHA1") }, { key: "checksumValue", value: JsonTree.Text(Str.join_with(List.repeat("b", 40), "")) }])]) }])
-	relation = JsonTree.Object([{ key: "spdxElementId", value: JsonTree.Text("SPDXRef-Subject") }, { key: "relatedSpdxElement", value: JsonTree.Text("SPDXRef-File-added") }, { key: "relationshipType", value: JsonTree.Text("CONTAINS") }])
-	with_files = set(tree, "files", JsonTree.Array([file]))
-	set(with_files, "relationships", JsonTree.Array(((tree.field("relationships") ?? JsonTree.Array([])).items() ?? []).append(relation)))
+	file = JsonData.Object([{ name: "SPDXID", value: JsonData.String("SPDXRef-File-added") }, { name: "fileName", value: JsonData.String("./README") }, { name: "checksums", value: JsonData.Array([JsonData.Object([{ name: "algorithm", value: JsonData.String("SHA1") }, { name: "checksumValue", value: JsonData.String(Str.join_with(List.repeat("b", 40), "")) }])]) }])
+	relation = JsonData.Object([{ name: "spdxElementId", value: JsonData.String("SPDXRef-Subject") }, { name: "relatedSpdxElement", value: JsonData.String("SPDXRef-File-added") }, { name: "relationshipType", value: JsonData.String("CONTAINS") }])
+	with_files = set(tree, "files", JsonData.Array([file]))
+	set(with_files, "relationships", JsonData.Array(((tree.field("relationships") ?? JsonData.Array([])).array() ?? []).append(relation)))
 }
 
 ## The same fields read from a BOM with nothing but the CycloneDX schema.
-seen : JsonTree -> Standard
+seen : JsonData -> Standard
 seen = |bom| {
-	text_of = |tree, key| (tree.field(key) ?? JsonTree.Null).text() ?? ""
-	list_of = |tree, key| (tree.field(key) ?? JsonTree.Array([])).items() ?? []
+	text_of = |tree, key| (tree.field(key) ?? JsonData.Null).string() ?? ""
+	list_of = |tree, key| (tree.field(key) ?? JsonData.Array([])).array() ?? []
 	sha = |tree| list_of(tree, "hashes").find_first(|hash| text_of(hash, "alg") == "SHA-256").map_ok(|hash| text_of(hash, "content")) ?? ""
 	dependencies = list_of(bom, "dependencies")
-	depends = |ref| dependencies.find_first(|entry| text_of(entry, "ref") == ref).map_ok(|entry| list_of(entry, "dependsOn").map(|item| item.text() ?? "")) ?? ["<no dependency entry>"]
+	depends = |ref| dependencies.find_first(|entry| text_of(entry, "ref") == ref).map_ok(|entry| list_of(entry, "dependsOn").map(|item| item.string() ?? "")) ?? ["<no dependency entry>"]
 	{
-		subject: sha((bom.field("metadata") ?? JsonTree.Null).field("component") ?? JsonTree.Null),
+		subject: sha((bom.field("metadata") ?? JsonData.Null).field("component") ?? JsonData.Null),
 		components: list_of(bom, "components").map(
 			|entry| {
 				ref: text_of(entry, "bom-ref"),
@@ -398,33 +398,42 @@ composition_of = |input| {
 	}
 }
 
+## A document this target built, as text; it must encode under the rules
+## Blueprint reads documents with.
+encoded : JsonData -> Str
+encoded = |tree|
+	match JsonData.encode_with(tree, JsonData.documents) {
+		Ok(text) => text
+		Err(problem) => crash "a built document does not encode: ${JsonData.message(problem)}"
+	}
+
 ## Violations
 
-Members : List({ key : Str, value : JsonTree })
+Members : List({ name : Str, value : JsonData })
 
 ## The `@graph` objects of a rendering.
-graph : JsonTree -> List(JsonTree)
-graph = |tree| (tree.field("@graph") ?? JsonTree.Array([])).items() ?? []
+graph : JsonData -> List(JsonData)
+graph = |tree| (tree.field("@graph") ?? JsonData.Array([])).array() ?? []
 
-with_graph : JsonTree, List(JsonTree) -> JsonTree
-with_graph = |tree, objects| set(tree, "@graph", JsonTree.Array(objects))
+with_graph : JsonData, List(JsonData) -> JsonData
+with_graph = |tree, objects| set(tree, "@graph", JsonData.Array(objects))
 
-set : JsonTree, Str, JsonTree -> JsonTree
+set : JsonData, Str, JsonData -> JsonData
 set = |tree, key, value|
 	match tree {
-		Object(members) => if (members.any(|entry| entry.key == key)) JsonTree.Object(members.map(|entry| if (entry.key == key) { key, value } else entry)) else JsonTree.Object(members.append({ key, value }))
+		Object(members) => if (members.any(|entry| entry.name == key)) JsonData.Object(members.map(|entry| if (entry.name == key) { name: key, value } else entry)) else JsonData.Object(members.append({ name: key, value }))
 		_ => tree
 	}
 
-remove : JsonTree, Str -> JsonTree
+remove : JsonData, Str -> JsonData
 remove = |tree, key|
 	match tree {
-		Object(members) => JsonTree.Object(members.drop_if(|entry| entry.key == key))
+		Object(members) => JsonData.Object(members.drop_if(|entry| entry.name == key))
 		_ => tree
 	}
 
 ## Change the `pick`th object of `@graph` that `chosen` accepts, if any.
-edit_one : JsonTree, U64, (JsonTree -> Bool), (JsonTree -> JsonTree) -> Try(JsonTree, [NotApplicable])
+edit_one : JsonData, U64, (JsonData -> Bool), (JsonData -> JsonData) -> Try(JsonData, [NotApplicable])
 edit_one = |tree, pick, chosen, change| {
 	objects = graph(tree)
 	count = objects.keep_if(chosen).len()
@@ -445,25 +454,25 @@ edit_one = |tree, pick, chosen, change| {
 	Ok(with_graph(tree, $edited))
 }
 
-of_type : List(Str) -> (JsonTree -> Bool)
-of_type = |types| |object| types.contains((object.field("type") ?? JsonTree.Null).text() ?? "")
+of_type : List(Str) -> (JsonData -> Bool)
+of_type = |types| |object| types.contains((object.field("type") ?? JsonData.Null).string() ?? "")
 
-elements : JsonTree -> Bool
+elements : JsonData -> Bool
 elements = |object| object.field("spdxId").is_ok()
 
 relationships : List(Str)
 relationships = ["Relationship", "LifecycleScopedRelationship"]
 
 ## Each breaks a rule the SPDX 3.0.1 schema or model states.
-violations : List({ name : Str, apply : JsonTree, U64 -> Try(JsonTree, [NotApplicable]) })
+violations : List({ name : Str, apply : JsonData, U64 -> Try(JsonData, [NotApplicable]) })
 violations = [
 	{ name: "an element without creationInfo", apply: |tree, pick| edit_one(tree, pick, elements, |object| remove(object, "creationInfo")) },
-	{ name: "a relationship to an element outside the document", apply: |tree, pick| edit_one(tree, pick, of_type(relationships), |object| set(object, "to", JsonTree.Array([JsonTree.Text("${context.namespace}#missing")]))) },
-	{ name: "a relationship with no target", apply: |tree, pick| edit_one(tree, pick, of_type(relationships), |object| set(object, "to", JsonTree.Array([]))) },
-	{ name: "an SPDX 2 relationship type", apply: |tree, pick| edit_one(tree, pick, of_type(relationships), |object| set(object, "relationshipType", JsonTree.Text("DEPENDS_ON"))) },
+	{ name: "a relationship to an element outside the document", apply: |tree, pick| edit_one(tree, pick, of_type(relationships), |object| set(object, "to", JsonData.Array([JsonData.String("${context.namespace}#missing")]))) },
+	{ name: "a relationship with no target", apply: |tree, pick| edit_one(tree, pick, of_type(relationships), |object| set(object, "to", JsonData.Array([]))) },
+	{ name: "an SPDX 2 relationship type", apply: |tree, pick| edit_one(tree, pick, of_type(relationships), |object| set(object, "relationshipType", JsonData.String("DEPENDS_ON"))) },
 	{ name: "a relationship without relationshipType", apply: |tree, pick| edit_one(tree, pick, of_type(relationships), |object| remove(object, "relationshipType")) },
-	{ name: "an SPDX 2 package property", apply: |tree, pick| edit_one(tree, pick, of_type(["software_Package"]), |object| set(object, "versionInfo", JsonTree.Text("1"))) },
-	{ name: "a single value where an array is required", apply: |tree, pick| edit_one(tree, pick, of_type(relationships), |object| set(object, "to", (object.field("to") ?? JsonTree.Array([])).items().map_ok(|items| items.first() ?? JsonTree.Null) ?? JsonTree.Null)) },
+	{ name: "an SPDX 2 package property", apply: |tree, pick| edit_one(tree, pick, of_type(["software_Package"]), |object| set(object, "versionInfo", JsonData.String("1"))) },
+	{ name: "a single value where an array is required", apply: |tree, pick| edit_one(tree, pick, of_type(relationships), |object| set(object, "to", (object.field("to") ?? JsonData.Array([])).array().map_ok(|items| items.first() ?? JsonData.Null) ?? JsonData.Null)) },
 	{
 		name: "a duplicate spdxId",
 		apply: |tree, pick| {
@@ -474,53 +483,53 @@ violations = [
 			}
 		},
 	},
-	{ name: "a blank-node spdxId", apply: |tree, pick| edit_one(tree, pick, elements, |object| set(object, "spdxId", JsonTree.Text("_:element"))) },
-	{ name: "an unknown class", apply: |tree, pick| edit_one(tree, pick, of_type(["software_Package"]), |object| set(object, "type", JsonTree.Text("software_Packages"))) },
-	{ name: "a 3.0.0 context", apply: |tree, _| Ok(set(tree, "@context", JsonTree.Text("https://spdx.org/rdf/3.0.0/spdx-context.jsonld"))) },
-	{ name: "a member beside @context and @graph", apply: |tree, _| Ok(set(tree, "spdxVersion", JsonTree.Text("SPDX-3.0"))) },
-	{ name: "a specVersion other than 3.0.1", apply: |tree, pick| edit_one(tree, pick, of_type(["CreationInfo"]), |object| set(object, "specVersion", JsonTree.Text("3.0.0"))) },
-	{ name: "an impossible creation date", apply: |tree, pick| edit_one(tree, pick, of_type(["CreationInfo"]), |object| set(object, "created", JsonTree.Text("2026-02-30T00:00:00Z"))) },
-	{ name: "a non-UTC creation date", apply: |tree, pick| edit_one(tree, pick, of_type(["CreationInfo"]), |object| set(object, "created", JsonTree.Text("2026-10-21T00:00:00+01:00"))) },
-	{ name: "a truncated SHA-256", apply: |tree, pick| edit_one(tree, pick, |object| object.field("verifiedUsing").is_ok(), |object| set(object, "verifiedUsing", JsonTree.Array([JsonTree.Object([{ key: "type", value: JsonTree.Text("Hash") }, { key: "algorithm", value: JsonTree.Text("sha256") }, { key: "hashValue", value: JsonTree.Text("abc") }])]))) },
-	{ name: "an invalid license expression", apply: |tree, pick| edit_one(tree, pick, of_type(["simplelicensing_LicenseExpression"]), |object| set(object, "simplelicensing_licenseExpression", JsonTree.Text("MIT OR"))) },
-	{ name: "a license list version that is not SemVer", apply: |tree, pick| edit_one(tree, pick, of_type(["simplelicensing_LicenseExpression"]), |object| set(object, "simplelicensing_licenseListVersion", JsonTree.Text("3.26"))) },
-	{ name: "a declared license that is a package", apply: |tree, pick| edit_one(tree, pick, |object| (object.field("relationshipType") ?? JsonTree.Null) == JsonTree.Text("hasDeclaredLicense"), |object| set(object, "to", JsonTree.Array([object.field("from") ?? JsonTree.Null]))) },
-	{ name: "a supplier that is a package", apply: |tree, pick| edit_one(tree, pick, |object| object.field("suppliedBy").is_ok(), |object| set(object, "suppliedBy", object.field("spdxId") ?? JsonTree.Null)) },
-	{ name: "a lifecycle scope outside the vocabulary", apply: |tree, pick| edit_one(tree, pick, of_type(["LifecycleScopedRelationship"]), |object| set(object, "scope", JsonTree.Text("compile"))) },
-	{ name: "a creationInfo that names no CreationInfo", apply: |tree, pick| edit_one(tree, pick, elements, |object| set(object, "creationInfo", JsonTree.Text("_:elsewhere"))) },
-	{ name: "a number where text is required", apply: |tree, pick| edit_one(tree, pick, of_type(["software_Package"]), |object| set(object, "name", JsonTree.Num(1))) },
+	{ name: "a blank-node spdxId", apply: |tree, pick| edit_one(tree, pick, elements, |object| set(object, "spdxId", JsonData.String("_:element"))) },
+	{ name: "an unknown class", apply: |tree, pick| edit_one(tree, pick, of_type(["software_Package"]), |object| set(object, "type", JsonData.String("software_Packages"))) },
+	{ name: "a 3.0.0 context", apply: |tree, _| Ok(set(tree, "@context", JsonData.String("https://spdx.org/rdf/3.0.0/spdx-context.jsonld"))) },
+	{ name: "a member beside @context and @graph", apply: |tree, _| Ok(set(tree, "spdxVersion", JsonData.String("SPDX-3.0"))) },
+	{ name: "a specVersion other than 3.0.1", apply: |tree, pick| edit_one(tree, pick, of_type(["CreationInfo"]), |object| set(object, "specVersion", JsonData.String("3.0.0"))) },
+	{ name: "an impossible creation date", apply: |tree, pick| edit_one(tree, pick, of_type(["CreationInfo"]), |object| set(object, "created", JsonData.String("2026-02-30T00:00:00Z"))) },
+	{ name: "a non-UTC creation date", apply: |tree, pick| edit_one(tree, pick, of_type(["CreationInfo"]), |object| set(object, "created", JsonData.String("2026-10-21T00:00:00+01:00"))) },
+	{ name: "a truncated SHA-256", apply: |tree, pick| edit_one(tree, pick, |object| object.field("verifiedUsing").is_ok(), |object| set(object, "verifiedUsing", JsonData.Array([JsonData.Object([{ name: "type", value: JsonData.String("Hash") }, { name: "algorithm", value: JsonData.String("sha256") }, { name: "hashValue", value: JsonData.String("abc") }])]))) },
+	{ name: "an invalid license expression", apply: |tree, pick| edit_one(tree, pick, of_type(["simplelicensing_LicenseExpression"]), |object| set(object, "simplelicensing_licenseExpression", JsonData.String("MIT OR"))) },
+	{ name: "a license list version that is not SemVer", apply: |tree, pick| edit_one(tree, pick, of_type(["simplelicensing_LicenseExpression"]), |object| set(object, "simplelicensing_licenseListVersion", JsonData.String("3.26"))) },
+	{ name: "a declared license that is a package", apply: |tree, pick| edit_one(tree, pick, |object| (object.field("relationshipType") ?? JsonData.Null) == JsonData.String("hasDeclaredLicense"), |object| set(object, "to", JsonData.Array([object.field("from") ?? JsonData.Null]))) },
+	{ name: "a supplier that is a package", apply: |tree, pick| edit_one(tree, pick, |object| object.field("suppliedBy").is_ok(), |object| set(object, "suppliedBy", object.field("spdxId") ?? JsonData.Null)) },
+	{ name: "a lifecycle scope outside the vocabulary", apply: |tree, pick| edit_one(tree, pick, of_type(["LifecycleScopedRelationship"]), |object| set(object, "scope", JsonData.String("compile"))) },
+	{ name: "a creationInfo that names no CreationInfo", apply: |tree, pick| edit_one(tree, pick, elements, |object| set(object, "creationInfo", JsonData.String("_:elsewhere"))) },
+	{ name: "a number where text is required", apply: |tree, pick| edit_one(tree, pick, of_type(["software_Package"]), |object| set(object, "name", JsonData.Number("1"))) },
 ]
 
 ## Each breaks a rule the CycloneDX 1.7 schema or specification states.
-bom_violations : List({ name : Str, apply : JsonTree, U64 -> Try(JsonTree, [NotApplicable]) })
+bom_violations : List({ name : Str, apply : JsonData, U64 -> Try(JsonData, [NotApplicable]) })
 bom_violations = [
-	{ name: "another bomFormat", apply: |bom, _| Ok(set(bom, "bomFormat", JsonTree.Text("SPDX"))) },
-	{ name: "a 1.6 specVersion", apply: |bom, _| Ok(set(bom, "specVersion", JsonTree.Text("1.6"))) },
-	{ name: "a BOM version of 0", apply: |bom, _| Ok(set(bom, "version", JsonTree.Num(0))) },
-	{ name: "a fractional BOM version", apply: |bom, _| Ok(set(bom, "version", JsonTree.Num(1.5))) },
-	{ name: "an uppercase serial number", apply: |bom, _| Ok(set(bom, "serialNumber", JsonTree.Text(((bom.field("serialNumber") ?? JsonTree.Null).text() ?? "").replace_each("a", "A").replace_each("b", "B").replace_each("c", "C").replace_each("d", "D").replace_each("e", "E").replace_each("f", "F").replace_each("8", "F")))) },
-	{ name: "a services section", apply: |bom, _| Ok(set(bom, "services", JsonTree.Array([]))) },
-	{ name: "a timestamp without a zone", apply: |bom, _| Ok(set(bom, "metadata", set(bom.field("metadata") ?? JsonTree.Null, "timestamp", JsonTree.Text("2026-10-21T00:00:00")))) },
-	{ name: "a dependency on an undeclared bom-ref", apply: |bom, pick| edit_list(bom, "dependencies", pick, |_| True, |entry| set(entry, "dependsOn", JsonTree.Array([JsonTree.Text("missing")]))) },
-	{ name: "a dependency entry for an undeclared bom-ref", apply: |bom, pick| edit_list(bom, "dependencies", pick, |_| True, |entry| set(entry, "ref", JsonTree.Text("missing"))) },
-	{ name: "a repeated dependsOn reference", apply: |bom, pick| edit_list(bom, "dependencies", pick, |entry| entry.field("dependsOn").is_ok(), |entry| set(entry, "dependsOn", JsonTree.Array(((entry.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).concat(((entry.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).take_first(1))))) },
-	{ name: "a duplicate bom-ref", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "bom-ref", JsonTree.Text("Subject"))) },
+	{ name: "another bomFormat", apply: |bom, _| Ok(set(bom, "bomFormat", JsonData.String("SPDX"))) },
+	{ name: "a 1.6 specVersion", apply: |bom, _| Ok(set(bom, "specVersion", JsonData.String("1.6"))) },
+	{ name: "a BOM version of 0", apply: |bom, _| Ok(set(bom, "version", JsonData.Number("0"))) },
+	{ name: "a fractional BOM version", apply: |bom, _| Ok(set(bom, "version", JsonData.Number("1.5"))) },
+	{ name: "an uppercase serial number", apply: |bom, _| Ok(set(bom, "serialNumber", JsonData.String(((bom.field("serialNumber") ?? JsonData.Null).string() ?? "").replace_each("a", "A").replace_each("b", "B").replace_each("c", "C").replace_each("d", "D").replace_each("e", "E").replace_each("f", "F").replace_each("8", "F")))) },
+	{ name: "a services section", apply: |bom, _| Ok(set(bom, "services", JsonData.Array([]))) },
+	{ name: "a timestamp without a zone", apply: |bom, _| Ok(set(bom, "metadata", set(bom.field("metadata") ?? JsonData.Null, "timestamp", JsonData.String("2026-10-21T00:00:00")))) },
+	{ name: "a dependency on an undeclared bom-ref", apply: |bom, pick| edit_list(bom, "dependencies", pick, |_| True, |entry| set(entry, "dependsOn", JsonData.Array([JsonData.String("missing")]))) },
+	{ name: "a dependency entry for an undeclared bom-ref", apply: |bom, pick| edit_list(bom, "dependencies", pick, |_| True, |entry| set(entry, "ref", JsonData.String("missing"))) },
+	{ name: "a repeated dependsOn reference", apply: |bom, pick| edit_list(bom, "dependencies", pick, |entry| entry.field("dependsOn").is_ok(), |entry| set(entry, "dependsOn", JsonData.Array(((entry.field("dependsOn") ?? JsonData.Array([])).array() ?? []).concat(((entry.field("dependsOn") ?? JsonData.Array([])).array() ?? []).take_first(1))))) },
+	{ name: "a duplicate bom-ref", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "bom-ref", JsonData.String("Subject"))) },
 	{ name: "a component without a name", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| remove(entry, "name")) },
-	{ name: "a component type outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "type", JsonTree.Text("crate"))) },
-	{ name: "a scope outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "scope", JsonTree.Text("build"))) },
-	{ name: "an unknown component property", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "versionInfo", JsonTree.Text("1"))) },
-	{ name: "a truncated SHA-256", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("hashes").is_ok(), |entry| set(entry, "hashes", JsonTree.Array([JsonTree.Object([{ key: "alg", value: JsonTree.Text("SHA-256") }, { key: "content", value: JsonTree.Text("abc") }])]))) },
-	{ name: "a hash algorithm outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("hashes").is_ok(), |entry| set(entry, "hashes", JsonTree.Array([JsonTree.Object([{ key: "alg", value: JsonTree.Text("SHA256") }, { key: "content", value: JsonTree.Text(Str.join_with(List.repeat("a", 64), "")) }])]))) },
-	{ name: "an invalid license expression", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("licenses").is_ok(), |entry| set(entry, "licenses", JsonTree.Array([JsonTree.Object([{ key: "expression", value: JsonTree.Text("MIT AND") }])]))) },
-	{ name: "a purl without its scheme", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("purl").is_ok(), |entry| set(entry, "purl", JsonTree.Text(((entry.field("purl") ?? JsonTree.Null).text() ?? "").drop_prefix("pkg:")))) },
-	{ name: "an external reference type outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("externalReferences").is_ok(), |entry| set(entry, "externalReferences", JsonTree.Array([JsonTree.Object([{ key: "type", value: JsonTree.Text("download") }, { key: "url", value: JsonTree.Text("https://example.org") }])]))) },
-	{ name: "a property without a name", apply: |bom, _| Ok(set(bom, "properties", JsonTree.Array([JsonTree.Object([{ key: "value", value: JsonTree.Text("v") }])]))) },
+	{ name: "a component type outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "type", JsonData.String("crate"))) },
+	{ name: "a scope outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "scope", JsonData.String("build"))) },
+	{ name: "an unknown component property", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "versionInfo", JsonData.String("1"))) },
+	{ name: "a truncated SHA-256", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("hashes").is_ok(), |entry| set(entry, "hashes", JsonData.Array([JsonData.Object([{ name: "alg", value: JsonData.String("SHA-256") }, { name: "content", value: JsonData.String("abc") }])]))) },
+	{ name: "a hash algorithm outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("hashes").is_ok(), |entry| set(entry, "hashes", JsonData.Array([JsonData.Object([{ name: "alg", value: JsonData.String("SHA256") }, { name: "content", value: JsonData.String(Str.join_with(List.repeat("a", 64), "")) }])]))) },
+	{ name: "an invalid license expression", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("licenses").is_ok(), |entry| set(entry, "licenses", JsonData.Array([JsonData.Object([{ name: "expression", value: JsonData.String("MIT AND") }])]))) },
+	{ name: "a purl without its scheme", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("purl").is_ok(), |entry| set(entry, "purl", JsonData.String(((entry.field("purl") ?? JsonData.Null).string() ?? "").drop_prefix("pkg:")))) },
+	{ name: "an external reference type outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("externalReferences").is_ok(), |entry| set(entry, "externalReferences", JsonData.Array([JsonData.Object([{ name: "type", value: JsonData.String("download") }, { name: "url", value: JsonData.String("https://example.org") }])]))) },
+	{ name: "a property without a name", apply: |bom, _| Ok(set(bom, "properties", JsonData.Array([JsonData.Object([{ name: "value", value: JsonData.String("v") }])]))) },
 ]
 
 ## Change the `pick`th item of the top-level array `key` that `chosen` accepts.
-edit_list : JsonTree, Str, U64, (JsonTree -> Bool), (JsonTree -> JsonTree) -> Try(JsonTree, [NotApplicable])
+edit_list : JsonData, Str, U64, (JsonData -> Bool), (JsonData -> JsonData) -> Try(JsonData, [NotApplicable])
 edit_list = |bom, key, pick, chosen, change| {
-	items = (bom.field(key) ?? JsonTree.Array([])).items() ?? []
+	items = (bom.field(key) ?? JsonData.Array([])).array() ?? []
 	count = items.keep_if(chosen).len()
 	if count == 0 {
 		return Err(NotApplicable)
@@ -536,7 +545,7 @@ edit_list = |bom, key, pick, chosen, change| {
 			$edited = $edited.append(item)
 		}
 	}
-	Ok(set(bom, key, JsonTree.Array($edited)))
+	Ok(set(bom, key, JsonData.Array($edited)))
 }
 
 target = Fuzz.target_with({

@@ -175,7 +175,6 @@
                 ./blueprint-core/SbomLicenses.roc
                 ./blueprint-core/Sidecar.roc
                 ./blueprint-core/CycloneDx.roc
-                ./blueprint-core/JsonTree.roc
                 ./blueprint-core/Lookup.roc
                 ./blueprint-core/Spdx2.roc
                 ./blueprint-core/Spdx3.roc

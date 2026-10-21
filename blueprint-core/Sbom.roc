@@ -2,7 +2,7 @@ import Spec
 import Lock
 import Project
 import CycloneDx
-import JsonTree
+import JsonData
 import Lookup
 import SbomLicenses
 import Spdx2
@@ -323,7 +323,7 @@ Sbom := [].{
 	render : Inventory, Subject, Context -> Try(Str, Str)
 	render = |inventory, subject, context| {
 		bindable(inventory, subject, context)?
-		text = "${spdx3(inventory, subject, context).to_str()}\n"
+		text = "${JsonData.encode_with(spdx3(inventory, subject, context), JsonData.documents).map_err(JsonData.message)?}\n"
 		_ = Spdx3.validate(text).map_err(|problem| "rendered SPDX 3.0.1 is invalid: ${problem}")?
 		no_leaks(text)
 	}
@@ -333,7 +333,7 @@ Sbom := [].{
 	render_spdx2 = |inventory, subject, context| {
 		bindable(inventory, subject, context)?
 		text = spdx2(inventory, subject, context)
-		_ = Spdx2.validate(JsonTree.parse(text)?).map_err(|problem| "rendered SPDX 2.3 is invalid: ${problem}")?
+		_ = Spdx2.validate(JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?).map_err(|problem| "rendered SPDX 2.3 is invalid: ${problem}")?
 		no_leaks(text)
 	}
 
@@ -351,7 +351,7 @@ Sbom := [].{
 	render_cyclonedx : Inventory, Subject, Context -> Try(Str, Str)
 	render_cyclonedx = |inventory, subject, context| {
 		bindable(inventory, subject, context)?
-		text = "${cyclonedx(inventory, subject, context).to_str()}\n"
+		text = "${JsonData.encode_with(cyclonedx(inventory, subject, context), JsonData.documents).map_err(JsonData.message)?}\n"
 		_ = CycloneDx.validate(text).map_err(|problem| "rendered CycloneDX ${CycloneDx.version} is invalid: ${problem}")?
 		no_leaks(text)
 	}
@@ -378,7 +378,7 @@ Sbom := [].{
 		if !json_within_bounds(text) {
 			return Err("SPDX document exceeds 1MiB or nests deeper than 64 levels")
 		}
-		tree = JsonTree.parse(text)?
+		tree = JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?
 		if tree.field("@context").is_ok() {
 			read_spdx3(Spdx3.check(tree)?)
 		} else if tree.field("spdxVersion").is_ok() {
@@ -460,24 +460,24 @@ packages_of = |inventory, subject| inventory.components.map(|component| { id: co
 
 ## SPDX 3.0.1
 
-member : Str, JsonTree -> { key : Str, value : JsonTree }
-member = |key, value| { key, value }
+member : Str, JsonData -> { name : Str, value : JsonData }
+member = |key, value| { name: key, value }
 
-text : Str -> JsonTree
-text = |value| JsonTree.Text(value)
+text : Str -> JsonData
+text = |value| JsonData.String(value)
 
-texts : List(Str) -> JsonTree
-texts = |values| JsonTree.Array(values.map(text))
+texts : List(Str) -> JsonData
+texts = |values| JsonData.Array(values.map(text))
 
 ## The members present when `condition` holds.
-when : Bool, List({ key : Str, value : JsonTree }) -> List({ key : Str, value : JsonTree })
+when : Bool, List({ name : Str, value : JsonData }) -> List({ name : Str, value : JsonData })
 when = |condition, members| if (condition) members else []
 
-spdx3 : Sbom.Inventory, Sbom.Subject, Sbom.Context -> JsonTree
+spdx3 : Sbom.Inventory, Sbom.Subject, Sbom.Context -> JsonData
 spdx3 = |inventory, subject, context| {
 	iri = |local| "${context.namespace}#${local}"
 	creation = member("creationInfo", text("_:creationinfo"))
-	element = |type, local, members| JsonTree.Object([member("type", text(type)), member("spdxId", text(iri(local))), creation].concat(members))
+	element = |type, local, members| JsonData.Object([member("type", text(type)), member("spdxId", text(iri(local))), creation].concat(members))
 	listed_packages = packages_of(inventory, subject)
 	agents = unique(listed_packages.map(|entry| entry.supplier).keep_if(agent).prepend(context.author))
 	agent_local = |name| "spdx/agent/${(agents.find_first_index(|candidate| candidate == name) ?? 0).to_str()}"
@@ -497,7 +497,7 @@ spdx3 = |inventory, subject, context| {
 				.concat(when(entry.download != "NOASSERTION", [member("software_downloadLocation", text(entry.download))]))
 				.concat(when(entry.supplier != "NOASSERTION", [member("suppliedBy", text(iri(agent_local(entry.supplier))))]))
 				.concat(when(!entry.identity.is_empty(), [member("software_packageUrl", text(entry.identity))]))
-				.concat(when(!entry.sha256.is_empty(), [member("verifiedUsing", JsonTree.Array([JsonTree.Object([member("type", text("Hash")), member("algorithm", text("sha256")), member("hashValue", text(entry.sha256))])]))])),
+				.concat(when(!entry.sha256.is_empty(), [member("verifiedUsing", JsonData.Array([JsonData.Object([member("type", text("Hash")), member("algorithm", text("sha256")), member("hashValue", text(entry.sha256))])]))])),
 		),
 	)
 	# One license element for each distinct expression and terms location.
@@ -509,7 +509,7 @@ spdx3 = |inventory, subject, context| {
 			"simplelicensing_LicenseExpression",
 			license_local(entry),
 			[member("simplelicensing_licenseExpression", text(entry.license)), member("simplelicensing_licenseListVersion", text("3.26.0"))]
-				.concat(when(!SbomLicenses.custom_ids(entry.license).is_empty() and entry.license_url != "NOASSERTION", [member("simplelicensing_customIdToUri", JsonTree.Array(SbomLicenses.custom_ids(entry.license).map(|id| JsonTree.Object([member("type", text("DictionaryEntry")), member("key", text(id)), member("value", text(entry.license_url))]))))])),
+				.concat(when(!SbomLicenses.custom_ids(entry.license).is_empty() and entry.license_url != "NOASSERTION", [member("simplelicensing_customIdToUri", JsonData.Array(SbomLicenses.custom_ids(entry.license).map(|id| JsonData.Object([member("type", text("DictionaryEntry")), member("key", text(id)), member("value", text(entry.license_url))]))))])),
 		),
 	)
 	declared = listed_packages.map(
@@ -533,15 +533,15 @@ spdx3 = |inventory, subject, context| {
 		)
 	}
 	contents = package_nodes.concat(license_nodes).concat($relationship_nodes)
-	ids_of = |nodes| nodes.map(|node| (node.field("spdxId") ?? JsonTree.Null).text() ?? "")
-	creation_info = JsonTree.Object([member("type", text("CreationInfo")), member("@id", text("_:creationinfo")), member("specVersion", text(Spdx3.version)), member("created", text(context.created)), member("createdBy", texts([iri(agent_local(context.author))])), member("createdUsing", texts([iri("spdx/tool")]))])
+	ids_of = |nodes| nodes.map(|node| (node.field("spdxId") ?? JsonData.Null).string() ?? "")
+	creation_info = JsonData.Object([member("type", text("CreationInfo")), member("@id", text("_:creationinfo")), member("specVersion", text(Spdx3.version)), member("created", text(context.created)), member("createdBy", texts([iri(agent_local(context.author))])), member("createdUsing", texts([iri("spdx/tool")]))])
 	tool = element("Tool", "spdx/tool", [member("name", text(context.generator.drop_prefix("Tool: ")))])
 	data_license = element("simplelicensing_LicenseExpression", "spdx/license/data", [member("simplelicensing_licenseExpression", text("CC0-1.0")), member("simplelicensing_licenseListVersion", text("3.26.0"))])
 	bom = element("software_Sbom", "spdx/sbom", [member("software_sbomType", texts(["build"])), member("rootElement", texts([iri(subject_id)])), member("element", texts(ids_of(contents)))])
 	annotation = element("Annotation", "spdx/annotation", [member("annotationType", text("other")), member("contentType", text("application/json")), member("subject", text(iri("spdx/document"))), member("statement", text(evidence(inventory, subject, context)))])
 	listed = agent_nodes.append(tool).append(bom).append(data_license).concat(contents).append(annotation)
 	document = element("SpdxDocument", "spdx/document", [member("name", text(subject.filename)), member("dataLicense", text(iri("spdx/license/data"))), member("profileConformance", texts(["core", "simpleLicensing", "software"])), member("rootElement", texts([iri("spdx/sbom")])), member("element", texts(ids_of(listed)))])
-	JsonTree.Object([member("@context", text(Spdx3.context)), member("@graph", JsonTree.Array(agent_nodes.prepend(creation_info).append(tool).append(document).append(bom).append(data_license).concat(contents).append(annotation)))])
+	JsonData.Object([member("@context", text(Spdx3.context)), member("@graph", JsonData.Array(agent_nodes.prepend(creation_info).append(tool).append(document).append(bom).append(data_license).concat(contents).append(annotation)))])
 }
 
 read_spdx3 : List(Spdx3.Node) -> Try(Sbom.Document, Str)
@@ -560,8 +560,8 @@ read_spdx3 = |nodes| {
 		if (id.starts_with("${namespace}#") and !fragment.is_empty() and !fragment.contains("#")) Ok(local_ref(fragment)) else Err("${id} is not NAMESPACE#name in the document namespace ${namespace}")
 	}
 	by_id = Lookup.index(nodes.keep_if(|node| !node.id.is_empty()).map(|node| { key: node.id, value: node }))
-	field_text = |tree, key| (tree.field(key) ?? JsonTree.Null).text() ?? ""
-	field_texts = |tree, key| ((tree.field(key) ?? JsonTree.Array([])).items() ?? []).map(|item| item.text() ?? "")
+	field_text = |tree, key| (tree.field(key) ?? JsonData.Null).string() ?? ""
+	field_texts = |tree, key| ((tree.field(key) ?? JsonData.Array([])).array() ?? []).map(|item| item.string() ?? "")
 	declared = nodes.keep_if(|node| (node.type == "Relationship" or node.type == "LifecycleScopedRelationship") and field_text(node.tree, "relationshipType") == "hasDeclaredLicense")
 	var $found = []
 	for node in nodes.keep_if(|candidate| candidate.type == "software_Package") {
@@ -576,19 +576,19 @@ read_spdx3 = |nodes| {
 			[] | ["expandedlicensing_NoAssertionLicense"] => ("NOASSERTION", "")
 			["expandedlicensing_NoneLicense"] => ("NONE", "")
 			[expression_id] => {
-				expression = (Lookup.find(by_id, expression_id) ?? { type: "", id: "", tree: JsonTree.Null }).tree
+				expression = (Lookup.find(by_id, expression_id) ?? { type: "", id: "", tree: JsonData.Null }).tree
 				value = field_text(expression, "simplelicensing_licenseExpression")
 				first = SbomLicenses.custom_ids(value).first() ?? ""
-				entries = (expression.field("simplelicensing_customIdToUri") ?? JsonTree.Array([])).items() ?? []
+				entries = (expression.field("simplelicensing_customIdToUri") ?? JsonData.Array([])).array() ?? []
 				(value, entries.find_first(|entry| field_text(entry, "key") == first).map_ok(|entry| field_text(entry, "value")) ?? (if (first.is_empty()) "" else "NOASSERTION"))
 			}
 			_ => return Err("package ${id} declares more than one license")
 		}
-		hashes = (node.tree.field("verifiedUsing") ?? JsonTree.Array([])).items() ?? []
+		hashes = (node.tree.field("verifiedUsing") ?? JsonData.Array([])).array() ?? []
 		sha256 = hashes.find_first(|hash| field_text(hash, "algorithm") == "sha256").map_ok(|hash| field_text(hash, "hashValue")) ?? ""
 		purl = match node.tree.field("software_packageUrl") {
-			Ok(Text(value)) => value
-			_ => ((node.tree.field("externalIdentifier") ?? JsonTree.Array([])).items() ?? []).find_first(|entry| field_text(entry, "externalIdentifierType") == "packageUrl").map_ok(|entry| field_text(entry, "identifier")) ?? ""
+			Ok(String(value)) => value
+			_ => ((node.tree.field("externalIdentifier") ?? JsonData.Array([])).array() ?? []).find_first(|entry| field_text(entry, "externalIdentifierType") == "packageUrl").map_ok(|entry| field_text(entry, "identifier")) ?? ""
 		}
 		$found = $found.append({
 			id,
@@ -740,10 +740,10 @@ spdx2 = |inventory, subject, context| {
 	"{\"spdxVersion\":\"SPDX-2.3\",\"dataLicense\":\"CC0-1.0\",\"SPDXID\":\"SPDXRef-DOCUMENT\",\"name\":${Json.to_str(subject.filename)},\"documentNamespace\":${Json.to_str(context.namespace)},\"creationInfo\":${Json.to_str({ created: context.created, creators: [context.author, context.generator], licenseListVersion: "3.26" })},\"packages\":[${Str.join_with(entries, ",")}],\"relationships\":[${Str.join_with(relationships, ",")}],\"annotations\":[${annotation}],\"hasExtractedLicensingInfos\":[${Str.join_with($licenses, ",")}] }\n"
 }
 
-read_spdx2 : JsonTree -> Try(Sbom.Document, Str)
+read_spdx2 : JsonData -> Try(Sbom.Document, Str)
 read_spdx2 = |tree| {
-	field_text = |object, key| (object.field(key) ?? JsonTree.Null).text() ?? ""
-	listed = |object, key| (object.field(key) ?? JsonTree.Array([])).items() ?? []
+	field_text = |object, key| (object.field(key) ?? JsonData.Null).string() ?? ""
+	listed = |object, key| (object.field(key) ?? JsonData.Array([])).array() ?? []
 	local = |id| id.drop_prefix("SPDXRef-")
 	extracted = listed(tree, "hasExtractedLicensingInfos")
 	listed_packages = listed(tree, "packages").map(
@@ -757,7 +757,7 @@ read_spdx2 = |tree| {
 				supplier: if (entry.field("supplier").is_ok()) field_text(entry, "supplier") else "NOASSERTION",
 				download: field_text(entry, "downloadLocation"),
 				license: license_text,
-				license_url: match extracted.find_first(|info| field_text(info, "licenseId") == first).map_ok(|info| (listed(info, "seeAlsos").first() ?? JsonTree.Null).text() ?? "") {
+				license_url: match extracted.find_first(|info| field_text(info, "licenseId") == first).map_ok(|info| (listed(info, "seeAlsos").first() ?? JsonData.Null).string() ?? "") {
 					Ok(url) if !url.is_empty() => url
 					_ => if (first.is_empty()) "" else "NOASSERTION"
 				},
@@ -780,7 +780,7 @@ read_spdx2 = |tree| {
 		else Err("relationship to a file or snippet")
 	var $roots = []
 	var $gaps = files
-	for described in listed(tree, "documentDescribes").map(|item| item.text() ?? "") {
+	for described in listed(tree, "documentDescribes").map(|item| item.string() ?? "") {
 		if package_ids.contains(described) {
 			$roots = $roots.append(local(described))
 		} else {
@@ -1019,8 +1019,8 @@ not_analyzed = False
 
 ## CycloneDX 1.7
 
-property : Str, Str -> JsonTree
-property = |name, value| JsonTree.Object([member("name", text(name)), member("value", text(value))])
+property : Str, Str -> JsonData
+property = |name, value| JsonData.Object([member("name", text(name)), member("value", text(value))])
 
 ## An RFC 4122 URN for the document revision: the first 128 bits of the
 ## namespace's SHA-256, marked as a version 8 (custom) UUID.
@@ -1070,34 +1070,34 @@ cyclonedx_scope = |relationships, required, id|
 
 ## Who supplied something, in CycloneDX: an organization is a supplier, a
 ## person an author.
-supplied : Str -> List({ key : Str, value : JsonTree })
+supplied : Str -> List({ name : Str, value : JsonData })
 supplied = |producer|
 	if producer.starts_with("Organization: ") {
-		[member("supplier", JsonTree.Object([member("name", text(producer.drop_prefix("Organization: ")))]))]
+		[member("supplier", JsonData.Object([member("name", text(producer.drop_prefix("Organization: ")))]))]
 	} else if producer.starts_with("Person: ") {
-		[member("authors", JsonTree.Array([JsonTree.Object([member("name", text(producer.drop_prefix("Person: ")))])]))]
+		[member("authors", JsonData.Array([JsonData.Object([member("name", text(producer.drop_prefix("Person: ")))])]))]
 	} else {
 		[]
 	}
 
-sha256_hashes : Str -> List({ key : Str, value : JsonTree })
-sha256_hashes = |digest| when(!digest.is_empty(), [member("hashes", JsonTree.Array([JsonTree.Object([member("alg", text("SHA-256")), member("content", text(digest))])]))])
+sha256_hashes : Str -> List({ name : Str, value : JsonData })
+sha256_hashes = |digest| when(!digest.is_empty(), [member("hashes", JsonData.Array([JsonData.Object([member("alg", text("SHA-256")), member("content", text(digest))])]))])
 
-references : List({ type : Str, url : Str }) -> List({ key : Str, value : JsonTree })
-references = |listed| when(!listed.is_empty(), [member("externalReferences", JsonTree.Array(listed.map(|reference| JsonTree.Object([member("type", text(reference.type)), member("url", text(reference.url))]))))])
+references : List({ type : Str, url : Str }) -> List({ name : Str, value : JsonData })
+references = |listed| when(!listed.is_empty(), [member("externalReferences", JsonData.Array(listed.map(|reference| JsonData.Object([member("type", text(reference.type)), member("url", text(reference.url))]))))])
 
-cyclonedx : Sbom.Inventory, Sbom.Subject, Sbom.Context -> JsonTree
+cyclonedx : Sbom.Inventory, Sbom.Subject, Sbom.Context -> JsonData
 cyclonedx = |inventory, subject, context| {
 	required = shipped(inventory.relationships)
 	expression = |license_text| license_text != "NOASSERTION" and license_text != "NONE"
 	components = inventory.components.map(
 		|component|
-			JsonTree.Object(
+			JsonData.Object(
 				[member("type", text("library")), member("bom-ref", text(component.id)), member("name", text(component.name)), member("version", text(component.version))]
 					.concat(supplied(component.producer))
 					.append(member("scope", text(cyclonedx_scope(inventory.relationships, required, component.id))))
 					.concat(sha256_hashes(component.sha256))
-					.concat(when(expression(component.license), [member("licenses", JsonTree.Array([JsonTree.Object([member("expression", text(component.license))])]))]))
+					.concat(when(expression(component.license), [member("licenses", JsonData.Array([JsonData.Object([member("expression", text(component.license))])]))]))
 					.concat(when(component.identity.starts_with("pkg:"), [member("purl", text(component.identity))]))
 					.concat(
 						references(
@@ -1105,58 +1105,58 @@ cyclonedx = |inventory, subject, context| {
 								.concat(if (component.license.contains("LicenseRef-") and !component.license_url.is_empty() and component.license_url != "NOASSERTION") [{ type: "license", url: component.license_url }] else []),
 						),
 					)
-					.append(member("properties", JsonTree.Array([property("blueprint:identity", component.identity), property("blueprint:origin", component.origin), property("blueprint:target", component.target), property("blueprint:modifications", component.modified)].concat(if (component.license == "NONE") [property("blueprint:license", "NONE")] else [])))),
+					.append(member("properties", JsonData.Array([property("blueprint:identity", component.identity), property("blueprint:origin", component.origin), property("blueprint:target", component.target), property("blueprint:modifications", component.modified)].concat(if (component.license == "NONE") [property("blueprint:license", "NONE")] else [])))),
 			),
 	)
-	metadata_component = JsonTree.Object(
+	metadata_component = JsonData.Object(
 		[member("type", text("file")), member("bom-ref", text(subject_id)), member("name", text(subject.filename)), member("version", text(subject.version))]
 			.concat(sha256_hashes(subject.sha256))
 			.concat(references(if (subject.url == "NOASSERTION") [] else [{ type: "distribution", url: subject.url }]))
-			.append(member("properties", JsonTree.Array([property("blueprint:target", subject.target), property("blueprint:digest-kind", "final-deliverable-sha256")]))),
+			.append(member("properties", JsonData.Array([property("blueprint:target", subject.target), property("blueprint:digest-kind", "final-deliverable-sha256")]))),
 	)
 	creator = if context.author.starts_with("Person: ") {
-		member("authors", JsonTree.Array([JsonTree.Object([member("name", text(context.author.drop_prefix("Person: ")))])]))
+		member("authors", JsonData.Array([JsonData.Object([member("name", text(context.author.drop_prefix("Person: ")))])]))
 	} else {
-		member("manufacturer", JsonTree.Object([member("name", text(context.author.drop_prefix("Organization: ")))]))
+		member("manufacturer", JsonData.Object([member("name", text(context.author.drop_prefix("Organization: ")))]))
 	}
-	metadata = JsonTree.Object([
+	metadata = JsonData.Object([
 		member("timestamp", text(context.created)),
-		member("lifecycles", JsonTree.Array([JsonTree.Object([member("phase", text("build"))])])),
-		member("tools", JsonTree.Object([member("components", JsonTree.Array([JsonTree.Object([member("type", text("application")), member("name", text(context.generator.drop_prefix("Tool: ")))])]))])),
+		member("lifecycles", JsonData.Array([JsonData.Object([member("phase", text("build"))])])),
+		member("tools", JsonData.Object([member("components", JsonData.Array([JsonData.Object([member("type", text("application")), member("name", text(context.generator.drop_prefix("Tool: ")))])]))])),
 		creator,
 		member("component", metadata_component),
-		member("properties", JsonTree.Array([property("blueprint:namespace", context.namespace), property("blueprint:evidence", evidence(inventory, subject, context))])),
+		member("properties", JsonData.Array([property("blueprint:namespace", context.namespace), property("blueprint:evidence", evidence(inventory, subject, context))])),
 	])
 	dependencies = inventory.components.map(|component| component.id).prepend(subject_id).map(
 		|ref| {
 			depends = unique(inventory.relationships.keep_if(|edge| edge.from == ref and (edge.relation == "contains" or edge.relation == "dependsOn")).map(|edge| edge.to))
-			JsonTree.Object([member("ref", text(ref))].concat(when(!depends.is_empty(), [member("dependsOn", texts(depends))])))
+			JsonData.Object([member("ref", text(ref))].concat(when(!depends.is_empty(), [member("dependsOn", texts(depends))])))
 		},
 	)
 	revision = U64.from_str(context.revision) ?? 1
-	JsonTree.Object([
+	JsonData.Object([
 		member("bomFormat", text(CycloneDx.format)),
 		member("specVersion", text(CycloneDx.version)),
 		member("serialNumber", text(serial_number(context.namespace))),
-		member("version", JsonTree.Num(Dec.from_str((if (revision == 0) 1 else revision).to_str()) ?? 1)),
+		member("version", JsonData.Number((if (revision == 0) 1 else revision).to_str())),
 		member("metadata", metadata),
-		member("components", JsonTree.Array(components)),
-		member("dependencies", JsonTree.Array(dependencies)),
-		member("properties", JsonTree.Array(inventory.relationships.map(|edge| property("blueprint:relationship", Json.to_str(edge))))),
+		member("components", JsonData.Array(components)),
+		member("dependencies", JsonData.Array(dependencies)),
+		member("properties", JsonData.Array(inventory.relationships.map(|edge| property("blueprint:relationship", Json.to_str(edge))))),
 	])
 }
 
-read_bom : JsonTree -> Try(Sbom.Document, Str)
+read_bom : JsonData -> Try(Sbom.Document, Str)
 read_bom = |tree| {
-	field_text = |object, key| (object.field(key) ?? JsonTree.Null).text() ?? ""
-	listed = |object, key| (object.field(key) ?? JsonTree.Array([])).items() ?? []
+	field_text = |object, key| (object.field(key) ?? JsonData.Null).string() ?? ""
+	listed = |object, key| (object.field(key) ?? JsonData.Array([])).array() ?? []
 	values = |object, name| listed(object, "properties").keep_if(|entry| field_text(entry, "name") == name).map(|entry| field_text(entry, "value"))
 	only = |object, name|
 		match values(object, name) {
 			[value] => Ok(value)
 			_ => Err("expected exactly one ${name} property; this is not a BOM Blueprint wrote")
 		}
-	metadata = tree.field("metadata") ?? JsonTree.Null
+	metadata = tree.field("metadata") ?? JsonData.Null
 	subject = metadata.field("component").map_err(|_| "the BOM describes no component")?
 	if field_text(subject, "bom-ref") != subject_id {
 		return Err("the described component must be ${subject_id}")
@@ -1219,7 +1219,7 @@ read_bom = |tree| {
 	}
 	for dependency in listed(tree, "dependencies") {
 		ref = field_text(dependency, "ref")
-		stated = listed(dependency, "dependsOn").map(|item| item.text() ?? "")
+		stated = listed(dependency, "dependsOn").map(|item| item.string() ?? "")
 		implied = unique($edges.keep_if(|edge| edge.from == ref and (edge.relation == "contains" or edge.relation == "dependsOn")).map(|edge| edge.to))
 		if stated != implied {
 			return Err("the dependencies of ${ref} differ from its relationships")
@@ -1330,34 +1330,34 @@ local_ref = |ref| {
 	if (kept == ref and !ref.is_empty() and kept.to_utf8().len() <= 64) ref else "${if (trimmed.is_empty()) "ref" else trimmed}-${Str.from_utf8_lossy(Crypto.SHA256.hash(ref.to_utf8()).to_hex().to_utf8().take_first(12))}"
 }
 
-Flat : { tree : JsonTree, parent : Str, id : Str }
+Flat : { tree : JsonData, parent : Str, id : Str }
 
 ## Every component of a tree of components, with its parent's local id.
-flatten : List(JsonTree), Str, Str -> List(Flat)
+flatten : List(JsonData), Str, Str -> List(Flat)
 flatten = |trees, parent, prefix| {
 	var $out = []
 	var $index = 0.U64
 	for tree in trees {
 		position = "${prefix}${$index.to_str()}"
 		id = match tree.field("bom-ref") {
-			Ok(Text(ref)) => local_ref(ref)
+			Ok(String(ref)) => local_ref(ref)
 			_ => "component-${position}"
 		}
-		$out = $out.append({ tree, parent, id }).concat(flatten((tree.field("components") ?? JsonTree.Array([])).items() ?? [], id, "${position}."))
+		$out = $out.append({ tree, parent, id }).concat(flatten((tree.field("components") ?? JsonData.Array([])).array() ?? [], id, "${position}."))
 		$index = $index + 1
 	}
 	$out
 }
 
-read_foreign_bom : JsonTree, List(Str) -> Try(Sbom.Document, Str)
+read_foreign_bom : JsonData, List(Str) -> Try(Sbom.Document, Str)
 read_foreign_bom = |tree, ignored| {
-	field_text = |object, key| (object.field(key) ?? JsonTree.Null).text() ?? ""
-	listed = |object, key| (object.field(key) ?? JsonTree.Array([])).items() ?? []
+	field_text = |object, key| (object.field(key) ?? JsonData.Null).string() ?? ""
+	listed = |object, key| (object.field(key) ?? JsonData.Array([])).array() ?? []
 	serial = field_text(tree, "serialNumber")
 	if serial.is_empty() {
 		return Err("an imported CycloneDX BOM needs a serialNumber to identify it")
 	}
-	metadata = tree.field("metadata") ?? JsonTree.Null
+	metadata = tree.field("metadata") ?? JsonData.Null
 	described = match metadata.field("component") {
 		Ok(component) => [component]
 		Err(_) => []
@@ -1368,14 +1368,14 @@ read_foreign_bom = |tree, ignored| {
 	if unique(ids).len() != ids.len() {
 		return Err("two components map to one identifier")
 	}
-	refs = Lookup.index(entries.keep_if(|entry| (entry.tree.field("bom-ref") ?? JsonTree.Null).text().is_ok()).map(|entry| { key: field_text(entry.tree, "bom-ref"), value: entry.id }))
+	refs = Lookup.index(entries.keep_if(|entry| (entry.tree.field("bom-ref") ?? JsonData.Null).string().is_ok()).map(|entry| { key: field_text(entry.tree, "bom-ref"), value: entry.id }))
 	var $gaps = ignored
 	var $packages = []
 	for entry in entries {
 		component = entry.tree
 		choices = listed(component, "licenses")
 		expressions = choices.keep_if(|choice| choice.field("expression").is_ok()).map(|choice| field_text(choice, "expression"))
-		licensed = choices.keep_if(|choice| choice.field("license").is_ok()).map(|choice| component_license(choice.field("license") ?? JsonTree.Null))
+		licensed = choices.keep_if(|choice| choice.field("license").is_ok()).map(|choice| component_license(choice.field("license") ?? JsonData.Null))
 		license_text = match (expressions, licensed) {
 			([], []) => "NOASSERTION"
 			([expression], []) => expression
@@ -1385,9 +1385,9 @@ read_foreign_bom = |tree, ignored| {
 				"NOASSERTION"
 			}
 		}
-		supplier_name = field_text(component.field("supplier") ?? JsonTree.Null, "name")
-		maker = field_text(component.field("manufacturer") ?? JsonTree.Null, "name")
-		author = field_text(listed(component, "authors").first() ?? JsonTree.Null, "name")
+		supplier_name = field_text(component.field("supplier") ?? JsonData.Null, "name")
+		maker = field_text(component.field("manufacturer") ?? JsonData.Null, "name")
+		author = field_text(listed(component, "authors").first() ?? JsonData.Null, "name")
 		$packages = $packages.append({
 			id: entry.id,
 			name: field_text(component, "name"),
@@ -1409,7 +1409,7 @@ read_foreign_bom = |tree, ignored| {
 	}
 	for dependency in listed(tree, "dependencies") {
 		from = Lookup.find(refs, field_text(dependency, "ref"))
-		for target in listed(dependency, "dependsOn").map(|item| item.text() ?? "") {
+		for target in listed(dependency, "dependsOn").map(|item| item.string() ?? "") {
 			match (from, Lookup.find(refs, target)) {
 				(Ok(source), Ok(destination)) => {
 					$edges = $edges.append({ from: source, to: destination, relation: "dependsOn", scope: "", basis: "CycloneDX dependency; CycloneDX states no lifecycle scope for it" })
@@ -1449,10 +1449,10 @@ read_foreign_bom = |tree, ignored| {
 
 ## An SPDX identifier for a CycloneDX license object, or "" when it names its
 ## license only in text.
-component_license : JsonTree -> Str
+component_license : JsonData -> Str
 component_license = |license_object|
 	match license_object.field("id") {
-		Ok(Text(id)) if SbomLicenses.licenses.contains(id) => id
+		Ok(String(id)) if SbomLicenses.licenses.contains(id) => id
 		_ => ""
 	}
 

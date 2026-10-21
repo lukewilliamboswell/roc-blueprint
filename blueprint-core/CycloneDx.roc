@@ -1,4 +1,4 @@
-import JsonTree
+import JsonData
 import Lookup
 import SbomLicenses
 import Spdx3
@@ -23,15 +23,15 @@ CycloneDx := [].{
 	version : Str
 	version = "1.7"
 
-	validate : Str -> Try(JsonTree, Str)
+	validate : Str -> Try(JsonData, Str)
 	validate = |text| {
-		tree = JsonTree.parse(text)?
+		tree = JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?
 		CycloneDx.check(tree)?
 		Ok(tree)
 	}
 
 	## `validate` for a document already parsed.
-	check : JsonTree -> Try({}, Str)
+	check : JsonData -> Try({}, Str)
 	check = |tree| {
 		ignored = check_bom(tree, Strict)?
 		if !ignored.is_empty() {
@@ -53,7 +53,7 @@ CycloneDx := [].{
 	## name an earlier version, and members this profile does not read, such
 	## as vulnerabilities, services or a component's pedigree, are named in
 	## the result rather than refused. Their JSON kinds are still checked.
-	check_import : JsonTree -> Try(List(Str), Str)
+	check_import : JsonData -> Try(List(Str), Str)
 	check_import = |tree| check_bom(tree, Lenient)
 
 	## An RFC 3339 `date-time`, as the schema's format names it.
@@ -97,15 +97,15 @@ CycloneDx := [].{
 
 Mode : [Strict, Lenient]
 
-check_bom : JsonTree, Mode -> Try(List(Str), Str)
+check_bom : JsonData, Mode -> Try(List(Str), Str)
 check_bom = |tree, mode| {
 	ignored = check_object(tree, "bom", mode)?
-	spec = (tree.field("specVersion") ?? JsonTree.Null).text() ?? ""
+	spec = (tree.field("specVersion") ?? JsonData.Null).string() ?? ""
 	versions = match mode {
 		Strict => [CycloneDx.version]
 		Lenient => CycloneDx.import_versions
 	}
-	if tree.field("bomFormat") != Ok(JsonTree.Text(CycloneDx.format)) or !versions.contains(spec) {
+	if tree.field("bomFormat") != Ok(JsonData.String(CycloneDx.format)) or !versions.contains(spec) {
 		return Err("a BOM names bomFormat ${CycloneDx.format} and specVersion ${Str.join_with(versions, ", ")}")
 	}
 	refs = Lookup.index(bom_refs(tree).map(|ref| { key: ref, value: ref }))
@@ -113,19 +113,19 @@ check_bom = |tree, mode| {
 		[] => {}
 		[ref, ..] => return Err("duplicate bom-ref ${ref}")
 	}
-	for dependency in (tree.field("dependencies") ?? JsonTree.Array([])).items() ?? [] {
-		named = [(dependency.field("ref") ?? JsonTree.Null).text() ?? ""].concat(((dependency.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).map(|item| item.text() ?? ""))
+	for dependency in (tree.field("dependencies") ?? JsonData.Array([])).array() ?? [] {
+		named = [(dependency.field("ref") ?? JsonData.Null).string() ?? ""].concat(((dependency.field("dependsOn") ?? JsonData.Array([])).array() ?? []).map(|item| item.string() ?? ""))
 		for ref in named {
 			if !Lookup.contains(refs, ref) {
 				return Err("dependency names ${ref}, which no component in the BOM declares")
 			}
 		}
-		depends = ((dependency.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).map(|item| item.text() ?? "")
+		depends = ((dependency.field("dependsOn") ?? JsonData.Array([])).array() ?? []).map(|item| item.string() ?? "")
 		if Lookup.repeated(Lookup.index(depends.map(|ref| { key: ref, value: ref }))) != [] {
 			return Err("dependsOn repeats a reference")
 		}
 	}
-	dependents = ((tree.field("dependencies") ?? JsonTree.Array([])).items() ?? []).map(|dependency| (dependency.field("ref") ?? JsonTree.Null).text() ?? "")
+	dependents = ((tree.field("dependencies") ?? JsonData.Array([])).array() ?? []).map(|dependency| (dependency.field("ref") ?? JsonData.Null).string() ?? "")
 	if Lookup.repeated(Lookup.index(dependents.map(|ref| { key: ref, value: ref }))) != [] {
 		return Err("two dependency entries name one component")
 	}
@@ -203,7 +203,7 @@ class = |name|
 
 ## Check `tree` as the schema's `kind`, and name the members it holds that
 ## this profile does not read. Strict mode refuses those instead.
-check_object : JsonTree, Str, Mode -> Try(List(Str), Str)
+check_object : JsonData, Str, Mode -> Try(List(Str), Str)
 check_object = |tree, kind, mode| {
 	properties = class(kind)?
 	match tree {
@@ -226,7 +226,7 @@ check_object = |tree, kind, mode| {
 	}
 	for property in properties {
 		match tree.field(property.name) {
-			Err(Missing) =>
+			Err(_) =>
 				if property.required {
 					return Err("${kind} requires ${property.name}")
 				}
@@ -244,8 +244,8 @@ check_object = |tree, kind, mode| {
 		}
 	}
 	if kind == "hash" {
-		algorithm = (tree.field("alg") ?? JsonTree.Null).text() ?? ""
-		content = (tree.field("content") ?? JsonTree.Null).text() ?? ""
+		algorithm = (tree.field("alg") ?? JsonData.Null).string() ?? ""
+		content = (tree.field("content") ?? JsonData.Null).string() ?? ""
 		expected = match algorithm {
 			"MD5" => 32
 			"SHA-1" => 40
@@ -265,7 +265,7 @@ check_object = |tree, kind, mode| {
 		return Err("a license holds exactly one of id and name")
 	}
 	if kind == "license" {
-		id = (tree.field("id") ?? JsonTree.Null).text() ?? ""
+		id = (tree.field("id") ?? JsonData.Null).string() ?? ""
 		listed = id.is_empty() or SbomLicenses.licenses.contains(id) or SbomLicenses.exceptions.contains(id)
 		match (listed, mode) {
 			(True, _) => {}
@@ -278,22 +278,22 @@ check_object = |tree, kind, mode| {
 	Ok($ignored)
 }
 
-check_value : JsonTree, Kind, Mode -> Try(List(Str), Str)
+check_value : JsonData, Kind, Mode -> Try(List(Str), Str)
 check_value = |value, kind, mode| {
 	ok = Ok([])
 	match (kind, value) {
-		(Text, Text(_)) => ok
-		(Bool, Bool(_)) => ok
+		(Text, String(_)) => ok
+		(Bool, Boolean(_)) => ok
 		# JSON Schema draft-07 counts any number with no fractional part as an integer.
-		(Integer, Num(number)) => if (number >= 1 and Dec.to_str(number).ends_with(".0") and Dec.to_str(number).drop_suffix(".0").to_utf8().all(|byte| byte >= '0' and byte <= '9')) ok else Err("not an integer of at least 1")
-		(DateTime, Text(text)) => if (CycloneDx.date_time(text)) ok else Err("not an RFC 3339 date-time")
-		(Ref, Text(text)) => if (!text.is_empty() and !text.starts_with("urn:cdx:")) ok else Err("a bom-ref is non-empty and is not a BOM-Link")
-		(Iri, Text(text)) => if (!text.is_empty() and !text.to_utf8().any(|byte| byte <= 32 or byte == 127)) ok else Err("not an IRI reference")
-		(Purl, Text(text)) => if (text.starts_with("pkg:") and text.drop_prefix("pkg:").contains("/") and !text.to_utf8().any(|byte| byte <= 32)) ok else Err("not a package URL")
-		(Serial, Text(text)) => if (serial(text)) ok else Err("not a urn:uuid serial number")
-		(Version, Text(text)) => if (text.to_utf8().len() <= 1024) ok else Err("version longer than 1024 bytes")
-		(Expression, Text(text)) => if (SbomLicenses.expression(text)) ok else Err("invalid SPDX license expression ${Json.to_str(text)}")
-		(Enum(allowed), Text(text)) => if (allowed.contains(text)) ok else Err("${text} is not a permitted value")
+		(Integer, Number(lexeme)) => if (JsonData.whole(lexeme) and lexeme != "0" and !lexeme.starts_with("0.")) ok else Err("not an integer of at least 1")
+		(DateTime, String(text)) => if (CycloneDx.date_time(text)) ok else Err("not an RFC 3339 date-time")
+		(Ref, String(text)) => if (!text.is_empty() and !text.starts_with("urn:cdx:")) ok else Err("a bom-ref is non-empty and is not a BOM-Link")
+		(Iri, String(text)) => if (!text.is_empty() and !text.to_utf8().any(|byte| byte <= 32 or byte == 127)) ok else Err("not an IRI reference")
+		(Purl, String(text)) => if (text.starts_with("pkg:") and text.drop_prefix("pkg:").contains("/") and !text.to_utf8().any(|byte| byte <= 32)) ok else Err("not a package URL")
+		(Serial, String(text)) => if (serial(text)) ok else Err("not a urn:uuid serial number")
+		(Version, String(text)) => if (text.to_utf8().len() <= 1024) ok else Err("version longer than 1024 bytes")
+		(Expression, String(text)) => if (SbomLicenses.expression(text)) ok else Err("invalid SPDX license expression ${Json.to_str(text)}")
+		(Enum(allowed), String(text)) => if (allowed.contains(text)) ok else Err("${text} is not a permitted value")
 		# Tools are an object since 1.5, and a legacy array of tool records before.
 		(Inline("tools"), Array(items)) => items.fold(
 			ok,
@@ -318,10 +318,10 @@ serial = |text|
 	}
 
 ## Every `bom-ref` the BOM declares, wherever it is.
-bom_refs : JsonTree -> List(Str)
+bom_refs : JsonData -> List(Str)
 bom_refs = |tree|
 	match tree {
-		Object(members) => members.fold([], |all, member| all.concat(if (member.key == "bom-ref") [member.value.text() ?? ""] else if (member.key == "dependencies" or member.key == "properties") [] else bom_refs(member.value)))
+		Object(members) => members.fold([], |all, member| all.concat(if (member.name == "bom-ref") [member.value.string() ?? ""] else if (member.name == "dependencies" or member.name == "properties") [] else bom_refs(member.value)))
 		Array(items) => items.fold([], |all, item| all.concat(bom_refs(item)))
 		_ => []
 	}

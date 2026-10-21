@@ -1,4 +1,4 @@
-import JsonTree
+import JsonData
 import Lookup
 import SbomLicenses
 
@@ -30,19 +30,19 @@ Spdx3 := [].{
 
 	## One checked `@graph` object: its class, its identity (`spdxId` for an
 	## element, `@id` for a CreationInfo, or "") and the object itself.
-	Node : { type : Str, id : Str, tree : JsonTree }
+	Node : { type : Str, id : Str, tree : JsonData }
 
 	validate : Str -> Try(List(Spdx3.Node), Str)
-	validate = |text| Spdx3.check(JsonTree.parse(text)?)
+	validate = |text| Spdx3.check(JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?)
 
 	## `validate` for a document already parsed.
-	check : JsonTree -> Try(List(Spdx3.Node), Str)
+	check : JsonData -> Try(List(Spdx3.Node), Str)
 	check = |tree| {
 		members = tree.keys()
 		if members.len() != 2 or !members.contains("@context") or !members.contains("@graph") {
 			return Err("an SPDX 3.0.1 document holds exactly @context and @graph")
 		}
-		if tree.field("@context") != Ok(JsonTree.Text(context)) {
+		if tree.field("@context") != Ok(JsonData.String(context)) {
 			return Err("@context must be ${context}")
 		}
 		objects = match tree.field("@graph") {
@@ -53,19 +53,19 @@ Spdx3 := [].{
 		var $entries = []
 		for object in objects {
 			type = match object.field("type") {
-				Ok(Text(name)) => name
+				Ok(String(name)) => name
 				_ => return Err("every @graph object needs a string type")
 			}
 			_ = class(type)?
 			id = if elements.contains(type) {
 				match object.field("spdxId") {
-					Ok(Text(iri)) if iri_syntax(iri) => iri
+					Ok(String(iri)) if iri_syntax(iri) => iri
 					_ => return Err("${type} needs an IRI spdxId")
 				}
 			} else if type == "CreationInfo" {
 				match object.field("@id") {
-					Ok(Text(node)) if iri_syntax(node) or blank_node(node) => node
-					Err(Missing) => ""
+					Ok(String(node)) if iri_syntax(node) or blank_node(node) => node
+					Err(_) => ""
 					_ => return Err("CreationInfo @id must be a blank node or IRI")
 				}
 			} else {
@@ -334,7 +334,7 @@ class = |name|
 
 Ids : List(Lookup.Entry(Str))
 
-check_object : JsonTree, Str, Ids -> Try({}, Str)
+check_object : JsonData, Str, Ids -> Try({}, Str)
 check_object = |tree, type, ids| {
 	properties = class(type)?
 	identity = if (elements.contains(type)) "spdxId" else if (type == "CreationInfo") "@id" else ""
@@ -345,7 +345,7 @@ check_object = |tree, type, ids| {
 	}
 	for property in properties {
 		match tree.field(property.name) {
-			Err(Missing) => if property.required {
+			Err(_) => if property.required {
 				return Err("${type} requires ${property.name}")
 			}
 			Ok(value) => match (property.count, value) {
@@ -365,20 +365,20 @@ check_object = |tree, type, ids| {
 	model_rules(tree, type, ids)
 }
 
-check_value : JsonTree, Kind, Ids -> Try({}, Str)
+check_value : JsonData, Kind, Ids -> Try({}, Str)
 check_value = |value, kind, ids|
 	match (kind, value) {
-		(Text, Text(_)) => Ok({})
-		(Date, Text(text)) => if (Spdx3.timestamp(text)) Ok({}) else Err("not a UTC dateTimeStamp")
-		(Version, Text(text)) => if (Spdx3.semver(text)) Ok({}) else Err("not a semantic version")
-		(Uri, Text(text)) => if (any_uri(text)) Ok({}) else Err("not a URI")
-		(Purl, Text(text)) => if (text.starts_with("pkg:") and any_uri(text)) Ok({}) else Err("not a package URL")
-		(MediaType, Text(text)) => match text.split_on("/") {
+		(Text, String(_)) => Ok({})
+		(Date, String(text)) => if (Spdx3.timestamp(text)) Ok({}) else Err("not a UTC dateTimeStamp")
+		(Version, String(text)) => if (Spdx3.semver(text)) Ok({}) else Err("not a semantic version")
+		(Uri, String(text)) => if (any_uri(text)) Ok({}) else Err("not a URI")
+		(Purl, String(text)) => if (text.starts_with("pkg:") and any_uri(text)) Ok({}) else Err("not a package URL")
+		(MediaType, String(text)) => match text.split_on("/") {
 			[kind_name, sub] if !kind_name.is_empty() and !sub.is_empty() => Ok({})
 			_ => Err("not a media type")
 		}
-		(Enum(allowed), Text(text)) => if (allowed.contains(text)) Ok({}) else Err("${text} is not a permitted value")
-		(Ref(classes, individuals), Text(text)) => {
+		(Enum(allowed), String(text)) => if (allowed.contains(text)) Ok({}) else Err("${text} is not a permitted value")
+		(Ref(classes, individuals), String(text)) => {
 			if individuals.contains(text) {
 				return Ok({})
 			}
@@ -388,9 +388,9 @@ check_value = |value, kind, ids|
 				Err(_) => Err("${text} does not resolve within the document")
 			}
 		}
-		(Creation, Text(text)) => if (Lookup.find(ids, text) == Ok("CreationInfo")) Ok({}) else Err("${text} is not a CreationInfo in the document")
-		(Creation, Object(_)) => if (value.field("type") == Ok(JsonTree.Text("CreationInfo"))) check_object(value, "CreationInfo", ids) else Err("inline creationInfo must be a CreationInfo")
-		(Inline(name), Object(_)) => if (value.field("type") == Ok(JsonTree.Text(name))) check_object(value, name, ids) else Err("expected an inline ${name}")
+		(Creation, String(text)) => if (Lookup.find(ids, text) == Ok("CreationInfo")) Ok({}) else Err("${text} is not a CreationInfo in the document")
+		(Creation, Object(_)) => if (value.field("type") == Ok(JsonData.String("CreationInfo"))) check_object(value, "CreationInfo", ids) else Err("inline creationInfo must be a CreationInfo")
+		(Inline(name), Object(_)) => if (value.field("type") == Ok(JsonData.String(name))) check_object(value, name, ids) else Err("expected an inline ${name}")
 		_ => Err("wrong JSON kind")
 	}
 
@@ -407,28 +407,28 @@ hex_length = |algorithm|
 		_ => Err(Unfixed)
 	}
 
-model_rules : JsonTree, Str, Ids -> Try({}, Str)
+model_rules : JsonData, Str, Ids -> Try({}, Str)
 model_rules = |tree, type, ids|
 	match type {
-		"CreationInfo" => if (tree.field("specVersion") == Ok(JsonTree.Text(Spdx3.version))) Ok({}) else Err("CreationInfo.specVersion must be ${Spdx3.version} under the ${Spdx3.version} context")
+		"CreationInfo" => if (tree.field("specVersion") == Ok(JsonData.String(Spdx3.version))) Ok({}) else Err("CreationInfo.specVersion must be ${Spdx3.version} under the ${Spdx3.version} context")
 		"Hash" => {
-			algorithm = (tree.field("algorithm") ?? JsonTree.Null).text() ?? ""
-			hash = (tree.field("hashValue") ?? JsonTree.Null).text() ?? ""
+			algorithm = (tree.field("algorithm") ?? JsonData.Null).string() ?? ""
+			hash = (tree.field("hashValue") ?? JsonData.Null).string() ?? ""
 			match hex_length(algorithm) {
 				Ok(len) => if (hash.to_utf8().len() == len and hash.to_utf8().all(|byte| (byte >= '0' and byte <= '9') or (byte >= 'a' and byte <= 'f') or (byte >= 'A' and byte <= 'F'))) Ok({}) else Err("Hash ${algorithm} value is not ${len.to_str()} hex digits")
 				Err(Unfixed) => if (hash.is_empty()) Err("empty Hash value") else Ok({})
 			}
 		}
 		"simplelicensing_LicenseExpression" => {
-			expression = (tree.field("simplelicensing_licenseExpression") ?? JsonTree.Null).text() ?? ""
+			expression = (tree.field("simplelicensing_licenseExpression") ?? JsonData.Null).string() ?? ""
 			if !SbomLicenses.expression(expression) {
 				return Err("invalid license expression ${Json.to_str(expression)}")
 			}
-			entries = (tree.field("simplelicensing_customIdToUri") ?? JsonTree.Array([])).items() ?? []
-			keys = entries.map(|entry| (entry.field("key") ?? JsonTree.Null).text() ?? "")
+			entries = (tree.field("simplelicensing_customIdToUri") ?? JsonData.Array([])).array() ?? []
+			keys = entries.map(|entry| (entry.field("key") ?? JsonData.Null).string() ?? "")
 			for entry in entries {
-				key = (entry.field("key") ?? JsonTree.Null).text() ?? ""
-				uri = (entry.field("value") ?? JsonTree.Null).text() ?? ""
+				key = (entry.field("key") ?? JsonData.Null).string() ?? ""
+				uri = (entry.field("value") ?? JsonData.Null).string() ?? ""
 				if !key.starts_with("LicenseRef-") or !any_uri(uri) {
 					return Err("customIdToUri maps a LicenseRef- identifier to a URI")
 				}
@@ -439,10 +439,10 @@ model_rules = |tree, type, ids|
 			Ok({})
 		}
 		"Relationship" | "LifecycleScopedRelationship" => {
-			relationship = (tree.field("relationshipType") ?? JsonTree.Null).text() ?? ""
+			relationship = (tree.field("relationshipType") ?? JsonData.Null).string() ?? ""
 			if relationship == "hasDeclaredLicense" or relationship == "hasConcludedLicense" {
-				from = (tree.field("from") ?? JsonTree.Null).text() ?? ""
-				destinations = ((tree.field("to") ?? JsonTree.Array([])).items() ?? []).map(|target| target.text() ?? "")
+				from = (tree.field("from") ?? JsonData.Null).string() ?? ""
+				destinations = ((tree.field("to") ?? JsonData.Array([])).array() ?? []).map(|target| target.string() ?? "")
 				if !artifacts.contains(Lookup.find(ids, from) ?? "") {
 					return Err("${relationship} must go from an artifact")
 				}

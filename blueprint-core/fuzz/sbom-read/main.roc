@@ -6,13 +6,13 @@ app [target] {
 
 import pf.Fuzz
 import core.CycloneDx
-import core.JsonTree
+import core.JsonData
 import core.Lock
 import core.Sbom
 import core.Spec
 import core.Spdx3
 
-## For any text, `JsonTree.parse` and `Sbom.read` return a result rather than
+## For any text, `JsonData.decode_with` and `Sbom.read` return a result rather than
 ## crash or hang. JSON the tree accepts re-encodes to text that parses to the
 ## same tree. A document `Sbom.read` accepts is a sound package graph: package
 ## identifiers are unique local names, every relationship and root names a
@@ -34,10 +34,15 @@ test = |bytes|
 	match Str.from_utf8(bytes) {
 		Err(_) => Fuzz.reject
 		Ok(text) => {
-			match JsonTree.parse(text) {
-				Ok(tree) => if JsonTree.parse(tree.to_str()) != Ok(tree) {
-					crash "accepted JSON did not survive a re-encode"
-				}
+			match JsonData.decode_with(text, JsonData.documents) {
+				Ok(tree) =>
+					match JsonData.encode_with(tree, JsonData.documents) {
+						Ok(encoded) =>
+							if JsonData.decode_with(encoded, JsonData.documents) != Ok(tree) {
+								crash "accepted JSON did not survive a re-encode"
+							}
+						Err(problem) => crash "accepted JSON does not encode: ${JsonData.message(problem)}"
+					}
 				Err(_) => {}
 			}
 			match CycloneDx.validate(text) {
@@ -93,14 +98,14 @@ sound = |document, text| {
 }
 
 ## The references of an accepted BOM, found without the validator's index.
-declared : JsonTree -> {}
+declared : JsonData -> {}
 declared = |bom| {
 	refs = all_refs(bom)
 	if refs.len() != refs.fold([], |all, ref| if (all.contains(ref)) all else all.append(ref)).len() {
 		crash "CycloneDx.validate accepted a repeated bom-ref"
 	}
-	for dependency in (bom.field("dependencies") ?? JsonTree.Array([])).items() ?? [] {
-		named = ((dependency.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).map(|item| item.text() ?? "").append((dependency.field("ref") ?? JsonTree.Null).text() ?? "")
+	for dependency in (bom.field("dependencies") ?? JsonData.Array([])).array() ?? [] {
+		named = ((dependency.field("dependsOn") ?? JsonData.Array([])).array() ?? []).map(|item| item.string() ?? "").append((dependency.field("ref") ?? JsonData.Null).string() ?? "")
 		if named.any(|ref| !refs.contains(ref)) {
 			crash "CycloneDx.validate accepted a dependency on an undeclared bom-ref"
 		}
@@ -108,10 +113,10 @@ declared = |bom| {
 	{}
 }
 
-all_refs : JsonTree -> List(Str)
+all_refs : JsonData -> List(Str)
 all_refs = |tree|
 	match tree {
-		Object(members) => members.fold([], |all, entry| if (entry.key == "bom-ref") all.append(entry.value.text() ?? "") else if (entry.key == "dependencies" or entry.key == "properties") all else all.concat(all_refs(entry.value)))
+		Object(members) => members.fold([], |all, entry| if (entry.name == "bom-ref") all.append(entry.value.string() ?? "") else if (entry.name == "dependencies" or entry.name == "properties") all else all.concat(all_refs(entry.value)))
 		Array(items) => items.fold([], |all, item| all.concat(all_refs(item)))
 		_ => []
 	}
