@@ -33,33 +33,28 @@ CycloneDx := [].{
 	## `validate` for a document already parsed.
 	check : JsonTree -> Try({}, Str)
 	check = |tree| {
-		check_object(tree, "bom")?
-		if tree.field("bomFormat") != Ok(JsonTree.Text(format)) or tree.field("specVersion") != Ok(JsonTree.Text(version)) {
-			return Err("a CycloneDX ${version} BOM names bomFormat ${format} and specVersion ${version}")
-		}
-		refs = Lookup.index(bom_refs(tree).map(|ref| { key: ref, value: ref }))
-		match Lookup.repeated(refs) {
-			[] => {}
-			[ref, ..] => return Err("duplicate bom-ref ${ref}")
-		}
-		for dependency in (tree.field("dependencies") ?? JsonTree.Array([])).items() ?? [] {
-			named = [(dependency.field("ref") ?? JsonTree.Null).text() ?? ""].concat(((dependency.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).map(|item| item.text() ?? ""))
-			for ref in named {
-				if !Lookup.contains(refs, ref) {
-					return Err("dependency names ${ref}, which no component in the BOM declares")
-				}
-			}
-			depends = ((dependency.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).map(|item| item.text() ?? "")
-			if Lookup.repeated(Lookup.index(depends.map(|ref| { key: ref, value: ref }))) != [] {
-				return Err("dependsOn repeats a reference")
-			}
-		}
-		dependents = ((tree.field("dependencies") ?? JsonTree.Array([])).items() ?? []).map(|dependency| (dependency.field("ref") ?? JsonTree.Null).text() ?? "")
-		if Lookup.repeated(Lookup.index(dependents.map(|ref| { key: ref, value: ref }))) != [] {
-			return Err("two dependency entries name one component")
+		ignored = check_bom(tree, Strict)?
+		if !ignored.is_empty() {
+			return Err("outside this profile: ${Str.join_with(ignored, ", ")}")
 		}
 		Ok({})
 	}
+
+	## An RFC 4122 `urn:uuid:` serial number, which identifies a BOM.
+	serial_number : Str -> Bool
+	serial_number = |text| serial(text)
+
+	## The CycloneDX versions an import reads. Each is checked against the 1.7
+	## rules for what Blueprint reads, which earlier versions share.
+	import_versions : List(Str)
+	import_versions = ["1.4", "1.5", "1.6", "1.7"]
+
+	## A BOM from elsewhere: the same checks as `check`, except that it may
+	## name an earlier version, and members this profile does not read, such
+	## as vulnerabilities, services or a component's pedigree, are named in
+	## the result rather than refused. Their JSON kinds are still checked.
+	check_import : JsonTree -> Try(List(Str), Str)
+	check_import = |tree| check_bom(tree, Lenient)
 
 	## An RFC 3339 `date-time`, as the schema's format names it.
 	date_time : Str -> Bool
@@ -98,6 +93,43 @@ CycloneDx := [].{
 	## test can hold them to the schema.
 	objects : List({ definition : Str, members : List(Str) })
 	objects = ["metadata", "component", "hash", "externalReference", "dependency", "property", "organizationalEntity", "organizationalContact"].map(|name| { definition: name, members: (class(name) ?? []).map(|property| property.name) })
+}
+
+Mode : [Strict, Lenient]
+
+check_bom : JsonTree, Mode -> Try(List(Str), Str)
+check_bom = |tree, mode| {
+	ignored = check_object(tree, "bom", mode)?
+	spec = (tree.field("specVersion") ?? JsonTree.Null).text() ?? ""
+	versions = match mode {
+		Strict => [CycloneDx.version]
+		Lenient => CycloneDx.import_versions
+	}
+	if tree.field("bomFormat") != Ok(JsonTree.Text(CycloneDx.format)) or !versions.contains(spec) {
+		return Err("a BOM names bomFormat ${CycloneDx.format} and specVersion ${Str.join_with(versions, ", ")}")
+	}
+	refs = Lookup.index(bom_refs(tree).map(|ref| { key: ref, value: ref }))
+	match Lookup.repeated(refs) {
+		[] => {}
+		[ref, ..] => return Err("duplicate bom-ref ${ref}")
+	}
+	for dependency in (tree.field("dependencies") ?? JsonTree.Array([])).items() ?? [] {
+		named = [(dependency.field("ref") ?? JsonTree.Null).text() ?? ""].concat(((dependency.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).map(|item| item.text() ?? ""))
+		for ref in named {
+			if !Lookup.contains(refs, ref) {
+				return Err("dependency names ${ref}, which no component in the BOM declares")
+			}
+		}
+		depends = ((dependency.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).map(|item| item.text() ?? "")
+		if Lookup.repeated(Lookup.index(depends.map(|ref| { key: ref, value: ref }))) != [] {
+			return Err("dependsOn repeats a reference")
+		}
+	}
+	dependents = ((tree.field("dependencies") ?? JsonTree.Array([])).items() ?? []).map(|dependency| (dependency.field("ref") ?? JsonTree.Null).text() ?? "")
+	if Lookup.repeated(Lookup.index(dependents.map(|ref| { key: ref, value: ref }))) != [] {
+		return Err("two dependency entries name one component")
+	}
+	Ok(ignored)
 }
 
 component_types = ["application", "framework", "library", "container", "platform", "operating-system", "device", "device-driver", "firmware", "file", "machine-learning-model", "data", "cryptographic-asset"]
@@ -148,7 +180,7 @@ class = |name|
 				one("description", Text),
 				one("scope", Enum(scopes)),
 				many("hashes", Inline("hash")),
-				many("licenses", Inline("license")),
+				many("licenses", Inline("licenseChoice")),
 				one("copyright", Text),
 				one("cpe", Text),
 				one("purl", Purl),
@@ -158,7 +190,9 @@ class = |name|
 			].concat(["author", "versionRange", "patentAssertions", "omniborId", "swhid", "swid", "modified", "pedigree", "evidence", "releaseNotes", "modelCard", "data", "cryptoProperties", "tags", "signature"].map(|unread| one(unread, Unsupported))),
 		)
 		"hash" => Ok([needs(one("alg", Enum(hash_algorithms))), needs(one("content", Text))])
-		"license" => Ok([needs(one("expression", Expression))].concat(["expressionDetails", "acknowledgement", "bom-ref", "licensing", "properties"].map(|unread| one(unread, Unsupported))))
+		"licenseChoice" => Ok([one("expression", Expression), one("license", Inline("license"))].concat(["expressionDetails", "acknowledgement", "bom-ref", "licensing", "properties"].map(|unread| one(unread, Unsupported))))
+		"license" => Ok([one("bom-ref", Ref), one("id", Text), one("name", Text), one("url", Iri), one("acknowledgement", Enum(["declared", "concluded"]))].concat(["text", "licensing", "properties"].map(|unread| one(unread, Unsupported))))
+		"tool" => Ok([one("vendor", Text), one("name", Text), one("version", Version), many("hashes", Inline("hash")), many("externalReferences", Inline("externalReference"))])
 		"externalReference" => Ok([needs(one("url", Iri)), one("comment", Text), needs(one("type", Enum(reference_types))), many("hashes", Inline("hash")), many("properties", Inline("property"))])
 		"dependency" => Ok([needs(one("ref", Ref)), many("dependsOn", Ref), many("provides", Unsupported)])
 		"property" => Ok([needs(one("name", Text)), one("value", Text)])
@@ -167,18 +201,24 @@ class = |name|
 		_ => Err("CycloneDX object ${name} is outside this profile")
 	}
 
-check_object : JsonTree, Str -> Try({}, Str)
-check_object = |tree, kind| {
+## Check `tree` as the schema's `kind`, and name the members it holds that
+## this profile does not read. Strict mode refuses those instead.
+check_object : JsonTree, Str, Mode -> Try(List(Str), Str)
+check_object = |tree, kind, mode| {
 	properties = class(kind)?
 	match tree {
 		Object(_) => {}
 		_ => return Err("${kind} must be an object")
 	}
+	var $ignored = []
 	for key in tree.keys() {
 		match properties.find_first(|property| property.name == key) {
 			Ok(property) =>
-				match property.kind {
-					Unsupported => return Err("${kind}.${key} is outside this profile")
+				match (property.kind, mode) {
+					(Unsupported, Strict) => return Err("${kind}.${key} is outside this profile")
+					(Unsupported, Lenient) => {
+						$ignored = $ignored.append("${kind}.${key}")
+					}
 					_ => {}
 				}
 			Err(_) => return Err("${kind} has no property ${key} in CycloneDX ${CycloneDx.version}")
@@ -192,10 +232,12 @@ check_object = |tree, kind| {
 				}
 			Ok(value) =>
 				match (property.count, value) {
-					(One, _) => check_value(value, property.kind).map_err(|problem| "${kind}.${property.name}: ${problem}")?
+					(One, _) => {
+						$ignored = $ignored.concat(check_value(value, property.kind, mode).map_err(|problem| "${kind}.${property.name}: ${problem}")?)
+					}
 					(Many, Array(values)) =>
 						for item in values {
-							check_value(item, property.kind).map_err(|problem| "${kind}.${property.name}: ${problem}")?
+							$ignored = $ignored.concat(check_value(item, property.kind, mode).map_err(|problem| "${kind}.${property.name}: ${problem}")?)
 						}
 					(Many, _) => return Err("${kind}.${property.name} must be an array")
 				}
@@ -215,27 +257,57 @@ check_object = |tree, kind| {
 			return Err("${algorithm} hash is not ${expected.to_str()} hex digits")
 		}
 	}
-	Ok({})
+	# A license choice is an expression or a license; a license has an id or a name.
+	if kind == "licenseChoice" and tree.field("expression").is_ok() == tree.field("license").is_ok() {
+		return Err("a license choice holds exactly one of expression and license")
+	}
+	if kind == "license" and tree.field("id").is_ok() == tree.field("name").is_ok() {
+		return Err("a license holds exactly one of id and name")
+	}
+	if kind == "license" {
+		id = (tree.field("id") ?? JsonTree.Null).text() ?? ""
+		listed = id.is_empty() or SbomLicenses.licenses.contains(id) or SbomLicenses.exceptions.contains(id)
+		match (listed, mode) {
+			(True, _) => {}
+			(False, Strict) => return Err("license id ${id} is not in the SPDX License List")
+			(False, Lenient) => {
+				$ignored = $ignored.append("license id ${id} outside SPDX License List 3.26")
+			}
+		}
+	}
+	Ok($ignored)
 }
 
-check_value : JsonTree, Kind -> Try({}, Str)
-check_value = |value, kind|
+check_value : JsonTree, Kind, Mode -> Try(List(Str), Str)
+check_value = |value, kind, mode| {
+	ok = Ok([])
 	match (kind, value) {
-		(Text, Text(_)) => Ok({})
-		(Bool, Bool(_)) => Ok({})
+		(Text, Text(_)) => ok
+		(Bool, Bool(_)) => ok
 		# JSON Schema draft-07 counts any number with no fractional part as an integer.
-		(Integer, Num(number)) => if (number >= 1 and Dec.to_str(number).ends_with(".0") and Dec.to_str(number).drop_suffix(".0").to_utf8().all(|byte| byte >= '0' and byte <= '9')) Ok({}) else Err("not an integer of at least 1")
-		(DateTime, Text(text)) => if (CycloneDx.date_time(text)) Ok({}) else Err("not an RFC 3339 date-time")
-		(Ref, Text(text)) => if (!text.is_empty() and !text.starts_with("urn:cdx:")) Ok({}) else Err("a bom-ref is non-empty and is not a BOM-Link")
-		(Iri, Text(text)) => if (!text.is_empty() and !text.to_utf8().any(|byte| byte <= 32 or byte == 127)) Ok({}) else Err("not an IRI reference")
-		(Purl, Text(text)) => if (text.starts_with("pkg:") and text.drop_prefix("pkg:").contains("/") and !text.to_utf8().any(|byte| byte <= 32)) Ok({}) else Err("not a package URL")
-		(Serial, Text(text)) => if (serial(text)) Ok({}) else Err("not a urn:uuid serial number")
-		(Version, Text(text)) => if (text.to_utf8().len() <= 1024) Ok({}) else Err("version longer than 1024 bytes")
-		(Expression, Text(text)) => if (SbomLicenses.expression(text)) Ok({}) else Err("invalid SPDX license expression ${Json.to_str(text)}")
-		(Enum(allowed), Text(text)) => if (allowed.contains(text)) Ok({}) else Err("${text} is not a permitted value")
-		(Inline(name), _) => check_object(value, name)
+		(Integer, Num(number)) => if (number >= 1 and Dec.to_str(number).ends_with(".0") and Dec.to_str(number).drop_suffix(".0").to_utf8().all(|byte| byte >= '0' and byte <= '9')) ok else Err("not an integer of at least 1")
+		(DateTime, Text(text)) => if (CycloneDx.date_time(text)) ok else Err("not an RFC 3339 date-time")
+		(Ref, Text(text)) => if (!text.is_empty() and !text.starts_with("urn:cdx:")) ok else Err("a bom-ref is non-empty and is not a BOM-Link")
+		(Iri, Text(text)) => if (!text.is_empty() and !text.to_utf8().any(|byte| byte <= 32 or byte == 127)) ok else Err("not an IRI reference")
+		(Purl, Text(text)) => if (text.starts_with("pkg:") and text.drop_prefix("pkg:").contains("/") and !text.to_utf8().any(|byte| byte <= 32)) ok else Err("not a package URL")
+		(Serial, Text(text)) => if (serial(text)) ok else Err("not a urn:uuid serial number")
+		(Version, Text(text)) => if (text.to_utf8().len() <= 1024) ok else Err("version longer than 1024 bytes")
+		(Expression, Text(text)) => if (SbomLicenses.expression(text)) ok else Err("invalid SPDX license expression ${Json.to_str(text)}")
+		(Enum(allowed), Text(text)) => if (allowed.contains(text)) ok else Err("${text} is not a permitted value")
+		# Tools are an object since 1.5, and a legacy array of tool records before.
+		(Inline("tools"), Array(items)) => items.fold(
+			ok,
+			|result, item| match result {
+				Ok(found) => check_object(item, "tool", mode).map_ok(|more| found.concat(more))
+				Err(problem) => Err(problem)
+			},
+		)
+		(Inline(name), _) => check_object(value, name, mode)
+		# A member this profile does not read still has to be JSON of some kind.
+		(Unsupported, _) => ok
 		_ => Err("wrong JSON kind")
 	}
+}
 
 ## The schema's pattern `^urn:uuid:` then 8-4-4-4-12 lowercase hex digits.
 serial : Str -> Bool

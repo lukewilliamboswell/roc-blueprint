@@ -81,6 +81,22 @@ test = |input| {
 	if seen(bom) != standard(inventory, subject) {
 		crash "CycloneDX standard fields differ from the inventory:\n${Str.inspect(seen(bom))}\n${Str.inspect(standard(inventory, subject))}"
 	}
+	# A consumer of plain CycloneDX, without Blueprint's properties, imports
+	# what the projection below says, and nothing else.
+	plain = strip_properties(bom)
+	if Sbom.read(plain.to_str()) != Ok(projected(inventory, subject, (bom.field("serialNumber") ?? JsonTree.Null).text() ?? "")) {
+		crash "plain CycloneDX imports differently:\n${Str.inspect(Sbom.read(plain.to_str()))}\n${Str.inspect(projected(inventory, subject, (bom.field("serialNumber") ?? JsonTree.Null).text() ?? ""))}"
+	}
+	# Files beside the packages, as generators write them, change nothing in
+	# the package graph and are counted in its gaps.
+	with_file_3 = add_file_3(tree, context.namespace)
+	if Sbom.read(with_file_3.to_str()) != Ok({ ..wanted, gaps: ["1 × file", "1 × relationship to an element that is not a package"] }) {
+		crash "SPDX 3.0.1 with a file reads differently: ${Str.inspect(Sbom.read(with_file_3.to_str()))}"
+	}
+	two_tree = JsonTree.parse(two) ?? crash "SPDX 2.3 rendering is not JSON"
+	if Sbom.read(add_file_2(two_tree).to_str()) != Ok({ ..wanted, version: "SPDX-2.3", gaps: ["1 × file", "1 × relationship to a file or snippet"] }) {
+		crash "SPDX 2.3 with a file reads differently: ${Str.inspect(Sbom.read(add_file_2(two_tree).to_str()))}"
+	}
 	bom_violation = bom_violations.get(input.bom_violation.to_u64() % bom_violations.len()) ?? crash "no violations"
 	match (bom_violation.apply)(bom, input.pick) {
 		Ok(broken) =>
@@ -119,7 +135,7 @@ expected = |inventory, subject| {
 		},
 	)
 	evidence = Json.to_str({ profile: Sbom.profile, revision: context.revision, target: subject.target, coverage: inventory.coverage, inspected: inventory.inspected, dispositions: inventory.inputs })
-	{ version: "SPDX-${Spdx3.version}", namespace: context.namespace, name: subject.filename, roots: ["Subject"], packages_: components.prepend(subject_package), relationships: inventory.relationships, evidence: [evidence] }
+	{ version: "SPDX-${Spdx3.version}", namespace: context.namespace, name: subject.filename, roots: ["Subject"], packages_: components.prepend(subject_package), relationships: inventory.relationships, evidence: [evidence], gaps: [] }
 }
 
 ## What a reader of standard CycloneDX learns about each component, and the
@@ -160,6 +176,90 @@ standard = |inventory, subject| {
 		),
 		dependents: depends("Subject"),
 	}
+}
+
+## A BOM with every `properties` member removed, as a plain CycloneDX
+## consumer that ignores them sees it.
+strip_properties : JsonTree -> JsonTree
+strip_properties = |tree|
+	match tree {
+		Object(members) => JsonTree.Object(members.drop_if(|entry| entry.key == "properties").map(|entry| { key: entry.key, value: strip_properties(entry.value) }))
+		Array(items) => JsonTree.Array(items.map(strip_properties))
+		_ => tree
+	}
+
+## What importing plain CycloneDX gives: each relationship CycloneDX can say,
+## `contains` and `dependsOn`, as an unscoped dependency, once per pair; a
+## component nothing connects to the subject related to it as `other`; and
+## only the facts plain CycloneDX carries.
+projected : Sbom.Inventory, Sbom.Subject, Str -> Sbom.Document
+projected = |inventory, subject, serial| {
+	refs = inventory.components.map(|component| component.id).prepend("Subject")
+	said = refs.fold(
+		[],
+		|all, ref| all.concat(
+			inventory.relationships.keep_if(|edge| edge.from == ref and (edge.relation == "contains" or edge.relation == "dependsOn")).map(|edge| edge.to).fold([], |kept, to| if (kept.contains(to)) kept else kept.append(to)).map(|to| { from: ref, to, relation: "dependsOn", scope: "", basis: "CycloneDX dependency; CycloneDX states no lifecycle scope for it" }),
+		),
+	)
+	var $reached = ["Subject"]
+	var $grew = True
+	while $grew {
+		$grew = False
+		for edge in said {
+			if $reached.contains(edge.from) and !$reached.contains(edge.to) {
+				$reached = $reached.append(edge.to)
+				$grew = True
+			}
+			if $reached.contains(edge.to) and !$reached.contains(edge.from) {
+				$reached = $reached.append(edge.from)
+				$grew = True
+			}
+		}
+	}
+	listed = inventory.components.keep_if(|component| !$reached.contains(component.id)).map(|component| { from: "Subject", to: component.id, relation: "other", scope: "", basis: "Listed in the CycloneDX BOM's components; the BOM states no relationship to the described component" })
+	scope_of = standard(inventory, subject).components
+	{
+		version: "CycloneDX-1.7",
+		namespace: serial,
+		name: subject.filename,
+		roots: ["Subject"],
+		packages_: inventory.components.map(
+			|component| {
+				id: component.id,
+				name: component.name,
+				version: component.version,
+				supplier: component.producer,
+				download: component.download,
+				license: if (component.license == "NONE") "NOASSERTION" else component.license,
+				license_url: if (component.license.contains("LicenseRef-") and component.license_url != "NOASSERTION") component.license_url else "",
+				sha256: component.sha256,
+				identity: if (component.identity.starts_with("pkg:")) component.identity else "",
+				comment: Json.to_str({ type: "library", scope: (scope_of.find_first(|entry| entry.ref == component.id) ?? crash "unscoped").scope }),
+			},
+		).prepend({ id: "Subject", name: subject.filename, version: subject.version, supplier: "NOASSERTION", download: subject.url, license: "NOASSERTION", license_url: "", sha256: subject.sha256, identity: "", comment: Json.to_str({ type: "file", scope: "" }) }),
+		relationships: said.concat(listed),
+		evidence: [],
+		gaps: [],
+	}
+}
+
+## An SPDX 3.0.1 rendering with a file in its graph and a relationship from
+## the subject to it.
+add_file_3 : JsonTree, Str -> JsonTree
+add_file_3 = |tree, namespace| {
+	objects = graph(tree)
+	file = JsonTree.Object([{ key: "type", value: JsonTree.Text("software_File") }, { key: "spdxId", value: JsonTree.Text("${namespace}#spdx/file/added") }, { key: "creationInfo", value: JsonTree.Text("_:creationinfo") }, { key: "name", value: JsonTree.Text("./README") }])
+	relation = JsonTree.Object([{ key: "type", value: JsonTree.Text("Relationship") }, { key: "spdxId", value: JsonTree.Text("${namespace}#spdx/relationship/added") }, { key: "creationInfo", value: JsonTree.Text("_:creationinfo") }, { key: "from", value: JsonTree.Text("${namespace}#Subject") }, { key: "relationshipType", value: JsonTree.Text("contains") }, { key: "to", value: JsonTree.Array([JsonTree.Text("${namespace}#spdx/file/added")]) }])
+	with_graph(tree, objects.concat([file, relation]))
+}
+
+## An SPDX 2.3 rendering with a file and the subject's CONTAINS of it.
+add_file_2 : JsonTree -> JsonTree
+add_file_2 = |tree| {
+	file = JsonTree.Object([{ key: "SPDXID", value: JsonTree.Text("SPDXRef-File-added") }, { key: "fileName", value: JsonTree.Text("./README") }, { key: "checksums", value: JsonTree.Array([JsonTree.Object([{ key: "algorithm", value: JsonTree.Text("SHA1") }, { key: "checksumValue", value: JsonTree.Text(Str.join_with(List.repeat("b", 40), "")) }])]) }])
+	relation = JsonTree.Object([{ key: "spdxElementId", value: JsonTree.Text("SPDXRef-Subject") }, { key: "relatedSpdxElement", value: JsonTree.Text("SPDXRef-File-added") }, { key: "relationshipType", value: JsonTree.Text("CONTAINS") }])
+	with_files = set(tree, "files", JsonTree.Array([file]))
+	set(with_files, "relationships", JsonTree.Array(((tree.field("relationships") ?? JsonTree.Array([])).items() ?? []).append(relation)))
 }
 
 ## The same fields read from a BOM with nothing but the CycloneDX schema.

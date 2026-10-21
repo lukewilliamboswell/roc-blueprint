@@ -523,52 +523,81 @@ available for individually justified scopes. Schema validity alone says
 nothing about the completeness of the underlying software inventory.
 
 [#import-inert-verified-upstream-graphs]
-== Import inert, verified upstream graphs
+== Import your suppliers' SBOMs
+
+You cannot review every dependency yourself. When a supplier publishes an
+SBOM for something you consume, Blueprint can check it and fold it into your
+own inventory, so your SBOM covers that supplier's components too.
 
 An `imported_documents` entry supplies `id`, `url`, `sha256`, `namespace`,
-`target`, `document`, `relation`, `basis`, `contact` and `subject`. `document` contains the
-local SPDX JSON bytes as a string, and `relation` is an SPDX 3.0.1 composition
-relationship. Its checksum and namespace must agree with
-the reviewed reference. Reporting never fetches the URL or executes content.
-Use an immutable release/revision URL and retain those exact verified bytes
-for recipients.
+`target`, `document`, `relation`, `basis`, `contact` and `subject`. `document`
+holds the supplier's SBOM bytes as a string, and `relation` is an SPDX 3.0.1
+composition relationship. The document's SHA-256 and identity must match the
+entry: the namespace of an SPDX document, or the `serialNumber` of a CycloneDX
+BOM. Reporting never fetches the URL or runs anything in the document. Use an
+immutable release URL and keep the exact verified bytes for your recipients.
 
-The import profile reads package-only graphs in SPDX 3.0.1 JSON-LD, SPDX 2.3
-JSON and SPDX 2.2 JSON, after checking each against its version of the
-specification. An SPDX 3.0.1 document holds one `SpdxDocument` whose `spdxId`
-is `NAMESPACE#fragment`; its packages are `NAMESPACE#name`, and its root
-element, or a `software_Sbom` root's, or a `describes` relationship names the
-subject. A reference into another document needs an `import` external map,
-which the profile does not read, so it is rejected. An SPDX 2 document names
-its subject with `DESCRIBES` or `documentDescribes`. Packages carry version,
-supplier, download location, declared license and SHA-256, and relationships
-must have a composition spelling (the table above, plus SPDX 2's
-`CONTAINED_BY`, `DEPENDENCY_OF` and `GENERATED_FROM`). Files, snippets and
-other element kinds are outside the profile and rejected. It prefixes imported identifiers to avoid
-collisions and preserves source namespace and verified-document SHA-256 in
-each imported component. Restricted license terms must name their location:
-`simplelicensing_customIdToUri` in SPDX 3.0.1, `seeAlsos` in SPDX 2.
-`subject` contains `component`, `filename`, `version` and `sha256`.
-Map `component` to the declaration for the consumed archive/program. Its
-resolved Lock digest, version and target must match the upstream described
-subject, in addition to verifying the upstream document's own digest and
-namespace. A `copiedTo` relationship preserves the bound upstream subject
-identity; imported component/edge identities retain their namespace and
-provenance. This lets a reviewed upstream graph replace duplicated dependency
-inventories while the Lock remains the authority for consumed artifact bytes.
-An empty component mapping imports only an integrity-checked upstream
-statement: coverage explicitly says the subject is unbound and its composition
-claims remain unverified. It cannot establish verified artifact composition.
+[cols="1,2",options="header"]
+|===
+| Supplier's format | What Blueprint reads
 
-Dangling external-document references require the referenced graph explicitly;
-they are rejected rather than silently discarded. Imported coverage remains
-incomplete unless the repository separately establishes the relevant closure.
+| SPDX 3.0.1 JSON-LD | Packages, their relationships and declared licenses. The document's root element, a `software_Sbom` root, or a `describes` relationship names the subject.
+
+| SPDX 2.3 and 2.2 JSON | Packages and their relationships. `DESCRIBES`, `DESCRIBED_BY` or `documentDescribes` names the subject.
+
+| CycloneDX 1.4 to 1.7 JSON | `metadata.component` is the subject. `components`, nested ones as `contains`, and `dependencies` as `dependsOn`.
+|===
+
+Each document is checked against its format's schema first. Blueprint then
+reads what its package graph can hold and *counts what it leaves out*: files,
+snippets, relationships to them or into other documents, relationship types
+with no composition meaning, and CycloneDX sections that are not composition,
+such as `vulnerabilities` and `services`. Those counts go into the import's
+coverage, which is always `incomplete`, so a recipient can see exactly what a
+supplier said that your SBOM does not carry. Nothing is dropped silently.
+
+Some values a supplier writes cannot be published as they are. Blueprint
+replaces them and records the original in the component's notes:
+
+* A missing name or version becomes `NOASSERTION`.
+* A download location that is not a plain HTTPS URL, such as
+  `registry+https://...` or `git+ssh://...`, becomes `NOASSERTION`.
+* A license that is not an SPDX expression, or is named only in text,
+  becomes `NOASSERTION`. A `LicenseRef-` with no terms location keeps
+  `NOASSERTION` as its location.
+* A package URL without a version, or one another imported package already
+  uses, gives way to an identity in the supplier's document.
+
+An import that would publish an absolute developer path or a credential is
+refused, with the imported component named.
+
+Imported identifiers are prefixed with the entry's `id`, so they cannot
+collide with yours, and every imported component keeps the supplier's
+document identity and SHA-256 in its notes. CycloneDX `bom-ref`s that are not
+valid identifiers are mapped to ones that are, with a short hash so distinct
+references stay distinct. CycloneDX states no build or test scope for a
+dependency, so imported CycloneDX dependencies carry none. A component a
+CycloneDX BOM lists but relates to nothing is related to its subject as
+`other`, which claims no containment.
+
+`subject` contains `component`, `filename`, `version` and `sha256`. To *bind*
+the supplier's SBOM to what you actually consumed, set `component` to the
+declaration of that archive or program. Its resolved Lock digest, version and
+target must then match the supplier's described subject, and a `copiedTo`
+relationship records the match. This lets a reviewed upstream graph stand in
+for a duplicated dependency inventory while the Lock stays the authority for
+the bytes you consumed. An empty `component` imports an *unbound* statement:
+coverage says the subject is not bound to a resolved artifact and its claims
+are unverified. An unbound subject may state no SHA-256, as a supplier's SBOM
+of a source tree often does; a bound one must.
+
+The importer is tested against what Syft and Trivy write, in both CycloneDX and
+SPDX (`tests/sbom/fixtures/upstream/`), and the `sbom-read` fuzz target requires
+that every document Blueprint can read also imports.
 
 Inputs are limited to 1 MiB, JSON nesting to 64 levels, imports to 16,
-components to 4,096 and relationships to 16,384. Metadata URIs use HTTPS
-without userinfo, query credentials or local filesystem paths. Explicit
-unknown download locations use `NOASSERTION`. SPDX licenses and exceptions
-are validated against the pinned SPDX 3.26.0 identifiers and expression grammar.
+components to 4,096 and relationships to 16,384. Licenses and exceptions are
+checked against the pinned SPDX License List 3.26.0 and expression grammar.
 
 [#bind-the-final-bytes-separately]
 == Bind the final bytes separately
@@ -670,12 +699,11 @@ rendering.
 
 `Sbom.read_cyclonedx` reads a BOM that Blueprint rendered back to the same
 package graph as `Sbom.read` gives for its SPDX renderings, after validating
-it against CycloneDX 1.7 and checking that its `dependencies` are what its
-relationships state. It is not a general CycloneDX importer: a BOM without the
-`blueprint:` properties is refused, and upstream graphs are imported only as
-SPDX (see <<import-inert-verified-upstream-graphs>>). Services, compositions,
-vulnerabilities, formulation and other top-level CycloneDX sections are
-outside the profile.
+it against CycloneDX 1.7 and checking that its `dependencies` and scopes are
+what its relationships state; `Sbom.read` uses it for such BOMs. Other
+CycloneDX BOMs, such as a supplier's, are read by their standard fields (see
+<<import-inert-verified-upstream-graphs>>), and what those cannot carry is
+counted in the import's coverage.
 
 == Blueprint's own release evidence
 

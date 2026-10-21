@@ -130,9 +130,12 @@ A standalone Roc app bundle provides the same `inspect` and `bind` operations
 without a Blueprint project. The published release notes link its immutable
 bundle URL; it uses the same pinned compiler as Blueprint.
 
-Consumers can import an upstream SPDX 3.0.1, 2.3 or 2.2 graph after verifying
-its document digest and namespace, and bind its described subject to the resolved
-artifact's digest, version and target. Imported identities and dependency
+Consumers can import a supplier's SBOM, in SPDX 3.0.1, 2.3 or 2.2 or in
+CycloneDX 1.4 to 1.7, after verifying its document digest and identity, and
+bind its described subject to the resolved artifact's digest, version and
+target. What Syft and Trivy publish imports as it is: files, vulnerabilities
+and other parts the package graph cannot carry are counted in the import's
+coverage rather than refused or dropped. Imported identities and dependency
 relationships remain available for downstream analysis.
 
 Release executables and Roc source bundles have their own `.spdx.json`

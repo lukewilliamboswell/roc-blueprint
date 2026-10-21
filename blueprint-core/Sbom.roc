@@ -39,8 +39,12 @@ Sbom := [].{
 	## The package graph of an SPDX document. `roots` are the packages it
 	## describes. Identifiers are local, as in a Composition. `evidence` holds
 	## the text of each `other` annotation on the document itself, where
-	## `render` records the profile's coverage and input dispositions.
-	Document : { version : Str, namespace : Str, name : Str, roots : List(Str), packages_ : List(Package), relationships : List(Edge), evidence : List(Str) }
+	## `render` records the profile's coverage and input dispositions. `gaps`
+	## counts what the reader left out of the package graph, and why: files,
+	## snippets, relationships to them or into other documents, relationship
+	## types with no composition meaning, and the sections of a CycloneDX BOM
+	## that are not composition. Blueprint's own documents have none.
+	Document : { version : Str, namespace : Str, name : Str, roots : List(Str), packages_ : List(Package), relationships : List(Edge), evidence : List(Str), gaps : List(Str) }
 
 	## Existing optional Spec extension seam: Custom("sbom-v1", SUBJECT, Str(JSON)).
 	## No resolver pins live in this metadata; `origin` references the Lock.
@@ -330,8 +334,9 @@ Sbom := [].{
 		read_bom(CycloneDx.validate(text)?)
 	}
 
-	## The package graph of an SPDX 3.0.1, 2.3 or 2.2 JSON document, after
-	## checking it against that version. Only a package graph is read: other
+	## The package graph of an SPDX 3.0.1, 2.3 or 2.2 JSON document, or of a
+	## CycloneDX 1.4 to 1.7 JSON BOM, after checking it against that format.
+	## A BOM Blueprint wrote is read through its `blueprint:` properties. Only a package graph is read: other
 	## element kinds, and relationships without a Composition spelling, are
 	## outside this profile and rejected.
 	read : Str -> Try(Document, Str)
@@ -345,8 +350,11 @@ Sbom := [].{
 		} else if tree.field("spdxVersion").is_ok() {
 			Spdx2.validate(tree)?
 			read_spdx2(tree)
+		} else if tree.field("bomFormat").is_ok() {
+			ignored = CycloneDx.check_import(tree)?
+			if (text.contains("\"blueprint:namespace\"")) read_bom(tree) else read_foreign_bom(tree, ignored)
 		} else {
-			Err("not an SPDX 3 JSON-LD or SPDX 2 JSON document")
+			Err("not an SPDX 3 JSON-LD, SPDX 2 JSON or CycloneDX JSON document")
 		}
 	}
 }
@@ -467,7 +475,7 @@ spdx3 = |inventory, subject, context| {
 			"simplelicensing_LicenseExpression",
 			license_local(entry),
 			[member("simplelicensing_licenseExpression", text(entry.license)), member("simplelicensing_licenseListVersion", text("3.26.0"))]
-				.concat(when(!SbomLicenses.custom_ids(entry.license).is_empty(), [member("simplelicensing_customIdToUri", JsonTree.Array(SbomLicenses.custom_ids(entry.license).map(|id| JsonTree.Object([member("type", text("DictionaryEntry")), member("key", text(id)), member("value", text(entry.license_url))]))))])),
+				.concat(when(!SbomLicenses.custom_ids(entry.license).is_empty() and entry.license_url != "NOASSERTION", [member("simplelicensing_customIdToUri", JsonTree.Array(SbomLicenses.custom_ids(entry.license).map(|id| JsonTree.Object([member("type", text("DictionaryEntry")), member("key", text(id)), member("value", text(entry.license_url))]))))])),
 		),
 	)
 	declared = listed_packages.map(
@@ -515,7 +523,7 @@ read_spdx3 = |nodes| {
 	}
 	local = |id| {
 		fragment = id.drop_prefix("${namespace}#")
-		if (id.starts_with("${namespace}#") and !fragment.is_empty() and !fragment.contains("#")) Ok(fragment) else Err("${id} is not NAMESPACE#name in the document namespace ${namespace}")
+		if (id.starts_with("${namespace}#") and !fragment.is_empty() and !fragment.contains("#")) Ok(local_ref(fragment)) else Err("${id} is not NAMESPACE#name in the document namespace ${namespace}")
 	}
 	by_id = Lookup.index(nodes.keep_if(|node| !node.id.is_empty()).map(|node| { key: node.id, value: node }))
 	field_text = |tree, key| (tree.field(key) ?? JsonTree.Null).text() ?? ""
@@ -538,7 +546,7 @@ read_spdx3 = |nodes| {
 				value = field_text(expression, "simplelicensing_licenseExpression")
 				first = SbomLicenses.custom_ids(value).first() ?? ""
 				entries = (expression.field("simplelicensing_customIdToUri") ?? JsonTree.Array([])).items() ?? []
-				(value, entries.find_first(|entry| field_text(entry, "key") == first).map_ok(|entry| field_text(entry, "value")) ?? "")
+				(value, entries.find_first(|entry| field_text(entry, "key") == first).map_ok(|entry| field_text(entry, "value")) ?? (if (first.is_empty()) "" else "NOASSERTION"))
 			}
 			_ => return Err("package ${id} declares more than one license")
 		}
@@ -574,37 +582,42 @@ read_spdx3 = |nodes| {
 		}
 	}
 	var $edges = []
+	var $gaps = []
 	for node in nodes.keep_if(|candidate| candidate.type == "Relationship" or candidate.type == "LifecycleScopedRelationship") {
 		relation = field_text(node.tree, "relationshipType")
 		from = field_text(node.tree, "from")
 		destinations = field_texts(node.tree, "to")
+		scope = field_text(node.tree, "scope")
 		if relation == "describes" {
 			$roots = $roots.concat(destinations)
-		} else if relation != "hasDeclaredLicense" and relation != "hasConcludedLicense" {
-			if !Sbom.relations.contains(relation) {
-				return Err("relationship type ${relation} is outside this profile")
-			}
-			scope = field_text(node.tree, "scope")
-			if !scope.is_empty() and (relation != "dependsOn" or !Sbom.scopes.contains(scope)) {
-				return Err("lifecycle scope ${scope} on ${relation} is outside this profile")
-			}
+		} else if relation == "hasDeclaredLicense" or relation == "hasConcludedLicense" {
+			{}
+		} else if !Sbom.relations.contains(relation) {
+			$gaps = $gaps.concat(destinations.map(|_| "relationship of type ${relation}, which has no composition meaning"))
+		} else if !scope.is_empty() and (relation != "dependsOn" or !Sbom.scopes.contains(scope)) {
+			$gaps = $gaps.concat(destinations.map(|_| "${relation} relationship with lifecycle scope ${scope}"))
+		} else {
 			for destination in destinations {
 				if !package_iris.contains(from) or !package_iris.contains(destination) {
-					return Err("relationship between non-package elements is outside this profile")
+					$gaps = $gaps.append("relationship to an element that is not a package")
+				} else {
+					$edges = $edges.append({ from: local(from)?, to: local(destination)?, relation, scope, basis: field_text(node.tree, "comment") })
 				}
-				$edges = $edges.append({ from: local(from)?, to: local(destination)?, relation, scope, basis: field_text(node.tree, "comment") })
 			}
 		}
 	}
 	var $root_ids = []
 	for root in unique($roots) {
-		if !package_iris.contains(root) {
-			return Err("document describes ${root}, which is not a package")
+		if package_iris.contains(root) {
+			$root_ids = $root_ids.append(local(root)?)
+		} else {
+			$gaps = $gaps.append("described element that is not a package")
 		}
-		$root_ids = $root_ids.append(local(root)?)
 	}
+	files = nodes.keep_if(|node| node.type == "software_File").len()
+	file_gaps = List.repeat("file", files)
 	statements = nodes.keep_if(|node| node.type == "Annotation" and field_text(node.tree, "annotationType") == "other" and field_text(node.tree, "subject") == document.id).map(|node| field_text(node.tree, "statement"))
-	Ok({ version: "SPDX-${Spdx3.version}", namespace, name: field_text(document.tree, "name"), roots: $root_ids, packages_: $found, relationships: $edges, evidence: statements })
+	Ok({ version: "SPDX-${Spdx3.version}", namespace, name: field_text(document.tree, "name"), roots: $root_ids, packages_: $found, relationships: $edges, evidence: statements, gaps: tally(file_gaps.concat($gaps)) })
 }
 
 ## SPDX 2.3
@@ -686,7 +699,7 @@ spdx2 = |inventory, subject, context| {
 		for id in SbomLicenses.custom_ids(component.license) {
 			if !$declared.contains(id) {
 				$declared = $declared.append(id)
-				$licenses = $licenses.append(Json.to_str({ licenseId: id, extractedText: "NOASSERTION", name: id, seeAlsos: [component.license_url] }))
+				$licenses = $licenses.append(Json.to_str({ licenseId: id, extractedText: "NOASSERTION", name: id, seeAlsos: if (component.license_url == "NOASSERTION") [] else [component.license_url] }))
 			}
 		}
 	}
@@ -710,34 +723,71 @@ read_spdx2 = |tree| {
 				supplier: if (entry.field("supplier").is_ok()) field_text(entry, "supplier") else "NOASSERTION",
 				download: field_text(entry, "downloadLocation"),
 				license: license_text,
-				license_url: extracted.find_first(|info| field_text(info, "licenseId") == first).map_ok(|info| (listed(info, "seeAlsos").first() ?? JsonTree.Null).text() ?? "") ?? "",
+				license_url: match extracted.find_first(|info| field_text(info, "licenseId") == first).map_ok(|info| (listed(info, "seeAlsos").first() ?? JsonTree.Null).text() ?? "") {
+					Ok(url) if !url.is_empty() => url
+					_ => if (first.is_empty()) "" else "NOASSERTION"
+				},
 				sha256: listed(entry, "checksums").find_first(|checksum| field_text(checksum, "algorithm") == "SHA256").map_ok(|checksum| field_text(checksum, "checksumValue")) ?? "",
 				identity: listed(entry, "externalRefs").find_first(|reference| ["PACKAGE-MANAGER", "PACKAGE_MANAGER"].contains(field_text(reference, "referenceCategory")) and field_text(reference, "referenceType") == "purl").map_ok(|reference| field_text(reference, "referenceLocator")) ?? "",
 				comment: field_text(entry, "comment"),
 			}
 		},
 	)
-	var $roots = listed(tree, "documentDescribes").map(|item| local(item.text() ?? ""))
+	package_ids = listed(tree, "packages").map(|entry| field_text(entry, "SPDXID"))
+	files = listed(tree, "files").map(|_| "file").concat(listed(tree, "snippets").map(|_| "snippet"))
+
+	## Why an endpoint is not a package of this document, if it is not.
+	elsewhere : Str -> Try({}, Str)
+	elsewhere = |id|
+		if (package_ids.contains(id)) Ok({})
+		else if (id == "SPDXRef-DOCUMENT") Err("relationship with the document itself")
+		else if (id == "NONE" or id == "NOASSERTION") Err("relationship to ${id}")
+		else if (id.starts_with("DocumentRef-")) Err("relationship into another SPDX document")
+		else Err("relationship to a file or snippet")
+	var $roots = []
+	var $gaps = files
+	for described in listed(tree, "documentDescribes").map(|item| item.text() ?? "") {
+		if package_ids.contains(described) {
+			$roots = $roots.append(local(described))
+		} else {
+			$gaps = $gaps.append("described element that is not a package")
+		}
+	}
 	var $edges = []
 	for relationship in listed(tree, "relationships") {
 		from = field_text(relationship, "spdxElementId")
 		type = field_text(relationship, "relationshipType")
 		to = field_text(relationship, "relatedSpdxElement")
-		if from == "SPDXRef-DOCUMENT" and type == "DESCRIBES" {
-			$roots = $roots.append(local(to))
-		} else if from == "SPDXRef-DOCUMENT" or to == "SPDXRef-DOCUMENT" or to == "NONE" or to == "NOASSERTION" {
-			return Err("relationship ${type} with the document or NONE/NOASSERTION is outside this profile")
-		} else {
-			match from_spdx2(local(from), type, local(to), field_text(relationship, "comment")) {
-				Ok(edge) => {
-					$edges = $edges.append(edge)
+		described = if (from == "SPDXRef-DOCUMENT" and type == "DESCRIBES") Ok(to) else if (to == "SPDXRef-DOCUMENT" and type == "DESCRIBED_BY") Ok(from) else Err(NotDescribes)
+		match described {
+			Ok(subject) =>
+				if package_ids.contains(subject) {
+					$roots = $roots.append(local(subject))
+				} else {
+					$gaps = $gaps.append("described element that is not a package")
 				}
-				Err(Missing) => return Err("relationship type ${type} is outside this profile")
-			}
+			Err(_) =>
+				match (elsewhere(from), elsewhere(to)) {
+					(Ok(_), Ok(_)) =>
+						match from_spdx2(local(from), type, local(to), field_text(relationship, "comment")) {
+							Ok(edge) => {
+								$edges = $edges.append(edge)
+							}
+							Err(Missing) => {
+								$gaps = $gaps.append("relationship of type ${type}, which has no composition meaning")
+							}
+						}
+					(Err(reason), _) => {
+						$gaps = $gaps.append(reason)
+					}
+					(_, Err(reason)) => {
+						$gaps = $gaps.append(reason)
+					}
+				}
 		}
 	}
 	statements = listed(tree, "annotations").keep_if(|annotation| field_text(annotation, "annotationType") == "OTHER").map(|annotation| field_text(annotation, "comment"))
-	Ok({ version: field_text(tree, "spdxVersion"), namespace: field_text(tree, "documentNamespace"), name: field_text(tree, "name"), roots: unique($roots), packages_: listed_packages, relationships: $edges, evidence: statements })
+	Ok({ version: field_text(tree, "spdxVersion"), namespace: field_text(tree, "documentNamespace"), name: field_text(tree, "name"), roots: unique($roots), packages_: listed_packages, relationships: $edges, evidence: statements, gaps: tally($gaps) })
 }
 
 resolve : Sbom.Component, Lock -> Try(Sbom.Component, Str)
@@ -798,8 +848,13 @@ identity = |value| {
 	if value.starts_with("https://") {
 		return uri(value)
 	}
+	# An identity names something and is never fetched, so it may be http.
+	if value.starts_with("http://") {
+		return uri("https://${value.drop_prefix("http://")}")
+	}
+	# A versioned package URL; qualifiers after `?` (such as `?arch=`) are allowed.
 	if value.starts_with("pkg:") {
-		return !value.contains("?") and !value.contains("\\") and !value.contains(" ") and value.contains("@")
+		return !value.contains("\\") and !value.contains(" ") and (value.split_on("?").first() ?? "").contains("@")
 	}
 	if value.starts_with("urn:") {
 		return !value.contains(" ") and !value.contains("\\") and !value.contains("?")
@@ -818,7 +873,7 @@ license = |value| value == "NOASSERTION" or value == "NONE" or SbomLicenses.expr
 # identities; imports never download a URI or execute a document's contents.
 expand_import : Sbom.Imported, Str, Try(Sbom.Component, [Unbound]) -> Try({ components : List(Sbom.Component), relationships : List(Sbom.Edge), coverage : Sbom.Coverage }, Str)
 expand_import = |imported, target, binding| {
-	if !valid_id(imported.id) or !uri(imported.url) or !uri(imported.namespace) or !hex(imported.sha256) or !Sbom.json_within_bounds(imported.document) or imported.contact.is_empty() or imported.basis.is_empty() or !Sbom.relations.contains(imported.relation) {
+	if !valid_id(imported.id) or !uri(imported.url) or !namespace_identity(imported.namespace) or !hex(imported.sha256) or !Sbom.json_within_bounds(imported.document) or imported.contact.is_empty() or imported.basis.is_empty() or !Sbom.relations.contains(imported.relation) {
 		return Err("invalid or oversized imported reference")
 	}
 	if target != "source" and imported.target != target {
@@ -827,7 +882,7 @@ expand_import = |imported, target, binding| {
 	if Crypto.SHA256.hash(imported.document.to_utf8()).to_hex() != imported.sha256 {
 		return Err("imported SBOM content digest mismatch")
 	}
-	decoded = Sbom.read(imported.document).map_err(|problem| "imported SBOM outside supported SPDX package profile: ${problem}")?
+	decoded = Sbom.read(imported.document).map_err(|problem| "imported SBOM outside the supported profile: ${problem}")?
 	if decoded.namespace != imported.namespace or decoded.packages_.is_empty() or decoded.packages_.len() > 4096 or decoded.relationships.len() > 16384 {
 		return Err("invalid imported document identity or bounds")
 	}
@@ -842,7 +897,10 @@ expand_import = |imported, target, binding| {
 	var $edges = []
 	for root_id in decoded.roots {
 		root = decoded.packages_.find_first(|entry| entry.id == root_id).map_err(|_| "missing imported subject")?
-		if root.name != imported.subject.filename or root.version != imported.subject.version or root.sha256 != imported.subject.sha256 or !hex(root.sha256) {
+		# A subject bound to a resolved artifact needs its digest; an unbound
+		# one, such as a source tree's, may state none.
+		digest_ok = hex(root.sha256) or (binding.is_err() and root.sha256.is_empty())
+		if root.name != imported.subject.filename or root.version != imported.subject.version or root.sha256 != imported.subject.sha256 or !digest_ok {
 			return Err("import subject filename/version/SHA256 mismatch")
 		}
 		root_comment : Try({ target : Str }, _)
@@ -869,12 +927,51 @@ expand_import = |imported, target, binding| {
 		if !ids.contains(edge.from) or !ids.contains(edge.to) {
 			return Err("dangling/external imported relationship; provide referenced graph explicitly")
 		}
-		$edges = $edges.append({ ..edge, from: map_id(edge.from), to: map_id(edge.to), basis: if (edge.basis.is_empty()) "Verified imported SPDX relationship" else edge.basis })
+		$edges = $edges.append({ ..edge, from: map_id(edge.from), to: map_id(edge.to), basis: if (edge.basis.is_empty()) "Verified imported ${decoded.version} relationship" else edge.basis })
+	}
+	# A package URL two imported packages share stays with the first.
+	var $claimed = []
+	var $shared = []
+	for entry in decoded.packages_ {
+		purl = normalized(entry).kept.identity
+		if !purl.is_empty() and $claimed.contains(purl) {
+			$shared = $shared.append(entry.id)
+		} else {
+			$claimed = $claimed.append(purl)
+		}
 	}
 	components = decoded.packages_.map(
-		|entry| { id: map_id(entry.id), name: entry.name, version: entry.version, producer: entry.supplier, download: entry.download, license: entry.license, license_url: entry.license_url, sha256: entry.sha256, identity: if (entry.identity.is_empty()) "${imported.namespace}#${entry.id}" else entry.identity, origin: "reviewed", target: imported.target, modified: "Imported ${imported.namespace}#${entry.id} from ${imported.url}; document SHA256 ${imported.sha256}; upstream metadata ${if (entry.comment.is_empty()) "NOASSERTION" else entry.comment}" },
+		|entry| {
+			found = normalized(entry)
+			kept = if ($shared.contains(entry.id)) { kept: { ..found.kept, identity: "" }, notes: found.notes.append("package URL ${found.kept.identity} is shared with another imported package") } else found
+			fallback = "${imported.namespace}#${entry.id}"
+			{ id: map_id(entry.id), name: kept.kept.name, version: kept.kept.version, producer: kept.kept.supplier, download: kept.kept.download, license: kept.kept.license, license_url: kept.kept.license_url, sha256: kept.kept.sha256, identity: if (kept.kept.identity.is_empty()) fallback else kept.kept.identity, origin: "reviewed", target: imported.target, modified: "Imported ${imported.namespace}#${entry.id} from ${imported.url}; document SHA256 ${imported.sha256}; upstream metadata ${if (entry.comment.is_empty()) "NOASSERTION" else entry.comment}${Str.join_with(kept.notes.map(|note| "; ${note}"), "")}" }
+		},
 	)
-	Ok({ components, relationships: $edges, coverage: { scope: "import:${imported.id}", status: "incomplete", reason: if (binding.is_ok()) "Document digest and upstream subject artifact identity match; completeness and undisclosed closure remain unverified" else "Document integrity verified; upstream subject not bound to a resolved artifact, so composition claims remain unverified", contact: imported.contact } })
+	# One LicenseRef- names one terms location in a document, so a later
+	# package that gives another location for it keeps the first.
+	var $terms = []
+	var $unified = []
+	for component in components {
+		custom = SbomLicenses.custom_ids(component.license)
+		earlier = $terms.find_first(|entry| custom.contains(entry.id) and entry.url != component.license_url)
+		match earlier {
+			Ok(first) => {
+				$unified = $unified.append({ ..component, license_url: first.url, modified: "${component.modified}; terms location ${component.license_url} replaced by ${first.url}, which the document gave ${first.id} first" })
+			}
+			Err(_) => {
+				$terms = $terms.concat(custom.keep_if(|id| !$terms.any(|entry| entry.id == id)).map(|id| { id, url: component.license_url }))
+				$unified = $unified.append(component)
+			}
+		}
+	}
+	match $unified.find_first(|component| leaks(Json.to_str(component))) {
+		Ok(component) => return Err("imported component ${component.id} names an absolute developer path or a credential; it cannot be published")
+		Err(_) => {}
+	}
+	verified = if (binding.is_ok()) "Document digest and upstream subject artifact identity match; completeness and undisclosed closure remain unverified" else "Document integrity verified; upstream subject not bound to a resolved artifact, so composition claims remain unverified"
+	omitted = if (decoded.gaps.is_empty()) "" else ". Not imported from ${decoded.version}: ${Str.join_with(decoded.gaps, "; ")}"
+	Ok({ components: $unified, relationships: $edges, coverage: { scope: "import:${imported.id}", status: "incomplete", reason: "${verified}${omitted}", contact: imported.contact } })
 }
 
 # Keep JSON boolean nominal rather than an inferred single tag.
@@ -966,7 +1063,7 @@ cyclonedx = |inventory, subject, context| {
 					.concat(
 						references(
 							(if (component.download == "NOASSERTION") [] else [{ type: "distribution", url: component.download }])
-								.concat(if (component.license.contains("LicenseRef-") and !component.license_url.is_empty()) [{ type: "license", url: component.license_url }] else []),
+								.concat(if (component.license.contains("LicenseRef-") and !component.license_url.is_empty() and component.license_url != "NOASSERTION") [{ type: "license", url: component.license_url }] else []),
 						),
 					)
 					.append(member("properties", JsonTree.Array([property("blueprint:identity", component.identity), property("blueprint:origin", component.origin), property("blueprint:target", component.target), property("blueprint:modifications", component.modified)].concat(if (component.license == "NONE") [property("blueprint:license", "NONE")] else [])))),
@@ -1062,7 +1159,7 @@ read_bom = |tree| {
 			supplier: supplier_of(component),
 			download: reference(component, "distribution") ?? "NOASSERTION",
 			license: license_text,
-			license_url: reference(component, "license") ?? "",
+			license_url: reference(component, "license") ?? (if (license_text.contains("LicenseRef-")) "NOASSERTION" else ""),
 			sha256: digest(component),
 			identity: field_text(component, "purl"),
 			comment: Json.to_str({ identity: only(component, "blueprint:identity")?, origin: only(component, "blueprint:origin")?, target: only(component, "blueprint:target")?, modifications: only(component, "blueprint:modifications")? }),
@@ -1101,5 +1198,231 @@ read_bom = |tree| {
 			return Err("the scope of ${ref} differs from its relationships")
 		}
 	}
-	Ok({ version: "${CycloneDx.format}-${CycloneDx.version}", namespace: only(metadata, "blueprint:namespace")?, name: subject_package.name, roots: [subject_id], packages_: $found, relationships: $edges, evidence: values(metadata, "blueprint:evidence") })
+	Ok({ version: "${CycloneDx.format}-${CycloneDx.version}", namespace: only(metadata, "blueprint:namespace")?, name: subject_package.name, roots: [subject_id], packages_: $found, relationships: $edges, evidence: values(metadata, "blueprint:evidence"), gaps: [] })
 }
+
+## Each distinct reason once, with how many times it occurred, in byte order.
+tally : List(Str) -> List(Str)
+tally = |reasons| {
+	sorted = reasons.sort_with(Project.bytewise)
+	var $out = []
+	var $current = ""
+	var $count = 0.U64
+	for reason in sorted {
+		if reason == $current {
+			$count = $count + 1
+		} else {
+			if $count > 0 {
+				$out = $out.append("${$count.to_str()} × ${$current}")
+			}
+			$current = reason
+			$count = 1
+		}
+	}
+	if $count > 0 {
+		$out = $out.append("${$count.to_str()} × ${$current}")
+	}
+	$out
+}
+
+expect tally(["b", "a", "b"]) == ["1 × a", "2 × b"] and tally([]) == []
+
+## An imported package with every field the profile can carry, and a note
+## for each value it had to replace: a missing version or name, a download
+## location that is not an HTTPS URL the profile accepts, a license that is
+## not an SPDX expression, a custom license with no terms location, or a
+## package URL without a version.
+normalized : Sbom.Package -> { kept : Sbom.Package, notes : List(Str) }
+normalized = |entry| {
+	var $notes = []
+	var $package = entry
+	if entry.name.trim().is_empty() {
+		$package = { ..$package, name: "NOASSERTION" }
+		$notes = $notes.append("no name stated")
+	}
+	if entry.version.trim().is_empty() {
+		$package = { ..$package, version: "NOASSERTION" }
+		$notes = $notes.append("no version stated")
+	}
+	if !uri(entry.download) {
+		$package = { ..$package, download: "NOASSERTION" }
+		$notes = $notes.append("download location ${Json.to_str(entry.download)} is not an HTTPS URL this profile accepts")
+	}
+	if !supplier(entry.supplier) {
+		$package = { ..$package, supplier: "NOASSERTION" }
+		$notes = $notes.append("supplier ${Json.to_str(entry.supplier)} is not an SPDX agent")
+	}
+	if !license(entry.license) {
+		$package = { ..$package, license: "NOASSERTION", license_url: "" }
+		$notes = $notes.append("license ${Json.to_str(entry.license)} is not an SPDX license expression")
+	} else if entry.license.contains("LicenseRef-") and !(entry.license_url != "NOASSERTION" and uri(entry.license_url) and !entry.license_url.is_empty()) {
+		$package = { ..$package, license_url: "NOASSERTION" }
+		if entry.license_url != "NOASSERTION" {
+			$notes = $notes.append("no usable terms location for ${entry.license}")
+		}
+	} else if !entry.license.contains("LicenseRef-") {
+		$package = { ..$package, license_url: "" }
+	}
+	if !entry.identity.is_empty() and !identity(entry.identity) {
+		$package = { ..$package, identity: "" }
+		$notes = $notes.append("package URL ${Json.to_str(entry.identity)} is not a versioned purl")
+	}
+	if !entry.sha256.is_empty() {
+		lowered = Str.from_utf8_lossy(entry.sha256.to_utf8().map(|byte| if (byte >= 'A' and byte <= 'F') byte + 32 else byte))
+		if hex(lowered) {
+			$package = { ..$package, sha256: lowered }
+		} else {
+			$package = { ..$package, sha256: "" }
+			$notes = $notes.append("SHA-256 ${Json.to_str(entry.sha256)} is not 64 hex digits")
+		}
+	}
+	{ kept: $package, notes: $notes }
+}
+
+## CycloneDX from elsewhere
+
+## A local identifier for a `bom-ref`: its own characters where they are
+## allowed, and a hash of it when any had to change, so distinct references
+## stay distinct.
+local_ref : Str -> Str
+local_ref = |ref| {
+	kept = Str.from_utf8_lossy(ref.to_utf8().map(|byte| if ((byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z') or (byte >= '0' and byte <= '9') or byte == '-' or byte == '.') byte else '-'))
+	trimmed = Str.from_utf8_lossy(kept.to_utf8().take_first(64))
+	if (kept == ref and !ref.is_empty() and kept.to_utf8().len() <= 64) ref else "${if (trimmed.is_empty()) "ref" else trimmed}-${Str.from_utf8_lossy(Crypto.SHA256.hash(ref.to_utf8()).to_hex().to_utf8().take_first(12))}"
+}
+
+Flat : { tree : JsonTree, parent : Str, id : Str }
+
+## Every component of a tree of components, with its parent's local id.
+flatten : List(JsonTree), Str, Str -> List(Flat)
+flatten = |trees, parent, prefix| {
+	var $out = []
+	var $index = 0.U64
+	for tree in trees {
+		position = "${prefix}${$index.to_str()}"
+		id = match tree.field("bom-ref") {
+			Ok(Text(ref)) => local_ref(ref)
+			_ => "component-${position}"
+		}
+		$out = $out.append({ tree, parent, id }).concat(flatten((tree.field("components") ?? JsonTree.Array([])).items() ?? [], id, "${position}."))
+		$index = $index + 1
+	}
+	$out
+}
+
+read_foreign_bom : JsonTree, List(Str) -> Try(Sbom.Document, Str)
+read_foreign_bom = |tree, ignored| {
+	field_text = |object, key| (object.field(key) ?? JsonTree.Null).text() ?? ""
+	listed = |object, key| (object.field(key) ?? JsonTree.Array([])).items() ?? []
+	serial = field_text(tree, "serialNumber")
+	if serial.is_empty() {
+		return Err("an imported CycloneDX BOM needs a serialNumber to identify it")
+	}
+	metadata = tree.field("metadata") ?? JsonTree.Null
+	described = match metadata.field("component") {
+		Ok(component) => [component]
+		Err(_) => []
+	}
+	roots = flatten(described, "", "root-")
+	entries = roots.concat(flatten(listed(tree, "components"), "", ""))
+	ids = entries.map(|entry| entry.id)
+	if unique(ids).len() != ids.len() {
+		return Err("two components map to one identifier")
+	}
+	refs = Lookup.index(entries.keep_if(|entry| (entry.tree.field("bom-ref") ?? JsonTree.Null).text().is_ok()).map(|entry| { key: field_text(entry.tree, "bom-ref"), value: entry.id }))
+	var $gaps = ignored
+	var $packages = []
+	for entry in entries {
+		component = entry.tree
+		choices = listed(component, "licenses")
+		expressions = choices.keep_if(|choice| choice.field("expression").is_ok()).map(|choice| field_text(choice, "expression"))
+		licensed = choices.keep_if(|choice| choice.field("license").is_ok()).map(|choice| component_license(choice.field("license") ?? JsonTree.Null))
+		license_text = match (expressions, licensed) {
+			([], []) => "NOASSERTION"
+			([expression], []) => expression
+			([], _) if licensed.all(|id| !id.is_empty()) => Str.join_with(licensed, " AND ")
+			_ => {
+				$gaps = $gaps.append("license stated only by name")
+				"NOASSERTION"
+			}
+		}
+		supplier_name = field_text(component.field("supplier") ?? JsonTree.Null, "name")
+		maker = field_text(component.field("manufacturer") ?? JsonTree.Null, "name")
+		author = field_text(listed(component, "authors").first() ?? JsonTree.Null, "name")
+		$packages = $packages.append({
+			id: entry.id,
+			name: field_text(component, "name"),
+			version: field_text(component, "version"),
+			supplier: if (!supplier_name.is_empty()) "Organization: ${supplier_name}" else if (!maker.is_empty()) "Organization: ${maker}" else if (!author.is_empty()) "Person: ${author}" else "NOASSERTION",
+			download: listed(component, "externalReferences").find_first(|reference| field_text(reference, "type") == "distribution").map_ok(|reference| field_text(reference, "url")) ?? "NOASSERTION",
+			license: license_text,
+			license_url: listed(component, "externalReferences").find_first(|reference| field_text(reference, "type") == "license").map_ok(|reference| field_text(reference, "url")) ?? "",
+			sha256: listed(component, "hashes").find_first(|hash| field_text(hash, "alg") == "SHA-256").map_ok(|hash| field_text(hash, "content")) ?? "",
+			identity: field_text(component, "purl"),
+			comment: Json.to_str({ type: field_text(component, "type"), scope: field_text(component, "scope") }),
+		})
+	}
+	var $edges = []
+	for entry in entries {
+		if !entry.parent.is_empty() {
+			$edges = $edges.append({ from: entry.parent, to: entry.id, relation: "contains", scope: "", basis: "Nested in the CycloneDX component tree" })
+		}
+	}
+	for dependency in listed(tree, "dependencies") {
+		from = Lookup.find(refs, field_text(dependency, "ref"))
+		for target in listed(dependency, "dependsOn").map(|item| item.text() ?? "") {
+			match (from, Lookup.find(refs, target)) {
+				(Ok(source), Ok(destination)) => {
+					$edges = $edges.append({ from: source, to: destination, relation: "dependsOn", scope: "", basis: "CycloneDX dependency; CycloneDX states no lifecycle scope for it" })
+				}
+				_ => {
+					$gaps = $gaps.append("dependency of or on a service")
+				}
+			}
+		}
+	}
+	# Listing a component in a BOM places it in the inventory the BOM
+	# describes, without saying how. One nothing connects to the described
+	# component is related to it as `other`, which claims no containment.
+	root_ids = roots.keep_if(|root| root.parent.is_empty()).map(|root| root.id)
+	var $reached = root_ids
+	var $changed = True
+	while $changed {
+		$changed = False
+		for edge in $edges {
+			if $reached.contains(edge.from) and !$reached.contains(edge.to) {
+				$reached = $reached.append(edge.to)
+				$changed = True
+			}
+			if $reached.contains(edge.to) and !$reached.contains(edge.from) {
+				$reached = $reached.append(edge.from)
+				$changed = True
+			}
+		}
+	}
+	for root in root_ids {
+		for entry in entries.keep_if(|candidate| candidate.parent.is_empty() and !root_ids.contains(candidate.id) and !$reached.contains(candidate.id)) {
+			$edges = $edges.append({ from: root, to: entry.id, relation: "other", scope: "", basis: "Listed in the CycloneDX BOM's components; the BOM states no relationship to the described component" })
+		}
+	}
+	Ok({ version: "${CycloneDx.format}-${field_text(tree, "specVersion")}", namespace: serial, name: roots.first().map_ok(|root| field_text(root.tree, "name")) ?? "", roots: roots.keep_if(|root| root.parent.is_empty()).map(|root| root.id), packages_: $packages, relationships: $edges, evidence: [], gaps: tally($gaps) })
+}
+
+## An SPDX identifier for a CycloneDX license object, or "" when it names its
+## license only in text.
+component_license : JsonTree -> Str
+component_license = |license_object|
+	match license_object.field("id") {
+		Ok(Text(id)) if SbomLicenses.licenses.contains(id) => id
+		_ => ""
+	}
+
+expect local_ref("c0") == "c0" and local_ref("Subject") == "Subject" and local_ref("pkg:cargo/a@1?x=y").starts_with("pkg-cargo-a-1-x-y-") and local_ref("pkg:cargo/a@1?x=y") != local_ref("pkg:cargo/a@1?x=z")
+
+## A document's identity: an SPDX namespace URI or a CycloneDX serial number.
+## It names the document and is never fetched, so `http` is allowed, but
+## credentials, queries and whitespace are not.
+namespace_identity : Str -> Bool
+namespace_identity = |value| CycloneDx.serial_number(value) or (value != "NOASSERTION" and (uri(value) or (value.starts_with("http://") and uri("https://${value.drop_prefix("http://")}"))))
+
+expect namespace_identity("http://trivy.dev/filesystem/src-1") and namespace_identity("urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79") and !namespace_identity("http://user:pw@example.org/x") and !namespace_identity("NOASSERTION")

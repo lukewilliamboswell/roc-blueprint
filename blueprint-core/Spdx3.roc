@@ -233,7 +233,7 @@ license_individuals = ["expandedlicensing_NoAssertionLicense", "expandedlicensin
 
 element_individuals = ["NoAssertionElement", "NoneElement", "SpdxOrganization"].concat(license_individuals)
 
-artifacts = ["software_Package"]
+artifacts = ["software_Package", "software_File"]
 
 elements = agents.concat(["Tool", "SpdxDocument", "software_Sbom", "Relationship", "LifecycleScopedRelationship", "Annotation"]).concat(artifacts).concat(licenses)
 
@@ -288,8 +288,8 @@ relationship_props = element_props.concat([
 	needs({ ..many("to", any_element), count: Many(1) }),
 ])
 
-package_props : List(Property)
-package_props = element_props.concat([
+artifact_props : List(Property)
+artifact_props = element_props.concat([
 	one("builtTime", Date),
 	many("originatedBy", Ref(agents, ["SpdxOrganization"])),
 	one("releaseTime", Date),
@@ -301,6 +301,10 @@ package_props = element_props.concat([
 	many("software_attributionText", Text),
 	one("software_copyrightText", Text),
 	one("software_primaryPurpose", Enum(purposes)),
+])
+
+package_props : List(Property)
+package_props = artifact_props.concat([
 	one("software_downloadLocation", Uri),
 	one("software_homePage", Uri),
 	one("software_packageUrl", Purl),
@@ -317,6 +321,7 @@ class = |name|
 		"SpdxDocument" => Ok(collection_props.append(one("dataLicense", Ref(licenses, license_individuals))))
 		"software_Sbom" => Ok(collection_props.append(many("software_sbomType", Enum(sbom_types))))
 		"software_Package" => Ok(package_props)
+		"software_File" => Ok(artifact_props.concat([one("contentType", MediaType), one("software_fileKind", Enum(["directory", "file"]))]))
 		"Relationship" => Ok(relationship_props)
 		"LifecycleScopedRelationship" => Ok(relationship_props.append(one("scope", Enum(lifecycle_scopes))))
 		"simplelicensing_LicenseExpression" => Ok(element_props.concat([many("simplelicensing_customIdToUri", Inline("DictionaryEntry")), needs(one("simplelicensing_licenseExpression", Text)), one("simplelicensing_licenseListVersion", Version)]))

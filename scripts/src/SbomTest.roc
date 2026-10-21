@@ -9,6 +9,10 @@ import core.CycloneDx
 import "../../tests/sbom/schema/cyclonedx-1.7/bom-1.7.schema.json" as schema_cdx : Str
 import "../../tests/sbom/schema/spdx-3.0.1.schema.json" as schema_3 : Str
 import "../../tests/sbom/schema/spdx-2.3.schema.json" as schema_2 : Str
+import "../../tests/sbom/fixtures/upstream/syft.cdx.json" as upstream_syft_cdx : Str
+import "../../tests/sbom/fixtures/upstream/syft.spdx.json" as upstream_syft_spdx : Str
+import "../../tests/sbom/fixtures/upstream/trivy.cdx.json" as upstream_trivy_cdx : Str
+import "../../tests/sbom/fixtures/upstream/trivy.spdx.json" as upstream_trivy_spdx : Str
 import "../../tests/sbom/fixtures/verified-import.cdx.json" as fixture_verified_import_cdx : Str
 import "../../tests/sbom/fixtures/native-linux.cdx.json" as fixture_native_linux_cdx : Str
 import "../../tests/sbom/fixtures/native-arm64.cdx.json" as fixture_native_arm64_cdx : Str
@@ -435,7 +439,7 @@ expect {
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each(",\"compiler\"]", "]")).is_err()
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("blueprint:namespace", "other:namespace")).is_err()
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"scope\":\"excluded\"", "\"scope\":\"required\"")).is_err()
-expect Sbom.read(fixture_native_linux_cdx).is_err()
+expect Sbom.read(fixture_native_linux_cdx) == Sbom.read_cyclonedx(fixture_native_linux_cdx)
 
 # The CycloneDX validator follows the vendored, digest-pinned 1.7 schema.
 expect Crypto.SHA256.hash(schema_cdx.to_utf8()).to_hex() == "73308edec3ab2d38bfffd993e96a042b594314143b6971a6e9ed98bbb6bd76ce"
@@ -459,3 +463,37 @@ at_cdx = |path|
 expect CycloneDx.vocabularies.all(|vocabulary| sorted(enumeration(at_cdx(vocabulary.path))) == sorted(vocabulary.values))
 expect CycloneDx.objects.all(|object| object.members.all(|name| (at_cdx([object.definition]).field("properties") ?? JsonTree.Null).keys().contains(name)))
 expect CycloneDx.objects.all(|object| sorted((at_cdx([object.definition]).field("properties") ?? JsonTree.Null).keys()) == sorted(object.members))
+
+# What real generators publish imports: Syft and Trivy, in CycloneDX and SPDX.
+# What the profile cannot carry is counted in the document's gaps and stated
+# in the import's coverage, never dropped silently.
+upstream_import : Str -> Try(Sbom.Inventory, Str)
+upstream_import = |text| {
+	document = Sbom.read(text)?
+	root = document.packages_.find_first(|entry| Ok(entry.id) == document.roots.first()).map_err(|_| "no described package")?
+	imported = { subject: { component: "", filename: root.name, version: root.version, sha256: root.sha256 }, id: "upstream", url: "https://example.org/upstream/sbom.json", sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), namespace: document.namespace, target: "x86_64-linux", document: text, relation: "dependsOn", basis: "Supplier SBOM for a consumed source", contact: "https://example.org/support" }
+	inspect({ ..SbomTest.composition, components: [], relationships: [], imported_documents: [imported] })
+}
+
+expect (Sbom.read(upstream_syft_cdx) ?? crash "syft cdx").gaps == ["1 × component.author"]
+expect (Sbom.read(upstream_trivy_cdx) ?? crash "trivy cdx").gaps == ["1 × bom.vulnerabilities"]
+expect (Sbom.read(upstream_syft_spdx) ?? crash "syft spdx").gaps == ["1 × file", "108 × relationship to a file or snippet"]
+expect (Sbom.read(upstream_trivy_spdx) ?? crash "trivy spdx").gaps == []
+expect [upstream_syft_cdx, upstream_syft_spdx, upstream_trivy_cdx, upstream_trivy_spdx].all(
+	|text|
+		match upstream_import(text) {
+			Ok(inventory) => inventory.components.len() >= 109 and inventory.coverage.any(|scope| scope.scope == "import:upstream" and scope.status == "incomplete")
+			Err(_) => False
+		},
+)
+expect {
+	inventory = upstream_import(upstream_syft_spdx) ?? crash "syft spdx import"
+	coverage = inventory.coverage.find_first(|scope| scope.scope == "import:upstream") ?? crash "no import coverage"
+	coverage.reason.contains("108 × relationship to a file or snippet") and inventory.components.any(|entry| entry.identity.starts_with("pkg:cargo/libsqlite3-sys@0.33.0"))
+}
+expect {
+	# Both formats from one tool describe the same crates.
+	crates = |text| (Sbom.read(text) ?? crash "unreadable").packages_.map(|entry| entry.identity).keep_if(|id| id.starts_with("pkg:cargo/")).map(|id| id.split_on("?").first() ?? id).sort_with(Project.bytewise)
+	crates(upstream_syft_cdx) == crates(upstream_syft_spdx) and crates(upstream_trivy_cdx) == crates(upstream_trivy_spdx)
+}
+expect upstream_import(upstream_syft_cdx.replace_each("/src/Cargo.lock", "/home/someone/src/Cargo.lock")).is_err()

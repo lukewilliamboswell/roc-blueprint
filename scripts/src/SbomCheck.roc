@@ -25,6 +25,9 @@ SbomCheck := [].{
 	profile = |text| {
 		document = if (text.contains("\"bomFormat\"")) Sbom.read_cyclonedx(text)? else Sbom.read(text)?
 		ids = document.packages_.map(|entry| entry.id)
+		if !document.gaps.is_empty() {
+			return Err("a Blueprint sidecar states only what its format can carry, but this one has ${Str.join_with(document.gaps, "; ")}")
+		}
 		if document.roots != ["Subject"] {
 			return Err("the document must describe exactly its delivered subject")
 		}
