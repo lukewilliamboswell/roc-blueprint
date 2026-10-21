@@ -30,6 +30,8 @@ import core.Provider
 import core.Realise
 import core.Lock
 import core.Tree
+import core.BuildModel
+import core.Sexpr
 import Bootstrap
 import Download
 import Paths
@@ -65,6 +67,7 @@ Command : [
 	Shell(Str),
 	Run({ task : Str, args : List(Str) }),
 	Build({ name : Str, json : Bool, rebuild : Bool }),
+	InspectBuild({ name : Str, json : Bool, prepare : Bool, explain : Bool }),
 	Workflow(Str),
 	Tasks,
 	Update(List(Str)),
@@ -180,6 +183,20 @@ cli_for = |loaded| {
 			}
 		}
 
+	inspect_build_cmd = |explain| SubCmd.finish(
+		SubCmd.required([
+			SubCmd.finish(
+				{
+					json: Opt.flag({ short: "", long: "json", help: "Render the shared build evidence as JSON." }),
+					prepare: Opt.flag({ short: "", long: "prepare", help: "Prepare an exact native build identity without building." }),
+					target: Param.str({ name: "name", help: "The declared build.", default: NoDefault }),
+				}.Cli,
+				{ name: "build", description: "Inspect a declared build", mapper: |options| InspectBuild({ name: options.target, json: options.json, prepare: options.prepare, explain }) },
+			),
+		]),
+		{ name: if (explain) "explain" else "plan", description: if (explain) "Explain changes from the last successful local build" else "Inspect declared build inputs and dependencies", mapper: |command| command },
+	)
+
 	Cli.assert_valid(
 		Cli.finish(
 			SubCmd.optional([
@@ -192,6 +209,8 @@ cli_for = |loaded| {
 				shell_cmd,
 				run_cmd,
 				build_cmd,
+				inspect_build_cmd(False),
+				inspect_build_cmd(True),
 				workflow_cmd,
 				SubCmd.empty({ name: "tasks", description: "List the tasks", value: Tasks }),
 				update_cmd,
@@ -286,6 +305,7 @@ run! = |command, loaded, context| {
 				Shell(name) => realise!(spec, Request.Shell(name), ctx)
 				Run({ task, args }) => realise!(spec, Request.Run(task, args), ctx)
 				Build(options) => realise!(spec, Request.Build(options.name), { ..ctx, build_json: options.json, rebuild: options.rebuild })
+				InspectBuild(options) => inspect_build!(spec, options, ctx)
 				Workflow(name) => realise!(spec, Request.Workflow(name), ctx)
 				Tasks => list_tasks!(spec)
 				Update(names) => resolve!(spec, names, ctx)
@@ -498,7 +518,7 @@ roc! = |_ctx| {
 	}
 }
 
-Context : { layout : Layout, target : Str, build_json : Bool, rebuild : Bool, build_sources : List(Lock.Source) }
+Context : { layout : Layout, target : Str, build_json : Bool, rebuild : Bool, build_sources : List(Lock.Source), build_pins : List(Lock.Source), build_spec : Spec, build_mode : [Execute, Plan, Explain] }
 
 ## Caller paths are observations, resolved once against the selected root.
 context! : () => Try(Context, _)
@@ -531,6 +551,9 @@ context! = || {
 		build_json: False,
 		rebuild: False,
 		build_sources: [],
+		build_pins: [],
+		build_spec: Spec.empty(""),
+		build_mode: Execute,
 		layout: Layout.{
 			project_root: root,
 			workspace,
@@ -781,7 +804,7 @@ realise! = |spec, request, ctx| {
 			}
 			_ => []
 		}
-		execute_step!(step, fetched, { ..ctx, build_sources: lock.sources.keep_if(|source| used.contains(source.name)) })?
+		execute_step!(step, fetched, { ..ctx, build_spec: spec, build_pins: lock.sources, build_sources: lock.sources.keep_if(|source| used.contains(source.name)) })?
 	}
 	Ok({})
 }
@@ -1250,38 +1273,161 @@ copy_roc_package! = |source, target| {
 	Ok({})
 }
 
-## Resolve the selected installable with the exact planned build command.
-## Dependency metadata stays descriptive; no store paths are guessed for it.
+
+## Decode every provider result once; execution uses the exact prepared recipe.
 report_build! : Steps.Step, Str, Context => Try({}, _)
 report_build! = |plan, name, ctx| {
-	root = ctx.layout.project_root
-	for artifact in plan.artifacts {
-		Stderr.line!(
-			"building ${artifact.name}: ${artifact.installable} "
-				.concat("(output ${artifact.output})"),
-		)?
-	}
-	artifact = plan.artifacts.find_first(|item| item.name == name)
-		.map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
+	artifact = plan.artifacts.find_first(|item| item.name == name).map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
 	adapter = providers.find_first(|candidate| candidate.name == artifact.provider).map_err(|_| RenderFailed("unknown build provider: ${artifact.provider}"))?
-	argv = (adapter.build_argv)(plan, { json: ctx.build_json, rebuild: ctx.rebuild }).map_err(|message| RenderFailed(message))?
-	match argv {
-		[program, .. as args] => {
-			result = native_command!(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(root))
-				.stderr(Inherit).capture!()?
+	snapshot = build_snapshot!(ctx.build_spec, name, adapter, ctx.build_pins, ctx)?
+	preparation = (adapter.build_prepare_argv)(plan).map_err(|message| RenderFailed(message))?
+	prepared_text = capture_build_command!(preparation, ctx)?
+	prepared = (adapter.build_prepared)(prepared_text).map_err(|message| RenderFailed(message))?
+	# The exact native recipe captures inputs during evaluation. Refuse evidence
+	# if local content changed while it was being captured.
+	observed = build_snapshot!(ctx.build_spec, name, adapter, ctx.build_pins, ctx)?
+	if snapshot != observed { return Err(RenderFailed("selected build inputs changed during preparation; retry")) }
+	match ctx.build_mode {
+		Plan => render_build_inspection!(snapshot, prepared, True, False, ctx)
+		Explain => render_build_inspection!(snapshot, prepared, True, True, ctx)
+		Execute => {
+			argv = (adapter.build_execute_argv)(plan, prepared, { json: True, rebuild: ctx.rebuild }).map_err(|message| RenderFailed(message))?
+			Stderr.line!("building ${name}: ${prepared.build_identity}")?
+			result = capture_build_command!(argv, ctx)?
+			built = (adapter.build_result)(result).map_err(|message| RenderFailed(message))?
+			if built.build_identity != prepared.build_identity or built.outputs != prepared.outputs { return Err(RenderFailed("provider result does not match the prepared build")) }
+			# Validate and publish evidence before announcing success.
+			record = { schema_version: 1, snapshot, build_identity: built.build_identity, outputs: built.outputs }
+			save_build_record!(record, ctx)?
 			reported = if ctx.build_json {
-				built = (adapter.build_result)(result).map_err(|message| RenderFailed(message))?
-				BuildReport.render(name, ctx.target, adapter.name, built, ctx.build_sources).map_err(|message| RenderFailed(message))?
+				BuildReport.render_evidence(name, ctx.target, adapter.name, built, ctx.build_sources, snapshot).map_err(|message| RenderFailed(message))?
 			} else {
-				result
+				Str.join_with(built.outputs.map(|output| output.path), "\n").concat("\n")
 			}
 			Stdout.write!(reported)?
-			Stderr.line!(
-				"built ${artifact.name}: ${artifact.installable} -> "
-					.concat(result.trim()),
-			)
+			Stderr.line!("built ${name}: ${built.build_identity}")
 		}
-		[] => Err(RenderFailed("build plan has no command"))
+	}
+}
+
+capture_build_command! : List(Str), Context => Try(Str, _)
+capture_build_command! = |argv, ctx| {
+	match argv {
+		[program, .. as args] => native_command!(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(ctx.layout.project_root)).stderr(Inherit).capture!()
+		[] => Err(RenderFailed("build operation has no command"))
+	}
+}
+
+inspect_build! = |spec, options, ctx| {
+	if options.prepare {
+		mode = if (options.explain) Explain else Plan
+		realise!(spec, Request.Build(options.name), { ..ctx, build_mode: mode, build_json: options.json })
+	} else {
+		validated = Project.validate(spec).map_err(|message| RenderFailed(message))?
+		# Explicit executor ownership replaces this discovery during integration.
+		adapter = providers.find_first(|candidate| validated.sources.any(|source| (candidate.realises)(source.provider))).map_err(|_| RenderFailed("no build executor provider"))?
+		lock = Lock.parse(path(ctx.layout.lock_path).read_utf8!()?).map_err(|_| LockFailed("unsupported Blueprint.lock"))?
+		lock.stale(spec).map_err(|message| LockFailed(message))?
+		snapshot = build_snapshot!(validated, options.name, adapter, lock.sources, ctx)?
+		render_build_inspection!(snapshot, { build_identity: "", outputs: [] }, False, options.explain, { ..ctx, build_json: options.json })
+	}
+}
+
+build_snapshot! : Spec, Str, Provider, List(Lock.Source), Context => Try(BuildModel.Snapshot, _)
+build_snapshot! = |spec, name, adapter, pins, ctx| {
+	closure = Project.build_closure(spec, name).map_err(|message| RenderFailed(message))?
+	var $nodes = []
+	for build in closure {
+		selected = spec.build_files.find_first(|entry| entry.build == build.name)
+		paths = selected.map_ok(|entry| entry.paths) ?? []
+		all = selected.is_err()
+		entries = selected_entries!(ctx.layout.project_root, "", paths, all, ctx.layout)?
+		# A missing selected path is an error, not an unchanged or empty input.
+		for selected_path in paths {
+			if !entries.any(|entry| entry.path == selected_path) { return Err(RenderFailed("missing selected build path: ${selected_path}")) }
+		}
+		files = entries.map(|entry| {
+			digest = Tree.digest([entry]).map_err(|message| RenderFailed(message))?
+			Ok({ path: entry.path, digest })
+		}).fold(Ok([]), |acc, item| Ok(acc?.append(item?)))?
+		sources = (adapter.build_sources)(spec, build.name).map_err(|message| RenderFailed(message))?
+		$nodes = $nodes.append(BuildModel.capture_node(spec, build, ctx.target, files, sources, pins))
+	}
+	Ok({ name, system: ctx.target, provider: adapter.name, nodes: $nodes })
+}
+
+## Match the selected-project snapshot contract without traversing excluded trees.
+selected_entries! : Str, Str, List(Str), Bool, Layout => Try(List(Tree.Entry), _)
+selected_entries! = |root, prefix, selected, all, layout| {
+	var $entries = []
+	directory = if (prefix == "") root else "${root}/${prefix}"
+	for entry_path in path(directory).list!()? {
+		full = Paths.portable(entry_path.to_str()?)
+		name = full.split_on("/").last() ?? full
+		relative = if (prefix == "") name else "${prefix}/${name}"
+		excluded = [".git", ".hg", ".svn", ".jj"].contains(name) or [layout.workspace, layout.generated_root, layout.lock_path].contains(full)
+		included = all or selected.any(|item| relative == item or relative.starts_with("${item}/") or item.starts_with("${relative}/"))
+		if !excluded and included {
+			match entry_path.type!()? {
+				IsDir => { $entries = $entries.append({ path: relative, kind: Dir }).concat(selected_entries!(root, relative, selected, all, layout)?) }
+				IsFile => { $entries = $entries.append({ path: relative, kind: File({ executable: entry_path.is_executable!()?, digest: Store.file_digest!(full)? }) }) }
+				_ => return Err(UnsafePath(full))
+			}
+		}
+	}
+	Ok($entries)
+}
+
+build_record_path : BuildModel.Snapshot, Context -> Str
+build_record_path = |snapshot, ctx| "${ctx.layout.workspace}/build-records/${snapshot.system}/${snapshot.name}.scm"
+
+save_build_record! : BuildModel.Record, Context => Try({}, _)
+save_build_record! = |record, ctx| {
+	text = BuildModel.render_record(record).map_err(|message| RenderFailed(message))?
+	file = build_record_path(record.snapshot, ctx)
+	safe_path!(file)?
+	path(Paths.parent(file)).create_all!()?
+	ignore_generated!(ctx.layout)?
+	atomic_write!(file, text)
+}
+
+render_build_inspection! : BuildModel.Snapshot, Provider.PreparedBuild, Bool, Bool, Context => Try({}, _)
+render_build_inspection! = |snapshot, prepared, exact, explain, ctx| {
+	file = build_record_path(snapshot, ctx)
+	safe_path!(file)?
+	baseline = if path(file).exists!()? {
+		text = path(file).read_utf8!()?
+		BuildModel.parse_record(text)
+	} else { Err("no successful local build record") }
+	comparison = match baseline {
+		Ok(previous) => BuildModel.compare(previous.snapshot, snapshot)
+		Err(message) => Err(message)
+	}
+	changes = comparison ?? []
+	status = match comparison { Ok(_) => "available"
+		Err(_) => "unavailable" }
+	reason = match comparison { Ok(_) => ""
+		Err(message) => message }
+	identity_status = if !exact { "unavailable" } else {
+		match baseline { Ok(previous) if previous.snapshot.provider == snapshot.provider => if (previous.build_identity == prepared.build_identity) "unchanged" else "changed"
+			_ => "unavailable" }
+	}
+	if ctx.build_json {
+		Stdout.line!(Json.to_str({ schema_version: 1, name: snapshot.name, system: snapshot.system, provider: snapshot.provider, prepared: exact, build_identity: prepared.build_identity, outputs: prepared.outputs, snapshot_digest: BuildModel.digest(snapshot), snapshot, baseline: status, baseline_reason: reason, build_identity_status: identity_status, changes }))
+	} else {
+		Stdout.line!("build ${snapshot.name} [${snapshot.system}] via ${snapshot.provider}")?
+		for node in snapshot.nodes {
+			Stdout.line!("  ${node.name}: ${node.files.len().to_str()} selected entries; inputs ${Str.join_with(node.inputs.map(|input| input.name), ", ")}; needs ${Str.join_with(node.dependencies, ", ")}")?
+		}
+		if exact { Stdout.line!("build identity: ${prepared.build_identity}")? }
+		if explain {
+			if status == "unavailable" { Stdout.line!("baseline unavailable: ${reason}")? } else {
+				if changes.is_empty() { Stdout.line!("declared inputs unchanged")? }
+				for change in changes { Stdout.line!("${Str.join_with(change.dependency_path, " -> ")}: ${change.kind}: ${change.name}")? }
+				if exact { Stdout.line!("build identity ${identity_status}")? }
+			}
+		}
+		Ok({})
 	}
 }
 

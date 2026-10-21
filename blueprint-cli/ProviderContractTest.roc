@@ -36,10 +36,17 @@ provider = Provider.{
 		Ok(Steps.{ steps: [{ action, argv, artifacts, files: [{ path: "${layout.generated_root}/channel.plan", contents: Json.to_str({ files: spec.build_files, inputs: spec.source_files }) }], operations: spec.source_files.map(|source| SourceFile(source)) }] })
 	},
 	build_argv: |step, options| Ok(step.argv.concat(if (options.json) ["--report"] else []).concat(if (options.rebuild) ["--verify-rebuild"] else [])),
+	build_prepare_argv: |step| Ok(step.argv.append("--prepare")),
+	build_prepared: |text| {
+		wire : { recipe : Str, artifact : Str }
+		wire = Json.parse(text).map_err(|_| "invalid fixture preparation")?
+		Ok({ build_identity: wire.recipe, outputs: [{ name: "artifact", path: wire.artifact }] })
+	},
+	build_execute_argv: |step, _prepared, options| Ok(step.argv.concat(if (options.rebuild) ["--verify-rebuild"] else []).append("--report")),
 	build_result: |text| {
 		wire : { recipe : Str, artifact : Str }
 		wire = Json.parse(text).map_err(|_| "invalid fixture result")?
-		Ok({ recipe_identity: wire.recipe, outputs: [{ name: "artifact", path: wire.artifact }], metadata: [{ name: "substituted", value: Value.Bool(False) }, { name: "attempts", value: Value.Int(2) }] })
+		Ok({ build_identity: wire.recipe, outputs: [{ name: "artifact", path: wire.artifact }], metadata: [{ name: "substituted", value: Value.Bool(False) }, { name: "attempts", value: Value.Int(2) }] })
 	},
 	build_sources: |_spec, _name| Ok(["channel", "archive"]),
 	resolve: |_spec, _system, layout, _update| Ok({ present: [{ program: "guix-fixture", because: "resolve channel" }], files: [], locals: [], argv: ["guix-fixture", "describe", "--save", "${layout.generated_root}/channel.lock"], native_lock: "${layout.generated_root}/channel.lock" }),
@@ -104,9 +111,9 @@ expect {
 	result = || {
 		built = (provider.build_result)("{\"recipe\":\"guix:recipe:123\",\"artifact\":\"/outputs/artifact\"}")?
 		text = BuildReport.render("app", "x86_64-linux", provider.name, built, [])?
-		decoded : { provider : Str, recipe_identity : Str, metadata : { guix : { substituted : Bool, attempts : I64 } }, outputs : List({ name : Str, path : Str }) }
+		decoded : { provider : Str, build_identity : Str, metadata : { guix : { substituted : Bool, attempts : I64 } }, outputs : List({ name : Str, path : Str }) }
 		decoded = Json.parse(text).map_err(|_| "invalid public report")?
-		Ok(decoded.provider == "guix" and decoded.recipe_identity == "guix:recipe:123" and decoded.metadata.guix == { substituted: False, attempts: 2 } and decoded.outputs == built.outputs and !text.contains("derivation"))
+		Ok(decoded.provider == "guix" and decoded.build_identity == "guix:recipe:123" and decoded.metadata.guix == { substituted: False, attempts: 2 } and decoded.outputs == built.outputs and !text.contains("derivation"))
 	}
 	result() == Ok(True)
 }
@@ -148,7 +155,7 @@ expect {
 }
 
 expect {
-	bad = { recipe_identity: "opaque", outputs: [], metadata: [{ name: "x", value: Value.Int(1) }, { name: "x", value: Value.Int(2) }] }
+	bad = { build_identity: "opaque", outputs: [], metadata: [{ name: "x", value: Value.Int(1) }, { name: "x", value: Value.Int(2) }] }
 	BuildReport.render("app", "x86_64-linux", "guix", bad, []) == Err("duplicate report metadata field: x")
 }
 
@@ -163,7 +170,7 @@ expect {
 }
 
 expect {
-	built = { recipe_identity: "opaque", outputs: [], metadata: [] }
-	BuildReport.render("app", "x86_64-linux", "", built, []) == Err("build report has no provider content_identity")
-		and BuildReport.render("app", "x86_64-linux", "guix", { ..built, recipe_identity: " " }, []) == Err("build report has no recipe content_identity")
+	built = { build_identity: "opaque", outputs: [], metadata: [] }
+	BuildReport.render("app", "x86_64-linux", "", built, []) == Err("build report has no provider identity")
+		and BuildReport.render("app", "x86_64-linux", "guix", { ..built, build_identity: " " }, []) == Err("build report has no build identity")
 }

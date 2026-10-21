@@ -44,6 +44,9 @@ Provider := {
 	## Build execution options and native-result decoding belong to the provider.
 	## The consumer executes argv and prints this provider-neutral result.
 	build_argv : Steps.Step, BuildOptions -> Try(List(Str), Str),
+	build_prepare_argv : Steps.Step -> Try(List(Str), Str),
+	build_prepared : Str -> Try(PreparedBuild, Str),
+	build_execute_argv : Steps.Step, PreparedBuild, BuildOptions -> Try(List(Str), Str),
 	build_result : Str -> Try(BuildResult, Str),
 	build_sources : Spec, Str -> Try(List(Str), Str),
 
@@ -62,7 +65,9 @@ Provider := {
 
 	## Identity is opaque outside its provider: a Nix derivation, for example.
 	## Native details stay namespaced when rendered, never mandatory core fields.
-	BuildResult : { recipe_identity : Str, outputs : List({ name : Str, path : Str }), metadata : List({ name : Str, value : Value }) }
+	PreparedBuild : { build_identity : Str, outputs : List({ name : Str, path : Str }) }
+
+	BuildResult : { build_identity : Str, outputs : List({ name : Str, path : Str }), metadata : List({ name : Str, value : Value }) }
 
 	## Inspection returns relative names; executable Steps files are absolute.
 	File : { path : Str, contents : Str }
