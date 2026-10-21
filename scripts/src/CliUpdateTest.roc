@@ -1,4 +1,5 @@
 import cli.Cmd
+import core.Spec
 import cli.Env
 import cli.OsStr
 import cli.Path
@@ -375,3 +376,6 @@ expect {
 expect CliUpdateTest.leftovers(["Blueprint.lock", ".blueprint-write-ab12", "wire.scm", "lock-writer.tmp", ".blueprint"]) == [".blueprint-write-ab12", "lock-writer.tmp"]
 
 expect CliUpdateTest.as_0_5("((format ((major 2) (minor 0))))").contains("(major 1)")
+
+# Keep stub compiler output valid under the current wire contract.
+expect Spec.parse(CliUpdateTest.wire).is_ok() and CliUpdateTest.local_inputs.all(|fixture| Spec.parse(fixture.wire).is_ok())

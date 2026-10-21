@@ -954,3 +954,25 @@ expect {
 	owner = { ..stub, name: "fixture" }
 	Realise.resolvers(project, [stub, owner]).map(|provider| provider.name) == ["fixture"] and Realise.resolvers(project, [owner, stub]).map(|provider| provider.name) == ["fixture"] and Project.validate({ ..project, resolvers: [] }).is_err() and Project.validate({ ..project, resolvers: [{ provider: "fixture", inputs: ["assets"] }, { provider: "nix", inputs: ["assets"] }] }).is_err()
 }
+
+# An environment-only adapter owns its native grammar without Nix-shaped
+# references, package attributes, build support or a bootstrap source.
+expect {
+	project = { ..Spec.empty("environment-adapter"), systems: ["x86_64-linux"], sources: [{ name: "channel", provider: { name: "fixture", version: 1, ref: "channel:native" } }], environments: [{ name: "dev", parents: [], tools: [{ source: "channel", name: "compiler@stable" }], overlays: [] }], tasks: [{ name: "compile", environment: "dev", run: ["compiler", "source"] }] }
+	adapter = {
+		..stub,
+		name: "fixture",
+		realises: |source| source.name == "fixture" and source.version == 1,
+		validate_source: |source| if (source.ref.starts_with("channel:")) Ok({}) else Err("unsupported fixture source"),
+		validate_tool: |name| if (name.contains("@")) Ok({}) else Err("fixture tools require a channel"),
+		preflight: |_spec, request, _system, _layout| match request {
+			Request.Run(_, _) => Ok({})
+			_ => Err("fixture adapter only enters task environments")
+		},
+		realise: |_spec, request, _system, _layout, _lock| match request {
+			Request.Run(name, _) => Ok(Steps.{ steps: [{ action: Run(name), files: [], argv: ["fixture-env", "exec"], artifacts: [], operations: [] }] })
+			_ => Err(Unrealisable("fixture adapter only enters task environments"))
+		},
+	}
+	Realise.plan(project, Request.Run("compile", []), "x86_64-linux", unix, locked, [stub, adapter]).map_ok(|steps| steps.steps.map(|step| step.argv)) == Ok([["fixture-env", "exec"]]) and Realise.preflight({ ..project, environments: [{ ..project.environments.first()?, tools: [{ source: "channel", name: "unsupported" }] }] }, Request.Run("compile", []), "x86_64-linux", unix, [adapter]) == Err(["fixture tools require a channel"])
+}

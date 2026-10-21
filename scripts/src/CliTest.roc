@@ -1,3 +1,4 @@
+import core.Spec
 import cli.Env
 import cli.OsStr
 import cli.Path
@@ -528,3 +529,6 @@ expect pins_match(authority_sample, "{\"version\":7,\"nodes\":{\"default\":{\"lo
 expect !pins_match(authority_sample, native_sample.replace_each("abc", "abd"))
 expect !pins_match(authority_sample.replace_each("(major 2)", "(major 3)"), native_sample)
 expect !pins_match(native_sample, native_sample)
+
+# Keep stub compiler output valid under the current wire contract.
+expect Spec.parse(CliTest.wire).is_ok() and Spec.parse(CliTest.workflow_wire).is_ok()
