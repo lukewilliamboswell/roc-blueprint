@@ -1,7 +1,24 @@
 import core.Spec
 import core.Lock
+import core.Project
+import core.JsonTree
 import core.Sbom
-import "../../tests/sbom/fixtures/native-linux.spdx.json" as native_fixture : Str
+import core.Spdx2
+import core.Spdx3
+import "../../tests/sbom/schema/spdx-3.0.1.schema.json" as schema_3 : Str
+import "../../tests/sbom/schema/spdx-2.3.schema.json" as schema_2 : Str
+import "../../tests/sbom/fixtures/verified-import.spdx.json" as fixture_verified_import_3 : Str
+import "../../tests/sbom/fixtures/verified-import.spdx-2.3.json" as fixture_verified_import_2 : Str
+import "../../tests/sbom/fixtures/native-linux.spdx.json" as fixture_native_linux_3 : Str
+import "../../tests/sbom/fixtures/native-linux.spdx-2.3.json" as fixture_native_linux_2 : Str
+import "../../tests/sbom/fixtures/native-arm64.spdx.json" as fixture_native_arm64_3 : Str
+import "../../tests/sbom/fixtures/native-arm64.spdx-2.3.json" as fixture_native_arm64_2 : Str
+import "../../tests/sbom/fixtures/source-bundle.spdx.json" as fixture_source_bundle_3 : Str
+import "../../tests/sbom/fixtures/source-bundle.spdx-2.3.json" as fixture_source_bundle_2 : Str
+import "../../tests/sbom/fixtures/verified-empty.spdx.json" as fixture_verified_empty_3 : Str
+import "../../tests/sbom/fixtures/verified-empty.spdx-2.3.json" as fixture_verified_empty_2 : Str
+import "../../tests/sbom/fixtures/unknown-closure.spdx.json" as fixture_unknown_closure_3 : Str
+import "../../tests/sbom/fixtures/unknown-closure.spdx-2.3.json" as fixture_unknown_closure_2 : Str
 
 ## Consumer fixtures intentionally include a transitive native library, a build
 ## compiler, a patched proprietary component, and a locked source identity.
@@ -17,16 +34,16 @@ SbomTest := [].{
 		profile: Sbom.profile,
 		imported_documents: [],
 		components: [
-			component("SPDXRef-platform", "platform", "1.0.0"),
-			{ ..component("SPDXRef-native", "native-library", "2.0.0"), identity: "pkg:cargo/native-library@2.0.0", sha256: digest },
-			component("SPDXRef-compiler", "compiler", "3.0.0"),
-			{ ..component("SPDXRef-restricted", "proprietary-code", "4.0.0-patch1"), license: "LicenseRef-Restricted", license_url: "https://example.org/terms/4.0.0", modified: "Vendor revision 4.0.0-patch1; upstream 4.0.0; local fix CVE-fixture; content source identity preserved" },
+			component("platform", "platform", "1.0.0"),
+			{ ..component("native", "native-library", "2.0.0"), identity: "pkg:cargo/native-library@2.0.0", sha256: digest },
+			component("compiler", "compiler", "3.0.0"),
+			{ ..component("restricted", "proprietary-code", "4.0.0-patch1"), license: "LicenseRef-Restricted", license_url: "https://example.org/terms/4.0.0", modified: "Vendor revision 4.0.0-patch1; upstream 4.0.0; local fix CVE-fixture; content source identity preserved" },
 		],
 		relationships: [
-			edge("SPDXRef-Subject", "SPDXRef-platform", "CONTAINS"),
-			edge("SPDXRef-platform", "SPDXRef-native", "CONTAINS"),
-			edge("SPDXRef-compiler", "SPDXRef-Subject", "BUILD_DEPENDENCY_OF"),
-			edge("SPDXRef-Subject", "SPDXRef-restricted", "CONTAINS"),
+			edge("Subject", "platform", "contains"),
+			edge("platform", "native", "contains"),
+			{ ..edge("Subject", "compiler", "dependsOn"), scope: "build" },
+			edge("Subject", "restricted", "contains"),
 		],
 		coverage: [{ scope: "native-closure", status: "incomplete", reason: "Opaque task lacks remaining native closure metadata", contact: "https://example.org/support" }],
 		inputs: [],
@@ -35,27 +52,42 @@ SbomTest := [].{
 	inventory : Try(Sbom.Inventory, Str)
 	inventory = Sbom.inspect(spec, lock, subject.target, composition)
 
+	## Each fixture document, rendered as SPDX 3.0.1 (`NAME.spdx.json`) and as
+	## SPDX 2.3 (`NAME.spdx-2.3.json`) from the same inventory.
 	outputs : List({ name : Str, text : Str })
-	outputs = {
-		linux = output ?? crash "invalid fixture"
+	outputs = cases.fold(
+		[],
+		|all, case| all.concat([
+			{ name: "${case.name}.spdx.json", text: Sbom.render(case.inventory, case.subject, case.context) ?? crash "invalid ${case.name} document" },
+			{ name: "${case.name}.spdx-2.3.json", text: Sbom.render_spdx2(case.inventory, case.subject, case.context) ?? crash "invalid ${case.name} SPDX 2.3 document" },
+		]),
+	)
+
+	Case : { name : Str, inventory : Sbom.Inventory, subject : Sbom.Subject, context : Sbom.Context }
+
+	cases : List(Case)
+	cases = {
+		linux = inventory ?? crash "invalid fixture"
 		arm_composition = { ..composition, components: composition.components.map(|entry| { ..entry, target: "aarch64-linux" }) }
 		arm_inventory = Sbom.inspect(spec, lock, "aarch64-linux", arm_composition) ?? crash "invalid arm fixture"
-		arm = Sbom.render(arm_inventory, { ..subject, target: "aarch64-linux" }, { ..context, namespace: "https://example.org/sbom/fixture/arm64/revision-1" }) ?? crash "invalid arm document"
 		source_composition = { ..composition, components: composition.components.map(|entry| { ..entry, target: "" }) }
 		source_inventory = Sbom.inspect(spec, lock, "source", source_composition) ?? crash "invalid source fixture"
-		source = Sbom.render(source_inventory, { ..subject, filename: "sample-source-bundle", target: "source", sha256: Crypto.SHA256.hash("fixture source bundle\n".to_utf8()).to_hex() }, { ..context, namespace: "https://example.org/sbom/fixture/source/revision-1" }) ?? crash "invalid source document"
 		empty = { ..composition, components: [], relationships: [], coverage: [{ scope: "all", status: "verified-empty", reason: "Reviewed generated text contains no third-party components", contact: "https://example.org/support" }] }
 		empty_inventory = Sbom.inspect(spec, lock, subject.target, empty) ?? crash "invalid empty fixture"
-		empty_output = Sbom.render(empty_inventory, subject, { ..context, namespace: "https://example.org/sbom/fixture/empty/revision-1" }) ?? crash "invalid empty document"
 		unknown = { ..empty, coverage: [{ scope: "all", status: "incomplete", reason: "Opaque task exposes no component closure", contact: "https://example.org/support" }] }
 		unknown_inventory = Sbom.inspect(spec, lock, subject.target, unknown) ?? crash "invalid unknown fixture"
-		unknown_output = Sbom.render(unknown_inventory, subject, { ..context, namespace: "https://example.org/sbom/fixture/unknown/revision-1" }) ?? crash "invalid unknown document"
-		incoming = { ..component("SPDXRef-consumed-input", "sample-artifact", subject.version), sha256: subject.sha256, download: subject.url, identity: "urn:example:fixture:consumed-input" }
+		incoming = { ..component("consumed-input", "sample-artifact", subject.version), sha256: subject.sha256, download: subject.url, identity: "urn:example:fixture:consumed-input" }
 		bound = { ..imported_document, subject: { ..imported_document.subject, component: incoming.id } }
-		import_composition = { ..composition, components: [incoming], relationships: [edge("SPDXRef-Subject", incoming.id, "DEPENDS_ON")], imported_documents: [bound] }
+		import_composition = { ..composition, components: [incoming], relationships: [edge("Subject", incoming.id, "dependsOn")], imported_documents: [bound] }
 		import_inventory = Sbom.inspect(spec, lock, subject.target, import_composition) ?? crash "invalid imported fixture"
-		import_output = Sbom.render(import_inventory, { ..subject, filename: "consumer-artifact", sha256: Crypto.SHA256.hash("consumer of fixture\n".to_utf8()).to_hex() }, { ..context, namespace: "https://example.org/sbom/fixture/imported/revision-1" }) ?? crash "invalid imported document"
-		[{ name: "verified-import.spdx.json", text: import_output }, { name: "native-linux.spdx.json", text: linux }, { name: "native-arm64.spdx.json", text: arm }, { name: "source-bundle.spdx.json", text: source }, { name: "verified-empty.spdx.json", text: empty_output }, { name: "unknown-closure.spdx.json", text: unknown_output }]
+		[
+			{ name: "verified-import", inventory: import_inventory, subject: { ..subject, filename: "consumer-artifact", sha256: Crypto.SHA256.hash("consumer of fixture\n".to_utf8()).to_hex() }, context: { ..context, namespace: "https://example.org/sbom/fixture/imported/revision-1" } },
+			{ name: "native-linux", inventory: linux, subject, context },
+			{ name: "native-arm64", inventory: arm_inventory, subject: { ..subject, target: "aarch64-linux" }, context: { ..context, namespace: "https://example.org/sbom/fixture/arm64/revision-1" } },
+			{ name: "source-bundle", inventory: source_inventory, subject: { ..subject, filename: "sample-source-bundle", target: "source", sha256: Crypto.SHA256.hash("fixture source bundle\n".to_utf8()).to_hex() }, context: { ..context, namespace: "https://example.org/sbom/fixture/source/revision-1" } },
+			{ name: "verified-empty", inventory: empty_inventory, subject, context: { ..context, namespace: "https://example.org/sbom/fixture/empty/revision-1" } },
+			{ name: "unknown-closure", inventory: unknown_inventory, subject, context: { ..context, namespace: "https://example.org/sbom/fixture/unknown/revision-1" } },
+		]
 	}
 
 	output : Try(Str, Str)
@@ -67,7 +99,7 @@ digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 component : Str, Str, Str -> Sbom.Component
 component = |id, name, version| { id, name, version, producer: "Organization: Fixture upstream", identity: "https://example.org/source/${name}/${version}", download: "https://example.org/source/${name}/${version}.tar.gz", sha256: "", license: "MIT", license_url: "", modified: "", target: "x86_64-linux", origin: "reviewed" }
 
-edge = |from, to, relation| { from, to, relation, basis: "Reviewed fixture composition declaration" }
+edge = |from, to, relation| { from, to, relation, scope: "", basis: "Reviewed fixture composition declaration" }
 
 inspect = |composition| Sbom.inspect(SbomTest.spec, SbomTest.lock, "x86_64-linux", composition)
 
@@ -75,8 +107,8 @@ expect SbomTest.inventory.is_ok()
 expect SbomTest.output.is_ok()
 expect inspect({ ..SbomTest.composition, components: [] }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.concat(SbomTest.composition.components) }).is_err()
-expect inspect({ ..SbomTest.composition, relationships: [edge("SPDXRef-Subject", "SPDXRef-missing", "CONTAINS")] }).is_err()
-expect inspect({ ..SbomTest.composition, relationships: [edge("SPDXRef-native", "SPDXRef-platform", "CONTAINS")] }).is_err()
+expect inspect({ ..SbomTest.composition, relationships: [edge("Subject", "missing", "contains")] }).is_err()
+expect inspect({ ..SbomTest.composition, relationships: [edge("native", "platform", "contains")] }).is_err()
 expect inspect({ ..SbomTest.composition, coverage: [] }).is_err()
 expect inspect({ ..SbomTest.composition, coverage: [{ scope: "all", status: "incomplete", reason: "", contact: "contact" }] }).is_err()
 expect inspect({ ..SbomTest.composition, relationships: SbomTest.composition.relationships.concat(SbomTest.composition.relationships) }).is_err()
@@ -94,7 +126,7 @@ expect inspect({ ..empty_composition, coverage: [{ scope: "all", status: "incomp
 # Complete known-input dispositions; a tool's availability proves no containment.
 tool_spec = { ..SbomTest.spec, environments: [{ name: "builder", parents: [], tools: [{ source: "packages", name: "cc" }], overlays: [] }] }
 expect Sbom.inspect(tool_spec, SbomTest.lock, "x86_64-linux", SbomTest.composition).is_err()
-expect Sbom.inspect(tool_spec, SbomTest.lock, "x86_64-linux", { ..SbomTest.composition, inputs: [{ input: "tool:packages#cc", component: "SPDXRef-compiler", reason: "Used only to compile; does not ship" }] }).is_ok()
+expect Sbom.inspect(tool_spec, SbomTest.lock, "x86_64-linux", { ..SbomTest.composition, inputs: [{ input: "tool:packages#cc", component: "compiler", reason: "Used only to compile; does not ship" }] }).is_ok()
 expect Sbom.inspect(tool_spec, SbomTest.lock, "x86_64-linux", { ..SbomTest.composition, inputs: [{ input: "tool:packages#cc", component: "", reason: "Unrelated developer tool excluded from this subject" }] }).is_ok()
 
 expect {
@@ -146,13 +178,13 @@ expect {
 imported_document : Sbom.Imported
 imported_document = {
 	subject: { component: "", filename: SbomTest.subject.filename, version: SbomTest.subject.version, sha256: SbomTest.subject.sha256 },
-	id: "SPDXRef-upstream",
+	id: "upstream",
 	url: "https://example.org/sbom/releases/1.0.0/revision-1.spdx.json",
 	sha256: Crypto.SHA256.hash((SbomTest.output ?? "").to_utf8()).to_hex(),
 	namespace: SbomTest.context.namespace,
 	target: SbomTest.subject.target,
 	document: SbomTest.output ?? "",
-	relation: "CONTAINS",
+	relation: "contains",
 	basis: "Reviewed imported graph bound to immutable document digest",
 	contact: "https://example.org/support",
 }
@@ -164,7 +196,7 @@ expect inspect({ ..imported_composition, imported_documents: [{ ..imported_docum
 expect inspect({ ..imported_composition, imported_documents: [{ ..imported_document, target: "aarch64-linux" }] }).is_err()
 expect inspect({ ..imported_composition, imported_documents: [{ ..imported_document, url: "https://user:secret@example.org/sbom" }] }).is_err()
 expect inspect({ ..imported_composition, imported_documents: [{ ..imported_document, document: "{bad JSON}", sha256: Crypto.SHA256.hash("{bad JSON}".to_utf8()).to_hex() }] }).is_err()
-expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, id: "SPDXRef-" }) }).is_err()
+expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, id: "spdx/agent" }) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, producer: "Not-an-SPDX-supplier" }) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, license: "Not-A-License" }) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, license: "MIT AND ( Apache-2.0 OR )" }) }).is_err()
@@ -177,11 +209,11 @@ locked_spec = { ..SbomTest.spec, sources: [{ name: "upstream", provider: NixPack
 
 locked_lock = Lock.{ format: Lock.current_format, intent: Lock.intent_of(locked_spec), sources: [{ name: "upstream", provider: "nix", ref: "github:example/source/stable", rev: "1111111111111111111111111111111111111111", digest: "sha256-Zml4dHVyZQ==" }], fetched: [{ name: "roc", system: "x86_64-linux", urls: ["https://example.org/roc/3.0.0.tar.gz"], sha256: digest, size: 100, obtained: Both }], hints: [] }
 
-source_component = { ..component("SPDXRef-source", "upstream", "1111111111111111111111111111111111111111"), download: "github:example/source/stable", identity: "github:example/source/stable@1111111111111111111111111111111111111111#sha256-Zml4dHVyZQ==", origin: "source:upstream" }
+source_component = { ..component("source", "upstream", "1111111111111111111111111111111111111111"), download: "github:example/source/stable", identity: "github:example/source/stable@1111111111111111111111111111111111111111#sha256-Zml4dHVyZQ==", origin: "source:upstream" }
 
-program_component = { ..component("SPDXRef-program", "roc", "3.0.0"), download: "https://example.org/roc/3.0.0.tar.gz", identity: "", sha256: digest, origin: "program:roc:x86_64-linux" }
+program_component = { ..component("program", "roc", "3.0.0"), download: "https://example.org/roc/3.0.0.tar.gz", identity: "", sha256: digest, origin: "program:roc:x86_64-linux" }
 
-locked_composition = { ..SbomTest.composition, components: [source_component, program_component], relationships: [edge("SPDXRef-Subject", source_component.id, "DEPENDS_ON"), edge(program_component.id, "SPDXRef-Subject", "BUILD_DEPENDENCY_OF")], inputs: [{ input: "source:upstream", component: source_component.id, reason: "Resolved source tree identity; no archive digest inferred" }, { input: "program:roc:x86_64-linux", component: program_component.id, reason: "Authoritative locked download archive" }] }
+locked_composition = { ..SbomTest.composition, components: [source_component, program_component], relationships: [edge("Subject", source_component.id, "dependsOn"), { ..edge("Subject", program_component.id, "dependsOn"), scope: "build" }], inputs: [{ input: "source:upstream", component: source_component.id, reason: "Resolved source tree identity; no archive digest inferred" }, { input: "program:roc:x86_64-linux", component: program_component.id, reason: "Authoritative locked download archive" }] }
 
 inspect_locked = |composition| Sbom.inspect(locked_spec, locked_lock, "x86_64-linux", composition)
 expect inspect_locked(locked_composition).is_ok()
@@ -192,14 +224,14 @@ expect inspect_locked({ ..locked_composition, components: [source_component, { .
 expect inspect_locked({ ..locked_composition, components: [source_component, { ..program_component, target: "aarch64-linux" }] }).is_err()
 expect {
 	inventory = inspect_locked(locked_composition) ?? crash "invalid locked fixture"
-	source = inventory.components.find_first(|entry| entry.id == "SPDXRef-source") ?? crash "missing source"
+	source = inventory.components.find_first(|entry| entry.id == "source") ?? crash "missing source"
 	source.sha256.is_empty() and source.download == "https://github.com/example/source/tree/1111111111111111111111111111111111111111"
 }
 expect Sbom.json_within_bounds("[[[[[]]]]]")
 expect !Sbom.json_within_bounds(Str.join_with(List.repeat("[", 65), "").concat(Str.join_with(List.repeat("]", 65), "")))
 expect !Sbom.json_within_bounds("{unclosed")
 
-expect SbomTest.output == Ok(native_fixture)
+expect SbomTest.output == Ok(fixture_native_linux_3)
 
 # Pin-derived metadata is populated, never duplicated in composition.
 unpinned_composition = { ..locked_composition, components: [{ ..source_component, version: "", identity: "", download: "", sha256: "" }, { ..program_component, version: "", identity: "", download: "", sha256: "", target: "" }] }
@@ -215,8 +247,7 @@ expect {
 	inventory.components.any(|entry| entry.id == program_component.id and entry.sha256 == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 }
 expect {
-	file_wire = { ..locked_spec, sources: [], requires_: ["source-files"] }.to_str().trim().drop_suffix(")")
-	file_spec = Spec.parse("${file_wire} (source_files (((name \"upstream\") (url \"https://example.org/source/1.0.0.tar.gz\") (sha256 \"${digest}\")))) )") ?? crash "invalid SourceFile fixture"
+	file_spec = { ..locked_spec, sources: [], source_files: [{ name: "upstream", url: "https://example.org/source/1.0.0.tar.gz", sha256: digest }] }
 	file_lock = { ..locked_lock, intent: Lock.intent_of(file_spec), sources: [{ name: "upstream", provider: "file", ref: "https://example.org/source/1.0.0.tar.gz", rev: "", digest: "sha256:${digest}" }] }
 	inventory = Sbom.inspect(file_spec, file_lock, "x86_64-linux", unpinned_composition) ?? crash "flat file should resolve"
 	inventory.components.any(|entry| entry.id == source_component.id and entry.sha256 == digest and entry.version == "sha256:${digest}")
@@ -224,13 +255,13 @@ expect {
 
 expect Sbom.inspect({ ..SbomTest.spec, requires_: ["unknown-future-feature"] }, SbomTest.lock, "x86_64-linux", SbomTest.composition).is_err()
 expect {
-	spaced = imported_document.document.replace_each("\"SPDXID\":", "\"SPDXID\" : ").replace_each("\"packages\":", "\"packages\" : ")
+	spaced = imported_document.document.replace_each("\"spdxId\":", "\"spdxId\" : ").replace_each("\"@graph\":", "\"@graph\" :\n ")
 	inspect({ ..imported_composition, imported_documents: [{ ..imported_document, document: spaced, sha256: Crypto.SHA256.hash(spaced.to_utf8()).to_hex() }] }).is_ok()
 }
 
 # Upstream subject binding is separate from document integrity. A real locked
 # artifact's digest/version/target must match before imported claims are bound.
-program_document = (SbomTest.output ?? "").replace_each("\"sample-artifact\"", "\"3.0.0.tar.gz\"").replace_each("\"versionInfo\":\"1.0.0\"", "\"versionInfo\":\"3.0.0\"").replace_each(SbomTest.subject.sha256, digest)
+program_document = (SbomTest.output ?? "").replace_each("\"sample-artifact\"", "\"3.0.0.tar.gz\"").replace_each("\"software_packageVersion\":\"1.0.0\"", "\"software_packageVersion\":\"3.0.0\"").replace_each(SbomTest.subject.sha256, digest)
 
 bound_import = { ..imported_document, document: program_document, sha256: Crypto.SHA256.hash(program_document.to_utf8()).to_hex(), subject: { component: program_component.id, filename: "3.0.0.tar.gz", version: "3.0.0", sha256: digest } }
 expect inspect_locked({ ..locked_composition, imported_documents: [bound_import] }).is_ok()
@@ -240,3 +271,131 @@ expect {
 	Sbom.inspect(locked_spec, changed_lock, "x86_64-linux", { ..unpinned_composition, imported_documents: [bound_import] }).is_err()
 }
 expect inspect_locked({ ..locked_composition, imported_documents: [{ ..bound_import, target: "aarch64-linux" }] }).is_err()
+
+# The same inventory reads back to the same package graph from either version,
+# and from SPDX 2.2, whose JSON differs only in its version string here.
+expect SbomTest.cases.all(
+	|case| {
+		three = Sbom.read(Sbom.render(case.inventory, case.subject, case.context) ?? "") ?? crash "3.0.1 rendering unreadable"
+		two = Sbom.render_spdx2(case.inventory, case.subject, case.context) ?? ""
+		two_three = Sbom.read(two) ?? crash "2.3 rendering unreadable"
+		two_two = Sbom.read(two.replace_each("\"SPDX-2.3\"", "\"SPDX-2.2\"")) ?? crash "2.2 rendering unreadable"
+		three.version == "SPDX-3.0.1" and two_three.version == "SPDX-2.3" and { ..three, version: "" } == { ..two_three, version: "" } and { ..two_two, version: "" } == { ..two_three, version: "" }
+	},
+)
+expect {
+	document = Sbom.read(SbomTest.output ?? "") ?? crash "unreadable"
+	document.roots == ["Subject"] and document.relationships.any(|relation| relation.from == "Subject" and relation.to == "compiler" and relation.relation == "dependsOn" and relation.scope == "build")
+}
+expect {
+	two = Sbom.render_spdx2(SbomTest.inventory ?? crash "fixture invalid", SbomTest.subject, SbomTest.context) ?? ""
+	two.contains("{\"comment\":\"Reviewed fixture composition declaration\",\"relatedSpdxElement\":\"SPDXRef-Subject\",\"relationshipType\":\"BUILD_DEPENDENCY_OF\",\"spdxElementId\":\"SPDXRef-compiler\"}")
+}
+
+# An upstream that publishes SPDX 2.3 imports exactly as its 3.0.1 rendering does.
+expect {
+	two = Sbom.render_spdx2(SbomTest.inventory ?? crash "fixture invalid", SbomTest.subject, SbomTest.context) ?? ""
+	from_two = inspect({ ..imported_composition, imported_documents: [{ ..imported_document, document: two, sha256: Crypto.SHA256.hash(two.to_utf8()).to_hex() }] })
+	from_three = inspect(imported_composition)
+	strip = |inventory| inventory.components.map(|entry| { ..entry, modified: "" })
+	from_two.is_ok() and from_two.map_ok(strip) == from_three.map_ok(strip) and from_two.map_ok(|inventory| inventory.relationships) == from_three.map_ok(|inventory| inventory.relationships)
+}
+expect Sbom.read("{\"@context\":\"https://spdx.org/rdf/3.0.0/spdx-context.jsonld\",\"@graph\":[]}").is_err()
+expect Sbom.read("{\"spdxVersion\":\"SPDX-2.1\"}").is_err()
+expect Sbom.read("[]").is_err()
+expect inspect({ ..SbomTest.composition, relationships: SbomTest.composition.relationships.map(|entry| { ..entry, scope: "test" }) }).is_err()
+expect inspect({ ..SbomTest.composition, relationships: SbomTest.composition.relationships.map(|entry| { ..entry, relation: "CONTAINS" }) }).is_err()
+expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| if (entry.id == "native") { ..entry, license: "LicenseRef-Restricted", license_url: "https://example.org/other-terms" } else entry) }).is_err()
+
+# The committed fixtures are what the renderers write now; regenerate them
+# with `scripts/test_sbom.roc fixtures tests/sbom/fixtures`.
+committed_fixtures = [{ name: "verified-import.spdx.json", text: fixture_verified_import_3 }, { name: "verified-import.spdx-2.3.json", text: fixture_verified_import_2 }, { name: "native-linux.spdx.json", text: fixture_native_linux_3 }, { name: "native-linux.spdx-2.3.json", text: fixture_native_linux_2 }, { name: "native-arm64.spdx.json", text: fixture_native_arm64_3 }, { name: "native-arm64.spdx-2.3.json", text: fixture_native_arm64_2 }, { name: "source-bundle.spdx.json", text: fixture_source_bundle_3 }, { name: "source-bundle.spdx-2.3.json", text: fixture_source_bundle_2 }, { name: "verified-empty.spdx.json", text: fixture_verified_empty_3 }, { name: "verified-empty.spdx-2.3.json", text: fixture_verified_empty_2 }, { name: "unknown-closure.spdx.json", text: fixture_unknown_closure_3 }, { name: "unknown-closure.spdx-2.3.json", text: fixture_unknown_closure_2 }]
+expect SbomTest.outputs.sort_with(|a, b| Project.bytewise(a.name, b.name)) == committed_fixtures.sort_with(|a, b| Project.bytewise(a.name, b.name))
+
+# What a consumer asks of the native fixture, in either version: the native
+# library ships inside the subject, the compiler only builds it, restricted
+# terms keep their patch identity, and source and binary digests stay apart.
+containers : Sbom.Document, Str -> List(Str)
+containers = |document, contained| {
+	var $found = [contained]
+	var $changed = True
+	while $changed {
+		$changed = False
+		for relation in document.relationships {
+			if relation.relation == "contains" and $found.contains(relation.to) and !$found.contains(relation.from) {
+				$found = $found.append(relation.from)
+				$changed = True
+			}
+		}
+	}
+	$found
+}
+
+expect [fixture_native_linux_3, fixture_native_linux_2].all(
+	|text| {
+		document = Sbom.read(text) ?? crash "fixture unreadable"
+		find = |id| document.packages_.find_first(|entry| entry.id == id) ?? crash "missing ${id}"
+		native = find("native")
+		restricted = find("restricted")
+		native.download == "https://example.org/source/native-library/2.0.0.tar.gz"
+			and containers(document, "native").contains("Subject")
+				and !containers(document, "compiler").contains("Subject")
+					and document.relationships.any(|relation| relation.from == "Subject" and relation.to == "compiler" and relation.relation == "dependsOn" and relation.scope == "build")
+						and restricted.license == "LicenseRef-Restricted"
+							and restricted.license_url == "https://example.org/terms/4.0.0"
+								and restricted.comment.contains("4.0.0-patch1")
+									and native.sha256 != find("Subject").sha256
+	},
+)
+
+# The validators follow the vendored, digest-pinned schemas: every class,
+# member and enumeration they accept is the schema's own.
+expect Crypto.SHA256.hash(schema_3.to_utf8()).to_hex() == "582c64e809d5b3ef9bd0c4de13a32391b47b0284a3e8d199569fb96f649234b1"
+expect Crypto.SHA256.hash(schema_2.to_utf8()).to_hex() == "4126dc29f15e92feec92e9622f4939131ad58b125d6f578aa93e980a6e6f3212"
+
+sorted = |values| values.sort_with(Project.bytewise)
+
+enumeration : JsonTree -> List(Str)
+enumeration = |tree| ((tree.field("enum") ?? JsonTree.Array([])).items() ?? []).map(|value| value.text() ?? "")
+
+definitions_3 : JsonTree
+definitions_3 = (JsonTree.parse(schema_3) ?? crash "schema is not JSON").field("$defs") ?? crash "schema has no $defs"
+
+## The properties a 3.0.1 class has, through its `_props` chain of `allOf`.
+schema_properties : Str -> List(Str)
+schema_properties = |definition| {
+	var $pending = [definition]
+	var $found = []
+	while !$pending.is_empty() {
+		name = $pending.first() ?? ""
+		$pending = $pending.drop_first(1)
+		parts = ((definitions_3.field(name) ?? JsonTree.Null).field("allOf") ?? JsonTree.Array([])).items() ?? []
+		for part in parts {
+			match part.field("$ref") {
+				Ok(Text(reference)) => {
+					$pending = $pending.append(reference.drop_prefix("#/$defs/"))
+				}
+				_ => {
+					$found = $found.concat((part.field("properties") ?? JsonTree.Null).keys())
+				}
+			}
+		}
+	}
+	$found
+}
+
+expect Spdx3.vocabularies.all(|vocabulary| sorted(enumeration(definitions_3.field(vocabulary.definition) ?? JsonTree.Null)) == sorted(vocabulary.values))
+expect Spdx3.classes.all(|class| definitions_3.field(class.name).is_ok() and class.properties.all(|property| schema_properties("${class.name}_props").contains(property)))
+
+## The schema object at `path` through `properties` and `items`.
+at_2 : List(Str) -> JsonTree
+at_2 = |path| path.fold(
+	JsonTree.parse(schema_2) ?? crash "schema is not JSON",
+	|node, step| {
+		child = (node.field("properties") ?? JsonTree.Null).field(step) ?? JsonTree.Null
+		child.field("items") ?? child
+	},
+)
+
+expect Spdx2.vocabularies.all(|vocabulary| sorted(enumeration(at_2(vocabulary.path))) == sorted(vocabulary.values))
+expect Spdx2.objects.all(|object| sorted((at_2(object.path).field("properties") ?? JsonTree.Null).keys()) == sorted(object.members))

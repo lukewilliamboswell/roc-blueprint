@@ -264,10 +264,12 @@ unit! = |context| {
 	tested = Process.together!(scripts.map(|name| Process.command(stable, ["test", "scripts/${name}"], context.root)))?
 	report_tests!(scripts, tested)?
 
-	step!("Offline SPDX standard/profile and read-only binding conformance")?
+	# SPDX 3.0.1 and 2.3 conformance runs in pure Roc with the script tests
+	# above (scripts/src/SbomTest.roc); this checks the built tool itself.
+	step!("Read-only SPDX binding with the native SBOM tool")?
 	Path.create_all!(Path.utf8("${context.root}/.cache/sbom-validation"))?
 	Process.passthrough!(Process.command(stable, ["build", "scripts/sbom.roc", "--output=.cache/sbom-validation/sbom"], context.root))?
-	Process.passthrough!(Process.command("nix", ["run", ".#sbom-validator", "--", "--self-test", "tests/sbom/fixtures/native-linux.spdx.json", "--binding-tool", ".cache/sbom-validation/sbom", "--binding-fixtures", "tests/sbom/fixtures/input", "tests/sbom/fixtures/native-linux.spdx.json", "tests/sbom/fixtures/native-arm64.spdx.json", "tests/sbom/fixtures/source-bundle.spdx.json", "tests/sbom/fixtures/verified-empty.spdx.json", "tests/sbom/fixtures/unknown-closure.spdx.json", "tests/sbom/fixtures/verified-import.spdx.json"], context.root))?
+	Process.passthrough!(Process.command(stable, ["scripts/test_sbom.roc", "binding", "${context.root}/.cache/sbom-validation/sbom", "tests/sbom/fixtures/input"], context.root))?
 
 	step!("Compile-time configuration validation")?
 	script!(context, "test_config", [])?
