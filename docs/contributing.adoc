@@ -20,8 +20,7 @@ blueprint-nix/           importable pure Nix provider (depends only on blueprint
   NixProvider.roc        shared pure request planning and flake rendering
   Locks.roc              Nix pins <-> the Lock: Sources plus a "nix" hint
   tests/                 Spec fixtures and golden flakes
-blueprint-cli/           the blueprint CLI (basic-cli + weaver); as `blueprint __build-runner`
-                         it is also each build's in-derivation argv/output/isolation check
+blueprint-cli/           the blueprint CLI (basic-cli + weaver), which executes provider plans
   Store.roc, Download.roc  the per-user store of downloads and the HTTPS client that fills it
   Bootstrap.roc          identity of the compiler archive embedded in each CLI
   compilers.roc          the same metadata as a package for build tooling
@@ -196,9 +195,12 @@ dependencies and sources, including host-file and TCP isolation with positive
 host controls, fail-closed runner checks, exact argv, immutable locks,
 freshness and relocation. It also checks what Nix copies from the project
 (bytes, the owner's execute bit, raw names, exclusions, refused symlinks and
-special files) and that an undeclared tool is not found. It runs
-`blueprint __build-runner` directly on the host for the checks that need no
-sandbox, with a hand-written witness naming namespaces the host does not have.
+special files) and that an undeclared tool is not found. The exact standalone
+runner's argv, input and output checks run in an isolated Linux test harness;
+an unisolated invocation must refuse execution before user code runs. Runtime
+namespace witnesses are private to each invocation and do not enter the
+derivation. Stubbed CLI tests verify their contents, cleanup and separation
+from stable recipe bytes.
 `scripts/test_workflows.roc` runs real ordered task/build workflows, nested
 repetitions, failure stops, snapshot/dependency freshness, repeated
 locked-source verification, whole-closure preflight and immutable authority,

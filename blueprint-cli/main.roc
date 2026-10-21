@@ -240,11 +240,6 @@ task_choice = |task|
 
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |raw_args| {
-	# A sandboxed build runs this executable as its builder. There is no
-	# Blueprint.roc or compiler there, so dispatch before loading either.
-	match raw_args {
-		_ => {}
-	}
 	# These inspectors must parse before project paths, configuration, host or
 	# compiler overrides are observed. LockShow selects only its lock path.
 	independent_query = match raw_args {

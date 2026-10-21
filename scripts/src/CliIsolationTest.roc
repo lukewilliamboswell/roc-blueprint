@@ -11,8 +11,8 @@ import Script
 ## and Nix.
 ##
 ## The stubbed Nix never builds: these cases observe only what `blueprint
-## build` stages before it runs the provider, namely the caller's namespace
-## identities and the CLI's own executable as the build runner. `PATH` holds
+## build` stages before it runs the provider: the caller's namespaces in a
+## private runtime witness, separate from the reproducible derivation. `PATH` holds
 ## the stubs, `readlink` and a `python3` that records any use, and nothing
 ## else, so the CLI is shown to need no Python and no `chmod` of its own.
 CliIsolationTest := [].{
@@ -43,17 +43,18 @@ CliIsolationTest := [].{
 	store : Str
 	store = "/nix/store/00000000000000000000000000000000-blueprint-app"
 
-	## What the staged flake must say about its caller and its project.
-	staged : { mnt : Str, net : Str, runner : Str, root : Str } -> List(Str)
-	staged = |caller| [
-		"isolation = { mnt = \"${caller.mnt}\"; net = \"${caller.net}\"; };",
-		"runner = builtins.path { path = /. + \"${caller.runner}\"; name = \"blueprint-runner\"; };",
-		# Nix reads the project where it is, minus caller-generated state.
-		"path = /. + \"${caller.root}\";",
-		"|| builtins.elem path [ \"${caller.root}/.blueprint\" \"${caller.root}/Blueprint.lock\" ])",
+	## Stable recipe bytes refer to the project and a versioned provider runner.
+	staged : Str -> List(Str)
+	staged = |root| [
+		"runnerSource = ",
+		"blueprint-build-runner-v1",
+		"builder = runner;",
+		"path = /. + \"${root}\";",
+		"|| builtins.elem path [ \"${root}/.blueprint\" \"${root}/Blueprint.lock\" ])",
 		"throw \"snapshot refuses symlink: \${path}\"",
 		"throw \"snapshot refuses special file: \${path}\"",
 	]
+
 }
 
 Test : { bench : CliHarness.Bench, env : List((OsStr, OsStr)) }
@@ -149,12 +150,13 @@ cases! = |bench| {
 				("STUB_NIX_FIXTURE", "${bench.root}/blueprint-nix/tests/local.nix-lock.json"),
 				("STUB_NIX_MODE", "local"),
 				("STUB_PYTHON_LOG", python_log),
+				("STUB_NIX_ISOLATION_LOG", "${bench.work}/runtime-witness.json"),
 			],
 		),
 	}
 	work = bench.work
 
-	# An ordinary build stages its caller's namespaces and its own executable.
+	# Caller namespace observations are runtime authorization, never recipe bytes.
 	root = project!(test, "ordinary")?
 	sources = [
 		{ file: "plain", mode: "644" },
@@ -175,14 +177,18 @@ cases! = |bench| {
 	CliHarness.check!(built.stdout == "${CliIsolationTest.store}\n", "build app printed ${Str.inspect(built.stdout)}, not the artifact")?
 	CliHarness.check!(builds!(root)? == before + 1, "build app did not run exactly one provider build")?
 	flake = Path.read_utf8!(Path.utf8("${root}/.blueprint/flake.nix"))?
-	caller = { mnt: namespace!(readlink, "mnt")?, net: namespace!(readlink, "net")?, runner: bench.blueprint, root }
-	for expected in CliIsolationTest.staged(caller) {
+	caller = { mnt: namespace!(readlink, "mnt")?, net: namespace!(readlink, "net")? }
+	for expected in CliIsolationTest.staged(root) {
 		CliHarness.contains!(flake, expected, "the staged flake")?
 	}
 	CliHarness.check!(!flake.contains("@blueprint-caller"), "the staged flake still holds a placeholder:\n${flake}")?
-	# The CLI copies nothing: no snapshot, witness file or runner in its state.
+	CliHarness.check!(!flake.contains(caller.mnt) and !flake.contains(caller.net) and !flake.contains(bench.blueprint), "caller or executable identity entered the derivation")?
+	observed = captured!(test)?
+	CliHarness.check!(observed.witness == "${caller.mnt}\n${caller.net}\n", "runtime witness did not capture caller namespaces")?
+	CliHarness.check!(observed.directory.starts_with("${root}/.blueprint/isolation/") and !CliHarness.present!(observed.directory), "runtime witness was not private and cleaned after the command")?
+	# The CLI copies no project snapshot or executable; runtime witnesses are temporary.
 	generated = CliHarness.names!("${root}/.blueprint")?.sort_with(Project.bytewise)
-	CliHarness.check!(generated == [".gitignore", "excluded-secret", "flake.lock", "flake.nix"], "the generated root holds ${Str.join_with(generated, " ")}")?
+	CliHarness.check!(generated == [".gitignore", "excluded-secret", "flake.lock", "flake.nix", "isolation"], "the generated root holds ${Str.join_with(generated, " ")}")?
 	for source in sources {
 		kept = CliHarness.stat!("%a %h", "${root}/${source.file}")?
 		CliHarness.check!(kept == "${source.mode} 1", "${source.file} now has mode and link count ${kept}, not ${source.mode} 1")?
@@ -190,7 +196,9 @@ cases! = |bench| {
 	# An unchanged caller stages identical bytes, so Nix can reuse the build.
 	CliHarness.exited!(run!(test, root, ["build", "app"], [])?, 0, "a second blueprint build app")?
 	CliHarness.check!(Path.read_utf8!(Path.utf8("${root}/.blueprint/flake.nix"))? == flake, "a second build staged a different flake")?
-	Script.pass!("build app: stages ${caller.mnt}, ${caller.net}, its own path as runner and the project in place; copies nothing; stages the same bytes again")?
+	second = captured!(test)?
+	CliHarness.check!(second.directory != observed.directory and !CliHarness.present!(second.directory), "two builds reused a mutable witness or left it behind")?
+	Script.pass!("build app: private caller witness is cleaned; derivation excludes namespace/CLI identity and stays unchanged across invocations")?
 
 	# Isolation that cannot be observed or is malformed stops before staging.
 	shadow = "${work}/shadow"
@@ -208,15 +216,16 @@ cases! = |bench| {
 	refused!(test, root, bench.blueprint, "cannot observe caller build isolation", [("PATH", empty)])?
 	Script.pass!("a readlink that fails, is absent, or names a namespace wrongly: the build is refused before the provider or any staging")?
 
-	# The runner's path is placed in generated text, so an executable whose
-	# path could be read as anything but a path is refused, not escaped.
+	# The CLI path is no longer recipe input, so unusual executable paths work.
 	for name in ["quo\"te", "dol\$lar", "back\\slash"] {
 		odd = "${work}/${name}"
 		Path.create_dir!(Path.utf8(odd))?
 		Path.copy!(Path.utf8(bench.blueprint), Path.utf8("${odd}/blueprint"))?
-		refused!(test, root, "${odd}/blueprint", "blueprint cannot run builds from ${odd}/blueprint", [])?
+		result = CliHarness.invoke!({ program: "${odd}/blueprint", args: ["build", "app"], cwd: root, env: test.env })?
+		CliHarness.exited!(result, 0, "build from unusual CLI path")?
+		CliHarness.check!(Path.read_utf8!(Path.utf8("${root}/.blueprint/flake.nix"))? == flake, "CLI path changed the recipe")?
 	}
-	Script.pass!("a blueprint whose own path holds a quote, a dollar or a backslash refuses to build")?
+	Script.pass!("quotes, dollars and backslashes in the CLI executable's path do not enter the derivation")?
 
 	# A symlinked generated root is refused, not followed.
 	linked = project!(test, "linked-workspace")?
@@ -229,29 +238,18 @@ cases! = |bench| {
 	CliHarness.check!(builds!(linked)? == linked_before and CliHarness.names!(real)?.is_empty(), "a build into a symlinked workspace reached the provider or wrote through the link")?
 	Script.pass!("a workspace that is a link: refused as unsafe, nothing written through it")?
 
-	# The runner is internal: absent from help, and usable with no project,
-	# compiler or provider at hand.
 	help = run!(test, linked, ["--help"], [])?
-	CliHarness.check!(!help.stdout.contains("__build-runner"), "--help mentions __build-runner")?
-	bare = "${work}/bare"
-	Path.create_dir!(Path.utf8(bare))?
-	missing = run!(test, bare, ["__build-runner"], [("PATH", bare)])?
-	CliHarness.check!(missing.code == 1 and missing.stderr == "blueprint build: missing build specification\n", "__build-runner alone exited with code ${missing.code.to_str()}: ${missing.stderr}")?
-	surplus = run!(test, bare, ["__build-runner", "a", "b"], [("PATH", bare)])?
-	CliHarness.check!(surplus.code == 1 and surplus.stderr == "blueprint build: expected one build specification\n", "__build-runner a b exited with code ${surplus.code.to_str()}: ${surplus.stderr}")?
-	Script.pass!("__build-runner: not in help; refuses no specification and two, with no project, compiler or provider")?
+	CliHarness.check!(!help.stdout.contains("__build-runner"), "--help exposes an obsolete runner entrypoint")?
 
 	used = CliHarness.calls!(python_log)?
 	CliHarness.check!(used.is_empty(), "blueprint ran a host python3: ${Str.inspect(used)}")?
-	Script.pass!("Build isolation witness, runner path and refusal tests passed without a host Python or chmod (stubbed Nix/compiler)")
+	Script.pass!("Build runtime witness, stable recipe and refusal tests passed without a host Python or chmod (stubbed Nix/compiler)")
 }
 
-expect CliIsolationTest.staged({ mnt: "mnt:[1]", net: "net:[2]", runner: "/repo/blueprint", root: "/tmp/p" }) == [
-	"isolation = { mnt = \"mnt:[1]\"; net = \"net:[2]\"; };",
-	"runner = builtins.path { path = /. + \"/repo/blueprint\"; name = \"blueprint-runner\"; };",
-	"path = /. + \"/tmp/p\";",
-	"|| builtins.elem path [ \"/tmp/p/.blueprint\" \"/tmp/p/Blueprint.lock\" ])",
-	"throw \"snapshot refuses symlink: \${path}\"",
-	"throw \"snapshot refuses special file: \${path}\"",
-]
+captured! : Test => Try({ directory : Str, witness : Str }, _)
+captured! = |test| {
+	text = Path.read_utf8!(Path.utf8("${test.bench.work}/runtime-witness.json"))?
+	Json.parse(text).map_err(|_| ScriptFailed)
+}
+
 expect CliIsolationTest.wire.contains("(builds (((name \"app\")") and CliIsolationTest.wire.contains("(requires (\"explicit-sources\" \"builds\"))")
