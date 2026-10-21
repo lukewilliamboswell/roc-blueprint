@@ -4,7 +4,7 @@ import Project
 ## SPDX validators and reader. It stands in for a `Dict`: in the bundled SBOM
 ## app, `roc run` reusing cached dev-backend objects for these modules made
 ## `Dict.contains` miss keys just inserted (nightly-2026-10-18-1df370f and
-## nightly-2026-10-20-7a8a800, on Linux and macOS alike).
+## nightly-2026-10-20-7a8a800, on Linux and macOS alike; roc-lang/roc#12495).
 Lookup := [].{
 	Entry(v) : { key : Str, value : v }
 
