@@ -14,12 +14,11 @@ ProviderContractTest := [].{}
 
 provider : Provider
 provider = Provider.{
+	validate_source: |_source| Ok({}),
+	validate_tool: |_name| Ok({}),
 	name: "guix",
 	features: ["builds", "build-files"],
-	realises: |source| match source {
-		GuixPackages(_) => True
-		_ => False
-	},
+	realises: |source| source.name == "guix" and source.version == 1,
 	render: |_spec| Ok([{ path: "channel.plan", contents: "reviewed channel" }]),
 	inspect_lock: |_lock| Ok([{ name: "channel", content_identity: "guix:commit:abc", digest_kind: Unknown, metadata: [{ name: "commit", value: Value.Str("abc") }, { name: "settings", value: Value.Attrs([{ name: "substitutes", value: Value.Bool(False) }]) }] }]),
 	preflight: |_spec, _request, _system, _layout| Ok({}),
@@ -52,7 +51,7 @@ spec = {
 	..Spec.empty("independent"),
 	requires_: ["explicit-sources", "builds", "build-files", "source-files"],
 	systems: ["x86_64-linux"],
-	sources: [{ name: "channel", provider: GuixPackages("https://example.test/channel.git") }],
+	sources: [{ name: "channel", provider: { name: "guix", version: 1, ref: "https://example.test/channel.git" } }],
 	environments: [{ name: "producer", parents: [], tools: [{ source: "channel", name: "git@2.50" }], overlays: [] }],
 	tasks: [{ name: "check", environment: "producer", run: ["git", "--version"] }],
 	source_files: [{ name: "archive", url: "https://example.test/source.tar.gz", sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],

@@ -4,6 +4,7 @@ import FlakeRef
 import InputName
 import Member
 import ProgramName
+import ProviderSource
 import System
 import TaskName
 import Tool
@@ -23,6 +24,8 @@ Config :: [].{
 		Name(Str),
 		Systems(List(System)),
 		Packages(InputName, PackageSource),
+		Resolver(Str, List(InputName)),
+		Executor(InputName, Str, Str),
 		Input(InputName, FlakeRef),
 		Overlay(InputName, FlakeRef),
 		Environment(EnvName, List(EnvironmentSetting)),
@@ -80,7 +83,7 @@ Config :: [].{
 	## consumer, was removed in 0.6: the tag remains for one release so that
 	## lowering can say what to write instead.
 	PackageSource : [Auto, From(Provider)]
-	Provider : [NixPackages(FlakeRef), GuixPackages(Str)]
+	Provider : [NixPackages(FlakeRef), GuixPackages(Str), Adapter(ProviderSource)]
 
 	## A tool is written `<source>#<name>` for a declared source, in Tools,
 	## ToolsFor, Command and ToolWith alike. Tools and Overlays occur at most
@@ -111,5 +114,5 @@ Config :: [].{
 	## Builds require Use, Run and one relative Output. Optional Inputs select
 	## locked non-flake Sources; Needs selects build artifacts, not task names.
 	## Sources and artifacts remain separate read-only inputs, never merged.
-	BuildSetting : [Files(List(Str)), Use(EnvName), Inputs(List(InputName)), Needs(List(InputName)), Run(List(Str)), Output(Str)]
+	BuildSetting : [Execute(InputName), Files(List(Str)), Use(EnvName), Inputs(List(InputName)), Needs(List(InputName)), Run(List(Str)), Output(Str)]
 }

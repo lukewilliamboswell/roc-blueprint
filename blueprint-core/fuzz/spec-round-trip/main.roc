@@ -45,8 +45,8 @@ source = {
 		|r|
 			match r.kind {
 				0 => Auto
-				1 => NixPackages(r.ref)
-				_ => GuixPackages(r.ref)
+				1 => { name: "nix", version: 1, ref: r.ref }
+				_ => { name: "guix", version: 1, ref: r.ref }
 			},
 	),
 }.Fuzz
@@ -167,7 +167,7 @@ spec_generator = Fuzz.map(
 		extensions: Fuzz.list(extension, 3),
 		raw: Fuzz.list(raw, 3),
 	}.Fuzz,
-	|r| Spec.{
+	|r| Spec.{ resolvers: [], executors: [], build_executors: [], 
 		source_files: [],
 		build_files: [],
 		format: { major: Spec.current_format.major, minor: r.minor },

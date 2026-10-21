@@ -14,7 +14,10 @@ Spec := {
 	name : Str,
 	requires_ : List(Str),
 	systems : List(Str),
-	sources : List({ name : Str, provider : [Auto, NixPackages(Str), GuixPackages(Str)] }),
+	sources : List(Source),
+	resolvers : List(Resolver),
+	executors : List(Executor),
+	build_executors : List(BuildExecutor),
 	inputs : List({ name : Str, url : Str, kind : [Overlay, Flake] }),
 	environments : List({ name : Str, parents : List(Str), tools : List({ source : Str, name : Str }), overlays : List(Str) }),
 	system_tools : List({ environment : Str, system : Str, tools : List({ source : Str, name : Str }) }),
@@ -53,7 +56,10 @@ Spec := {
 	## Which package set a source is. `Auto` is read and never written: a
 	## Spec or a Lock from before sources were explicit holds it, and
 	## `Project.validate` refuses a Spec that does.
-	Provider : [Auto, NixPackages(Str), GuixPackages(Str)]
+	Provider : { name : Str, version : U64, ref : Str }
+	Resolver : { provider : Str, inputs : List(Str) }
+	Executor : { name : Str, provider : Str, source : Str }
+	BuildExecutor : { build : Str, executor : Str }
 	Source : { name : Str, provider : Provider }
 	Input : { name : Str, url : Str, kind : [Overlay, Flake] }
 	Tool : { source : Str, name : Str }
@@ -120,7 +126,7 @@ Spec := {
 	Raw : { backend : Str, target : Str, value : Value }
 
 	current_format : Format
-	current_format = { major: 2, minor: 8 }
+	current_format = { major: 3, minor: 0 }
 
 	empty : Str -> Spec
 	empty = |name| Spec.{
@@ -130,6 +136,9 @@ Spec := {
 		requires_: [],
 		systems: [],
 		sources: [],
+		resolvers: [],
+		executors: [],
+		build_executors: [],
 		inputs: [],
 		environments: [],
 		system_tools: [],
@@ -170,6 +179,9 @@ Spec := {
 				requires_: wire.requires_ ?? [],
 				systems: wire.systems ?? [],
 				sources: wire.sources ?? [],
+				resolvers: wire.resolvers ?? [],
+				executors: wire.executors ?? [],
+				build_executors: wire.build_executors ?? [],
 				inputs: wire.inputs ?? [],
 				environments: wire.environments ?? [],
 				system_tools: wire.system_tools ?? [],
@@ -201,6 +213,9 @@ Wire : {
 	requires_ : Try(List(Str), [Missing]),
 	systems : Try(List(Str), [Missing]),
 	sources : Try(List(Spec.Source), [Missing]),
+	resolvers : Try(List(Spec.Resolver), [Missing]),
+	executors : Try(List(Spec.Executor), [Missing]),
+	build_executors : Try(List(Spec.BuildExecutor), [Missing]),
 	inputs : Try(List(Spec.Input), [Missing]),
 	environments : Try(List(Spec.Environment), [Missing]),
 	system_tools : Try(List(Spec.SystemTools), [Missing]),

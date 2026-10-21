@@ -1,5 +1,5 @@
 package
-	[LockJson, Locks, NixProvider]
+	[LockJson, Locks, Native, NixProvider]
 	{
 		core: "../blueprint-core/main.roc",
 	}

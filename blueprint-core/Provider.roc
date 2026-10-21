@@ -21,6 +21,10 @@ Provider := {
 	## fetches or expects of the machine is the Core's own.
 	realises : Spec.Provider -> Bool,
 
+	## Native declaration grammar belongs to the selected adapter.
+	validate_source : Spec.Provider -> Try({}, Str),
+	validate_tool : Str -> Try({}, Str),
+
 	## Inspect: the files this provider would generate for the whole Spec.
 	render : Spec -> Try(List(File), Str),
 

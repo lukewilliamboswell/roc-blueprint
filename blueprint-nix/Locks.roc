@@ -22,16 +22,8 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	inputs = |spec| {
 		var $inputs = []
 		for source in spec.sources {
-			match source.provider {
-				GuixPackages(_) | Auto => {}
-				NixPackages(ref) => {
-					$inputs = $inputs.append({
-						name: source.name,
-						ref: normalize_ref(ref)?,
-						kind: "packages",
-						flake: True,
-					})
-				}
+			if source.provider.name == "nix" and source.provider.version == 1 {
+				$inputs = $inputs.append({ name: source.name, ref: normalize_ref(source.provider.ref)?, kind: "packages", flake: True })
 			}
 		}
 		for input in spec.inputs {
@@ -1137,13 +1129,13 @@ expect match aliased_locks {
 # Only what the project declares for Nix is an input: a Guix channel is not,
 # and neither is a source that names no package set. Nothing stands in for a
 # source that is not declared.
-expect Locks.inputs({ ..TestData.project(TestData.data), sources: [{ name: "channel", provider: GuixPackages("channels") }, { name: "unnamed", provider: Auto }] }).map_ok(|inputs| inputs.map(|input| input.name)) == Ok(["assets"])
+expect Locks.inputs({ ..TestData.project(TestData.data), sources: [{ name: "channel", provider: { name: "guix", version: 1, ref: "channels" } }, { name: "unnamed", provider: { name: "", version: 0, ref: "" } }] }).map_ok(|inputs| inputs.map(|input| input.name)) == Ok(["assets"])
 expect Locks.inputs(TestData.project(TestData.data)).map_ok(|inputs| inputs.map(|input| (input.name, input.kind))) == Ok([("default", "packages"), ("assets", "source")])
 
 # A project with an input of its own called nixpkgs has an ordinary pinned
 # edge of that name. Nothing follows, and a follows edge there is refused.
 expect {
-	project = TestData.project({ ..TestData.data, sources: [{ name: "default", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }, { name: "nixpkgs", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] })
+	project = TestData.project({ ..TestData.data, sources: [{ name: "default", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }, { name: "nixpkgs", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] })
 	own = native_fixture.replace_each("\"default\": \"default\"", "\"default\": \"default\", \"nixpkgs\": \"default\"")
 	match with_assets(Locks.from_nix(project, TestData.layout, own)) {
 		Ok(locks) => match Locks.derive(locks, project, TestData.layout) {
@@ -1160,7 +1152,7 @@ expect {
 expect {
 	project = TestData.project({
 		..TestData.data,
-		sources: [{ name: "default", provider: GuixPackages("channels") }],
+		sources: [{ name: "default", provider: { name: "guix", version: 1, ref: "channels" } }],
 		environments: [{ ..TestData.builder, tools: [] }],
 		tasks: [],
 		builds: [],
@@ -1265,7 +1257,7 @@ expect [
 	|(kind, host)| {
 		project = TestData.project({
 			..TestData.data,
-			sources: [{ name: "default", provider: NixPackages("${kind}:NixOS/nixpkgs/nixos-unstable") }],
+			sources: [{ name: "default", provider: { name: "nix", version: 1, ref: "${kind}:NixOS/nixpkgs/nixos-unstable" } }],
 		})
 		native = native_fixture.replace_each("github", kind)
 		with_host = |value| native.replace_each(
@@ -1469,7 +1461,7 @@ expect {
 		sources: [
 			{
 				name: "default",
-				provider: NixPackages("flake:nixpkgs/nixos-unstable"),
+				provider: { name: "nix", version: 1, ref: "flake:nixpkgs/nixos-unstable" },
 			},
 		],
 	})

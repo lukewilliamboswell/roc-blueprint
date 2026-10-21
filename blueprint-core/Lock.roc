@@ -144,7 +144,7 @@ Lock := {
 	## none can declare now. Such a Lock is stale for every Spec, and is
 	## said to be old instead.
 	from_before_explicit_sources : Lock -> Bool
-	from_before_explicit_sources = |lock| lock.intent.sources.any(|source| source.provider == Auto)
+	from_before_explicit_sources = |lock| lock.intent.sources.any(|source| source.provider.name.is_empty())
 	Intent : {
 		sources : List(Spec.Source),
 		inputs : List(Spec.Input),
@@ -258,7 +258,7 @@ WireFetched : { name : Str, system : Str, urls : List(Str), sha256 : Str, size :
 sample : Lock
 sample = Lock.{
 	format: Lock.current_format,
-	intent: { ..Lock.empty_intent, sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] },
+	intent: { ..Lock.empty_intent, sources: [{ name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] },
 	sources: [{ name: "nix", provider: "nix", ref: "github:NixOS/nixpkgs/nixos-unstable", rev: "4975466d324710c576dc11ad614684e6bd8cad8e", digest: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=" }],
 	hints: [{ provider: "nix", value: Value.Attrs([{ name: "version", value: Value.Int(7) }]) }],
 	fetched: [
@@ -281,7 +281,7 @@ expect Lock.parse("((format ((major 1) (minor 0))) (future (1 2 3)))").is_ok()
 # A 1.0 Lock, as blueprint 0.5 wrote it, has fetched nothing and keeps its pins.
 expect
 	match Lock.parse("((format ((major 1) (minor 0))) (hints ()) (intent ((build_sources ()) (inputs ()) (overlays ()) (sources (((name \"default\") (provider Auto)))))) (sources (((digest \"sha256:00\") (name \"default\") (provider \"nix\") (ref \"github:NixOS/nixpkgs/nixos-unstable\") (rev \"abc\")))))") {
-		Ok(lock) => lock.format == { major: 1, minor: 0 } and lock.fetched == [] and lock.sources.map(|source| source.rev) == ["abc"] and lock.intent.sources == [{ name: "default", provider: Auto }]
+		Ok(lock) => lock.format == { major: 1, minor: 0 } and lock.fetched == [] and lock.sources.map(|source| source.rev) == ["abc"] and lock.intent.sources == [{ name: "default", provider: { name: "", version: 0, ref: "" } }]
 		Err(_) => False
 	}
 
@@ -299,7 +299,7 @@ expect sample.hint("nix").is_ok() and sample.hint("conda") == Err(MissingHint)
 
 # Only what Resolve consumes can make a Lock stale, and the error says what.
 expect {
-	spec = { ..Spec.empty("x"), sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] }
+	spec = { ..Spec.empty("x"), sources: [{ name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] }
 	lock = { ..sample, intent: Lock.intent_of(spec) }
 	with_task = { ..spec, tasks: [{ name: "t", environment: "e", run: ["true"] }] }
 	with_input = { ..spec, inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }
@@ -310,8 +310,8 @@ expect {
 
 # Declaration order is not intent; overlay order is.
 expect {
-	a = { name: "a", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }
-	b = { name: "b", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }
+	a = { name: "a", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }
+	b = { name: "b", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-24.05" } }
 	env = |overlays| { name: "dev", parents: [], tools: [], overlays }
 	one = { ..Spec.empty("x"), sources: [a, b], environments: [env(["p", "q"])] }
 	two = { ..Spec.empty("x"), sources: [b, a], environments: [env(["p", "q"])] }
@@ -343,7 +343,7 @@ expect {
 
 # Programs are not intent: declaring one leaves the pins of the Lock current.
 expect {
-	spec = { ..Spec.empty("x"), sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] }
+	spec = { ..Spec.empty("x"), sources: [{ name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] }
 	lock = { ..sample, intent: Lock.intent_of(spec) }
 	lock.stale({ ..spec, programs: [{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool"], unpack: File, path: "" }] }) == Ok({})
 }

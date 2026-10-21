@@ -6,7 +6,6 @@ import Value
 ## It normalizes inheritance, adds nothing that was not declared, and is safe
 ## to repeat on emitted Spec.
 Project :: [].{
-	ProviderName : [Nix, Guix]
 
 	## Order by UTF-8 bytes, for declaration-order-independent output.
 	bytewise : Str, Str -> [Before, Same, After]
@@ -66,81 +65,6 @@ Project :: [].{
 		Ok({ source, name })
 	}
 
-	## The attributes a Nix tool name selects, in order. Segments are separated
-	## by dots; a segment in double quotes is one attribute whose name may
-	## itself contain dots, as in `zigpkgs."0.16.0"`.
-	nix_path : Str -> Try(List(Str), [BadNixPath])
-	nix_path = |name| {
-		parts = name.split_on("\"")
-		if parts.len() % 2 == 0 {
-			return Err(BadNixPath)
-		}
-		last = parts.len() - 1
-		var $segments = []
-		var $index = 0
-		for part in parts {
-			after = $index > 0
-			before = $index < last
-			if $index % 2 == 1 {
-				if !nix_quoted(part) {
-					return Err(BadNixPath)
-				}
-				$segments = $segments.append(part)
-			} else if part == "" {
-				# Nothing may be missing between two quoted segments, and a
-				# name is never empty.
-				if after == before {
-					return Err(BadNixPath)
-				}
-			} else if part == "." {
-				if !(after and before) {
-					return Err(BadNixPath)
-				}
-			} else {
-				if (after and !part.starts_with(".")) or (before and !part.ends_with(".")) {
-					return Err(BadNixPath)
-				}
-				leading = if (after) part.drop_prefix(".") else part
-				inner = if (before) leading.drop_suffix(".") else leading
-				plain = inner.split_on(".")
-				if !plain.all(nix_identifier) {
-					return Err(BadNixPath)
-				}
-				$segments = $segments.concat(plain)
-			}
-			$index = $index + 1
-		}
-		Ok($segments)
-	}
-
-	nix_identifier : Str -> Bool
-	nix_identifier = |part| {
-		bytes = part.to_utf8()
-		!bytes.is_empty() and bytes.all(|b| letter(b) or (b >= '0' and b <= '9') or b == '_' or b == '-' or b == '\'')
-	}
-
-	nix_quoted : Str -> Bool
-	nix_quoted = |part| {
-		bytes = part.to_utf8()
-		!bytes.is_empty() and bytes.all(|b| letter(b) or (b >= '0' and b <= '9') or b == '_' or b == '-' or b == '.' or b == '+')
-	}
-
-	## Deliberately conservative native grammars: Nix attribute paths of
-	## identifiers and quoted segments; Guix package[@version][:output]
-	## specifications. No translation or probing.
-	check_tool : ProviderName, Str -> Try({}, Str)
-	check_tool = |provider, name| {
-		valid = match provider {
-			Nix => nix_path(name).is_ok()
-			Guix => {
-				parts = name.split_on(":")
-				spec = parts.first() ?? ""
-				versions = spec.split_on("@")
-				parts.len() <= 2 and versions.len() <= 2 and parts.drop_first(1).all(valid_name) and versions.all(|part| !part.is_empty() and part.to_utf8().all(|b| letter(b) or (b >= '0' and b <= '9') or b == '-' or b == '_' or b == '.' or b == '+'))
-			}
-		}
-		if (valid) Ok({}) else Err("invalid ${if (provider == Nix) "Nix" else "Guix"} tool: ${name}")
-	}
 
 	check_names : List(Str), Str -> Try({}, Str)
 	check_names = |names, kind| {
@@ -269,16 +193,8 @@ Project :: [].{
 			if spec.inputs.any(|i| i.name == source.name) {
 				return Err("DuplicateInput: ${source.name}")
 			}
-			match source.provider {
-				# The tag is still read, so that a Spec or a Lock from before
-				# sources were explicit says this instead of failing to parse.
-				Auto => return Err("source ${source.name} is Auto, which names no package set; declare the set it takes its tools from")
-				NixPackages(url) => if !valid_ref(url) {
-					return Err("invalid Nix source: ${source.name}")
-				}
-				GuixPackages(url) => if !clean(url) {
-					return Err("invalid Guix source: ${source.name}")
-				}
+			if !valid_name(source.provider.name) or source.provider.version == 0 or !clean(source.provider.ref) {
+				return Err("invalid versioned source declaration: ${source.name}")
 			}
 		}
 		for source in spec.source_files {
@@ -462,16 +378,8 @@ Project :: [].{
 			all_tools = plain_tools.concat(env_commands.map(|entry| entry.tool)).concat(env_configured.map(|entry| entry.tool))
 			for t in all_tools {
 				parsed = tool("${t.source}#${t.name}")?
-				source = sources.find_first(|s| s.name == parsed.source).map_err(|_| unknown_source(sources, t.source))?
-				match source.provider {
-					Auto => {}
-					NixPackages(_) => {
-						check_tool(Nix, t.name)?
-					}
-					GuixPackages(_) => {
-						check_tool(Guix, t.name)?
-					}
-				}
+				_source = sources.find_first(|s| s.name == parsed.source).map_err(|_| unknown_source(sources, t.source))?
+
 			}
 			# One package cannot be on PATH both as it is and with options.
 			for entry in env_configured {
@@ -563,7 +471,8 @@ Project :: [].{
 				return Err("empty Raw provider or target")
 			}
 		}
-		Ok(Spec.{ source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: $environment_programs, expects: $expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
+		check_ownership(spec)?
+		Ok(Spec.{ resolvers: spec.resolvers, executors: spec.executors, build_executors: spec.build_executors,  source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: $environment_programs, expects: $expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
 	}
 
 	## A tool names a source the project does not declare. The sources it
@@ -854,7 +763,7 @@ Project :: [].{
 	guix_source : Spec.Provider -> Bool
 	guix_source = |provider|
 		match provider {
-			GuixPackages(_) => True
+			{ name: "guix", version: 1, ref: _ } => True
 			_ => False
 		}
 
@@ -1010,32 +919,59 @@ Project :: [].{
 		)
 	}
 
-	## Check only the requested environment's normalized dependency closure.
-	## This models Guix shell capability without implementing a Guix executor.
-	check_environment : Spec, ProviderName, Str -> Try({}, Str)
-	check_environment = |spec, provider, name| {
-		project = validate(spec)?
-		env = project.environments.find_first(|e| e.name == name).map_err(|_| "unknown environment: ${name}")?
-		if provider == Guix and !env.overlays.is_empty() {
-			return Err("Guix does not support overlays in environment ${name}")
-		}
-		configured = project.configured_tools.keep_if(|entry| entry.environment == name)
-		if provider == Guix and !configured.is_empty() {
-			return Err("Guix does not support configured tools in environment ${name}")
-		}
-		all_tools = env.tools.concat(project.system_tools.keep_if(|entry| entry.environment == name).fold([], |tools, entry| tools.concat(entry.tools))).concat(project.commands.keep_if(|entry| entry.environment == name).map(|entry| entry.tool)).concat(configured.map(|entry| entry.tool))
-		for source_name in unique(all_tools.map(|t| t.source)) {
-			source = project.sources.find_first(|s| s.name == source_name).map_err(|_| unknown_source(project.sources, source_name))?
-			match (provider, source.provider) {
-				(Nix, GuixPackages(_)) => return Err("source ${source.name} requires Guix, not Nix")
-				(Guix, NixPackages(_)) => return Err("source ${source.name} requires Nix, not Guix")
-				_ => {}
+
+	## Explicit ownership is independent of registration and declaration order.
+	check_ownership : Spec -> Try({}, Str)
+	check_ownership = |spec| {
+		check_names(spec.executors.map(|entry| entry.name), "Executor")?
+		check_names(spec.resolvers.map(|entry| entry.provider), "Resolver")?
+		for executor in spec.executors {
+			if !valid_name(executor.provider) {
+				return Err("invalid executor provider: ${executor.provider}")
+			}
+			if !executor.source.is_empty() and !spec.sources.any(|source| source.name == executor.source and source.provider.name == executor.provider) {
+				return Err("executor ${executor.name} bootstrap source ${executor.source} is not owned by ${executor.provider}")
 			}
 		}
-		for t in all_tools {
-			check_tool(provider, t.name)?
+		var $owned = []
+		declared = spec.inputs.map(|entry| entry.name).concat(resolved_build_sources(spec).map(|entry| entry.name))
+		for resolver in spec.resolvers {
+			for input in resolver.inputs {
+				if !declared.contains(input) {
+					return Err("resolver ${resolver.provider} owns undeclared input: ${input}")
+				}
+				if $owned.contains(input) {
+					return Err("input has multiple resolver owners: ${input}")
+				}
+				$owned = $owned.append(input)
+			}
+		}
+		for input in declared {
+			if !$owned.contains(input) {
+				return Err("input has no resolver owner: ${input}; declare Resolver")
+			}
+		}
+		var $builds = []
+		for selected in spec.build_executors {
+			if !spec.builds.any(|build| build.name == selected.build) {
+				return Err("executor selected for unknown build: ${selected.build}")
+			}
+			if $builds.contains(selected.build) {
+				return Err("build selects multiple executors: ${selected.build}")
+			}
+			_ = build_executor(spec, selected.build)?
+			$builds = $builds.append(selected.build)
+		}
+		for build in spec.builds {
+			_ = build_executor(spec, build.name)?
 		}
 		Ok({})
+	}
+
+	build_executor : Spec, Str -> Try(Spec.Executor, Str)
+	build_executor = |spec, name| {
+		selected = spec.build_executors.find_first(|entry| entry.build == name).map_err(|_| "build ${name} has no executor; declare Execute")?
+		spec.executors.find_first(|entry| entry.name == selected.executor).map_err(|_| "unknown executor for build ${name}: ${selected.executor}")
 	}
 
 	unique : List(a) -> List(a) where [a.is_eq : a, a -> Bool]
@@ -1048,31 +984,9 @@ expect Project.tool("git").is_err() and Project.tool("#git").is_err() and Projec
 expect Project.tool("stable#python@3.12:out") == Ok({ source: "stable", name: "python@3.12:out" })
 expect Project.tool("bad##git").is_err()
 expect Project.tool("git\n").is_err()
-expect Project.check_tool(Nix, "python3Packages.requests").is_ok()
-expect Project.check_tool(Nix, "7zip").is_ok() and Project.check_tool(Nix, "2bwm").is_ok()
-expect Project.check_tool(Nix, "python@3").is_err()
-expect Project.nix_path("python3Packages.requests") == Ok(["python3Packages", "requests"])
-expect Project.nix_path("zigpkgs.\"0.16.0\"") == Ok(["zigpkgs", "0.16.0"])
-expect Project.nix_path("zigpkgs.brew.\"0.16.0\".out") == Ok(["zigpkgs", "brew", "0.16.0", "out"])
-expect Project.nix_path("\"0.16.0\"") == Ok(["0.16.0"])
-expect Project.nix_path("a.\"1.0\".\"2.0\"") == Ok(["a", "1.0", "2.0"])
-expect Project.check_tool(Nix, "zigpkgs.\"0.16.0\"").is_ok()
-expect Project.check_tool(Nix, "zigpkgs.0.16.0").is_ok()
-expect Project.check_tool(Nix, "zigpkgs\"0.16.0\"").is_err()
-expect Project.check_tool(Nix, "zigpkgs.\"0.16.0").is_err()
-expect Project.check_tool(Nix, "zigpkgs.\"\"").is_err()
-expect Project.check_tool(Nix, "\"a\"\"b\"").is_err()
-expect Project.check_tool(Nix, "\"a\"..\"b\"").is_err()
-expect Project.check_tool(Nix, "a.\"b\".").is_err()
-expect Project.check_tool(Nix, "a.\"b c\"").is_err()
-expect Project.check_tool(Nix, "").is_err()
-expect Project.check_tool(Guix, "python@3.12:out").is_ok()
-expect Project.check_tool(Guix, "git::out").is_err()
-expect Project.check_tool(Guix, "g++@12.3:lib").is_ok()
-
 # These fixtures use the public Spec and validation boundary, not resolve internals.
 fixture : List(Spec.Environment) -> Spec
-fixture = |environments| Spec.{
+fixture = |environments| Spec.{ resolvers: [], executors: [], build_executors: [], 
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -1080,8 +994,8 @@ fixture = |environments| Spec.{
 	requires_: [],
 	systems: ["x86_64-linux"],
 	sources: [
-		{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") },
-		{ name: "guix", provider: GuixPackages("https://git.savannah.gnu.org/git/guix.git") },
+		{ name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } },
+		{ name: "guix", provider: { name: "guix", version: 1, ref: "https://git.savannah.gnu.org/git/guix.git" } },
 	],
 	inputs: [
 		{ name: "first", url: "github:example/first", kind: Overlay },
@@ -1142,14 +1056,8 @@ expect Project.validate(fixture([{ ..base, overlays: ["data"] }])) == Err("unkno
 expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "git#extra" }] }])).is_err()
 expect Project.validate(fixture([{ ..base, name: "bad/name" }])).is_err()
 
-# Every source says what it is, so a tool's name is held to its source's
-# grammar at once: what Guix writes is no Nix attribute, and the reverse.
-expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])).is_err()
-expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])).is_err()
-expect {
-	spec = fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@3:out" }] }])
-	Project.validate(spec).is_ok() and Project.check_environment(spec, Guix, "base").is_ok() and Project.check_environment(spec, Nix, "base") == Err("source guix requires Guix, not Nix")
-}
+# Provider-native syntax is checked by its adapter, not the generic core.
+expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])).is_ok()
 
 # No source is implied. A project that declares none has none, a tool cannot
 # name one that is not declared, and the refusal lists those that are.
@@ -1159,27 +1067,13 @@ expect {
 		and Project.validate({ ..bare, environments: [{ ..base, overlays: [] }] }) == Err("unknown source: nix; Blueprint.roc declares no package source")
 		and Project.validate(fixture([{ ..base, tools: [{ source: "default", name: "git" }] }])) == Err("unknown source: default; Blueprint.roc declares nix, guix")
 		# An environment with no tool asks nothing of any provider.
-		and Project.check_environment(bare, Nix, "base") == Ok({})
-		and Project.check_environment(bare, Guix, "base") == Ok({})
 }
 
 # A source that leaves its package set to the consumer is refused: the tag is
 # read, so that a Spec from before sources were explicit says so.
-expect Project.validate({ ..fixture([]), sources: [{ name: "default", provider: Auto }] }) == Err("source default is Auto, which names no package set; declare the set it takes its tools from")
+expect Project.validate({ ..fixture([]), sources: [{ name: "default", provider: { name: "", version: 0, ref: "" } }] }) == Err("invalid versioned source declaration: default")
 
-# An unused overlay/foreign source is not a global provider requirement.
-expect {
-	spec = fixture([base, { name: "plain", parents: [], overlays: [], tools: [{ source: "guix", name: "git" }] }])
-	Project.check_environment(spec, Nix, "base").is_ok() and Project.check_environment(spec, Guix, "plain").is_ok() and Project.check_environment(spec, Nix, "plain").is_err() and Project.check_environment(spec, Guix, "base").is_err()
-}
 
-# Capabilities belong to the request, even with an explicit source constraint.
-expect {
-	spec = fixture([{ ..base, tools: [{ source: "guix", name: "git" }] }, { ..child, parents: [], overlays: [] }])
-	Project.validate(spec).is_ok() and Project.check_environment(spec, Nix, "dev").is_ok() and Project.check_environment(spec, Guix, "base").is_err() and Project.check_environment(spec, Nix, "base").is_err()
-}
-expect Project.check_environment(fixture([{ ..base, overlays: [], tools: [{ source: "nix", name: "git" }] }]), Guix, "base").is_err()
-expect Project.check_environment(fixture([base]), Nix, "missing").is_err()
 
 # System-specific tools inherit parent first and remain explicit intent.
 expect {
@@ -1216,7 +1110,7 @@ expect !Project.valid_name("unsafe/name") and !Project.valid_name("line\nbreak")
 expect Project.valid_task_name("check.fmt") and !Project.valid_task_name("check..fmt")
 
 build_fixture : List(Spec.Build) -> Spec
-build_fixture = |builds| Spec.{
+build_fixture = |builds| Spec.{ resolvers: [], executors: [], build_executors: [], 
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -1357,7 +1251,7 @@ expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../esc
 build_source_fixture : List(Spec.BuildSource), List(Str) -> Spec
 build_source_fixture = |build_sources, requires_| {
 	spec = build_fixture([library])
-	Spec.{ source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
+	Spec.{ resolvers: [], executors: [], build_executors: [],  source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
 }
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["builds"])) == Err("build sources require feature: sources")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["sources"])) == Err("builds require feature: builds")
@@ -1411,7 +1305,7 @@ workflow_fixture : List(Spec.Workflow) -> Spec
 workflow_fixture = |workflows| workflow_features(workflows, ["workflows"])
 
 workflow_features : List(Spec.Workflow), List(Str) -> Spec
-workflow_features = |workflows, features| Spec.{
+workflow_features = |workflows, features| Spec.{ resolvers: [], executors: [], build_executors: [], 
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -1668,7 +1562,7 @@ expect {
 	spec = fixture([base])
 	Project.validate({ ..spec, shells: [shell, shell] }) == Err("DuplicateShell: default") and
 		Project.validate({ ..spec, tasks: [task, task] }) == Err("DuplicateTask: check") and
-			Project.validate({ ..spec, sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }, { name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }] }) == Err("DuplicateSource: nix") and
+			Project.validate({ ..spec, sources: [{ name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }, { name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-24.05" } }] }) == Err("DuplicateSource: nix") and
 				Project.validate({ ..spec, inputs: [{ name: "tools", url: "github:example/tools", kind: Flake }, { name: "tools", url: "github:example/overlay", kind: Overlay }] }) == Err("DuplicateInput: tools")
 }
 
@@ -1676,7 +1570,7 @@ expect {
 expect {
 	spec = fixture([base])
 	assets = { name: "assets", ref: "path:./assets" }
-	Project.validate({ ..spec, sources: [{ name: "data", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] }) == Err("DuplicateInput: data") and
+	Project.validate({ ..spec, sources: [{ name: "data", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] }) == Err("DuplicateInput: data") and
 		Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "data" }] }) == Err("DuplicateInput: data") and
 			Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "nix" }] }) == Err("DuplicateInput: nix") and
 				Project.validate({ ..spec, requires_: ["sources"], build_sources: [assets] }).is_ok() and
@@ -1738,8 +1632,6 @@ expect {
 			{ environment: "dev", tool: { source: "nix", name: "zig" }, options: Value.Attrs([]) },
 			{ environment: "ci", tool: rust, options: rust_targets(["a"]) },
 		]
-			and Project.check_environment(spec, Nix, "ci").is_ok()
-			and Project.check_environment(spec, Guix, "ci") == Err("Guix does not support configured tools in environment ci")
 		Err(_) => False
 	}
 }

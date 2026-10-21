@@ -1,6 +1,7 @@
 # Pure Nix rendering for validated, reusable environment closures.
 import core.Spec
 import core.Project
+import Native
 import core.Value
 import core.Request
 import core.Layout
@@ -21,6 +22,8 @@ import Runner
 NixProvider :: [].{
 	provider : Provider
 	provider = Provider.{
+		validate_source: validate_source,
+		validate_tool: |name| Native.check_tool(Nix, name),
 		build_argv,
 		build_result,
 		build_sources: provenance_sources,
@@ -69,11 +72,15 @@ NixProvider :: [].{
 	## Guix channel is not its to realise, and neither is a source that names
 	## no set, which nothing declares any longer.
 	realises : Spec.Provider -> Bool
-	realises = |source|
-		match source {
-			NixPackages(_) => True
-			Auto | GuixPackages(_) => False
+	realises = |source| source.name == "nix" and source.version == 1
+
+	validate_source : Spec.Provider -> Try({}, Str)
+	validate_source = |source| {
+		if !realises(source) or !Project.valid_ref(source.ref) {
+			return Err("unsupported Nix source declaration version or reference")
 		}
+		Ok({})
+	}
 
 	## `nix flake update` resolves every input of the staged flake. Given
 	## names it resolves those and keeps the rest of the lock beside the flake,
@@ -590,7 +597,7 @@ NixProvider :: [].{
 			|seen, name| if (seen.contains(name)) seen else seen.append(name),
 		)
 		for name in selected_names {
-			Project.check_environment(spec, Nix, name)?
+			Native.check_environment(spec, Nix, name)?
 		}
 		environments = spec.environments.keep_if(|e| names.contains(e.name))
 		shells = spec.shells.keep_if(|s| names.contains(s.environment))
@@ -658,11 +665,10 @@ NixProvider :: [].{
 				for source in spec.sources.keep_if(
 					|s| environments.any(|e| source_names(e, spec.system_tools, spec.commands, spec.configured_tools, builder).contains(s.name)),
 				) {
-					url = match source.provider {
-						NixPackages(ref) => ref
-						GuixPackages(_) => return Err("Nix cannot use Guix source ${source.name}")
-						Auto => return Err("Nix cannot use source ${source.name}, which names no package set")
+					if !realises(source.provider) {
+						return Err("Nix cannot use ${source.provider.name} source ${source.name}")
 					}
+					url = source.provider.ref
 					$declared = $declared.append({ name: source.name, kind: "packages" })
 					$rendered = append_rendered(
 						$rendered,
@@ -1155,7 +1161,7 @@ NixProvider :: [].{
 	## A validated Spec's tool names always parse; an unparsed name stays one
 	## attribute, so Nix reports it rather than a different package.
 	tool_path : Str -> List(Str)
-	tool_path = |name| Project.nix_path(name) ?? [name]
+	tool_path = |name| Native.nix_path(name) ?? [name]
 
 	attr_path : List(Str) -> Str
 	attr_path = |path| Str.join_with(path.map(quote), ".")
@@ -1228,7 +1234,7 @@ base = { name: "dev", parents: [], tools: [], overlays: [] }
 ## The one source most fixtures take their tools and their builder from. Its
 ## name is not special: it is declared, like any other.
 unstable : Spec.Source
-unstable = { name: "default", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }
+unstable = { name: "default", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }
 
 simple : TestSpec
 simple = {
@@ -1244,7 +1250,7 @@ simple = {
 }
 
 mk : TestSpec -> Spec
-mk = |t| Spec.{
+mk = |t| Spec.{ resolvers: [], executors: [], build_executors: [], 
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -1286,7 +1292,7 @@ foreign = {
 mixed : TestSpec
 mixed = {
 	..simple,
-	sources: [unstable, { name: "guix", provider: GuixPackages("channels") }],
+	sources: [unstable, { name: "guix", provider: { name: "guix", version: 1, ref: "channels" } }],
 	environments: [base, foreign],
 }
 
@@ -1298,7 +1304,7 @@ expect match NixProvider.render(mk(simple)) {
 	) and text.contains("in extra: sets.\"default\".mkShell")
 	Err(_) => False
 }
-expect match NixProvider.render(mk({ ..simple, sources: [{ name: "guix", provider: GuixPackages("channels") }, stable, unstable] })) {
+expect match NixProvider.render(mk({ ..simple, sources: [{ name: "guix", provider: { name: "guix", version: 1, ref: "channels" } }, stable, unstable] })) {
 	Ok(text) => text.contains("\"stable\".url = \"github:NixOS/nixpkgs/nixos-24.05\";") and text.contains("in extra: sets.\"stable\".mkShell") and !text.contains("\"default\".url")
 	Err(_) => False
 }
@@ -1307,7 +1313,7 @@ expect match NixProvider.render(mk({ ..simple, sources: [{ name: "guix", provide
 # with, and nothing is invented: asked for it alone, the provider refuses,
 # and it has no file to show for the project.
 expect NixProvider.render_environment(mk({ ..simple, sources: [] }), "dev") == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
-expect NixProvider.render_environment(mk({ ..simple, sources: [{ name: "guix", provider: GuixPackages("channels") }] }), "dev") == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
+expect NixProvider.render_environment(mk({ ..simple, sources: [{ name: "guix", provider: { name: "guix", version: 1, ref: "channels" } }] }), "dev") == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
 
 # A rendering of the whole of such a project leaves the environment and its
 # shell out: what remains is what Nix has to lock, here an overlay. A build
@@ -1321,7 +1327,7 @@ expect {
 		and NixProvider.render(building) == Err("environment dev has no tool of a Nix source, and Blueprint.roc declares no Nix source to build it with")
 }
 expect (NixProvider.provider.render)(mk({ ..simple, sources: [] })) == Ok([]) and (NixProvider.provider.render)(mk(simple)).map_ok(|files| files.map(|file| file.path)) == Ok(["flake.nix"])
-expect NixProvider.builder_source(mk({ ..simple, sources: [{ name: "guix", provider: GuixPackages("channels") }, stable, unstable] })) == ["stable"] and NixProvider.builder_source(mk({ ..simple, sources: [] })) == []
+expect NixProvider.builder_source(mk({ ..simple, sources: [{ name: "guix", provider: { name: "guix", version: 1, ref: "channels" } }, stable, unstable] })) == ["stable"] and NixProvider.builder_source(mk({ ..simple, sources: [] })) == []
 
 # `nix develop` takes its own bash from the input named nixpkgs: the flake
 # gives that name to its first Nix source, after the inputs it declares.
@@ -1339,7 +1345,7 @@ alias_lines : TestSpec -> Try(List(Str), Str)
 alias_lines = |t| Ok(NixProvider.render(mk(t))?.split_on("\n").keep_if(|line| line.contains("follows") or line.contains("\"nixpkgs\"")))
 
 stable : Spec.Source
-stable = { name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }
+stable = { name: "stable", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-24.05" } }
 
 # The first rendered package source is followed, in the order of
 # Blueprint.roc and whatever its name: one called `default` is not preferred.
@@ -1353,7 +1359,7 @@ expect {
 	}
 	only_named = {
 		..simple,
-		sources: [stable, { name: "older", provider: NixPackages("github:NixOS/nixpkgs/nixos-23.11") }],
+		sources: [stable, { name: "older", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-23.11" } }],
 		environments: [alias_environment("dev", ["older", "stable"])],
 	}
 	alias_lines(both) == Ok(["    \"nixpkgs\".follows = \"stable\";"])
@@ -1379,7 +1385,7 @@ expect {
 expect {
 	as_source = {
 		..simple,
-		sources: [unstable, { name: "nixpkgs", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		sources: [unstable, { name: "nixpkgs", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-24.05" } }],
 		environments: [alias_environment("dev", ["default", "nixpkgs"])],
 	}
 	as_overlay = {
@@ -1528,7 +1534,7 @@ expect {
 expect {
 	project = {
 		..mk(simple),
-		sources: [{ name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		sources: [{ name: "stable", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-24.05" } }],
 		requires_: ["commands"],
 		commands: [{ environment: "dev", name: "roc-stable", tool: { source: "stable", name: "rocpkgs.nightly-2026-09-10-a670e34" } }],
 	}
@@ -1543,7 +1549,7 @@ expect {
 expect {
 	project = {
 		..mk(simple),
-		sources: [{ name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		sources: [{ name: "stable", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-24.05" } }],
 		requires_: ["commands"],
 		commands: [{ environment: "dev", name: "zig", tool: { source: "stable", name: "zigpkgs.\"0.16.0\"" } }],
 	}
@@ -1564,7 +1570,7 @@ expect {
 	])
 	project = {
 		..mk(simple),
-		sources: [{ name: "stable", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }],
+		sources: [{ name: "stable", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-24.05" } }],
 		requires_: ["configured-tools"],
 		configured_tools: [{ environment: "dev", tool: { source: "stable", name: "rust-bin.stable.\"1.95.0\".default" }, options }],
 	}
@@ -2147,7 +2153,7 @@ expect match plan_locks {
 			{ ..TestData.data, systems: ["x86_64-linux", "riscv64-linux"] },
 			{
 				..TestData.data,
-				sources: [{ name: "default", provider: GuixPackages("channels") }],
+				sources: [{ name: "default", provider: { name: "guix", version: 1, ref: "channels" } }],
 			},
 		]
 		bad.all(
@@ -2172,7 +2178,7 @@ expect {
 	}
 	data = {
 		..TestData.data,
-		sources: [unstable, { name: "guix", provider: GuixPackages("channels") }],
+		sources: [unstable, { name: "guix", provider: { name: "guix", version: 1, ref: "channels" } }],
 		environments: [TestData.builder, foreign_builder],
 		builds: [
 			TestData.application,
@@ -2791,7 +2797,7 @@ expect {
 expect {
 	data = {
 		..TestData.workflow_data,
-		sources: [unstable, { name: "guix", provider: GuixPackages("channels") }],
+		sources: [unstable, { name: "guix", provider: { name: "guix", version: 1, ref: "channels" } }],
 		environments: [TestData.builder, foreign],
 		tasks: TestData.data.tasks.append(
 			{ name: "foreign", environment: "foreign", run: ["python"] },
@@ -2841,7 +2847,7 @@ expect {
 expect {
 	project = TestData.project({
 		..TestData.workflow_data,
-		sources: [unstable, { name: "guix", provider: GuixPackages("channels") }],
+		sources: [unstable, { name: "guix", provider: { name: "guix", version: 1, ref: "channels" } }],
 		environments: [TestData.builder, foreign],
 		builds: [
 			TestData.application,
@@ -2985,7 +2991,7 @@ expect ["empty", "nothing"].all(
 expect {
 	project = TestData.project({
 		..TestData.workflow_data,
-		sources: [unstable, { name: "guix", provider: GuixPackages("channels") }],
+		sources: [unstable, { name: "guix", provider: { name: "guix", version: 1, ref: "channels" } }],
 		environments: [TestData.builder, foreign],
 	})
 	locks = resolved(project, native_lock)?
@@ -3157,8 +3163,8 @@ expect {
 		) == Ok(False)
 }
 
-expect NixProvider.realises(NixPackages("github:NixOS/nixpkgs/nixos-unstable")) and !NixProvider.realises(GuixPackages("https://git.savannah.gnu.org/git/guix.git")) and !NixProvider.realises(Auto)
-expect (NixProvider.provider.realises)(NixPackages("github:NixOS/nixpkgs/nixos-unstable")) and !(NixProvider.provider.realises)(Auto)
+expect NixProvider.realises({ name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" }) and !NixProvider.realises({ name: "guix", version: 1, ref: "https://git.savannah.gnu.org/git/guix.git" }) and !NixProvider.realises({ name: "", version: 0, ref: "" })
+expect (NixProvider.provider.realises)({ name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" }) and !(NixProvider.provider.realises)({ name: "", version: 0, ref: "" })
 
 # An update says the machine must have Nix, and why: the first thing declared
 # that only Nix resolves. A named update asks the same.
