@@ -1,206 +1,187 @@
 = Understand the architecture
 
-This page explains how Blueprint is designed and why. It is written for
-contributors and provider authors who already know what a development
-environment is and want to understand the shared vocabulary, the layers, the
-stages between them, and the rules that keep Blueprint independent of any
-one package ecosystem or use case. After reading it, you should be able to
-judge whether a proposed change fits the architecture.
-
-This is an explanation of the intended design. It does not describe the
-progress of any particular implementation.
+Blueprint gives repository-owned commands declared environments and, when
+requested, a managed artifact-production contract. This chapter defines its
+responsibilities for contributors, provider authors and downstream consumers.
 
 [[purpose]]
-== Why Blueprint has a core model
+== What Blueprint owns
 
-Blueprint turns a typed description of a development environment into a
-working, reproducible environment. Many tools do this for one ecosystem, and
-in doing so they tie the user's intent to that ecosystem's formats and
-commands. Blueprint separates the two.
+A project keeps compilation, packaging and validation logic in its own scripts.
+Blueprint describes how to run them: tools, pinned inputs, selected project
+files, dependencies, outputs and ordered workflows. It does not discover
+arbitrary script dependencies or decide a project's release policy.
 
-It adopts proven ideas from reproducible build systems: pinned inputs,
-content addressing, fetches checked against a known digest, and substitution
-from caches. Every ecosystem-specific concern belongs to a replaceable
-*provider*. The same Blueprint can therefore be realised through different
-package ecosystems, or through Blueprint's own store, on macOS, Linux and
-Windows.
+[cols="1,4",options="header"]
+|===
+| Owner | Responsibility
+| Repository | Commands, compilation and packaging logic, validation and release policy.
+| Configuration | Explicit environments, tasks, builds, inputs, outputs and workflow order.
+| Pure core library | Types, semantic validation, dependency relationships, request planning and evidence comparison.
+| CLI or another host | Filesystem, network and process effects described by constrained plans.
+| Provider | Native resolution, recipe preparation, execution and cache behavior for supported capabilities.
+| Release automation | Reviewing and admitting published artifacts, publication and advisory decisions.
+|===
 
-**The protocol is the product; providers are adapters.**
+A Task is a common runner around a command. A Build adds an explicit contract
+for producing an artifact from declared inputs. Both may invoke the same script;
+Blueprint does not take ownership of the script's algorithm. A Workflow orders
+these operations rather than inferring their dependencies from script contents.
 
 [[provider-neutrality]]
 === Provider neutrality is an enduring constraint
 
-Blueprint defines capabilities and their guarantees; providers implement
-them using a particular deterministic system. Nix is one implementation,
-not the definition of a build, a content identity or a reproducibility check.
-The same rule applies to a future system built within Blueprint itself.
+Shared contracts define capabilities and guarantees independently of native
+formats. Provider adapters own package grammar, native recipes, process
+arguments, store paths and metadata. Another executor need not imitate Nix or
+provide every capability. Unsupported capabilities fail before effects rather
+than silently weakening isolation or a reproducibility check.
 
-Shared contracts describe selected inputs, verified content, declared tools,
-outputs, isolation guarantees and reproducible execution. Native recipe
-formats, store paths, package grammars and process arguments belong to their
-provider. Reports carry a provider-qualified identity and preserve native
-details as provider-specific metadata. Consumers must not interpret an
-opaque identity as a Nix derivation or assume every digest identifies a tree.
-An identity from one provider does not establish recipe or output equivalence
-with an identity from another provider.
+Source resolution, environment tools and build execution are separate roles.
+Sources name their resolver; builds select a named executor. Registering an
+unselected provider must not change the request. Unsupported combinations are
+rejected explicitly; neutrality does not promise arbitrary mixed-provider
+composition or portable ecosystem-specific package names.
 
-A provider must reject a capability it cannot fulfil before effects begin.
-It must not silently replace an isolated, offline build or a checked rebuild
-with a weaker operation. An operating-system mechanism, such as Linux mount
-and network namespaces, can be an explicit optional executor capability;
-it is not the universal meaning of isolation. New host effects still need
-an explicit, constrained Core operation.
+Nix is the shipped complete package resolver and managed-build executor.
+Core-managed verified downloads, Roc packages, expected host tools and tasks
+also work without Nix. Independent adapter fixtures test shared boundaries;
+they are not a second production provider. Guix source intent is not evidence
+of a working Guix executor.
 
-Neutrality does not make ecosystem-specific declarations portable. A Nix
-package source selects Nix, and its package names retain their native
-meaning. Another provider should be able to fulfil the same shared
-capabilities using its own sources and implementation, without depending on
-Nix or imitating its formats. A new shared semantic requirement can extend
-the versioned protocol; one provider's syntax alone is not a reason to do so.
-
-Nix is currently the only complete package resolver and realiser shipped
-with the CLI. Core-managed downloads, Roc packages, host requirements,
-named environments and tasks already work without it, including on Windows.
-Reusable predefined configurations can compose those features without
-selecting any package ecosystem. A future provider backed by Conda-forge,
-for example, could supply resolved environments on Windows and advertise
-the capabilities it supports; it need not own the whole pipeline or provide
-isolated builds to be useful.
-
-Representing Guix source intent does not mean a Guix executor
-has been implemented. Provider-neutral contracts and independent contract
-fixtures preserve the direction; a second complete implementation is the
-stronger integration proof. Source registration, resolution ownership and
-execution selection still need work before another full provider can be
-added through registration alone.
+Providers own their native caches and substitution. Blueprint supplies the
+selected inputs and interprets typed results; it does not implement a second
+artifact cache or infer a cache hit from a successful command.
 
 [[terms]]
 == Terms
 
-The vocabulary has three parts: *data* (the things Blueprint records and
-produces), *stages* (the steps that turn one kind of data into another) and
-*roles* (who carries out each step).
-
 [[terms-data]]
-=== Data
+=== Configuration and data
 
 [cols="1,4",options="header"]
 |===
 | Term | Definition
-
-| *Blueprint* | The authored source: what the user _intends_.
-
-| *Spec* | The normalised, validated, provider-neutral form of a Blueprint. Every stage after evaluation consumes it.
-
-| *Component* | One thing a Spec asks for: a package identity plus a version constraint.
-
-| *Source* | A pinned universe that components are chosen from, such as a revision of a package collection, a channel snapshot or a registry commit.
-
-| *System* | A target platform: operating system, architecture and C library.
-
-| *Lock* | The _decisions_: the exact pins chosen for each Source and Component, with their digests and how they were verified.
-
-| *Artifact* | Fetched bytes, identified by digest and never modified.
-
-| *Tree* | An unpacked, content-addressed artifact in a Store.
-
-| *Store* | The local collection of artifacts and trees on one machine.
-
-| *Host facts* | What is observed about the machine rather than provided by Blueprint, such as the system C library version, an installed platform toolchain or a program a Blueprint says it expects to find there.
-
-| *Environment* | The realised set of trees and host facts for one shell on one System.
-
-| *Activation* | Data that describes how to enter an Environment: search-path and environment-variable operations. It contains no shell text.
-
-| *Report* | A derived, read-only view of committed data, such as a change summary, a software bill of materials or an attestation.
+| Blueprint | The authored `Blueprint.roc` configuration.
+| Spec | Its normalized, validated, versioned description of intent.
+| Source | A declared external content origin, with explicit resolver ownership.
+| Component | A requested package within a source's native package universe.
+| Execution system | The operating system, architecture and platform on which an operation executes.
+| Artifact target | The platform an artifact is intended to run on. It may differ from the execution system; scripts currently own cross-compilation settings.
+| Lock | Committed dependency authority: exact pins, declared resolution intent and recorded verification evidence.
+| Artifact | A produced or fetched file/tree. Its role must be stated; a location alone does not identify its content.
+| Store | Disposable local materialization of pinned or produced content.
+| Host facts | Explicitly observed machine requirements that Blueprint does not supply or pin.
+| Environment | Selected tools, fetched programs, variables and expected host requirements for execution.
+| Task | Exact command argv executed in an environment, with repository-owned behavior and side effects.
+| Build | An artifact-producing command with declared files, inputs, dependencies, executor and output.
+| Workflow | An ordered sequence of tasks, builds and nested workflows.
+| Activation | Structured search-path and environment-variable operations for entering an environment.
+| Input snapshot | Captured selected project files and their executable bits, together with the selected pinned inputs and build settings.
+| Request plan | Validated operations, dependency relationships, capabilities and permitted preparation effects.
+| Prepared build | Captured inputs and the exact provider-native recipe with its build identity, ready for execution.
+| Build result | Prepared build identity, output locations and execution evidence established by the provider.
+| Report | A rendering of typed inspection or execution evidence, with a defined input and compatibility boundary.
 |===
 
-Tool selections in a Spec may name a System. Evaluate records those selections
-as intent, so Realise includes them only for that System without inferring
-availability from a provider or the host.
+`Systems` and `BLUEPRINT_TARGET` retain their established names, but select the
+execution system in this contract. They do not introduce an artifact-target
+framework or prove that cross-compiled output runs on its intended target.
+
+=== Identities, digests and locations
+
+[cols="1,4",options="header"]
+|===
+| Term | Comparison domain
+| `content_identity` | Pinned input content, compared together with its provider. Opaque to consumers outside that provider's contract.
+| `build_identity` | A fully prepared executable build, compared together with its provider. Includes the provider's selected inputs and recipe semantics.
+| File digest | Exact original file bytes under a named hashing scheme; an archive's hash includes compression and archive metadata.
+| Tree digest | Directory content under a named tree-hashing scheme. A Nix NAR hash and an archive SHA-256 are different measurements.
+| Output digest | Measured content of a produced artifact under a named scheme.
+| `path` | A location of content; it is not automatically a content checksum.
+|===
+
+Equal content identities do not imply equal builds: commands, selected files,
+tools and options also matter. A changed build identity means the request
+changed, not that output bytes differ. Equal build identities do not prove
+deterministic execution. A checked rebuild provides evidence about repeated
+execution; it does not prove determinism for every execution.
+
+For Nix, the build identity is its derivation path. The returned output store
+path is a location, not a general output-content digest. Consumers must not
+interpret opaque provider identities or compare them across providers.
 
 [[terms-stages]]
 === Stages
 
-[cols="1,4",options="header"]
+[cols="1,3,3",options="header"]
 |===
-| Stage | Responsibility
-
-| *Evaluate* | Turn a Blueprint into a Spec, rejecting invalid intent.
-
-| *Resolve* | Decide exactly what to use and whether to trust it. This is the _only_ stage that makes choices.
-
-| *Fetch* | Obtain the exact bytes the Lock names, and prove that they match.
-
-| *Realise* | Turn verified artifacts into trees and an Environment.
-
-| *Activate* | Describe how to enter the Environment, as data.
-
-| *Present* | Render an Activation for one consumer: a shell, CI, an editor, an agent or a container.
-
-| *Inspect* | Derive Reports from Specs and Locks without touching a Store.
+| Stage | Input | Responsibility
+| Evaluate | Blueprint | Produce and validate the Spec without effects.
+| Resolve | Spec, previous Lock and source responses | Explicitly select dependency pins and record verification evidence.
+| Fetch | Lock | Obtain and verify the pinned bytes without changing authority.
+| Realise | Pinned inputs and declared environment | Materialize tools and activation data.
+| Plan | Spec, Lock, request and execution system | Validate relationships and capability requirements before effects.
+| Prepare | Validated build request and selected project files | Capture inputs and obtain the exact native build recipe/identity.
+| Execute | Prepared build or task plan | Run through the selected host/provider and validate results.
+| Activate | Realized environment | Describe environment operations as data.
+| Present | Typed data | Render human output, JSON or shell syntax for a consumer.
+| Inspect | Explicitly supplied authority or evidence | Derive a read-only explanation without discovering hidden dependencies.
 |===
+
+Preparation may fetch pinned content and write caches. It does not resolve new
+pins or start the requested build or dependency builds. A provider must refuse
+preparation that requires unsupported evaluation effects. Execution uses the
+captured inputs and native recipe, rather than silently reevaluating a changed
+working tree.
 
 [[terms-roles]]
-=== Roles
+=== Pure planning and effect execution
 
-Core::
-  Owns the data types, the invariants, the *plan* of every request and the
-  *effect executor*. The Core is the only part that performs I/O. What a
-  Blueprint declares as a download with a known digest needs no ecosystem at
-  all: the Core plans it, fetches it, keeps it in the Store and puts it in the
-  Environment itself, and it checks the host facts a Blueprint declares.
+The core library and provider adapters return data and constrained steps. They
+perform no I/O. The CLI is one effect host; another application may import the
+same core types and execute authorized operations itself. Calling both the
+library and its host "Core" obscures this boundary.
 
-Provider::
-  A pure plug-in that implements one or more stages for one ecosystem. The
-  Core asks a provider only for what comes from that provider's Sources, one
-  Environment at a time; a request that needs nothing of an ecosystem involves
-  no provider. The kinds are:
-  * _resolver provider_, which chooses pins from an ecosystem's Sources;
-  * _realiser provider_, which builds trees locally or through remote
-    execution;
-  * _presenter_, which renders an Activation for a shell, a CI system, a
-    machine-readable format or a container definition;
-  * _inspector_, which derives Reports such as change summaries and audits.
-
-Blueprint says *provider* rather than *backend* on purpose. A backend
-suggests one component that owns the whole pipeline from end to end, which is
-exactly the coupling this model is designed to avoid.
+Executable steps are distinct from inspectable evidence. Parsing a saved
+record must never authorize executing it. Human output and JSON are renderings
+of the same typed result, rather than independently reconstructed models or
+raw provider stdout.
 
 [[layers]]
-== Layers
+== Authority, execution and release evidence
 
-Each kind of data belongs to one layer. A layer is defined by the question
-its data answers, how long that data lives, and which stages may change it.
+The Lock is dependency authority, not a complete build description. A build
+also consumes its command, selected project files, tool options and declared
+dependency builds. Captured inputs can include untracked or task-generated
+files; the Lock alone cannot reconstruct them.
 
-[cols="1,2,2,1,1",options="header"]
-|===
-| Layer | Data | Question it answers | Lifetime | Changed by
+Local successful-build evidence records what was prepared and obtained. It is
+disposable operational state, not a replacement lock. A failed build, planning
+or explanation must not replace the successful baseline. Missing or
+incompatible evidence means unavailable, never unchanged.
 
-| *Intent* | Blueprint, Spec | What do we want? | committed | people
+An SBOM describes selected artifact composition. Neither a lock projection nor
+an SBOM is implicitly a complete executable build graph. Release admission is
+a separate repository policy: obtaining a cached result does not authorize
+adopting newly published bytes.
 
-| *Decision* | Lock, Sources | What exactly did we choose, and why do we trust it? | committed, reviewed | Resolve only
-
-| *Materialisation* | Artifact, Tree, Store, Environment | What exists on this machine? | disposable cache | Fetch, Realise
-
-| *Interface* | Activation, renderings | How is it used? | ephemeral | Activate, Present
-
-| _Cross-cutting_ | Reports | What changed, and what is in it? | derived | Inspect
-|===
-
-The two committed layers, Intent and Decision, *are the protocol*. Everything
-below the Lock can be replaced by another provider and rebuilt from the Lock.
+For example, a native-input producer can compare the exact current build
+identity in Linux admission CI, then publish reviewed evidence bound to the
+selected declaration/file snapshot and artifact digest. Consumers on other
+systems verify that evidence and the artifact bytes without preparing a Nix
+build. Relevant local edits make the admission stale. A producer must not embed
+its own final build identity in its recipe inputs; final result evidence belongs
+outside the artifact's production inputs.
 
 [[flow]]
-== Flow
+== Environment flow
 
-The diagram shows how data moves through the layers. Solid arrows are stages
-that produce new data; each arrow is labelled with its stage name. Dotted
-arrows are read-only: Inspect reads committed data, and a remote cache can
-supply or receive trees. Each box is labelled with its layer, so the diagram
-does not depend on color.
+This diagram shows the environment path. Builds additionally consume captured
+project inputs and preparation evidence as described above. Read-only reports
+can inspect explicitly supplied execution evidence as well as committed data.
 
-.Data flow through the Blueprint layers
+.Data flow through the environment layers
 [mermaid]
 ....
 flowchart LR
@@ -240,198 +221,107 @@ flowchart LR
     CACHE[("Remote cache")] <-.->|substitute / push| TREE
 ....
 
-The Lock is the trust boundary. Everything to its left expresses and records
-decisions; everything to its right follows those decisions without making new
-ones.
-
 [[stage-responsibilities]]
-=== Stage responsibilities
+=== Build and workflow execution
 
-[cols="1,2,2",options="header"]
-|===
-| Stage | Input | Output
+A request first validates structure and capabilities before effects. A workflow
+then executes in order and stops on failure. Each build captures its inputs when
+reached, after earlier tasks may have changed files. Repeated explicit build
+steps prepare again; the provider may reuse identical results through its cache.
+Blueprint must not reuse a result by build name across intervening tasks.
 
-| Evaluate | Blueprint | Spec
-
-| Resolve | Spec, Sources, previous Lock | Lock
-
-| Fetch | Lock | Artifacts
-
-| Realise | Artifacts, System, host facts | Trees, Environment
-
-| Activate | Environment | Activation
-
-| Present | Activation | a rendering
-
-| Inspect | one or more Specs and Locks | Report
-|===
-
-[cols="1,5",options="header"]
-|===
-| Stage | Effects and executor
-
-| Evaluate | *Effects:* none. *Performed by:* configuration layer.
-
-| Resolve | *Effects:* network reads, signature checks. *Performed by:* the Core for declared downloads; a resolver provider, planned by the Core, for its Sources.
-
-| Fetch | *Effects:* network, Store writes. *Performed by:* Core, with mirrors and caches.
-
-| Realise | *Effects:* Store writes, possibly process execution. *Performed by:* the Core for what it fetched; a realiser provider, planned by the Core, for an Environment that takes components from its Sources.
-
-| Activate | *Effects:* none. *Performed by:* Core or realiser provider.
-
-| Present | *Effects:* none, except running a command when asked. *Performed by:* presenter.
-
-| Inspect | *Effects:* none. *Performed by:* inspector.
-|===
-
-[cols="1,5",options="header"]
-|===
-| Stage | Must hold
-
-| Evaluate | Deterministic. Shared capabilities are neutral; provider selections and native data are explicitly scoped.
-
-| Resolve | The only stage that makes choices. Trust is recorded, never assumed.
-
-| Fetch | Each artifact's digest equals the digest in the Lock.
-
-| Realise | A function of its inputs only. No network access and no new choices.
-
-| Activate | Produces data only, never shell text.
-
-| Present | Each presenter does its own escaping.
-
-| Inspect | Never reads a Store, so it works with every provider.
-|===
+Selected files and dependency identities allow changes to flow through the
+declared graph. Explanations distinguish changed declarations, changed build
+identities and measured output changes. A script reading undeclared ambient
+inputs cannot receive guarantees beyond the executor's enforced contract.
 
 [[commands-as-flows]]
-=== Commands as flows
+=== Commands use the same model
 
-Every user-facing command is a path through the same stages. No command needs
-a stage of its own.
-
-[cols="1,3",options="header"]
-|===
-| Kind of command | Flow
-
-| Update the pins | Evaluate, then Resolve. The new Lock is committed and reviewed as a diff.
-
-| Enter, run in or build an environment | Evaluate, Fetch, Realise, Activate, then Present. With a warm Store this works offline.
-
-| Check or describe a project | Evaluate, then Inspect.
-
-| Review a proposed change | Evaluate and Inspect on two revisions, a base and a head.
-
-| Audit what is used | Inspect the Lock.
-|===
+Tasks use the common runner. Builds, preparation and explanations use the same
+request and prepared-build objects. JSON is optional presentation, not the
+architecture's integration mechanism. Saved local evidence supports local
+explanation; arbitrary historical record comparison remains separate work.
 
 [[invariants]]
 == Invariants
 
-These rules keep the model neutral and reproducible. A design that breaks one
-of them breaks the architecture.
-
 [[inv-1]]
-=== Invariant 1: Intent is neutral
+=== Invariant 1: Shared capabilities are provider neutral
 
-A Spec defines shared capability semantics independently of their provider's
-implementation. Explicit provider selections and source declarations say who
-supplies a capability. Native data stays in those scoped declarations or
-namespaced hints; it must not become a requirement imposed on other providers.
+Native details stay scoped to their provider. Explicit source ownership and
+executor selection determine routing without ambient provider selection.
 
 [[inv-2]]
-=== Invariant 2: Only Resolve makes choices
+=== Invariant 2: Only explicit resolution changes dependency pins
 
-Every later stage is a pure function of the Lock, the System and the host
-facts. This is Blueprint's reproducibility guarantee.
+Ordinary planning, preparation and execution preserve the Lock. They still
+consume declared commands, settings, selected files and host requirements.
 
 [[inv-3]]
-=== Invariant 3: The Lock is the single source of truth and the trust boundary
+=== Invariant 3: Authority and evidence have different responsibilities
 
-* No later stage changes a pin, URL or digest.
-* Trust decisions happen during Resolve and are recorded in the Lock.
-* An update is always a visible, reviewable diff.
+Pins and their verification decisions belong in the reviewed Lock. Captured
+build inputs, results and measured outputs are execution evidence. Neither
+silently expands or rewrites the other's authority.
 
 [[inv-4]]
-=== Invariant 4: Content is immutable and verified before use
+=== Invariant 4: Pinned content is verified before use
 
-Caches and mirrors are never trusted. Everything they return is checked
-against the Lock.
+Fetched bytes are checked against their declared authority. Native build
+caches use the provider's established integrity contract. A build identity is
+not a universal checksum for an output.
 
 [[inv-5]]
-=== Invariant 5: Materialisation is disposable
+=== Invariant 5: Materialization is disposable
 
-Deleting a Store or an Environment loses nothing that the Lock cannot
-rebuild.
+A cache may be deleted without losing committed dependency authority. Rebuilding
+also requires the matching configuration and captured project inputs; the Lock
+alone is insufficient for arbitrary local builds.
 
 [[inv-6]]
-=== Invariant 6: Host dependence is explicit
+=== Invariant 6: Guarantees state their host dependence
 
-Anything Blueprint does not provide is a declared host fact that Reports
-show. Nothing about the host is assumed silently.
+Expected tools are checked, not pinned. Tasks and configuration evaluation are
+not sandboxed. Isolation and reproducibility claims must name the capability
+actually enforced by an executor.
 
 [[inv-7]]
-=== Invariant 7: Providers are pure
+=== Invariant 7: Planning is pure and effects are constrained
 
-* Providers return steps, and the Core executes them.
-* A provider can cause only the effects the Core grants it.
-* The Core knows providers only through the provider interface.
-* Which provider a request needs follows from the Spec alone. Nothing
-  ambient, such as a variable or what is installed, selects one.
+Providers return typed plans. Hosts execute only granted operations. Unsupported
+capabilities and invalid selected relationships fail before effects.
 
 [[inv-8]]
-=== Invariant 8: Activation is data, and rendering happens last
+=== Invariant 8: Rendering happens at the edge
 
-No stage before Present produces shell text.
+Activation remains data. Shell presenters own escaping. Machine and human
+presentations share typed results; native process output is decoded first.
 
 [[inv-9]]
-=== Invariant 9: Inspectors read only committed data
+=== Invariant 9: Inspection declares its evidence boundary
 
-If a Report needs anything else, the Lock is incomplete, and the fix belongs
-in the Lock.
+Lock inspection reads committed authority without a Store or project evaluation.
+Build explanation can compare declared/captured execution evidence. Missing
+coverage is explicit; inspectors must not invent a complete graph from reports.
 
 [[inv-10]]
-=== Invariant 10: One codec, one versioning scheme
+=== Invariant 10: Formats have explicit compatibility contracts
 
-* Spec, Lock and Activation share one codec and one set of major/minor
-  compatibility rules.
-* Other formats, such as JSON, TOML and shell scripts, are _renderings_,
-  never protocol data.
+Spec, Lock, build records and public reports version their own semantics.
+S-expressions serve the authority and local records; JSON is useful optional
+presentation. A package version, wire format and compiler version are distinct.
 
 [[coupling-test]]
 == The coupling test
 
-Implementing an existing capability for another ecosystem should need a new
-provider, not a different meaning for the shared capability. A new consumer
-should need a rendering. Genuinely new shared semantics or host effects may
-require a versioned protocol or Core change; provider-specific formats stay
-behind the adapter boundary.
+An ecosystem implementing an existing capability should need an adapter, not a
+new shared meaning. A consumer should use typed plans/results and their
+renderings, not reconstruct dependencies from unrelated JSON reports. New
+capabilities may require versioned semantics or constrained host effects.
 
-[cols="2,2,1",options="header"]
-|===
-| Use case | What it needs | Existing capabilities unchanged?
-
-| Developer shell | presenter | yes
-
-| CI system | presenter | yes
-
-| Editor or AI agent | presenter with machine-readable output | yes
-
-| Container or development container | presenter | yes
-
-| A new package ecosystem | resolver and realiser providers; explicit source registration | yes
-
-| A machine with no package ecosystem installed | nothing: the Core fetches declared downloads itself | yes
-
-| Remote execution | realiser provider | yes
-
-| Bill of materials or change review | inspector | yes
-|===
-
-A proposal breaks the architecture, and needs redesigning, if it requires any
-of these:
-
-* a provider's native detail imposed as a shared capability requirement,
-  which breaks <<inv-1,invariant 1>>;
-* a choice made after Resolve, which breaks <<inv-2,invariant 2>>;
-* an inspector that reads a Store, which breaks <<inv-9,invariant 9>>.
+Review a change by asking whether repository logic remains in scripts, source
+ownership is explicit, execution guarantees are accurate, identity comparisons
+are well-defined and a provider can implement the capability without Nix-shaped
+native data. A second provider fixture is useful evidence of those boundaries;
+it does not establish production support or arbitrary provider composition.

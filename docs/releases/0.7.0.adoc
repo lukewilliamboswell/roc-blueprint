@@ -19,7 +19,9 @@ app [config] { pf: platform "{platform-url}" }
 Binaries are attached for x86_64 Linux, arm64 Linux, Apple Silicon macOS and
 x86_64 Windows, with SHA-256 sums in `blueprint.sha256`. Use this release's
 binary with its platform URL. The importable core package is `{core-url}`.
-Existing 0.6 configurations and lock files remain supported.
+This is an intentionally breaking pre-1.0 release. Upgrade configurations and
+report consumers together, then migrate supported locks explicitly; see
+xref:migrating-0.7.adoc[Upgrade to 0.7.0].
 
 == Compiler available on first use
 
@@ -69,7 +71,7 @@ own installation; matching the version alone does not share that executable.
 
 `blueprint lock show --json [NAME...]` exposes the entries in `Blueprint.lock`
 without evaluating `Blueprint.roc`, starting a provider, accessing the network
-or creating cache state. Its documented JSON format 1 includes exact remote
+or creating cache state. Its documented JSON format 2 includes exact remote
 Nix `fetchTree` attributes and per-entry content identities, so external
 scripts can use the locked revision and `narHash` without parsing the lock's
 internal representation or maintaining a second pin.
@@ -111,17 +113,36 @@ See xref:builds.adoc#original-files-with-published-hashes[Original file sources]
 
 `blueprint build NAME --rebuild` checks an existing output by rebuilding the
 same derivation and failing when the bytes differ. `--json` reports versioned
-provenance with the provider, opaque `recipe_identity`, outputs and locked
-sources used by the build. Nix uses the actual derivation path as its recipe
+provenance with the provider, opaque `build_identity`, outputs and locked
+sources used by the build. Nix uses the actual derivation path as its build
 identity and exposes it in `metadata.nix.derivation` too. Other providers can
-describe their own recipe identities and native metadata without imitating
+describe their own build identities and native metadata without imitating
 Nix. `BLUEPRINT_TOOLS` exposes full roots of declared packages, so recipes
 can reach libraries and loaders as well as executables. See
 xref:builds.adoc#check-reproducibility-and-record-provenance[Build checks and provenance].
 
-The platform writes Spec format 2.8. Configurations that do not select new
-features retain their existing meaning; older consumers reject unsupported
-required features explicitly.
+The platform writes Spec major 3. Sources have explicit resolver ownership and
+builds select named executors. This breaks older configuration and core APIs;
+there are no deprecated identity-field aliases. Package versions, Spec/Lock
+formats and report versions are separate compatibility contracts.
+
+== Integrated build planning and explanations
+
+Tasks remain common command runners. Optional Builds declare artifact inputs,
+dependencies, execution capabilities and output while retaining repository-owned
+compilation and packaging scripts. Providers own native caches; Blueprint
+tracks and explains the declared execution relationships.
+
+`blueprint plan build NAME` inspects the request. `--prepare` obtains the exact
+build identity, allowing pinned fetches and cache writes but executing no builds.
+`blueprint explain build NAME` compares against the last successful local build;
+`--prepare` additionally compares exact build identities. Both support optional
+JSON from shared typed objects. A failed build never replaces the successful
+baseline. Portable arbitrary historical comparison remains deferred.
+
+Public lock reports call pinned input content `content_identity`; build results
+call fully prepared requests `build_identity`. Changed build identity does not
+claim changed output bytes, and a result location is not an output digest.
 
 == Describe your software's supply chain with SBOMs
 

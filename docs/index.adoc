@@ -67,4 +67,6 @@ include::contributing.adoc[leveloffset=+1]
 
 include::maintaining.adoc[leveloffset=+1]
 
+include::migrating-0.7.adoc[leveloffset=+1]
+
 include::releases.adoc[leveloffset=+1]

@@ -8,7 +8,7 @@ A project's `Blueprint.roc` is a Roc program that describes:
   another;
 * *shells* and *tasks*: an environment to enter, or an exact command to run
   in one;
-* *builds*: sandboxed commands that produce an artifact from declared inputs;
+* *builds*: commands with managed artifact outputs, explicit executors and declared inputs;
 * *workflows*: ordered sequences of tasks and builds.
 
 The `blueprint` command reads that file and carries it out. Everything an
@@ -54,12 +54,12 @@ by Nix, and whether a URL serves anything by `blueprint update`, not by Roc.
 == How it works
 
 The platform lowers and validates the whole configuration, then prints it as
-a *Spec*, a provider-neutral S-expression (format 2.8). The `blueprint`
+a *Spec*, a provider-neutral S-expression (format 3). The `blueprint`
 command runs Roc to get that Spec, validates it again through the same shared
 rules, plans the request, and owns every download, file write, the lock and
 execution. It fetches programs into a per-user store itself, and asks the Nix
 provider only for the environments that have a tool from a Nix source. The
-core package and the Nix renderer are pure: they discover nothing about the
+core library and provider adapters are pure: they discover nothing about the
 host and perform no effects.
 xref:architecture.adoc#purpose[The architecture chapter] explains the model
 and the rules that keep it independent of any one package ecosystem.
@@ -118,6 +118,20 @@ fetched program gets a digest for each, and the generated Nix outputs have
 each. It installs nothing and is not evidence that a target runs:
 `x86_64-darwin` may still be listed there.
 
+== Who owns build behavior
+
+The repository owns its scripts, compilation and packaging decisions. Blueprint
+owns explicit environments, dependency relationships and execution contracts;
+providers own native execution and cache reuse. A Task is sufficient for an
+ordinary script runner. Opt into a Build for a declared artifact; adding one
+does not move its compilation logic into Blueprint.
+
+A Lock pins dependencies, but does not capture every build input. Commands,
+selected project files and executor settings also matter. A build identity can
+support reuse of the same request; an output digest measures produced bytes.
+Neither identity alone establishes reproducible execution or authorizes adopting
+a new published release.
+
 == What it does not do
 
 * Nix is the only package provider. A source may state Guix intent, and its
@@ -126,5 +140,5 @@ each. It installs nothing and is not evidence that a target runs:
 * A fetched program is one file, or one file inside an archive that is
   unpacked whole. An archive gives one command name.
 * There is no parallel workflow scheduler: steps run in order.
-* Tasks and the evaluation of `Blueprint.roc` are not sandboxed; only builds
-  are, and a build cannot use fetched programs or expected tools.
+* Tasks and the evaluation of `Blueprint.roc` are not sandboxed; the supported managed-build executor enforces its declared isolation. Expected
+  host tools are not automatically available inside a sandbox.

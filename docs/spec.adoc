@@ -12,13 +12,15 @@ xref:architecture.adoc#terms[The architecture chapter] defines the terms.
 
 In outline:
 
-* `format` — `((major 2) (minor 8))`; see <<compatibility-of-the-formats>>.
+* `format` — `((major 3) (minor 0))`; see <<compatibility-of-the-formats>>.
 * `name`, `systems` (strings such as `"x86_64-linux"`).
-* `sources` — `{ name, provider }`, where provider is `NixPackages(Str)` or
-  `GuixPackages(Str)`. Every source a tool names is declared: validation adds
-  none, and a project whose environments have no tool of a package source has
-  no source. `Auto` is still read, so that a Spec written before 0.6 is
-  refused by name; no Spec is written with it.
+* `sources` — package sources with explicit versioned provider declarations
+  `{ name, version, ref }`. Every source a tool names is declared; validation
+  inserts no package source. Checked authoring shorthands such as
+  `From(NixPackages(...))` produce these declarations.
+* `resolvers` — explicit provider ownership of non-package source/input names.
+* `executors` — named executor declarations with provider and bootstrap source.
+* `build_executors` — explicit executor selection for each Build.
 * `inputs` — `{ name, url, kind }`, where kind is `Overlay` or `Flake`.
 * `environments` — `{ name, parents, tools, overlays }`; tools are
   `{ source, name }`, where `source` is a declared source, and overlays are
@@ -68,10 +70,8 @@ In outline:
 * `extensions` — `{ kind, name, value }`, blocks a provider may understand.
 * `requires` — features the config uses beyond the core (`"raw"`,
   `"extensions"`, `"sources"`, `"builds"`, `"build-files"`, `"workflows"`, `"system-tools"`, `"commands"`, `"roc-packages"`, `"configured-tools"`, `"programs"`, `"expects"`), so an older `blueprint` can say what's missing.
-  The platform always writes `"explicit-sources"`: a `blueprint` from before
-  0.6 would give the Spec a `default` source it does not declare, and refuses
-  it by that name instead. A `blueprint` given a Spec without it says the
-  platform is older than 0.6.0.
+  Required features are independent of the Spec major; unsupported required
+  capabilities are rejected before effects.
 
 `Value` is `Str`, `Int`, `Bool`, `List` or `Attrs`. Its S-expression encoder
 and parser are hand-written to avoid recursive-codec derivation problems.
@@ -98,37 +98,31 @@ probes the host or installs/fetches anything.
 
 == What the Lock holds
 
-`Blueprint.lock` is a `blueprint-core/Lock.roc` value in the same S-expression
-codec, with its own `format` (currently 1.1) and the same compatibility rules
-as the Spec. It holds `intent` (the parts of the Spec Resolve consumed: source
-and input declarations, the build sources a provider resolves and
-per-environment overlay order), which
-the CLI records on `update` and compares before every other command, failing
-with what changed; `sources` (one provider-neutral `{ name, provider, ref,
-rev, digest }` per declared input; `digest` is `sha256:<hex>`: the Nix
-provider converts its NAR hashes for remote inputs, local inputs carry
-Blueprint's own tree digest from core `Tree`, and `SourceFile` entries use
-`provider = "file"` with the flat original-file digest), provider-namespaced
-`hints`, and `fetched` (one `{ name, system, urls, sha256, size, obtained }`
-per declared program and System: the SHA-256, in hex, and the length of the
-download when it was resolved, the URLs it was declared with, and whether the
-digest was `Computed` from the bytes, `Published` by the release that serves
-them, or `Both`; an entry with no `obtained` is read as `Unstated`. Programs
-are not part of `intent`; each entry carries its URLs, so a program whose URLs
-changed is stale alone). A project that asks no provider for anything has a
-Lock with no `hints`; it may still hold Core-owned original-file sources.
-File declarations are compared directly with those locked pins for freshness. The Nix provider's hint carries its declared input identity and the
-complete native lock graph; decoding rejects a lock whose Sources disagree with
-those pins, so hand edits to either side fail. The graph's root holds one edge
-that is no declared input: `nixpkgs`, following the package source
-`Locks.shell_source` selects, which Nix writes for the alias in the generated
-flake (see Providers). Decoding accepts that edge only as the declarations
-determine it. A Lock written before the alias has no such edge and is still
-valid: `Locks.derive` adds it to the working lock, which changes no pin, so
-nothing needs `blueprint update` and the next update records it. A Lock that
-blueprint 0.5 or older wrote records, in its `intent`, the `Auto` source every
-project had then: it is read, found stale for every Spec, and reported as
-old. Older JSON locks are not migrated. Either way, run `blueprint update`. `fuzz/lock-parse` fuzzes the parser.
+`Blueprint.lock` is versioned S-expression dependency authority. Its `intent`
+records resolution declarations, including explicit provider ownership; `sources`
+records selected names, providers, references, revisions and digests. Adapter
+hints preserve checked native authority. `fetched` records program download
+URLs, original-file SHA-256, length and how verification evidence was obtained.
+
+A source's recorded digest retains its provider representation. The public
+inspection contract exposes `content_identity` separately, with explicit file,
+tree or unknown digest kind and inert namespaced metadata. Core `SourceFile`
+entries pin unchanged original bytes, not an implicitly unpacked tree.
+
+Only explicit update changes pins. Ordinary requests validate freshness and
+verify selected materialization without rewriting authority. Local sources use
+project-relative declarations and checked tree digests rather than checkout
+locations. A dirty locked source needs explicit update.
+
+The Lock does not contain arbitrary selected project files, prepared build
+recipes, output hashes or successful execution records. These belong to their
+own declared evidence types. An SBOM describes artifact composition and is not
+a substitute for the build graph.
+
+`blueprint lock migrate` converts supported older authority while preserving
+pins and verification evidence. It does not fetch or resolve; ambiguous
+ownership mappings fail rather than being guessed. See
+xref:migrating-0.7.adoc[Upgrade to 0.7.0].
 
 == Compatibility of the formats
 
@@ -141,119 +135,48 @@ old. Older JSON locks are not migrated. Either way, run `blueprint update`. `fuz
 
 == What a provider does
 
-`Realise.plan(spec, request, system, layout, lock, providers)` is the Core's
-own pure plan of a request. An environment's fetched programs, the tools it
-expects of the machine and its Roc packages are planned from the Spec and
-the Lock alone, as `Present`, `Programs` and `RocBundles` operations. A
-provider is asked only for an environment that has a tool from a source it
-`realises`, and its steps then follow what the Core supplies. A task whose
-environment has no such tool is its own argv, and a shell with none has no
-argv: the executor starts the caller's shell. Every problem of every step is
-collected before one is reported, and a request with a problem yields no
-step. `Realise.requirements` answers, from the Spec alone, which providers a
-task needs and which programs it fetches and expects.
+The pure core validates declarations and plans requests. Providers are pure
+adapters that return constrained operations; the CLI or another host performs
+filesystem, network and process effects. Registering a provider grants no
+ambient ownership of shared sources.
 
-The executor checks every `Present` program of every step on `PATH` and
-reports all that are missing together; then makes every `Programs` entry
-ready in its store, where a download is kept by its SHA-256 and hashed again
-on each use; then runs the steps, each with a directory of links to its
-programs first on `PATH`, removed when the step ends.
+A source names its resolver. Package sources carry versioned provider intent;
+`Resolver("nix", ["assets"])` assigns a non-package source to that provider.
+Each build selects a named executor using `Execute("native")`, whose
+`Executor("native", "nix", "pkgs")` declaration identifies its provider and
+bootstrap package source. An independent executor may use an empty bootstrap
+source. A build never infers its executor from the first package source.
 
-`Request`, `Steps` and `Layout` are importable pure core types.
-`NixProvider.plan(project, request, target, layout, locks)` derives
-an ordered `Steps.steps` sequence, each holding action, files, exact argv, artifact
-metadata and materialization operations. `Request.Workflow(name)` uses the same
-atomic planner as standalone tasks/builds. Execute each step's operations, stage
-its files, then invoke its argv; stop immediately on failure. The entire plan
-must succeed before effects.
-The caller owns all effects; no provider registry or serialized config recipes
-are involved. `blueprint-core/Provider.roc` is the Core/Provider contract: a
-`name`, the `features` the provider implements, `render`, `inspect_lock`, `preflight`,
-`realises` (which package sources it supplies), `realise` (Steps from the
-Lock) and `resolve` plus `lock_from_native` (the programs the machine must
-have, and what to stage and run to produce new pins). `inspect_lock` validates
-and projects committed provider authority into per-source content identities
-and generic `Value` metadata, without a Spec, host context or effects. The
-Core uses this for the versioned `lock show` report. Resolve asks a provider
-only when the Spec declares something it resolves (`Realise.resolvers`); the
-digests of fetched programs are the Core's own to obtain. The CLI uses only
-that record; `scripts/test.roc` fails if it
-reaches into a provider's modules directly. Nix is the only implemented
-provider. It:
+Adapters validate their own native package/source grammar through the pure
+validation boundary used by both authoring and CLI ingestion. Core validation
+owns references, cycles, ownership and shared capabilities. Checked constructors
+must not expose unchecked provider JSON as configuration intent.
 
-* supplies the sources declared as `NixPackages` and no other; a project
-  that declares none has no flake, and nothing is generated for it;
-* builds an environment that has no tool of its own, such as the sandbox of
-  a build whose environment is empty, with the first Nix source the project
-  declares, in the order of `Blueprint.roc`;
-* imports each selected environment's package sources per system with only
-  that environment's ordered overlay stack; aliases and task entries share it;
-* checks provider compatibility for the requested environment/build closure, not
-  unrelated valid source/environment declarations. `render` selects every
-  build's environment and every shell or task environment that has a tool of
-  a Nix source, and leaves out those the Core enters without Nix;
-  `render_environment` selects one. Whole-project
-  structure, required features, declared targets and Nix Raw remain checked;
-* declares `nixpkgs` as an input that `follows` the first Nix package source
-  the flake declares, whatever it is called, and nothing when the project
-  declares an input of that name. `nix develop` takes the bash it
-  runs from the input called `nixpkgs` and otherwise from the registry's
-  floating one, which no Lock pins. The alias is one name for the whole flake,
-  so it cannot follow each environment's own source;
-* emits native package attributes without translation, fallback or availability
-  filtering: missing/unavailable packages fail in Nix. Explicit `system_tools`
-  select packages for their named System before Nix evaluates them. Each
-  `commands` entry becomes a package holding one launcher that execs the
-  tool's main program. Each `configured_tools` entry is the tool's `override`
-  applied to its options, rendered as data like `raw`, in shells and builds;
-* appends `Present` for `nix` to every step that starts it, with the reason,
-  and none to a step that only generates files;
-* gives a build its environment's `roc_packages`, since a build has no
-  network: the build's specification lists the locked bundles, and the
-  standalone runner links them into a private cache inside the build directory
-  and sets `XDG_CACHE_HOME` for the build's command. A shell or a
-  task gets nothing of them from this provider: the Core's `RocBundles`
-  operation downloads the missing ones into Roc's package cache, with Nix or
-  without. There is no shell hook;
-* rejects unsupported Nix target declarations and restricts build requests to
-  x86_64 Linux. Other supported output shapes are not execution evidence;
-* renders `raw` for backend `"nix"` at `shell:<alias>` and `flake` as data,
-  rejecting invalid targets, duplicate attributes and managed-field overrides.
-  Alias Raw does not affect other aliases or tasks; other providers' Raw is inert;
-* refuses any `extensions` and advertises `"raw"`, `"sources"`, `"builds"`,
-  `"workflows"`, `"system-tools"`, `"commands"`, `"roc-packages"` and
-  `"configured-tools"` and `"build-files"`;
-* builds ordinary derivations with exact argv, filtered project snapshots,
-  read-only declared sources/artifacts and checked file/directory outputs. Each
-  is a raw `derivation` using a versioned standalone Roc runner from the
-  locked package set and a frozen compiler toolchain. Runner bytes, selected project bytes and locked tools
-  determine its identity. The CLI executable and runtime namespace witness
-  stay outside the derivation. The user command receives exact argv and only
-  its declared environment tools on `PATH`. Complete tool roots are available
-  under `BLUEPRINT_TOOLS`; this does not opt into `stdenv` setup.
-* adapts build options through `Provider.build_argv` and decodes its native
-  build JSON through `Provider.build_result` into provider-tagged opaque recipe
-  identities, outputs and namespaced native metadata. `Provider.build_sources` identifies the authoritative lock entries
-  used by the build closure. The CLI executes and prints these results without
-  knowing provider flags or native JSON field names.
+A provider may implement resolution, environment tools, managed execution or a
+subset. Capability checks follow the selected request closure. Unsupported
+mixed resolvers or executors fail before effects; general composition and a
+second production implementation remain follow-up work.
 
-`Project.check_environment(project, Nix | Guix, name)` is a pure compatibility
-check. Guix source intent, native tool grammar and overlay-capability rejection
-are modeled; no Guix renderer, task implementation or executor exists. The
-reference CLI lists Nix as its one provider and selects nothing: `Realise.plan`
-asks a provider only for an environment that has a tool from a source it
-supplies, so which requests reach Nix is decided by the Spec.
+Shared request plans describe dependencies and preparation requirements.
+Prepared builds bind captured files, tools, pins and commands to a native build
+identity. Build execution uses that exact preparation; typed results decode
+provider output before human or JSON presentation. Providers own native caches
+and substitution, not Blueprint's report layer.
 
-The source package exports `NixProvider` and `Locks`, without importing the CLI
-or an effectful platform. `Locks.decode` parses the Lock, checks that its Sources match the
-"nix" hint's pins, and validates the native Nix graph; `Locks.derive` validates declaration/ordered-overlay identity
-and translates local project-relative paths into a disposable working lock.
-`NixProvider.plan` uses that translation. The former opaque-text `render_files`
-seam was removed, not retained as a bypass. `fixtures/consumer/main.roc` is an
-independent app using these APIs, including caller-selected paths, decoded
-supplied authority and exact argv; `scripts/test.roc` checks it and runs its
-`expect`s. `scripts/test_builds.roc` separately proves actual
-relocated local-source translation.
+The Nix adapter uses locked package sources, ordered selected overlays and
+explicit execution-system tool selections. Managed builds use a versioned
+standalone runner, filtered project files, read-only inputs and artifacts, exact
+argv and validated outputs. They receive declared tools on `PATH` and package
+roots under `BLUEPRINT_TOOLS`; this does not activate `stdenv` setup. Runtime
+namespace authorization witnesses stay outside the derivation identity. Local
+x86_64 Linux is the verified isolation implementation; remote builders are
+disabled for this contract.
+
+Nix preparation disables import-from-derivation and does not execute dependency
+builds. Execution and checked rebuild target the exact prepared derivation.
+Native details stay namespaced in metadata; a derivation path is the Nix build
+identity, not a universal output digest. See xref:builds.adoc[Build artifacts and
+run workflows] for planning, results and local evidence.
 
 `gen`, `shell`, `run`, `build` and `workflow` require existing matching authority. Only
 explicit `update` resolves new pins and publishes authority; normal commands

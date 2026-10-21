@@ -1,19 +1,25 @@
 = Build artifacts and run workflows
 
-A `Build` runs one command in a sandbox and keeps one declared output. A
-`Workflow` runs tasks and builds in order. Sandboxed builds run in Nix, on
-x86_64 Linux only.
+A `Task` runs a repository-owned command in its environment. Use a `Build`
+when the command produces an artifact whose inputs, dependencies, execution
+capabilities and output should be managed explicitly. Keep compilation and
+packaging logic in the script; Blueprint supplies the declared inputs and asks
+the executor to obtain the result. A `Workflow` orders tasks and builds.
+The shipped sandboxed executor uses Nix on x86_64 Linux.
 
 == Declare a build
 
-Inside `config`, with `scripts/build.roc` in the project and the
-`build-scripts` environment of
+Inside `config`, with a Nix package source named `nix`,
+`scripts/build.roc` in the project and the `build-scripts` environment of
 xref:configuration.adoc#what-the-lock-pins[Lock the Roc packages scripts use]:
 
 [source,roc,snippet=unchecked]
 ----
 Source("assets", "path:./assets"),
+Resolver("nix", ["assets"]),
+Executor("native", "nix", "nix"),
 Build("app", [
+	Execute("native"),
 	Use("build-scripts"),
 	Inputs(["assets"]),
 	Run(["roc-stable", "scripts/build.roc"]),
@@ -48,9 +54,10 @@ package sources, and nothing of the machine: no `sh`, `cp`, `mkdir` or
 or inside the build's own script when that script calls one. A build does not
 see the variables Nix's `stdenv` exports either. A tool may give what it runs
 more than the build was given: the Roc compiler's package puts coreutils and
-a C compiler on the `PATH` of a script it runs. An environment with fetched
-programs or expected tools cannot be a build's: a sandbox holds only what its
-package sources supply, and the build is refused when it is planned.
+a C compiler on the `PATH` of a script it runs. Expected host tools cannot be supplied inside this sandbox. Tool origins are
+checked against the selected executor's capabilities before effects; support
+for a fetched program must be established by that executor rather than inferred
+from a task's ability to run it.
 A versioned standalone runner executes builds using only the locked package
 set. Its bytes are independent of the Blueprint CLI executable. Caller namespace
 identities are mounted as an authorization witness at execution time, outside
@@ -70,7 +77,7 @@ release archive whose publisher supplies a flat SHA-256. The hash is exactly
 rules as fetched programs. Use `Inputs([name])` on a build: the unchanged file
 is available at `$BLUEPRINT_INPUTS/<name>`. An archive is never unpacked
 implicitly; name the unpacker in the environment's `Tools` and run it in the
-recipe when needed. `Source(name, ref)` continues to supply a locked source
+producer script when needed. `Source(name, ref)` continues to supply a locked source
 tree, including archives that Nix unpacks and pins by their NAR hash.
 
 `blueprint update` fetches and verifies the original bytes against the declared
@@ -114,7 +121,7 @@ Locked sources are verified again; task edits to them require explicit update.
 Cycles and excessive depth/expansion fail during configuration validation.
 See the https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/workflows/README.md[real workflow fixture].
 
-== Select a recipe's project files
+== Select a build's project files
 
 `Files(["scripts/producer.sh", "dependencies/shared"])` on a `Build` selects
 only those project files and directory trees for that build. Paths are relative
@@ -143,25 +150,74 @@ and compare its output. Nix fails when the output differs. Build it once
 before asking for this check; a missing prior output is not a reproducibility
 comparison. Run this for each component in CI.
 
-`blueprint build NAME --json` prints one JSON object and keeps build progress
-on stderr. Both flags may be combined. Version 1 has these fields:
+`blueprint build NAME --json` prints one typed result as JSON and keeps progress
+on stderr. Both flags may be combined. Build result schema version 2 contains:
 
-* `schema_version`: `1`.
-* `name` and `system`: the requested build and target system.
-* `provider`: the provider that executed the build, currently `"nix"`.
-* `recipe_identity`: the provider's opaque locked recipe identity. Compare it
-  only together with `provider`; it is not necessarily a path or a SHA-256.
-* `metadata`: typed native details namespaced by provider. Nix supplies
-  `metadata.nix.derivation`, the actual builder derivation path reported by Nix,
-  which is also its `recipe_identity`. Other providers need no Nix fields.
-* `outputs`: a list of `{ "name": "out", "path": "..." }` records.
-* `sources`: the root lock entries used by this build and its dependencies,
-  each with `name`, `provider`, `ref`, `rev` and `digest`. Sources without a
-  revision have an empty `rev`; these digests retain the lock's representation.
+* `schema_version`: `2`.
+* `name` and `system`: requested build and execution system.
+* `provider`: selected executor provider, currently `"nix"`.
+* `build_identity`: opaque identity of the fully prepared build; compare it
+  together with `provider`.
+* `metadata`: typed provider-namespaced details. Nix exposes its exact
+  derivation under `metadata.nix.derivation`.
+* `outputs`: returned output names and locations.
+* `sources`: selected authoritative source entries for the build closure.
+* Snapshot evidence binding the build to its selected inputs.
 
-Consumers should reject unsupported schema versions and tolerate additional
-fields. Recipe and output identities come from the selected provider; Blueprint does
-not infer them from the declared output name.
+Reject unsupported schema versions and tolerate additive fields. The build
+identity describes the executable request, not the resulting bytes. Output
+locations are not general content checksums. The provider owns cache reuse;
+a successful build alone does not prove it was a cache hit.
+
+== Plan a build and explain changes
+
+`blueprint plan build NAME` shows the selected files, dependencies, executor and
+capabilities without preparing the provider recipe. Add `--prepare` to capture
+selected inputs and obtain the exact `build_identity`. Preparation may fetch
+pinned inputs and write caches, but does not change pins or execute the requested
+build or dependency builds. Nix preparation disables import-from-derivation.
+
+`blueprint explain build NAME` compares the declared/captured input evidence
+with the last successful local build. Add `--prepare` to compare the exact
+current and previous build identities as well. Missing or incompatible baseline
+evidence is reported as unavailable, not unchanged. Relevant direct and
+transitive changes are named; changed build identity does not assert changed
+output bytes.
+
+Both commands accept `--json`, rendering the same typed objects as human output.
+Their report schema is version 1, independent of build result schema version 2.
+An unprepared plan has `prepared: false` and no exact build identity. It cannot
+establish that a cached artifact corresponds to the current request.
+
+A successful, validated build atomically advances its versioned local baseline
+at `.blueprint/build-records/<system>/<name>.scm`. Failed execution, planning and
+explanation preserve that baseline. These bounded S-expression records are
+operational evidence, not executable plans or dependency authority; do not
+commit them. Deleting them removes the comparison baseline, not the provider's
+cached artifacts. Arbitrary historical-record comparison is not part of this
+interface.
+
+Use narrow `Files` selections to avoid unrelated project changes affecting a
+build. The default whole-project snapshot intentionally includes every eligible
+project file. Pinned dependencies, tools, options, commands and declared build
+dependencies also participate in preparation. Scripts must declare what they
+need: Blueprint cannot infer dependencies hidden in arbitrary commands.
+
+== Capture selected reproduction evidence
+
+The Nix executor supplies a read-only JSON file at
+`$BLUEPRINT_INPUTS/blueprint-input-evidence`. Its native format 1 records selected
+package revisions and NAR hashes, original-file SHA-256 pins, the captured
+project store path and tool roots. This is provider-native reproduction material,
+not another provider-neutral report API or a complete lock export.
+
+A producer can ship selected files and its producer module alongside this
+material. A dedicated configuration using the recorded package revision/NAR
+hash can prepare the same build request without depending on unrelated project
+pins. Mutable references, the whole Lock and the final build identity do not
+participate in this evidence input. Final identity and artifact SHA-256 belong
+in external result or release evidence, avoiding a build identity that depends
+on itself.
 
 == Override packages in a producer
 
@@ -193,5 +249,5 @@ The checksum is an intentional placeholder; fill it before building. Blueprint
 locks the local flake's tree and refuses edits until `blueprint update`.
 The override applies to builds whose environment selects that overlay. The
 https://github.com/lukewilliamboswell/roc-blueprint/blob/main/examples/artifacts/Blueprint.roc[artifact example]
-declares two single-output builds selecting their recipe directory and sharing
+declares two single-output builds selecting their producer directory and sharing
 the same pinned package environment.

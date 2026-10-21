@@ -5,7 +5,7 @@
 </p>
 
 Describe a project's development environments, the commands that run in them,
-its sandboxed builds and its ordered workflows in one typed file,
+its managed artifact builds and its ordered workflows in one typed file,
 `Blueprint.roc`. The file says where every program comes from: a download
 checked against a digest the project commits, the machine itself, or a pinned
 Nix package source. A contributor's machine and a CI runner get the same
@@ -44,6 +44,11 @@ declaring `Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable
 [Get started](https://lukewilliamboswell.github.io/roc-blueprint/getting-started.html)
 has this file with the latest release's platform URL filled in, and each
 release's notes give its own.
+
+Tasks run your scripts in declared environments. Optional Builds add explicit
+inputs, dependencies, an executor and a declared artifact output; compilation
+and packaging stay in your scripts. Providers own native execution and caching.
+See the [architecture](docs/architecture.adoc) and [0.7.0 migration guide](docs/migrating-0.7.adoc).
 
 ## Install
 

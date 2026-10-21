@@ -50,6 +50,12 @@ complete file with the current URL.
 | `Input(InputName, FlakeRef)`
 | Other flake input; not a tool source or overlay.
 
+| `Resolver(Str, List(InputName))`
+| Explicit provider ownership of non-package sources, inputs and overlays. Package-source declarations already identify their provider; core `SourceFile` needs no resolver.
+
+| `Executor(InputName, Str, InputName)`
+| Named build executor, provider name and bootstrap package source. Independent executors may require no source and use an empty string.
+
 | `Environment(EnvName, List(EnvironmentSetting))`
 | Named tools and scoped overlays, optionally inherited.
 
@@ -66,7 +72,7 @@ complete file with the current URL.
 | Original file pinned by its published SHA-256 (64 lowercase hexadecimal characters). `Inputs` exposes the unchanged file. See xref:builds.adoc#original-files-with-published-hashes[original file sources].
 
 | `Build(InputName, List(BuildSetting))`
-| Sandboxed artifact with required `Use`, exact argv `Run`, relative `Output`; optional `Inputs` and `Needs`.
+| Managed artifact with required `Execute(executor)`, `Use`, exact argv `Run` and relative `Output`; optional `Files`, `Inputs` and `Needs`.
 
 | `Workflow(WorkflowName, List(WorkflowStep))`
 | Ordered `RunTask(name, extra_argv)`, `BuildArtifact(name)` and `RunWorkflow(name)` steps.
@@ -435,6 +441,7 @@ and those options:
 ----
 Overlay("rust", "github:oxalica/rust-overlay"),
 Overlay("zig", "github:mitchellh/zig-overlay"),
+Resolver("nix", ["rust", "zig"]),
 Environment("host", [
 	Overlays(["rust", "zig"]),
 	Tools(["nix#zigpkgs.\"0.16.0\""]),
@@ -506,6 +513,7 @@ source: select the attribute, quoting a segment that contains dots.
 [source,roc]
 ----
 Overlay("zig", "github:mitchellh/zig-overlay"),
+Resolver("nix", ["zig"]),
 Environment("dev", [Overlays(["zig"]), Tools(["nix#zigpkgs.\"0.16.0\""])]),
 ----
 
@@ -549,13 +557,14 @@ used by tasks and shells alone has none of them in its lock.
 A sandboxed build cannot download. The bundles of an environment that a build
 runs in, or that it extends, are therefore fetched by Nix as well:
 `blueprint update` records those in `Blueprint.lock` like any other source,
-and Nix checks the bytes against that pin. An environment a build uses takes
-its compiler from a Nix source, since a build cannot use a fetched program:
+and Nix checks the bytes against that pin. This example selects its compiler
+from the package source supported by its executor:
 
 [source,roc]
 ----
 Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 Overlay("roc", "github:roc-lang/roc-overlay/76fdbdc2c34adf35eea5fae1d991ca29591a1a7c"),
+Resolver("nix", ["roc"]),
 Environment("build-scripts", [
 	Overlays(["roc"]),
 	Command("roc-stable", "nix#rocpkgs.nightly-2026-10-18-1df370f"),
@@ -564,7 +573,8 @@ Environment("build-scripts", [
 		"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	]),
 ]),
-Build("notes", [Use("build-scripts"), Run(["roc-stable", "scripts/notes.roc"]), Output("notes.txt")]),
+Executor("native", "nix", "nix"),
+Build("notes", [Execute("native"), Use("build-scripts"), Run(["roc-stable", "scripts/notes.roc"]), Output("notes.txt")]),
 ----
 
 The overlay is pinned to a revision that records this nightly. Keep the
