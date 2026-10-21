@@ -295,15 +295,21 @@ staged_platform! = |root, paths, idle, release| {
 	licences = file_names!("${source}/linker-inputs/licenses")?.map(|name| "linker-inputs/licenses/${name}")
 	files = roc_files.concat(linked).concat(["linker-inputs/dependency.json"]).concat(licences)
 	copy!(source, staged, files)?
+	# Native authoring validation is adapter-owned source. Publish that same
+	# module inside the platform, rather than a checkout-relative Nix package
+	# dependency (which would otherwise pull in the executor and runner).
+	copy!("${root}/blueprint-nix", staged, ["Native.roc"])?
+	Path.replace_utf8!(Path.utf8("${staged}/Lower.roc"), "import nix.Native", "import Native")?
 	entry = Path.utf8("${staged}/main.roc")
 	Path.replace_utf8!(entry, Bundle.development_core, "\"${core_url}\"")?
+	Path.replace_utf8!(entry, "\n\t\tnix: \"../blueprint-nix/main.roc\",", "")?
 	if !Path.read_utf8!(entry)?.contains("core: \"${core_url}\"") {
 		return Script.fail!("failed to rewrite the core dependency")
 	}
 	# `roc bundle` resolves the platform's dependencies, and the core URL does
 	# not exist yet. The compiler looks in its package cache before it
 	# downloads, so it gets a cache that already holds the core bundle.
-	platform_bundle = bundle!(staged, files, paths, [("XDG_CACHE_HOME", core_cache)])?
+	platform_bundle = bundle!(staged, files.append("Native.roc"), paths, [("XDG_CACHE_HOME", core_cache)])?
 	Script.info!("   ", platform_bundle)?
 	record!(paths, "roc-blueprint", platform_bundle)?
 
