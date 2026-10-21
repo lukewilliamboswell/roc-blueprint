@@ -153,7 +153,9 @@ report format, Lock format and compiler version are distinct contracts.
 The UTF-8 document is limited to 8 MiB, depth 128 (root at zero), and 4096
 entries in any object/array. Encoding checks these bounds before allocating
 output, includes the emitted newline in the byte limit and validates manual
-constructions too. Duplicate decoded keys, including escaped aliases, invalid
+constructions too. Canonical escaping may expand a bounded input, so encoding
+a successfully decoded value can still return `LimitExceeded` when its output
+would exceed 8 MiB. Duplicate decoded keys, including escaped aliases, invalid
 Unicode, trailing input, mismatched source names and duplicate program/system
 pairs fail. The `format` and `size` fields use unsigned base-10 integer
 lexemes; size must fit U64. Declared flat/program hashes must agree with their
