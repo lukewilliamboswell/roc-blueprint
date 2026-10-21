@@ -592,7 +592,7 @@ core_fixtures : List(ConfigTest.Fixture)
 core_fixtures = [
 	refused(
 		"AutoSource",
-		"TYPE MISMATCH",
+		"type mismatch",
 		\\[Name("invalid"), Packages("default", Auto), Environment("dev", [])]
 		,
 	),
