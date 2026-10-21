@@ -442,7 +442,6 @@ and those options:
 Resolver("nix", ["rust", "zig"]),
 Overlay("rust", "github:oxalica/rust-overlay"),
 Overlay("zig", "github:mitchellh/zig-overlay"),
-Resolver("nix", ["rust", "zig"]),
 Environment("host", [
 	Overlays(["rust", "zig"]),
 	Tools(["nix#zigpkgs.\"0.16.0\""]),
@@ -515,7 +514,6 @@ source: select the attribute, quoting a segment that contains dots.
 ----
 Resolver("nix", ["zig"]),
 Overlay("zig", "github:mitchellh/zig-overlay"),
-Resolver("nix", ["zig"]),
 Environment("dev", [Overlays(["zig"]), Tools(["nix#zigpkgs.\"0.16.0\""])]),
 ----
 
@@ -568,7 +566,6 @@ Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 Resolver("nix", ["roc", "roc-Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af", "roc-6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS"]),
 Executor("native", "nix", "nix"),
 Overlay("roc", "github:roc-lang/roc-overlay/76fdbdc2c34adf35eea5fae1d991ca29591a1a7c"),
-Resolver("nix", ["roc"]),
 Environment("build-scripts", [
 	Overlays(["roc"]),
 	Command("roc-stable", "nix#rocpkgs.nightly-2026-10-18-1df370f"),
