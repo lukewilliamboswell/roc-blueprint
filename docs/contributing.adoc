@@ -52,6 +52,7 @@ scripts/                 Roc scripts, run from the repository root; their module
   check_version.roc      check a release's version before building and against the public API after
   package_docs.roc       archive the rendered site
   release_assets.roc     gather a release's assets and check the names other repositories depend on
+  test_lock_snapshot.roc  check the official lock snapshot consumer against the vendored schema and profile
   test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
   reproducible_probe.roc  compare a producer on independent CI hosts and synthetic CLI patch builds
 docs/                    the manual: index.adoc includes one chapter per top-level .adoc file
@@ -106,8 +107,8 @@ gives two Roc compilers from
 https://github.com/roc-lang/roc-overlay[roc-overlay], Zig 0.16 and the
 programs the scripts start: coreutils, git, curl, tar, gzip, zip, unzip and gh.
 On Linux it also supplies Bubblewrap, util-linux and Python for isolated
-runner tests and a restrictive-umask launcher. Independent SPDX validation
-uses its own pinned Python environment; the product and reporting app run in Roc.
+runner tests and a restrictive-umask launcher. Nothing else uses Python: the
+product, the reporting app and every conformance check run in Roc.
 `roc` is the product compiler, the nightly in
 `blueprint-cli/compiler-version`: it builds and tests the CLI, the packages and
 the platform, and a released `blueprint` embeds it. `roc-stable` is the

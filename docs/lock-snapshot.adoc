@@ -167,9 +167,12 @@ https://github.com/lukewilliamboswell/roc-blueprint/blob/0.7.0/blueprint-core/lo
 The local JSON Schema describes structure and additive-field compatibility.
 The runtime profile additionally checks duplicate keys, resource bounds,
 lexical integers and cross-field identity equality, which standard JSON Schema
-alone cannot express. Independent offline schema/profile tests compare both
-valid and rejected documents with a real native Roc consumer. Schemas and
-external references are never downloaded by the library or validator.
+alone cannot express. `scripts/test_lock_snapshot.roc` checks both in Roc
+without `core.LockSnapshot`: it evaluates the vendored schema file itself,
+refusing any keyword or pattern it does not implement, then the profile, and
+requires a native build of the consumer in `fixtures/lock-snapshot` to reach
+the same verdict on valid and rejected documents. Schemas and external
+references are never downloaded by the library or the check.
 
 == When reading the authority directly is enough
 

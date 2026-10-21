@@ -223,13 +223,6 @@
             default = blueprint;
             roc-glue-spec = rocGlueSpec;
             roc-docs = rocDocs;
-            lock-snapshot-validator = pkgs.writeShellApplication {
-              name = "validate-lock-snapshot";
-              runtimeInputs = [ (pkgs.python3.withPackages (ps: [ ps.jsonschema ])) ];
-              text = ''
-                exec python3 -I ${./scripts/validate_lock_snapshot.py} --schema ${./blueprint-core/lock-snapshot-v1.schema.json} "$@"
-              '';
-            };
           }
           # Not in the development shell: only a release build needs it, and
           # with it the macOS archive.

@@ -278,10 +278,12 @@ unit! = |context| {
 	Process.passthrough!(Process.command(stable, ["build", "scripts/sbom.roc", "--output=.cache/sbom-validation/sbom"], context.root))?
 	Process.passthrough!(Process.command(stable, ["scripts/test_sbom.roc", "binding", "${context.root}/.cache/sbom-validation/sbom", "tests/sbom/fixtures/input"], context.root))?
 
-	step!("Official lock snapshot consumer and independent JSON Schema/profile")?
+	# The schema and profile are evaluated in Roc (scripts/src/LockSnapshotTest.roc),
+	# independently of core.LockSnapshot, which the consumer uses.
+	step!("Official lock snapshot consumer against the vendored schema and profile")?
 	Path.create_all!(Path.utf8("${context.root}/.cache/lock-snapshot"))?
 	compiler!(context, ["build", "fixtures/lock-snapshot/main.roc", "--output=.cache/lock-snapshot/consumer"])?
-	Process.passthrough!(Process.command("nix", ["run", ".#lock-snapshot-validator", "--", "--consumer", ".cache/lock-snapshot/consumer"], context.root))?
+	Process.passthrough!(Process.command(stable, ["scripts/test_lock_snapshot.roc", "${context.root}/.cache/lock-snapshot/consumer"], context.root))?
 	compiler!(context, ["test", "fixtures/lock-snapshot/main.roc"])?
 	Process.passthrough!(Process.command(stable, ["test", "fixtures/lock-snapshot/main.roc"], context.root))?
 
