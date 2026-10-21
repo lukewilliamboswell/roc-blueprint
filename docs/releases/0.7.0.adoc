@@ -117,6 +117,9 @@ artifact composition and emits SPDX 2.3 JSON. It distinguishes build tools
 from contained code and records incomplete or unknown coverage explicitly.
 Inspection runs offline without evaluating a project or starting a provider;
 binding the inventory to the final file's SHA-256 is a separate operation.
+A standalone Roc app bundle provides the same `inspect` and `bind` operations
+without a Blueprint project. The published release notes link its immutable
+bundle URL; it uses the same pinned compiler as Blueprint.
 
 Consumers can import an upstream SPDX graph after verifying its document
 digest and namespace, and bind its described subject to the resolved
