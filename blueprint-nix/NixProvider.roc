@@ -2200,7 +2200,7 @@ roc_plan = |request| {
 		"\"roc-${hash}\": { \"flake\": false, \"locked\": { \"narHash\": \"sha256-mhO52EWOvxHOyTFt0V1hM6Oo6mlpNo2PFlxQtcmCJBc=\", \"type\": \"tarball\", \"url\": \"https://example.test/${hash}.tar.zst\" }, \"original\": { \"type\": \"tarball\", \"url\": \"https://example.test/${hash}.tar.zst\" } },"
 	native = native_lock
 		.replace_each("    \"root\": {", "    ${node("abc")}\n    ${node("def")}\n    \"root\": {")
-		.replace_each("\"default\": \"default\" }", "\"default\": \"default\", \"roc-abc\": \"roc-abc\", \"roc-def\": \"roc-def\" }")
+		.replace_each("\"nixpkgs\": [\"default\"]", "\"nixpkgs\": [\"default\"], \"roc-abc\": \"roc-abc\", \"roc-def\": \"roc-def\"")
 	locks = resolved(roc_project, native)?
 	NixProvider.plan(roc_project, request, "x86_64-linux", TestData.layout, locks)
 }

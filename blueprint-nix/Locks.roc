@@ -152,7 +152,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 				{
 					name: "overlays",
 					value: LockJson.Object(
-						spec.environments.map(
+						spec.environments.keep_if(|env| !env.overlays.is_empty()).map(
 							|env| {
 								name: env.name,
 								value: LockJson.Array(env.overlays.map(|name| LockJson.String(name))),
@@ -162,21 +162,6 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 				},
 			]),
 		)
-	}
-
-	## Environment existence is not resolution intent. Empty stacks import no
-	## overlays, matching Lock.intent_of. Older hints retain these empty scopes;
-	## compare their semantic projection without rewriting committed authority.
-	without_empty_overlay_scopes : LockJson -> Try(LockJson, Str)
-	without_empty_overlay_scopes = |identity| {
-		overlays = LockJson.object(LockJson.field(identity, "overlays")?)?
-		var $selected = []
-		for scope in overlays {
-			if !LockJson.array(scope.value)?.is_empty() {
-				$selected = $selected.append(scope)
-			}
-		}
-		replace_existing(identity, "overlays", LockJson.Object($selected))
 	}
 
 	## Read the Lock text. The Sources shown to reviewers must be exactly those
@@ -482,7 +467,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 		validate_identity(locks.identity)?
 		validate_graph(locks.graph)?
 		validate_binding(locks.identity, locks.graph)?
-		if !equivalent(without_empty_overlay_scopes(locks.identity)?, without_empty_overlay_scopes(identity_for(project)?)?) {
+		if !equivalent(locks.identity, identity_for(project)?) {
 			return Err(
 				"lock input or ordered-overlay identity changed; "
 					.concat("run blueprint update"),
@@ -491,9 +476,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 		root = root_inputs(locks.graph)?
 		nodes = LockJson.object(LockJson.field(locks.graph, "nodes")?)?
 		declared = inputs(project)?
-		# The staged flake always declares the alias, so the working lock always
-		# has its edge. A Lock written before the alias existed lacks it; adding
-		# it here changes no pin, and Nix is never left to add it itself.
+		# Reconstruct the alias already validated against the current declaration.
 		root_name = LockJson.string(LockJson.field(locks.graph, "root")?)?
 		alias = shell_source(declared.map(|input| { name: input.name, kind: input.kind }))
 		aliased = match alias {
@@ -562,8 +545,12 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 			if !Project.valid_name(env.name) {
 				return Err("invalid lock environment")
 			}
+			items = LockJson.array(env.value)?
+			if items.is_empty() {
+				return Err("empty overlay scope is not canonical lock intent")
+			}
 			var $seen = []
-			for item in LockJson.array(env.value)? {
+			for item in items {
 				name = LockJson.string(item)?
 				input = inputs_.find_first(|i| i.name == name)
 					.map_err(|_| "unknown lock overlay: ${name}")?
@@ -866,13 +853,11 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	validate_binding = |identity, graph| {
 		inputs_ = LockJson.object(LockJson.field(identity, "inputs")?)?
 		root = root_inputs(graph)?
-		# Beside the declared inputs the root may hold the alias, exactly as the
-		# declarations determine it. A Lock from before the alias has none.
-		aliased = !inputs_.any(|input| input.name == shell_alias)
-			and LockJson.object(root)?.any(|edge| edge.name == shell_alias)
+		# The current writer emits exactly the alias selected by the declarations.
+		expected_alias = shell_source(declared_kinds(identity)?)
+		aliased = expected_alias.is_ok()
 		if aliased {
-			expected = shell_source(declared_kinds(identity)?).map_ok(alias_edge)
-			if LockJson.field(root, shell_alias).map_err(|_| NoAlias) != expected {
+			if LockJson.field(root, shell_alias).map_err(|_| NoAlias) != expected_alias.map_ok(alias_edge) {
 				return Err("Nix root input ${shell_alias} does not follow the source lock identity selects")
 			}
 		}
@@ -1090,59 +1075,49 @@ expect match locked_fixture {
 	Err(_) => False
 }
 
-# What Nix writes since the generated flake gives its first Nix source the
-# name `nixpkgs` as well: one more root edge, which follows it.
-aliased_fixture : Str
-aliased_fixture = native_fixture.replace_each("\"default\": \"default\"", "\"default\": \"default\", \"nixpkgs\": [\"default\"]")
-
-aliased_locks : Try(Locks, Str)
-aliased_locks = with_assets(Locks.from_nix(TestData.project(TestData.data), TestData.layout, aliased_fixture))
-
-# An update records that edge with the rest of the native graph and it
-# round-trips. It is no Source: the pins shown to reviewers are the same.
-expect match (aliased_locks, locked_fixture) {
-	(Ok(locks), Ok(before)) => Locks.decode(Locks.encode(locks)) == Ok(locks)
+# Current generated flakes include the follows edge beside their declared inputs.
+expect match locked_fixture {
+	Ok(locks) => Locks.decode(Locks.encode(locks)) == Ok(locks)
 		and Locks.encode(locks).contains("(name \"nixpkgs\")")
-		and !Locks.encode(before).contains("(name \"nixpkgs\")")
-		and locks != before
-		and Locks.sources(locks) == Locks.sources(before)
-	_ => False
+	Err(_) => False
 }
 
 expect Locks.path_reference("/tmp/a [b]#%/雪") == "path:/tmp/a%20%5Bb%5D%23%25/%E9%9B%AA"
 expect Locks.path_reference("/tmp/unchanged-a_b.c~d/123") == "path:/tmp/unchanged-a_b.c~d/123"
 
-# A Lock written before the alias existed is still authority, unchanged. Its
-# working lock gains the edge, so it is byte for byte the one a new Lock
-# derives and Nix has nothing to add under --no-update-lock-file.
-expect match (aliased_locks, locked_fixture) {
-	(Ok(locks), Ok(before)) => {
-		project = TestData.project(TestData.data)
-		match (Locks.derive(locks, project, TestData.layout), Locks.derive(before, project, TestData.layout)) {
-			(Ok(new), Ok(old)) => new == old
-				and old.contents.contains("\"inputs\":{\"assets\":\"assets\",\"default\":\"default\",\"nixpkgs\":[\"default\"]}")
-				and Locks.decode(Locks.encode(before)) == Ok(before)
-			_ => False
-		}
-	}
-	_ => False
+# A missing generated alias is refused during seed ingestion and authority decoding.
+expect Locks.from_nix(TestData.project(TestData.data), TestData.layout, native_fixture.replace_each(", \"nixpkgs\": [\"default\"]", "")).is_err()
+expect {
+	locks = locked_fixture?
+	nodes = LockJson.field(locks.graph, "nodes")?
+	root = LockJson.field(nodes, "root")?
+	edges = LockJson.object(LockJson.field(root, "inputs")?)?.keep_if(|edge| edge.name != "nixpkgs")
+	graph = LockJson.set(locks.graph, "nodes", LockJson.set(nodes, "root", LockJson.set(root, "inputs", LockJson.Object(edges))?)?)?
+	Locks.from_lock(Locks.to_lock({ ..locks, graph })).is_err()
+}
+
+# Empty environments are absent from canonical resolution intent.
+expect {
+	locks = locked_fixture?
+	invalid = Locks.replace_existing(locks.identity, "overlays", LockJson.Object([{ name: "empty", value: LockJson.Array([]) }]))?
+	Locks.from_lock(Locks.to_lock({ ..locks, identity: invalid })).is_err()
 }
 
 # The edge is the one the declarations determine, or the Lock is refused: it
 # cannot follow another input, be a pin of its own, or stand beside nothing.
 expect {
 	accepts = |text| Locks.from_nix(TestData.project(TestData.data), TestData.layout, text).is_ok()
-	retargeted = |edge| aliased_fixture.replace_each("\"nixpkgs\": [\"default\"]", "\"nixpkgs\": ${edge}")
-	accepts(aliased_fixture)
+	retargeted = |edge| native_fixture.replace_each("\"nixpkgs\": [\"default\"]", "\"nixpkgs\": ${edge}")
+	accepts(native_fixture)
 		and !accepts(retargeted("[\"assets\"]"))
 		and !accepts(retargeted("\"default\""))
 		and !accepts(retargeted("[\"default\", \"default\"]"))
 		and !accepts(retargeted("[]"))
-		and !accepts(aliased_fixture.replace_each("\"nixpkgs\": [", "\"other\": ["))
+		and !accepts(native_fixture.replace_each("\"nixpkgs\": [", "\"other\": ["))
 }
 
 # Tampering with the recorded edge is caught when the Lock is read back.
-expect match aliased_locks {
+expect match locked_fixture {
 	Ok(locks) => {
 		text = Locks.encode(locks)
 		edge = "(List ((Str \"default\")))"
@@ -1161,11 +1136,11 @@ expect Locks.inputs(TestData.project(TestData.data)).map_ok(|inputs| inputs.map(
 # edge of that name. Nothing follows, and a follows edge there is refused.
 expect {
 	project = TestData.project({ ..TestData.data, sources: [{ name: "default", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }, { name: "nixpkgs", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] })
-	own = native_fixture.replace_each("\"default\": \"default\"", "\"default\": \"default\", \"nixpkgs\": \"default\"")
+	own = native_fixture.replace_each("\"nixpkgs\": [\"default\"]", "\"nixpkgs\": \"default\"")
 	match with_assets(Locks.from_nix(project, TestData.layout, own)) {
 		Ok(locks) => match Locks.derive(locks, project, TestData.layout) {
 			Ok(derived) => derived.contents.contains("\"nixpkgs\":\"default\"") and !derived.contents.contains("[\"default\"]")
-				and Locks.from_nix(project, TestData.layout, aliased_fixture).is_err()
+				and Locks.from_nix(project, TestData.layout, native_fixture).is_err()
 			Err(_) => False
 		}
 		Err(_) => False
@@ -1183,7 +1158,7 @@ expect {
 		builds: [],
 		shells: [],
 	})
-	native = native_fixture.replace_each("\"assets\": \"assets\", \"default\": \"default\"", "\"assets\": \"assets\"")
+	native = native_fixture.replace_each("\"assets\": \"assets\", \"default\": \"default\", \"nixpkgs\": [\"default\"]", "\"assets\": \"assets\"")
 	match with_assets(Locks.from_nix(project, TestData.layout, native)) {
 		Ok(locks) => match Locks.derive(locks, project, TestData.layout) {
 			Ok(derived) => !derived.contents.contains("nixpkgs\":")
@@ -1536,13 +1511,6 @@ expect match locked_fixture {
 		Err(_) => False
 	}
 	Err(_) => False
-}
-
-# Native graph aliases introduced by a different writer are not consumer
-# identities: inspecting either committed representation yields the same pins.
-expect match (aliased_locks, locked_fixture) {
-	(Ok(aliased), Ok(original_)) => Locks.inspect(Locks.to_lock(aliased)) == Locks.inspect(Locks.to_lock(original_))
-	_ => False
 }
 
 # Adding an artifact producer and its flat-file source preserves package and

@@ -149,6 +149,8 @@
 					(value (Attrs ((
 						(name "inputs")
 						(value (Attrs ((
+							(name "nixpkgs")
+							(value (List ((Str "default"))))) (
 							(name "default")
 							(value (Str "default"))) (
 							(name "roc")

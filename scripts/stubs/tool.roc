@@ -234,7 +234,7 @@ flake_update! = |target, names| {
 	graph = match mode {
 		"declared" => {
 			flake = Path.read_utf8!(Path.utf8("${generated}/flake.nix")).map_err(|_| "cannot read ${generated}/flake.nix")?
-			StubTool.declared_graph(fixture, StubTool.declared(flake))?
+			StubTool.with_follows(StubTool.declared_graph(fixture, StubTool.declared(flake))?, flake)?
 		}
 		"local" => StubTool.local_graph(fixture, optional!("STUB_NIX_REV") ?? "c")?
 		"local-inputs" => {

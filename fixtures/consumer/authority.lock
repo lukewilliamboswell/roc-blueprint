@@ -28,8 +28,6 @@
 						(value (Bool true))))))))))) (
 				(name "overlays")
 				(value (Attrs ((
-					(name "base")
-					(value (List ()))) (
 					(name "dev")
 					(value (List ((Str "roc"))))))))))))) (
 			(name "graph")
