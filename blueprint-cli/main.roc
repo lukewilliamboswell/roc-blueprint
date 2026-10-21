@@ -1627,7 +1627,7 @@ resolve! = |spec, names, ctx| {
 		if Lock.from_before_explicit_sources(lock) {
 			return Err(OldLock)
 		}
-		lock.stale(spec).map_err(|message| LockFailed("${message} without input names"))?
+		Lock.stale_except_files(lock, spec, wanted).map_err(|message| LockFailed("${message} without input names"))?
 		if others.is_empty() {
 			lock
 		} else {

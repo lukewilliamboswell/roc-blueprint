@@ -196,6 +196,17 @@ Lock := {
 	}
 
 	## Flat-file sources are Core-owned authority, not NAR tree identities.
+	## An explicit named update may replace only the named original-file pins.
+	## All other declarations and authority must still match. Verification of
+	## the newly declared bytes happens before the executor publishes the lock.
+	stale_except_files : Lock, Spec, List(Str) -> Try({}, Str)
+	stale_except_files = |lock, spec, names| {
+		kept_lock = { ..lock, sources: lock.sources.keep_if(|source| source.provider != "file" or !names.contains(source.name)) }
+		kept_spec = { ..spec, source_files: spec.source_files.keep_if(|source| !names.contains(source.name)) }
+		stale(kept_lock, kept_spec)
+	}
+
+	## Flat-file sources are Core-owned authority, not NAR tree identities.
 	file_pin : Spec.SourceFile -> Source
 	file_pin = |source| { name: source.name, provider: "file", ref: source.url, rev: "", digest: "sha256:${source.sha256}" }
 
@@ -502,4 +513,19 @@ expect {
 	legacy = "((format ((major 1) (minor 0))) (intent ((build_sources ()) (inputs ()) (overlays ()) (sources (((name \"pkgs\") (provider Auto)))))) (sources (((name \"pkgs\") (provider \"nix\") (ref \"github:NixOS/nixpkgs/nixos-unstable\") (rev \"abc\") (digest \"sha256:00\")))))"
 	spec = { ..Spec.empty("migration"), systems: ["x86_64-linux"], sources: [{ name: "pkgs", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] }
 	Lock.migrate(legacy, spec).map_ok(|lock| lock.sources.map(|source| source.rev)) == Ok(["abc"]) and Lock.migrate(legacy, { ..spec, sources: [{ name: "pkgs", provider: { name: "other", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] }).is_err()
+}
+
+# Updating one original-file pin must not resolve unrelated provider inputs or
+# authorize changing another file. Native intent still has to match exactly.
+expect {
+	first = { name: "first", url: "https://example.test/first", sha256: "a".repeat(64) }
+	second = { name: "second", url: "https://example.test/second", sha256: "b".repeat(64) }
+	before = { ..Spec.empty("files"), requires_: ["source-files"], source_files: [first] }
+	lock = Lock.{ format: Lock.current_format, intent: Lock.intent_of(before), sources: [Lock.file_pin(first)], hints: [], fetched: [] }
+	after = { ..before, source_files: [first, second] }
+	Lock.stale_except_files(lock, after, ["second"]) == Ok({})
+		and Lock.stale(lock, after).is_err()
+		and Lock.stale_except_files(lock, { ..after, source_files: [{ ..first, sha256: "c".repeat(64) }, second] }, ["second"]).is_err()
+		and Lock.stale_except_files(lock, { ..after, inputs: [{ name: "unexpected", url: "github:example/input", kind: Flake }] }, ["second"]).is_err()
+		and lock.sources == [Lock.file_pin(first)]
 }
