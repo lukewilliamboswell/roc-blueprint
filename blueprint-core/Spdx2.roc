@@ -55,12 +55,15 @@ Spdx2 := [].{
 		}
 		entries = (tree.field("packages") ?? JsonTree.Array([])).items() ?? []
 		ids = entries.map(|entry| (entry.field("SPDXID") ?? JsonTree.Null).text() ?? "")
+		# Each identifier maps to itself. With `{}` values, `contains` missed
+		# inserted keys in the bundled app under `roc run` on x86_64 Linux
+		# (nightly-2026-10-18-1df370f), while Spdx3's Dict(Str, Str) lookups held.
 		var $seen = Dict.empty()
 		for id in ids {
 			if $seen.contains(id) or id == "SPDXRef-DOCUMENT" {
 				return Err("duplicate SPDX identifier ${id}")
 			}
-			$seen = $seen.insert(id, {})
+			$seen = $seen.insert(id, id)
 		}
 		declared = ((tree.field("hasExtractedLicensingInfos") ?? JsonTree.Array([])).items() ?? []).map(|info| (info.field("licenseId") ?? JsonTree.Null).text() ?? "")
 		for entry in entries {
