@@ -63,7 +63,6 @@ provider_names = Str.join_with(providers.map(|provider| provider.name), ", ")
 Command : [
 	CompilerVersion,
 	LockShow({ json : Bool, names : List(Str) }),
-	LockMigrate,
 	Gen,
 	Shell(Str),
 	Run({ task : Str, args : List(Str) }),
@@ -118,9 +117,8 @@ cli_for = |loaded| {
 				}.Cli,
 				{ name: "show", description: "Inspect committed pins without evaluating Blueprint.roc", mapper: |r| LockShow(r) },
 			),
-			SubCmd.empty({ name: "migrate", description: "Migrate recorded authority without resolving or fetching", value: LockMigrate }),
 		]),
-		{ name: "lock", description: "Inspect or explicitly migrate committed pins", mapper: |c| c },
+		{ name: "lock", description: "Inspect committed pins", mapper: |c| c },
 	)
 	requirements_cmd = SubCmd.finish(
 		{
@@ -266,7 +264,6 @@ main! = |raw_args| {
 	# These inspectors must parse before project paths, configuration, host or
 	# compiler overrides are observed. LockShow selects only its lock path.
 	independent_query = match raw_args {
-		[first, second, ..] if first.to_bytes() == "lock".to_utf8() => second.to_bytes() != "migrate".to_utf8()
 		[first, ..] => first.to_bytes() == "compiler-version".to_utf8() or first.to_bytes() == "lock".to_utf8()
 		_ => False
 	}
@@ -304,7 +301,6 @@ run! = |command, loaded, context| {
 			match command {
 				LockShow({ json, names }) => inspect_lock!(json, names)
 				CompilerVersion => Stdout.line!(compiler_version.trim())
-				LockMigrate => migrate_lock!(spec, ctx)
 				Gen => realise!(spec, Request.Generate, ctx)
 				Shell(name) => realise!(spec, Request.Shell(name), ctx)
 				Run({ task, args }) => realise!(spec, Request.Run(task, args), ctx)
@@ -322,42 +318,6 @@ run! = |command, loaded, context| {
 	}
 }
 
-## Explicit format migration changes representation, never dependency choices.
-migrate_lock! : Spec, Context => Try({}, _)
-migrate_lock! = |input_spec, ctx| {
-	spec = Project.validate(input_spec).map_err(|message| LockFailed(message))?
-	for source in spec.sources {
-		adapter = providers.find_first(|candidate| candidate.name == source.provider.name).map_err(|_| LockFailed("no adapter for source ${source.name}"))?
-		(adapter.validate_source)(source.provider).map_err(|message| LockFailed(message))?
-		tools = spec.environments.fold([], |all, environment| all.concat(environment.tools))
-			.concat(spec.system_tools.fold([], |all, entry| all.concat(entry.tools)))
-			.concat(spec.commands.map(|entry| entry.tool))
-			.concat(spec.configured_tools.map(|entry| entry.tool))
-		for tool in tools.keep_if(|entry| entry.source == source.name) {
-			(adapter.validate_tool)(tool.name).map_err(|message| LockFailed(message))?
-		}
-	}
-	file = ctx.layout.lock_path
-	safe_path!(file)?
-	prior = authority_token!(file)?
-	text = path(file).read_utf8!()?
-	var $migrated = Lock.migrate(text, spec).map_err(|message| LockFailed(message))?
-	for resolver in spec.resolvers {
-		if !providers.any(|adapter| adapter.name == resolver.provider) {
-			return Err(LockFailed("no adapter for resolver ${resolver.provider}"))
-		}
-	}
-	selected = Realise.resolvers(spec, providers)
-	if selected.len() > 1 {
-		return Err(LockFailed("mixed resolver ownership is not supported"))
-	}
-	for adapter in selected {
-		$migrated = (adapter.migrate_lock)($migrated).map_err(|message| LockFailed(message))?
-	}
-	publish_authority!(file, prior, $migrated.to_str())?
-	Stderr.line!("migrated Blueprint.lock without resolving dependency pins")
-}
-
 ## This path intentionally avoids Context, host probing and project evaluation.
 inspect_lock! = |json, names| {
 	cwd = Paths.portable(Env.cwd!()?.to_str()?)
@@ -370,8 +330,7 @@ inspect_lock! = |json, names| {
 }
 
 ## Type-check Blueprint.roc (including whole-config validation), then reuse
-## the Spec loaded for CLI parsing to check provider compatibility. This also
-## preserves validation for older platforms that only lower at run time.
+## the Spec loaded for CLI parsing to check provider compatibility.
 check! : Try(Spec, _), Context => Try({}, _)
 check! = |loaded, ctx| {
 	check_host!()?
@@ -394,23 +353,12 @@ evaluate! = |ctx| {
 		.cwd(path(root)).capture!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = Spec.parse(output).map_err(|err| BadSpec(err))?
-	current_platform(spec)?
 	missing = spec.unsupported_features(providers.fold(Realise.features, |all, provider| all.concat(provider.features)))
 	if !missing.is_empty() {
 		return Err(NeedsFeatures(missing))
 	}
 	Project.validate(spec).map_err(|message| InvalidProject(message))
 }
-
-## A Spec from a platform older than 0.6.0 does not say that its sources are
-## all declared: its tools may name a source that platform implied, which
-## nothing here supplies. It is refused as that, before anything in it is
-## read as if it were complete.
-current_platform : Spec -> Try({}, [OldPlatform])
-current_platform = |spec| if (spec.requires_.contains("explicit-sources")) Ok({}) else Err(OldPlatform)
-
-expect current_platform({ ..Spec.empty("x"), requires_: ["explicit-sources", "programs"] }) == Ok({})
-expect current_platform(Spec.empty("x")) == Err(OldPlatform) and current_platform({ ..Spec.empty("x"), requires_: ["sources", "builds"] }) == Err(OldPlatform)
 
 ## The files every provider would generate for the Spec.
 rendered : Spec -> Try(List(Provider.File), _)
@@ -814,11 +762,7 @@ realise! = |spec, request, ctx| {
 		return Err(UnsafePath(layout.lock_path))
 	}
 	lock = Lock.parse(path(layout.lock_path).read_utf8!()?)
-		.map_err(|_| LockFailed("unsupported Blueprint lock format; run blueprint lock migrate"))?
-	# Stale for every project: said as what it is, not as what changed.
-	if Lock.from_before_explicit_sources(lock) {
-		return Err(OldLock)
-	}
+		.map_err(|_| LockFailed("unsupported Blueprint lock format; Blueprint 0.7 requires Lock 2"))?
 	lock.stale(spec).map_err(|message| LockFailed(message))?
 	# Everything that stops the request is known, and said together, before
 	# the first effect of any step.
@@ -1406,7 +1350,7 @@ inspect_build! = |spec, options, ctx| {
 		# Structural inspection needs no native execution preflight.
 		executor = Project.build_executor(validated, options.name).map_err(|message| RenderFailed(message))?
 		adapter = providers.find_first(|candidate| candidate.name == executor.provider).map_err(|_| RenderFailed("no build executor provider"))?
-		lock = Lock.parse(path(ctx.layout.lock_path).read_utf8!()?).map_err(|_| LockFailed("unsupported Blueprint.lock; run blueprint lock migrate"))?
+		lock = Lock.parse(path(ctx.layout.lock_path).read_utf8!()?).map_err(|_| LockFailed("unsupported Blueprint.lock; Blueprint 0.7 requires Lock 2"))?
 		lock.stale(spec).map_err(|message| LockFailed(message))?
 		# Inspect selected local pins independently of native host/layout limits.
 		locals = (adapter.build_local_inputs)(validated, options.name, ctx.layout, lock).map_err(|message| RenderFailed(message))?
@@ -1738,10 +1682,7 @@ resolve! = |input_spec, names, ctx| {
 		lock = match before {
 			Held(found) => found
 			Absent => return Err(LockFailed("no lock to keep the other pins from; run `blueprint update` without input names first"))
-			Unreadable => return Err(LockFailed("unsupported Blueprint lock format; run `blueprint lock migrate`"))
-		}
-		if Lock.from_before_explicit_sources(lock) {
-			return Err(OldLock)
+			Unreadable => return Err(LockFailed("unsupported Blueprint lock format; Blueprint 0.7 requires Lock 2"))
 		}
 		Lock.stale_except_files(lock, spec, wanted).map_err(|message| LockFailed("${message} without input names"))?
 		if others.is_empty() {
@@ -2034,7 +1975,6 @@ describe = |err, provider|
 				.concat("set ROC to use another compatible executable:\n${message}")
 		# A message that already names the command is not told it twice.
 		LockFailed(message) => if (message.contains("blueprint update")) message else "${message}; use `blueprint update` to initialize or deliberately refresh pins"
-		OldLock => "Blueprint.lock was written by blueprint 0.5 or older, which gave every project a package source it did not declare; run `blueprint update` to resolve it again with this blueprint, and review what changes"
 		PlanFailed([problem]) => problem
 		PlanFailed(problems) => "this cannot be carried out:\n  ${Str.join_with(problems, "\n  ")}"
 		UnsafePath(value) => "refusing unsafe or symlinked runtime path: ${value}"
@@ -2042,12 +1982,10 @@ describe = |err, provider|
 		BadSpec(InvalidSexpr(msg)) => "could not read the Spec from Blueprint.roc: ${msg}"
 		BadSpec(UnsupportedFormat({ major, minor })) => "Spec format ${U64.to_str(major)}.${U64.to_str(minor)} is not supported by this blueprint (understands major ${Spec.current_format.major.to_str()}); upgrade blueprint or change the platform version"
 		NeedsFeatures(missing) => "Blueprint.roc needs features: ${Str.join_with(missing, ", ")}; upgrade blueprint"
-		OldPlatform => "Blueprint.roc uses a roc-blueprint platform older than 0.6.0; update the platform URL in its app header and see docs/releases/0.6.0"
 		InvalidProject(msg) => "invalid Spec project: ${msg}"
 		RenderFailed(msg) => "cannot generate the ${provider} files: ${msg}"
 		RocPackagesFailed(msg) => msg
 		FetchFailed(msg) => msg
-		BadSpec(MissingRequiredField("format")) => "Blueprint.roc uses an older roc-blueprint platform that this blueprint can't read; update the platform URL in its app header to a current release"
 		BadSpec(MissingRequiredField(field)) => "the Spec from Blueprint.roc is missing ${field}"
 		BadExitStatus(Cmd.Output.{ command, status, stderr_bytes, .. }) =>
 			"`${command}` failed (${Str.inspect(status)}):\n".concat(Str.from_utf8_lossy(stderr_bytes))

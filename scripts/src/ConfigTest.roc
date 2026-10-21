@@ -590,9 +590,9 @@ quote_fixtures = [
 ## rule, one graph rule, one argv rule, and two bounds on generated graphs.
 core_fixtures : List(ConfigTest.Fixture)
 core_fixtures = [
-	rejected(
+	refused(
 		"AutoSource",
-		"Packages(\"default\", Auto): the Auto source",
+		"TYPE MISMATCH",
 		\\[Name("invalid"), Packages("default", Auto), Environment("dev", [])]
 		,
 	),

@@ -79,10 +79,8 @@ Config :: [].{
 		RunWorkflow(WorkflowName),
 	]
 
-	## Which package set a source is. `Auto`, which left that to the
-	## consumer, was removed in 0.6: the tag remains for one release so that
-	## lowering can say what to write instead.
-	PackageSource : [Auto, From(Provider)]
+	## The declared package source and its provider.
+	PackageSource : [From(Provider)]
 	Provider : [NixPackages(FlakeRef), GuixPackages(Str), Adapter(ProviderSource)]
 
 	## A tool is written `<source>#<name>` for a declared source, in Tools,

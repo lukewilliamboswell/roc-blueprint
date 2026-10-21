@@ -330,9 +330,6 @@ cases! = |bench| {
 		{ name: "major-4", text: CliTest.wire.replace_each("(major 3)", "(major 4)"), diagnostic: "Spec format 4.0" },
 		{ name: "workflow-tag", text: CliTest.workflow_wire.replace_each("RunTask \"echo-args\" ()", "FutureStep \"echo-args\""), diagnostic: "could not read the Spec from Blueprint.roc" },
 		{ name: "requires", text: CliTest.wire.replace_each("(requires (\"explicit-sources\"))", "(requires (\"explicit-sources\" \"future-operation\"))"), diagnostic: "needs features: future-operation" },
-		# A Spec as a platform from before 0.6.0 prints it: it does not say its
-		# sources are all declared, and is told which platform to move to.
-		{ name: "old-platform", text: CliTest.wire.replace_each("(requires (\"explicit-sources\"))", "(requires ())"), diagnostic: "Blueprint.roc uses a roc-blueprint platform older than 0.6.0; update the platform URL in its app header and see docs/releases/0.6.0" },
 		{ name: "old-platform-auto", text: CliTest.wire.replace_each("(major 3)", "(major 2)").replace_each("(provider ((name \"nix\") (ref \"github:NixOS/nixpkgs/nixos-unstable\") (version 1)))", "(provider Auto)"), diagnostic: "Spec format 2.0" },
 		{ name: "reference", text: CliTest.wire.replace_each("(environment \"ci\")", "(environment \"missing\")"), diagnostic: "unknown environment: missing" },
 	]
@@ -364,7 +361,6 @@ cases! = |bench| {
 	incompatible = [
 		{ name: "source", command: ["shell", "ci"], tool: "default#git", declaration: "Packages(\"default\", From(GuixPackages(\"current\"))),", diagnostic: "environment ci takes tools from the source default (guix v1), which no provider of this blueprint supplies" },
 		{ name: "grammar", command: ["run", "echo-args"], tool: "default#python@3.12:out", declaration: CliTest.source, diagnostic: "invalid Nix tool: python@3.12:out" },
-		{ name: "auto", command: ["run", "echo-args"], tool: "default#git", declaration: "Packages(\"default\", Auto),", diagnostic: "the Auto source was removed in 0.6; name the package set, as in From(NixPackages(" },
 	]
 	for case in incompatible {
 		cwd = isolated!(test, "request-${case.name}")?

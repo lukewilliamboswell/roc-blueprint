@@ -7,8 +7,6 @@ import cli.Random
 import cli.Sleep
 import CliHarness
 import Integrity
-import core.Lock
-import core.Sexpr
 import Script
 
 ## `blueprint update` against a stubbed compiler and Nix: what it refuses to
@@ -65,14 +63,6 @@ CliUpdateTest := [].{
 			Ok(byte) => bytes.drop_last(1).append(if byte == '0' '1' else '0')
 			Err(_) => bytes
 		}
-
-	## A lock for `wire` as blueprint 0.5 wrote one: Lock format 1.0, and a
-	## `default` source that named no package set, which every project had.
-	as_0_5 : Str -> Str
-	as_0_5 = |text| {
-		lock = Lock.parse(text) ?? Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], hints: [], fetched: [] }
-		Sexpr.to_str({ format: { major: 1.U64, minor: 0.U64 }, intent: { sources: lock.intent.sources.map(|source| { name: source.name, provider: Auto }), inputs: lock.intent.inputs, build_sources: lock.intent.build_sources, overlays: lock.intent.overlays }, sources: lock.sources, hints: lock.hints, fetched: lock.fetched })
-	}
 
 	## The entries an interrupted publication would leave beside the authority.
 	leftovers : List(Str) -> List(Str)
@@ -332,27 +322,27 @@ cases! = |bench| {
 	CliHarness.same_calls!(updates, [["flake", "update", "--flake"], ["flake", "update", "default", "--flake"]], "the provider calls of a full and a named update")?
 	Script.pass!("update INPUT: refused with no lock or an undeclared name before any effect; otherwise the provider updates that input beside the staged lock")?
 
-	# A lock blueprint 0.5 wrote is stale for every project now, and is said
-	# to be old instead of to differ: by what uses it and by a named update,
-	# before any effect. A full update resolves it again.
-	earlier = project!(test, "old-lock", CliUpdateTest.wire)?
+	# Unsupported formats are rejected without conversion or side effects.
+	# An explicit full update creates current authority and resolves pins anew.
+	earlier = project!(test, "unsupported-lock", CliUpdateTest.wire)?
 	earlier_lock = "${earlier}/Blueprint.lock"
-	CliHarness.exited!(run!(test, earlier, ["update"], [("STUB_NIX_REV", "a")])?, 0, "the update whose lock is rewritten as 0.5 wrote one")?
-	lock_0_5 = CliUpdateTest.as_0_5(Path.read_utf8!(Path.utf8(earlier_lock))?)
-	CliHarness.check!(lock_0_5.contains("(provider Auto)") and lock_0_5.contains("(minor 0)"), "the lock could not be rewritten as blueprint 0.5 wrote one:\n${lock_0_5}")?
-	Path.write_utf8!(Path.utf8(earlier_lock), lock_0_5)?
+	CliHarness.exited!(run!(test, earlier, ["update"], [("STUB_NIX_REV", "a")])?, 0, "create current authority")?
+	unsupported = Path.read_utf8!(Path.utf8(earlier_lock))?.replace_each("(major 2)", "(major 1)")
+	Path.write_utf8!(Path.utf8(earlier_lock), unsupported)?
 	Path.delete_all!(Path.utf8("${earlier}/.blueprint"))?
 	CliHarness.forget!("${earlier}/nix-calls")?
 	for args in [["gen"], ["shell", "default"], ["update", "default"]] {
-		refused!(run!(test, earlier, args, [])?, "lock migrate", "${Str.join_with(args, " ")} with a lock from blueprint 0.5")?
+		refused!(run!(test, earlier, args, [])?, "requires Lock 2", "${Str.join_with(args, " ")} with unsupported authority")?
 	}
-	no_effects!(earlier, "a lock from blueprint 0.5")?
-	CliHarness.check!(Path.read_utf8!(Path.utf8(earlier_lock))? == lock_0_5, "a refused command rewrote a lock from blueprint 0.5")?
-	CliHarness.exited!(run!(test, earlier, ["lock", "migrate"], [])?, 0, "explicit migration of a lock from blueprint 0.5")?
+	no_effects!(earlier, "unsupported authority")?
+	CliHarness.check!(Path.read_utf8!(Path.utf8(earlier_lock))? == unsupported, "a refused command rewrote unsupported authority")?
+	CliHarness.exited!(run!(test, earlier, ["lock", "migrate"], [])?, 2, "removed lock command")?
+	no_effects!(earlier, "removed lock command")?
+	CliHarness.exited!(run!(test, earlier, ["update"], [("STUB_NIX_REV", "b")])?, 0, "explicitly resolve current authority")?
 	renewed = Path.read_utf8!(Path.utf8(earlier_lock))?
-	CliHarness.check!(!renewed.contains("(provider Auto)") and renewed.contains("(major 2)") and pinned_rev!(earlier_lock)? == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "migration did not preserve pins from blueprint 0.5:\n${renewed}")?
-	CliHarness.exited!(run!(test, earlier, ["gen"], [])?, 0, "gen after the lock was resolved again")?
-	Script.pass!("a lock from blueprint 0.5: commands require explicit migration; migration preserves reviewed pins")?
+	CliHarness.check!(renewed.contains("(major 2)") and pinned_rev!(earlier_lock)? == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "explicit update did not create current authority with new pins")?
+	CliHarness.exited!(run!(test, earlier, ["gen"], [])?, 0, "gen with current authority")?
+	Script.pass!("unsupported lock formats are refused; an explicit full update resolves current authority")?
 
 	used = CliHarness.calls!(python_log)?
 	CliHarness.check!(used.is_empty(), "blueprint ran a host python3: ${Str.inspect(used)}")?
@@ -374,8 +364,6 @@ expect {
 }
 
 expect CliUpdateTest.leftovers(["Blueprint.lock", ".blueprint-write-ab12", "wire.scm", "lock-writer.tmp", ".blueprint"]) == [".blueprint-write-ab12", "lock-writer.tmp"]
-
-expect CliUpdateTest.as_0_5("((format ((major 2) (minor 0))))").contains("(major 1)")
 
 # Keep stub compiler output valid under the current wire contract.
 expect Spec.parse(CliUpdateTest.wire).is_ok() and CliUpdateTest.local_inputs.all(|fixture| Spec.parse(fixture.wire).is_ok())

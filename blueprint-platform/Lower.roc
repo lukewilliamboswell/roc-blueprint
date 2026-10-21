@@ -132,7 +132,7 @@ Lower :: [].{
 			Systems(systems) => { ..acc, systems: acc.systems.append(systems) }
 			Resolver(provider, inputs) => { ..acc, resolvers: acc.resolvers.append({ provider, inputs: inputs.map(|input| input.to_str()) }) }
 			Executor(name, provider, source) => { ..acc, executors: acc.executors.append({ name: name.to_str(), provider, source }) }
-			Packages(name, source) => { ..acc, sources: acc.sources.append({ name: name.to_str(), provider: provider(name.to_str(), source)? }) }
+			Packages(name, source) => { ..acc, sources: acc.sources.append({ name: name.to_str(), provider: provider(source) }) }
 			Input(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Flake }) }
 			Overlay(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Overlay }) }
 			Environment(name, inner) => {
@@ -253,16 +253,13 @@ Lower :: [].{
 			RunWorkflow(name) => RunWorkflow(name.to_str())
 		}
 
-	## A source says which package set it is. `Auto`, which left that to the
-	## consumer, is still a tag of the type for one release, so that a
-	## configuration from before 0.6 is told what to write.
-	provider : Str, Config.PackageSource -> Try(Spec.Provider, Str)
-	provider = |name, source|
+	## Lower an explicitly declared package source.
+	provider : Config.PackageSource -> Spec.Provider
+	provider = |source|
 		match source {
-			Auto => Err("Packages(\"${name}\", Auto): the Auto source was removed in 0.6; name the package set, as in From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))")
-			From(NixPackages(ref)) => Ok({ name: "nix", version: 1, ref: ref.to_str() })
-			From(GuixPackages(channel)) => Ok({ name: "guix", version: 1, ref: channel })
-			From(Adapter(declaration)) => Ok({ name: declaration.provider(), version: declaration.version(), ref: declaration.reference() })
+			From(NixPackages(ref)) => { name: "nix", version: 1, ref: ref.to_str() }
+			From(GuixPackages(channel)) => { name: "guix", version: 1, ref: channel }
+			From(Adapter(declaration)) => { name: declaration.provider(), version: declaration.version(), ref: declaration.reference() }
 		}
 
 	## The feature every Spec lowered here requires: its sources are all
@@ -437,7 +434,6 @@ expect Lower.lower([Name("sourced"), Packages("nix", From(NixPackages("github:Ni
 
 # A source that leaves its package set to the consumer is told what to write,
 # and a tool cannot name a source that is not declared.
-expect Lower.lower([Name("invalid"), Packages("default", Auto)]) == Err("Packages(\"default\", Auto): the Auto source was removed in 0.6; name the package set, as in From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))")
 expect Lower.lower([Name("invalid"), Environment("dev", [Tools(["nix#git"])])]) == Err("unknown source: nix; Blueprint.roc declares no package source")
 expect Lower.lower([Name("invalid"), Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))), Environment("dev", [Command("vcs", "nix#git")])]) == Err("unknown source: nix; Blueprint.roc declares stable")
 
