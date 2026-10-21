@@ -897,7 +897,7 @@ execute_step! = |step, fetched, ctx| {
 		Ok(Isolation({ directory, .. })) => {
 			safe_path!(directory)?
 			path(directory).create_all!()?
-			created = Env.create_temp_dir_in!(path(directory), "caller-")?
+			created = Env.create_temp_dir_in!(path(directory), "blueprint-isolation-")?
 			result = execute_prepared!(step, fetched, ctx, Paths.portable(created.to_str()?))
 			_ = created.delete_all!()
 			result

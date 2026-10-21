@@ -15,7 +15,9 @@ ReproducibleGates := [].{
 
 	run! : BuildHarness.Suite => Try({}, _)
 	run! = |suite| {
-		root = "${suite.work}/repro-project"
+		# The generated root deliberately has spaces: runtime Nix witness mounts
+		# must stay valid even though sandbox-paths cannot quote whitespace.
+		root = "${suite.work}/repro project [witness]"
 		Path.create_dir!(Path.utf8(root))?
 		place = { project: root, workspace: "${root}/work", generated: "${root}/generated", lock: "${root}/authority.lock" }
 		platform_path = BuildHarness.relative(root, "${suite.root}/blueprint-platform/main.roc")

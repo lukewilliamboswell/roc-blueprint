@@ -185,10 +185,12 @@ cases! = |bench| {
 	CliHarness.check!(!flake.contains(caller.mnt) and !flake.contains(caller.net) and !flake.contains(bench.blueprint), "caller or executable identity entered the derivation")?
 	observed = captured!(test)?
 	CliHarness.check!(observed.witness == "${caller.mnt}\n${caller.net}\n", "runtime witness did not capture caller namespaces")?
-	CliHarness.check!(observed.directory.starts_with("${root}/.blueprint/isolation/") and !CliHarness.present!(observed.directory), "runtime witness was not private and cleaned after the command")?
+	CliHarness.check!(observed.directory.starts_with("/tmp/blueprint-isolation-") and !CliHarness.present!(observed.directory), "runtime witness was not private and cleaned after the command")?
 	# The CLI copies no project snapshot or executable; runtime witnesses are temporary.
 	generated = CliHarness.names!("${root}/.blueprint")?.sort_with(Project.bytewise)
-	CliHarness.check!(generated == [".gitignore", "excluded-secret", "flake.lock", "flake.nix", "isolation"], "the generated root holds ${Str.join_with(generated, " ")}")?
+	source_files = generated.keep_if(|name| name.starts_with("source-file-") and name.ends_with(".json"))
+	CliHarness.check!(source_files.len() == 1, "the runner compiler needs exactly one original-file path record")?
+	CliHarness.check!(generated.keep_if(|name| !source_files.contains(name)) == [".gitignore", "excluded-secret", "flake.lock", "flake.nix"], "the generated root holds ${Str.join_with(generated, " ")}")?
 	for source in sources {
 		kept = CliHarness.stat!("%a %h", "${root}/${source.file}")?
 		CliHarness.check!(kept == "${source.mode} 1", "${source.file} now has mode and link count ${kept}, not ${source.mode} 1")?

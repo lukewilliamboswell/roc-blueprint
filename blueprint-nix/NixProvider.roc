@@ -369,7 +369,10 @@ NixProvider :: [].{
 		}
 		match action {
 			Build(_) => {
-				$operations = $operations.append(SourceFile(Runner.compiler)).append(Isolation({ directory: "${layout.generated_root}/isolation", placeholder: "@blueprint-isolation-source@" }))
+				# Nix sandbox-paths splits on whitespace and cannot quote paths.
+				# A fixed Linux temporary parent keeps arbitrary project/cache paths
+				# out of that setting; the executor creates a private child per call.
+				$operations = $operations.append(SourceFile(Runner.compiler)).append(Isolation({ directory: "/tmp", placeholder: "@blueprint-isolation-source@" }))
 					.append(LocalSystem(target))
 			}
 			_ => {}
@@ -1821,7 +1824,7 @@ expect match plan_fixture(Request.Build("app")) {
 	Ok({ steps: [plan] }) => plan.operations == [
 		VerifyTree({ path: "/project/assets", digest: assets_tree }),
 		SourceFile(Runner.compiler),
-		Isolation({ directory: "/generated/isolation", placeholder: "@blueprint-isolation-source@" }),
+		Isolation({ directory: "/tmp", placeholder: "@blueprint-isolation-source@" }),
 		LocalSystem("x86_64-linux"),
 		Present([{ program: "nix", because: "build app runs in the Nix sandbox" }]),
 	] and plan.files.map(|file| file.path) == [
