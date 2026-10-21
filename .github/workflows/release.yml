@@ -4,10 +4,10 @@ name: Release
 # runs the same build and tests as a dry run, under a version that is never
 # published.
 #
-# One release holds the roc-blueprint platform bundle, the roc-blueprint-core
-# bundle it depends on, the `blueprint` binaries for x86_64 Linux, arm64 Linux
-# and Apple Silicon macOS with their checksums, the examples, the
-# documentation and the manual. Everything is built once, tested as those
+# One release holds the platform, core and standalone SBOM app bundles; the
+# `blueprint` binaries for x86_64 Linux, arm64 Linux, Apple Silicon macOS and
+# x86_64 Windows with checksums; artifact-bound SPDX sidecars; the examples,
+# documentation and manual. Everything is built once, tested as those
 # exact files on each kind of machine, and only then published, in one step.
 on:
   workflow_dispatch:

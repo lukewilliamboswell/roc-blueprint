@@ -96,8 +96,10 @@ the evaluation of a `Blueprint.roc` work too. Sandboxed builds, and so the
 == Release
 
 One release holds the platform bundle, the roc-blueprint-core bundle it
-depends on, the `blueprint` binaries with their checksums, the examples
-archive, the documentation archive and the manual. It is made by
+depends on, the standalone Roc SBOM reporting app, the `blueprint` binaries
+with their checksums, the examples archive, the documentation archive and
+the manual. Each executable and Roc source bundle has an artifact-bound
+SPDX sidecar. It is made by
 `.github/workflows/release.yml`, run by hand from `main` with a version. Every
 pull request runs the same workflow as a dry run, under the version
 `0.0.1-dry-run`, which is never published.
@@ -127,13 +129,15 @@ product compiler pin names the latest official nightly.
 
 build::
 Cross-builds the binaries (`scripts/build_release.roc`), runs the whole test
-suite on them, bundles both packages for the version
+suite on them, bundles the core, platform and reporting app for the version
 (`scripts/bundle.roc`), checks the version against the public API
 (`scripts/check_version.roc bump`), archives the examples
 (`scripts/package_examples.roc`), renders the manual with the release's
 platform URL and archives the site (`scripts/docs_snippet.roc`,
 `scripts/package_docs.roc`), renders the notes
-(`scripts/release_notes.roc`) and gathers the assets
+(`scripts/release_notes.roc`), generates artifact-bound SPDX sidecars
+(`scripts/release_sbom.roc`), independently validates their schemas, subjects
+and known inputs, and gathers the assets
 (`scripts/release_assets.roc`). On a pull request the test suite is left to
 `ci.yml`.
 
@@ -248,6 +252,17 @@ inventory go into the bundle under `linker-inputs/`.
 `scripts/test.roc package` runs the dry run on every commit, with the examples
 archive and its test. A change that adds a Spec field needs nothing more: the
 core bundle carrying the field is released with the platform that uses it.
+
+=== The reporting app bundle
+
+The same bundling command stages `scripts/sbom.roc` and its filesystem helper
+as a standalone app, using the released core URL and the product compiler pin.
+Its archive is named `roc-blueprint-sbom-<hash>.tar.zst`, so it has a distinct
+package identity. A separate smoke test downloads that app and exercises
+`inspect` and `bind` in a directory with an invalid `Blueprint.roc`; neither
+operation may evaluate the project. The release notes include its immutable
+URL. See xref:sbom.adoc#artifact-bound-software-bills-of-materials[Artifact-bound software bills of materials]
+for its supported inputs and coverage contract.
 
 === The version check
 

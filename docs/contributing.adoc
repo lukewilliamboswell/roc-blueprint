@@ -32,9 +32,9 @@ examples/composition/    imported pure modules: reusable task settings and a pro
 examples/artifacts/      runnable source/dependency/workflow example and its Roc scripts
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
 scripts/                 Roc scripts, run from the repository root; their modules are in scripts/src/
-  test.roc               everything CI checks, in groups; runs the test_*.roc suites
+  test.roc               local CI test groups; runs the test_*.roc suites
   link_inputs.roc        fetch or check the platform's linker inputs
-  bundle.roc             bundle core and the platform into dist/ and smoke-test the pair
+  bundle.roc             bundle core, the platform and the reporting app into dist/ and smoke-test them
   embed_compiler.roc     stage and verify one target's compiler archive for embedding
   test_bootstrap.roc     test embedded compiler installation, repair and concurrency
   build_release.roc      cross-build the CLI and its smoke-test program for each released system
@@ -48,6 +48,7 @@ scripts/                 Roc scripts, run from the repository root; their module
   package_docs.roc       archive the rendered site
   release_assets.roc     gather a release's assets and check the names other repositories depend on
   test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
+  reproducible_probe.roc  compare a producer on independent CI hosts and synthetic CLI patch builds
 docs/                    the manual: index.adoc includes one chapter per top-level .adoc file
   releases/              each release's notes, included by releases.adoc
 link-inputs.lock.json    the linker-input release the platform links, pinned by content
@@ -71,8 +72,11 @@ nix develop
 
 gives two Roc compilers from
 https://github.com/roc-lang/roc-overlay[roc-overlay], Zig 0.16 and the
-programs the scripts start: coreutils, git, curl, tar, gzip, zip, unzip and gh. It has no
-Python. `roc` is the product compiler, the nightly in
+programs the scripts start: coreutils, git, curl, tar, gzip, zip, unzip and gh.
+On Linux it also supplies Bubblewrap, util-linux and Python for isolated
+runner tests and a restrictive-umask launcher. Independent SPDX validation
+uses its own pinned Python environment; the product and reporting app run in Roc.
+`roc` is the product compiler, the nightly in
 `blueprint-cli/compiler-version`: it builds and tests the CLI, the packages and
 the platform, and a released `blueprint` embeds it. `roc-stable` is the
 nightly `rocStableTag` names in `flake.nix`: the scripts in `scripts/` start
@@ -105,7 +109,7 @@ roc test blueprint-core/main.roc      # Spec round trips and format tests
 roc test --opt=interpreter blueprint-cli/main.roc # CLI, provider and core expects
 roc build blueprint-cli/main.roc --output=./blueprint
 (cd examples/all-settings && ../../blueprint run --help) # try the CLI
-scripts/test.roc                            # everything CI runs
+scripts/test.roc                            # all local CI test groups
 scripts/test.roc unit cli                   # or only some groups: static, unit,
                                             # cli, scenarios, builds, package, glue, fuzz
 scripts/fuzz.roc 300                        # fuzz each target for 5 minutes
@@ -127,7 +131,7 @@ verifies it and installs the files beside `libhost.a`; nothing that evaluates a
 See
 https://github.com/lukewilliamboswell/roc-blueprint/blob/main/blueprint-platform/targets/README.md[blueprint-platform/targets/README.md].
 
-`scripts/test.roc` is the full CI entry point. Its groups are `static`
+`scripts/test.roc` runs the repository's CI test groups. Its groups are `static`
 (formatting; no tracked object file, archive or import library; the CLI's use of
 the Provider contract; the compiler downloads `Bootstrap.roc` records, one
 for each system the CLI runs on; each workflow's
@@ -150,6 +154,11 @@ every week, starting from the inputs earlier runs found, which it keeps in the
 Actions cache through `FUZZ_CORPUS`, and uploads any crashing input). `scenarios` and `builds` are the
 real-Nix suites, split into two groups of about the same length so that CI runs
 them as two jobs at the same time.
+Two additional CI jobs run `scripts/reproducible_probe.roc` on independent
+Ubuntu 24.04 and 22.04 hosts. One uses the release binary; the other compiles
+a synthetic next-patch CLI with the same runner pins. Each builds and
+rebuilds the same selected-input producer. A dependent job compares their
+actual derivation, outputs and locked-source provenance.
 `scripts/test_config.roc` runs the compiler on generated `Blueprint.roc`
 fixtures: the platform's own rules, which only a compiler run can show (a
 setting given twice or not at all, in `Lower.roc`, and each checked name's
