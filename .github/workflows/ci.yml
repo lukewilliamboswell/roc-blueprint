@@ -118,6 +118,58 @@ jobs:
         env:
           BLUEPRINT_PREBUILT: 1
 
+  # Compare the same tiny producer on two independent Linux runners. The
+  # second compiles a synthetic next-patch CLI; frozen runner pins stay fixed.
+  reproducible:
+    permissions:
+      contents: read
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: release
+            system: ubuntu-24.04
+          - variant: synthetic
+            system: ubuntu-22.04
+    name: reproducible-${{ matrix.variant }}
+    runs-on: ${{ matrix.system }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/toolchain
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: blueprint-binaries
+      - run: install -m 755 dist/blueprint-x86_64-linux blueprint
+      - name: Build and rebuild the selected-input producer
+        run: nix develop -c scripts/reproducible_probe.roc run ${{ matrix.variant }} dist/reproducible-${{ matrix.variant }}.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reproducible-probe-${{ matrix.variant }}
+          path: dist/reproducible-${{ matrix.variant }}.json
+          if-no-files-found: error
+
+  reproducible-compare:
+    permissions:
+      contents: read
+    needs: reproducible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/toolchain
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: reproducible-probe-*
+          path: dist/reproducible-probes
+          merge-multiple: true
+      - name: Compare actual derivations and outputs from both hosts
+        run: nix develop -c scripts/reproducible_probe.roc compare dist/reproducible-probes/reproducible-release.json dist/reproducible-probes/reproducible-synthetic.json
+
   # Two binaries are cross-built for machines the Linux job cannot run, so
   # run each where it must work. These runners have Nix and deliberately no
   # Roc: the smoke test is itself a program the build job cross-built.
@@ -206,7 +258,7 @@ jobs:
   test:
     permissions: {}
     if: always()
-    needs: [build, checks, cli, binaries, no-nix]
+    needs: [build, checks, cli, binaries, no-nix, reproducible, reproducible-compare]
     runs-on: ubuntu-latest
     steps:
       - name: Every job succeeded

@@ -10,7 +10,9 @@ import cli.Utc
 
 ## The build and workflow suites install this program as `nix`, first on
 ## `PATH`. It is not a fake: it records its arguments, then runs the real Nix
-## with `--offline` and the same input and output, and exits as Nix did.
+## with `--offline` and the same input and output, and exits as Nix did. The
+## separate-host probe explicitly sets `NIX_RECORDER_ONLINE=1` only while
+## populating its cache; existing suites retain the offline default.
 ##
 ## `NIX_RECORDER_EVENTS` names the directory that receives one file per
 ## invocation and `NIX_RECORDER_REAL` the real Nix. A record holds each
@@ -33,7 +35,10 @@ record_and_run! = |args| {
 	real = Env.var!("NIX_RECORDER_REAL")?
 	name = "${stamp(Utc.now!().to_nanos_since_epoch())}-${Random.seed_u64!()?.to_str()}.nix"
 	Path.write_bytes!(Path.join(events, name), args.fold([], |bytes, arg| bytes.concat(arg.to_bytes()).append(0)))?
-	ran = Cmd.new(real).arg("--offline").args(args)
+	# Only the separate-host minimal probe opts into cache population; all
+	# existing effect suites and the probe's forced rebuild remain offline.
+	base = if (Env.var_str!("NIX_RECORDER_ONLINE") == Ok("1")) Cmd.new(real) else Cmd.new(real).arg("--offline")
+	ran = base.args(args)
 		.stdin(Inherit)
 		.stdout(Inherit)
 		.stderr(Inherit)
