@@ -217,6 +217,10 @@ static! = |context| {
 		problem!(StaticChecks.lock_inspector_contract_problem(read!(context, report)?))?
 	}
 
+	for report in ["blueprint-core/LockSnapshot.roc", "blueprint-core/JsonData.roc"] {
+		problem!(StaticChecks.core_report_contract_problem(read!(context, report)?))?
+	}
+
 	step!("The CLI records a download of its compiler for every system it runs on")?
 	problem!(StaticChecks.bootstrap_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-cli/Bootstrap.roc")?))?
 
@@ -271,6 +275,13 @@ unit! = |context| {
 	Path.create_all!(Path.utf8("${context.root}/.cache/sbom-validation"))?
 	Process.passthrough!(Process.command(stable, ["build", "scripts/sbom.roc", "--output=.cache/sbom-validation/sbom"], context.root))?
 	Process.passthrough!(Process.command("nix", ["run", ".#sbom-validator", "--", "--self-test", "tests/sbom/fixtures/native-linux.spdx.json", "--binding-tool", ".cache/sbom-validation/sbom", "--binding-fixtures", "tests/sbom/fixtures/input", "tests/sbom/fixtures/native-linux.spdx.json", "tests/sbom/fixtures/native-arm64.spdx.json", "tests/sbom/fixtures/source-bundle.spdx.json", "tests/sbom/fixtures/verified-empty.spdx.json", "tests/sbom/fixtures/unknown-closure.spdx.json", "tests/sbom/fixtures/verified-import.spdx.json"], context.root))?
+
+	step!("Official lock snapshot consumer and independent JSON Schema/profile")?
+	Path.create_all!(Path.utf8("${context.root}/.cache/lock-snapshot"))?
+	compiler!(context, ["build", "fixtures/lock-snapshot/main.roc", "--output=.cache/lock-snapshot/consumer"])?
+	Process.passthrough!(Process.command("nix", ["run", ".#lock-snapshot-validator", "--", "--consumer", ".cache/lock-snapshot/consumer"], context.root))?
+	compiler!(context, ["test", "fixtures/lock-snapshot/main.roc"])?
+	Process.passthrough!(Process.command(stable, ["test", "fixtures/lock-snapshot/main.roc"], context.root))?
 
 	step!("Compile-time configuration validation")?
 	script!(context, "test_config", [])?

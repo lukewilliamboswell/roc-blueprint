@@ -15,7 +15,8 @@ blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
 blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
   Project.roc            pure normalization, references and provider capability checks
   Realise.roc            pure planning of a request: what the Core supplies, and what it asks of a provider
-  fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip, lock-parse
+  fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip, lock-parse,
+                         lock-snapshot-parse, lock-snapshot-round-trip, lock-snapshot-project
 blueprint-nix/           importable pure Nix provider (depends only on blueprint-core)
   NixProvider.roc        shared pure request planning and flake rendering
   Locks.roc              Nix pins <-> the Lock: Sources plus a "nix" hint
@@ -401,13 +402,15 @@ in the present tense. What changed between versions belongs in the release
 notes, and what is unfinished in an issue.
 
 The Roc in the manual is compiled by `scripts/test.roc unit`, so a block must
-be one of four things:
+be one of five things:
 
 * a whole `Blueprint.roc`, starting `app [`, whose platform is written as a
   placeholder;
 * settings as they stand inside `config`, complete enough to check by
   themselves: an environment a task uses is in the block. A tool of the
   source `nix` may be written without the `Packages("nix", ...)` line;
+* `[source,roc,snippet=core-module]`, pure imports and declarations checked
+  inside a package against the repository's core modules;
 * `[source,roc,snippet=refused]`, settings the compiler must refuse, for a
   mistake the text explains;
 * `[source,roc,snippet=unchecked]`, which is not compiled: use it only for a

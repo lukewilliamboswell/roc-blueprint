@@ -157,6 +157,8 @@
                 ./blueprint-cli
                 ./blueprint-nix
                 ./fixtures/consumer/authority.lock
+                ./blueprint-core/JsonData.roc
+                ./blueprint-core/LockSnapshot.roc
                 ./blueprint-core/main.roc
                 ./blueprint-core/Spec.roc
                 ./blueprint-core/Project.roc
@@ -216,6 +218,13 @@
             default = blueprint;
             roc-glue-spec = rocGlueSpec;
             roc-docs = rocDocs;
+            lock-snapshot-validator = pkgs.writeShellApplication {
+              name = "validate-lock-snapshot";
+              runtimeInputs = [ (pkgs.python3.withPackages (ps: [ ps.jsonschema ])) ];
+              text = ''
+                exec python3 -I ${./scripts/validate_lock_snapshot.py} --schema ${./blueprint-core/lock-snapshot-v1.schema.json} "$@"
+              '';
+            };
             sbom-validator = pkgs.writeShellApplication {
               name = "validate-blueprint-sbom";
               runtimeInputs = [ (pkgs.python3.withPackages (ps: [ ps.jsonschema ])) ];

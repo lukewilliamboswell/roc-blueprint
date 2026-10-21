@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/lukewilliamboswell/roc-blueprint/0.7.0/blueprint-core/lock-snapshot-v1.schema.json",
+  "title": "Blueprint lock inspection report, format 1",
+  "description": "Operational projection, not authoritative Lock, SBOM or build provenance. Format-1 readers accept additive fields and preserve unknown digest-kind/obtained strings. Native metadata is inert arbitrary JSON. Runtime profile additionally rejects duplicate keys, mismatched source keys/identities and duplicate program/system pairs, and limits UTF-8 JSON to 8 MiB, depth 128 and 4096 entries per collection.",
+  "type": "object",
+  "required": [
+    "format",
+    "sources",
+    "fetched"
+  ],
+  "properties": {
+    "format": {
+      "const": 1,
+      "type": "integer"
+    },
+    "sources": {
+      "type": "object",
+      "maxProperties": 4096,
+      "additionalProperties": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "fetched": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/fetched"
+      }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "name",
+        "provider",
+        "ref",
+        "rev",
+        "digest",
+        "identity",
+        "digestKind",
+        "flatSha256",
+        "metadata"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "rev": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "digestKind": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "flatSha256": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "object",
+          "maxProperties": 4096,
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      },
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "file"
+              }
+            },
+            "required": [
+              "provider"
+            ]
+          },
+          "then": {
+            "properties": {
+              "digestKind": {
+                "const": "file"
+              },
+              "flatSha256": {
+                "$ref": "#/$defs/sha256"
+              },
+              "rev": {
+                "const": ""
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "flatSha256": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "fetched": {
+      "type": "object",
+      "required": [
+        "name",
+        "system",
+        "urls",
+        "sha256",
+        "identity",
+        "size",
+        "obtained"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "system": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "urls": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "obtained": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

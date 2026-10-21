@@ -140,7 +140,7 @@ expect {
 		foreign = { ..provider, inspect_lock: |_lock| Ok([{ ..pin, name: "archive" }]) }
 		ambiguous = { ..provider, inspect_lock: |_lock| Ok([pin, pin]) }
 		Ok(
-			LockReport.render(lock, [], True, [duplicate]) == Err("duplicate report metadata field: same")
+			LockReport.render(lock, [], True, [duplicate]) == Err("duplicate JSON key: same")
 				and LockReport.render(lock, [], True, [foreign]) == Err("provider guix projected an unowned source: archive")
 				and LockReport.render(lock, [], True, [ambiguous]) == Err("duplicate projected source: channel"),
 		)
