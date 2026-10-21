@@ -44,6 +44,7 @@ NixProvider :: [].{
 					|entry| {
 						name: entry.name,
 						identity: entry.identity,
+						digest_kind: Tree,
 						metadata: match entry.fetch_tree {
 							LockJson.Null => []
 							value => [{ name: "fetchTree", value: Locks.to_value(value) }]
@@ -862,7 +863,7 @@ NixProvider :: [].{
 		parsed : Try(List({ drvPath : Str, outputs : { out : Str } }), _)
 		parsed = Json.parse(text)
 		match parsed.map_err(|_| "Nix returned invalid build JSON")? {
-			[built] => Ok({ derivation: built.drvPath, outputs: [{ name: "out", path: built.outputs.out }] })
+			[built] => Ok({ recipe_identity: built.drvPath, outputs: [{ name: "out", path: built.outputs.out }], metadata: [{ name: "derivation", value: Value.Str(built.drvPath) }] })
 			_ => Err("Nix returned an unexpected number of build results")
 		}
 	}
@@ -3165,6 +3166,6 @@ expect {
 	step = { action: Build("app"), files: [], argv: ["nix", "build", "--print-out-paths", "example#app"], artifacts: [], operations: [] }
 	NixProvider.build_argv(step, { json: True, rebuild: True }) == Ok(["nix", "build", "example#app", "--json", "--rebuild"])
 }
-expect NixProvider.build_result("[{\"drvPath\":\"/nix/store/recipe.drv\",\"outputs\":{\"out\":\"/nix/store/result\"}}]") == Ok({ derivation: "/nix/store/recipe.drv", outputs: [{ name: "out", path: "/nix/store/result" }] })
+expect NixProvider.build_result("[{\"drvPath\":\"/nix/store/recipe.drv\",\"outputs\":{\"out\":\"/nix/store/result\"}}]") == Ok({ recipe_identity: "/nix/store/recipe.drv", outputs: [{ name: "out", path: "/nix/store/result" }], metadata: [{ name: "derivation", value: Value.Str("/nix/store/recipe.drv") }] })
 expect NixProvider.build_result("[]").is_err()
 expect NixProvider.build_result("[{\"drvPath\":\"/nix/store/recipe.drv\",\"outputs\":{\"out\":\"/nix/store/result\"}}]\n/nix/store/result\n").is_err()

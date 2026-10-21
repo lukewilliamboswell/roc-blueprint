@@ -232,8 +232,8 @@ provider. It:
   its declared environment tools on `PATH`. Complete tool roots are available
   under `BLUEPRINT_TOOLS`; this does not opt into `stdenv` setup.
 * adapts build options through `Provider.build_argv` and decodes its native
-  build JSON through `Provider.build_result` into neutral derivation/output
-  records. `Provider.build_sources` identifies the authoritative lock entries
+  build JSON through `Provider.build_result` into provider-tagged opaque recipe
+  identities, outputs and namespaced native metadata. `Provider.build_sources` identifies the authoritative lock entries
   used by the build closure. The CLI executes and prints these results without
   knowing provider flags or native JSON field names.
 

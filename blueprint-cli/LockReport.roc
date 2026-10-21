@@ -2,6 +2,7 @@
 import core.Lock
 import core.Provider
 import core.Value
+import ReportJson
 
 LockReport := [].{
 	format : U64
@@ -19,7 +20,15 @@ LockReport := [].{
 		var $pins = []
 		for provider in providers {
 			if lock.sources.any(|source| source.provider == provider.name) {
-				$pins = $pins.concat((provider.inspect_lock)(lock)?)
+				for entry in (provider.inspect_lock)(lock)? {
+					if !lock.sources.any(|source| source.name == entry.name and source.provider == provider.name) {
+						return Err("provider ${provider.name} projected an unowned source: ${entry.name}")
+					}
+					if $pins.any(|known| known.name == entry.name) {
+						return Err("duplicate projected source: ${entry.name}")
+					}
+					$pins = $pins.append(entry)
+				}
 			}
 		}
 		var $sources = []
@@ -36,9 +45,18 @@ LockReport := [].{
 				if identity.is_empty() {
 					return Err("locked source ${source.name} has no content identity")
 				}
-				fetch = match pin {
-					Ok(entry) => entry.metadata.find_first(|field| field.name == "fetchTree").map_ok(|field| value_json(field.value)) ?? "null"
-					Err(_) => "null"
+				metadata = match pin {
+					Ok(entry) => ReportJson.object([(source.provider, ReportJson.value(Value.Attrs(entry.metadata))?)])
+					Err(_) => "{}"
+				}
+				digest_kind = if source.provider == "file" {
+					"file"
+				} else {
+					match pin.map_ok(|entry| entry.digest_kind) ?? Unknown {
+						File => "file"
+						Tree => "tree"
+						Unknown => "unknown"
+					}
 				}
 				$lines = $lines.append("source ${source.name} [${source.provider}] ${source.rev} ${identity}")
 				fields = [
@@ -47,16 +65,7 @@ LockReport := [].{
 					("ref", Json.to_str(source.ref)),
 					("rev", Json.to_str(source.rev)),
 					("digest", Json.to_str(source.digest)),
-					(
-						"digestKind",
-						Json.to_str(
-							if source.provider == "file" {
-								"file"
-							} else {
-								"tree"
-							},
-						),
-					),
+					("digestKind", Json.to_str(digest_kind)),
 					(
 						"flatSha256",
 						if source.provider == "file" {
@@ -66,9 +75,9 @@ LockReport := [].{
 						},
 					),
 					("identity", Json.to_str(identity)),
-					("fetchTree", fetch),
+					("metadata", metadata),
 				]
-				$sources = $sources.append((source.name, object(fields)))
+				$sources = $sources.append((source.name, ReportJson.object(fields)))
 			}
 		}
 		var $fetched = []
@@ -82,7 +91,7 @@ LockReport := [].{
 				}
 				$lines = $lines.append("program ${entry.name} [${entry.system}] sha256:${entry.sha256}")
 				$fetched = $fetched.append(
-					object([
+					ReportJson.object([
 						("name", Json.to_str(entry.name)),
 						("system", Json.to_str(entry.system)),
 						("urls", Json.to_str(entry.urls)),
@@ -96,9 +105,9 @@ LockReport := [].{
 		}
 		Ok(
 			if json {
-				object([
+				ReportJson.object([
 					("format", format.to_str()),
-					("sources", object($sources)),
+					("sources", ReportJson.object($sources)),
 					("fetched", "[${Str.join_with($fetched, ",")}]"),
 				]).concat("\n")
 			} else {
@@ -106,18 +115,6 @@ LockReport := [].{
 			},
 		)
 	}
-}
-
-object : List((Str, Str)) -> Str
-object = |fields| "{${Str.join_with(fields.map(|(name, value)| "${Json.to_str(name)}:${value}"), ",")}}"
-
-value_json : Value -> Str
-value_json = |value| match value {
-	Str(text) => Json.to_str(text)
-	Int(number) => number.to_str()
-	Bool(boolean) => if (boolean) "true" else "false"
-	List(items) => "[${Str.join_with(items.map(value_json), ",")}]"
-	Attrs(fields) => object(fields.map(|field| (field.name, value_json(field.value))))
 }
 
 # Fetched entries round-trip the caller-facing names, escaping and provenance,

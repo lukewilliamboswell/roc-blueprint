@@ -35,7 +35,8 @@ HELLO FROM THE WORKING TREE
 `source checked` followed by the resolved artifact path. Tasks do **not**
 automatically receive artifact paths; declared dependency access is build-only.
 
-The library reads `src/message.txt` from a fresh filtered working-tree snapshot.
+The library selects `scripts/build_library.roc` and `src/message.txt` for its
+fresh working-tree snapshot. The app selects `scripts/build_app.roc`.
 The app reads locked `assets/heading.txt` through `BLUEPRINT_INPUTS/assets` and
 exactly the library's declared file through `BLUEPRINT_ARTIFACTS/library`.
 Those are separate read-only locations, not files merged into the writable
@@ -52,10 +53,10 @@ back to its current working-tree bytes.
   Fetching pinned tools/sources is separate from sandboxed build execution;
   initial update/tool provisioning may need network access.
 - Compilation and tasks are not sandboxed. Only builds use the isolated runner.
-- Project snapshots, source inputs and outputs reject all symlinks and special
-  files. Ordinary project files, including untracked ones, enter the snapshot;
-  keep secrets outside it. VCS metadata, authority, generated workspace and
-  declared local source trees are excluded.
+- Each build snapshots its `Files` selection, including selected untracked
+  files. Unselected project edits leave its derivation unchanged. Snapshots,
+  source inputs and outputs reject symlinks and special files. VCS metadata,
+  authority, generated workspace and declared local source trees are excluded.
 - Serialize shared-workspace use and avoid concurrent source mutation, and run
   one `blueprint update` per project at a time: an update that sees the
   authority change fails, but no lock excludes two that publish together.

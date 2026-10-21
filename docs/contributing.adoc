@@ -64,6 +64,33 @@ major-1 bundles are not compatible. The architecture, terminology (Spec,
 Provider, Lock, stages) and invariants are defined in
 xref:architecture.adoc#purpose[the architecture chapter]; keep it in sync with changes.
 
+[[review-provider-neutrality]]
+== Keep capabilities provider neutral
+
+xref:architecture.adoc#provider-neutrality[Provider neutrality] is a lasting
+design constraint, including for a future executor developed within
+Blueprint. Review shared-contract changes against it:
+
+* Describe the capability and guarantee independently of the current Nix
+  implementation. Keep native syntax, command lines and metadata in the
+  provider; keep identity semantics explicit and provider-qualified.
+* Show how another deterministic system could fulfil the contract. A
+  provider that cannot fulfil it must fail before effects, rather than
+  silently weaken isolation or reproducibility.
+* Preserve the boundary between committed intent and pins, pure inspection,
+  disposable materialisation and the Core's constrained effect execution.
+* Exercise changed provider boundaries with an independent contract fixture
+  using its own arguments, identities and metadata. Renaming a Nix fixture
+  is not evidence of another implementation.
+* Document unsupported capabilities and remaining routing or registration
+  constraints. Distinguish a reusable contract from an implemented backend.
+
+Protocol changes need a shared semantic reason and the existing versioning
+rules. They must not make every provider adopt one ecosystem's native format.
+The existing source-registration, resolver-ownership and execution-selection
+work is tracked in
+https://github.com/lukewilliamboswell/roc-blueprint/issues/56[the additional-provider follow-up].
+
 == Set up
 
 Full development and CI require x86_64 Linux with Nix and flakes enabled.

@@ -1,4 +1,4 @@
-## `blueprint`: turns a `Blueprint.roc` into a working Nix environment.
+## `blueprint`: turns a `Blueprint.roc` into a reproducible development environment.
 ##
 ## The Roc compiler validates `Blueprint.roc` and prints the blueprint Spec;
 ## this CLI consumes pure plans and owns file/process effects. Only explicit
@@ -36,6 +36,8 @@ import Paths
 import Published
 import Store
 import LockReport
+import BuildReport
+import ProviderContractTest
 import nix.NixProvider
 import "compiler-version" as compiler_version : Str
 import "compiler-archive" as compiler_archive : List(U8)
@@ -91,7 +93,7 @@ cli_for = |loaded| {
 	generic_build_cmd = SubCmd.finish(
 		{
 			json: Opt.flag({ short: "", long: "json", help: "Emit versioned build provenance as JSON." }),
-			rebuild: Opt.flag({ short: "", long: "rebuild", help: "Rebuild an existing derivation and fail if its output differs." }),
+			rebuild: Opt.flag({ short: "", long: "rebuild", help: "Rebuild the same locked recipe and fail if its output differs." }),
 			target: Param.str({ name: "name", help: "The artifact to build.", default: NoDefault }),
 		}.Cli,
 		{ name: "build", description: "Build a sandboxed artifact and its dependencies", mapper: |options| Build({ name: options.target, json: options.json, rebuild: options.rebuild }) },
@@ -136,7 +138,7 @@ cli_for = |loaded| {
 					|build| SubCmd.finish(
 						{
 							json: Opt.flag({ short: "", long: "json", help: "Emit versioned build provenance as JSON." }),
-							rebuild: Opt.flag({ short: "", long: "rebuild", help: "Rebuild an existing derivation and fail if its output differs." }),
+							rebuild: Opt.flag({ short: "", long: "rebuild", help: "Rebuild the same locked recipe and fail if its output differs." }),
 						}.Cli,
 						{ name: build.name, description: "${build.output} [${build.environment}]", mapper: |options| Build({ name: build.name, json: options.json, rebuild: options.rebuild }) },
 					),
@@ -1269,7 +1271,7 @@ report_build! = |plan, name, ctx| {
 				.stderr(Inherit).capture!()?
 			reported = if ctx.build_json {
 				built = (adapter.build_result)(result).map_err(|message| RenderFailed(message))?
-				Json.to_str({ schema_version: 1.U64, name, system: ctx.target, derivation: built.derivation, outputs: built.outputs, sources: ctx.build_sources }).concat("\n")
+				BuildReport.render(name, ctx.target, adapter.name, built, ctx.build_sources).map_err(|message| RenderFailed(message))?
 			} else {
 				result
 			}
@@ -1767,10 +1769,10 @@ import "../fixtures/consumer/authority.lock" as lock_report_authority : Str
 expect match Lock.parse(lock_report_authority) {
 	Ok(lock) => match LockReport.render(lock, ["nixpkgs"], True, providers) {
 		Ok(text) => {
-			decoded : Try({ format : U64, sources : { nixpkgs : { identity : Str, fetchTree : { rev : Str, narHash : Str, lastModified : U64, owner : Str } } }, fetched : List(Str) }, _)
+			decoded : Try({ format : U64, sources : { nixpkgs : { identity : Str, metadata : { nix : { fetchTree : { rev : Str, narHash : Str, lastModified : U64, owner : Str } } } } }, fetched : List(Str) }, _)
 			decoded = Json.parse(text)
 			match decoded {
-				Ok(read) => read.format == 1 and read.sources.nixpkgs.fetchTree == { rev: "4975466d324710c576dc11ad614684e6bd8cad8e", narHash: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=", lastModified: 1790185690, owner: "NixOS" } and read.sources.nixpkgs.identity == "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5" and read.fetched.is_empty() and !text.contains("roc-overlay")
+				Ok(read) => read.format == 1 and read.sources.nixpkgs.metadata.nix.fetchTree == { rev: "4975466d324710c576dc11ad614684e6bd8cad8e", narHash: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=", lastModified: 1790185690, owner: "NixOS" } and read.sources.nixpkgs.identity == "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5" and read.fetched.is_empty() and !text.contains("roc-overlay")
 				Err(_) => False
 			}
 		}

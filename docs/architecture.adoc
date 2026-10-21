@@ -27,6 +27,53 @@ Windows.
 
 **The protocol is the product; providers are adapters.**
 
+[[provider-neutrality]]
+=== Provider neutrality is an enduring constraint
+
+Blueprint defines capabilities and their guarantees; providers implement
+them using a particular deterministic system. Nix is one implementation,
+not the definition of a build, a content identity or a reproducibility check.
+The same rule applies to a future system built within Blueprint itself.
+
+Shared contracts describe selected inputs, verified content, declared tools,
+outputs, isolation guarantees and reproducible execution. Native recipe
+formats, store paths, package grammars and process arguments belong to their
+provider. Reports carry a provider-qualified identity and preserve native
+details as provider-specific metadata. Consumers must not interpret an
+opaque identity as a Nix derivation or assume every digest identifies a tree.
+An identity from one provider does not establish recipe or output equivalence
+with an identity from another provider.
+
+A provider must reject a capability it cannot fulfil before effects begin.
+It must not silently replace an isolated, offline build or a checked rebuild
+with a weaker operation. An operating-system mechanism, such as Linux mount
+and network namespaces, can be an explicit optional executor capability;
+it is not the universal meaning of isolation. New host effects still need
+an explicit, constrained Core operation.
+
+Neutrality does not make ecosystem-specific declarations portable. A Nix
+package source selects Nix, and its package names retain their native
+meaning. Another provider should be able to fulfil the same shared
+capabilities using its own sources and implementation, without depending on
+Nix or imitating its formats. A new shared semantic requirement can extend
+the versioned protocol; one provider's syntax alone is not a reason to do so.
+
+Nix is currently the only complete package resolver and realiser shipped
+with the CLI. Core-managed downloads, Roc packages, host requirements,
+named environments and tasks already work without it, including on Windows.
+Reusable predefined configurations can compose those features without
+selecting any package ecosystem. A future provider backed by Conda-forge,
+for example, could supply resolved environments on Windows and advertise
+the capabilities it supports; it need not own the whole pipeline or provide
+isolated builds to be useful.
+
+Representing Guix source intent does not mean a Guix executor
+has been implemented. Provider-neutral contracts and independent contract
+fixtures preserve the direction; a second complete implementation is the
+stronger integration proof. Source registration, resolution ownership and
+execution selection still need work before another full provider can be
+added through registration alone.
+
 [[terms]]
 == Terms
 
@@ -242,7 +289,7 @@ ones.
 |===
 | Stage | Must hold
 
-| Evaluate | Deterministic. No provider concepts outside namespaced hints.
+| Evaluate | Deterministic. Shared capabilities are neutral; provider selections and native data are explicitly scoped.
 
 | Resolve | The only stage that makes choices. Trust is recorded, never assumed.
 
@@ -287,7 +334,10 @@ of them breaks the architecture.
 [[inv-1]]
 === Invariant 1: Intent is neutral
 
-A Spec contains no provider concepts except inside namespaced hints.
+A Spec defines shared capability semantics independently of their provider's
+implementation. Explicit provider selections and source declarations say who
+supplies a capability. Native data stays in those scoped declarations or
+namespaced hints; it must not become a requirement imposed on other providers.
 
 [[inv-2]]
 === Invariant 2: Only Resolve makes choices
@@ -351,12 +401,15 @@ in the Lock.
 [[coupling-test]]
 == The coupling test
 
-A new use case should need only a new provider or a new rendering. It should
-never change the Core or the committed data.
+Implementing an existing capability for another ecosystem should need a new
+provider, not a different meaning for the shared capability. A new consumer
+should need a rendering. Genuinely new shared semantics or host effects may
+require a versioned protocol or Core change; provider-specific formats stay
+behind the adapter boundary.
 
 [cols="2,2,1",options="header"]
 |===
-| Use case | What it needs | Core and Lock unchanged?
+| Use case | What it needs | Existing capabilities unchanged?
 
 | Developer shell | presenter | yes
 
@@ -366,7 +419,7 @@ never change the Core or the committed data.
 
 | Container or development container | presenter | yes
 
-| A new package ecosystem | resolver and realiser providers | yes
+| A new package ecosystem | resolver and realiser providers; explicit source registration | yes
 
 | A machine with no package ecosystem installed | nothing: the Core fetches declared downloads itself | yes
 
@@ -378,6 +431,7 @@ never change the Core or the committed data.
 A proposal breaks the architecture, and needs redesigning, if it requires any
 of these:
 
-* a provider-specific field outside hints, which breaks <<inv-1,invariant 1>>;
+* a provider's native detail imposed as a shared capability requirement,
+  which breaks <<inv-1,invariant 1>>;
 * a choice made after Resolve, which breaks <<inv-2,invariant 2>>;
 * an inspector that reads a Store, which breaks <<inv-9,invariant 9>>.

@@ -8,7 +8,7 @@ import StandaloneRunner
 # Real Linux Nix checks for stable recipes, source selection, provenance,
 # rebuild comparison and complete tool roots. Called by the build test group.
 ReproducibleGates := [].{
-	Record : { schema_version : U64, name : Str, system : Str, derivation : Str, outputs : List({ name : Str, path : Str }), sources : List({ name : Str, provider : Str, ref : Str, rev : Str, digest : Str }) }
+	Record : { schema_version : U64, name : Str, system : Str, provider : Str, recipe_identity : Str, metadata : { nix : { derivation : Str } }, outputs : List({ name : Str, path : Str }), sources : List({ name : Str, provider : Str, ref : Str, rev : Str, digest : Str }) }
 
 	record : Str -> Try(Record, _)
 	record = |text| Json.parse(text)
@@ -29,7 +29,7 @@ ReproducibleGates := [].{
 		first = record(BuildHarness.ok!(suite, place, ["build", "one", "--json"])?.out)?
 		Path.write_utf8!(Path.utf8("${suite.work}/standalone-runner-path"), StandaloneRunner.locate!(place.generated, "one")?)?
 		BuildHarness.require!(first.schema_version == 1 and first.name == "one" and first.system == "x86_64-linux", "invalid provenance header")?
-		BuildHarness.require!(first.derivation.ends_with(".drv") and first.sources.len() == 1 and first.sources.any(|source| source.name == "nix" and !source.rev.is_empty() and !source.digest.is_empty()), "missing actual derivation or source identity")?
+		BuildHarness.require!(first.provider == "nix" and first.recipe_identity == first.metadata.nix.derivation and first.recipe_identity.ends_with(".drv") and first.sources.len() == 1 and first.sources.any(|source| source.name == "nix" and !source.rev.is_empty() and !source.digest.is_empty()), "missing actual derivation or source identity")?
 		output = first.outputs.first()?
 		BuildHarness.require!(output.name == "out" and Path.read_utf8!(Path.utf8(output.path))? == "one", "provenance output differs from built bytes")?
 		checked = record(BuildHarness.ok!(suite, place, ["build", "one", "--rebuild", "--json"])?.out)?
@@ -54,7 +54,7 @@ ReproducibleGates := [].{
 		Path.write_utf8!(Path.utf8("${root}/unrelated"), "an application edit")?
 		BuildHarness.link!("${root}/absent", "${root}/unrelated-link")?
 		unchanged = record(BuildHarness.ok!(suite, place, ["build", "one", "--json"])?.out)?
-		BuildHarness.require!(unchanged.derivation == first.derivation, "unselected file or symlink changed derivation")?
+		BuildHarness.require!(unchanged.recipe_identity == first.recipe_identity, "unselected file or symlink changed derivation")?
 		Path.delete!(Path.utf8("${root}/unrelated-link"))?
 		two = record(BuildHarness.ok!(suite, place, ["build", "two", "--json"])?.out)?
 		BuildHarness.require!(Path.read_utf8!(Path.utf8(two.outputs.first()?.path))? == "two", "second single-output producer failed")?
@@ -65,7 +65,7 @@ ReproducibleGates := [].{
 		Path.write_bytes!(Path.utf8(patched), binary.concat("different CLI patch bytes".to_utf8()))?
 		BuildHarness.mode!("755", Path.utf8(patched))?
 		other = record(BuildHarness.ok!({ ..suite, blueprint: patched }, place, ["build", "one", "--json"])?.out)?
-		BuildHarness.require!(other.derivation == first.derivation, "Blueprint binary identity entered derivation")?
+		BuildHarness.require!(other.recipe_identity == first.recipe_identity, "Blueprint binary identity entered derivation")?
 		# A second actual caller kernel namespace must name the same recipe.
 		# Privileges are dropped before any caller code executes.
 		readlink = BuildHarness.which!("readlink")?
@@ -77,11 +77,17 @@ ReproducibleGates := [].{
 		setpriv = BuildHarness.which!("setpriv")?
 		uid = Cmd.new("id").arg("-u").capture!()?.trim()
 		gid = Cmd.new("id").arg("-g").capture!()?.trim()
+		# sudo's secure_path replaces PATH even with -E. Restore the suite's
+		# declared recorder/tools path explicitly before the unprivileged caller.
+		(_, path_value) = suite.variables.find_first(|(name, _)| name == OsStr.from_str("PATH"))?
+		caller_path = OsStr.to_str_try(path_value)?
+		env = BuildHarness.which!("env")?
+		BuildHarness.require!(env.starts_with("/nix/store/") and caller_path.starts_with("${suite.work}/bin:"), "namespace caller requires pinned env and the suite's recording PATH")?
 		observed = "${suite.work}/other-caller-namespaces"
 		separated = BuildHarness.command!(
 			suite,
 			{
-				argv: ["sudo", "-n", "-E", "--", unshare, "--mount", "--net", "--", setpriv, "--reuid=${uid}", "--regid=${gid}", "--clear-groups", bridge, "--caller", observed, suite.blueprint, "build", "one", "--json"],
+				argv: ["sudo", "-n", "-E", "--", env, "PATH=${caller_path}", unshare, "--mount", "--net", "--", setpriv, "--reuid=${uid}", "--regid=${gid}", "--clear-groups", bridge, "--caller", observed, suite.blueprint, "build", "one", "--json"],
 				cwd: suite.caller,
 				extra: [("BLUEPRINT_ROOT", root), ("BLUEPRINT_WORKSPACE", place.workspace), ("BLUEPRINT_GENERATED_ROOT", place.generated), ("BLUEPRINT_LOCK", "authority.lock"), ("ROC_BUILD_RUNNER_READLINK", readlink)],
 				stdin: [],
@@ -91,17 +97,17 @@ ReproducibleGates := [].{
 		)?
 		namespaces = Path.read_utf8!(Path.utf8(observed))?.split_on("\n")
 		BuildHarness.require!(namespaces.first() != Ok(mnt) and namespaces.get(1) != Ok(net), "caller namespace control did not change both namespaces")?
-		BuildHarness.require!(record(separated.out)?.derivation == first.derivation, "caller namespace identity entered derivation")?
+		BuildHarness.require!(record(separated.out)?.recipe_identity == first.recipe_identity, "caller namespace identity entered derivation")?
 		BuildHarness.require!(Path.read_bytes!(Path.utf8(place.lock))? == before_authority, "second namespace changed authority")?
 
 		moved_root = "${suite.work}/repro-relocated"
 		BuildHarness.tool!("cp", ["-a", "--", root, moved_root])?
 		moved = { project: moved_root, workspace: "${moved_root}/work", generated: "${moved_root}/generated", lock: "${moved_root}/authority.lock" }
 		relocated = record(BuildHarness.ok!(suite, moved, ["build", "one", "--json"])?.out)?
-		BuildHarness.require!(relocated.derivation == first.derivation, "checkout location entered derivation")?
+		BuildHarness.require!(relocated.recipe_identity == first.recipe_identity, "checkout location entered derivation")?
 		Path.write_utf8!(Path.utf8("${root}/recipe.py"), "${recipe}# selected recipe changed\n")?
 		changed = record(BuildHarness.ok!(suite, place, ["build", "one", "--json"])?.out)?
-		BuildHarness.require!(changed.derivation != first.derivation, "selected recipe edit did not change derivation")?
+		BuildHarness.require!(changed.recipe_identity != first.recipe_identity, "selected recipe edit did not change derivation")?
 		_ = BuildHarness.ok!(suite, place, ["build", "random"])?
 		refused = BuildHarness.blueprint!(suite, place, ["build", "random", "--rebuild"], { code: 1, stdin: [], service: NoService })?
 		BuildHarness.require!(refused.out.is_empty() and (refused.err.contains("not deterministic") or refused.err.contains("differs")), "rebuild did not reject nondeterministic bytes")?

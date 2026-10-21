@@ -75,13 +75,13 @@ probe! = |suite, variant, output| {
 	_ = BuildHarness.ok!(online, place, ["update"])?
 	# The public lock projection supplies both Nix's SRI hash and the neutral
 	# content identity; no test-specific conversion or native lock parser.
-	locked : { format : U64, sources : { nix : { identity : Str, ref : Str, fetchTree : { narHash : Str, rev : Str } } } }
+	locked : { format : U64, sources : { nix : { identity : Str, ref : Str, metadata : { nix : { fetchTree : { narHash : Str, rev : Str } } } } } }
 	locked = Json.parse(BuildHarness.ok!(online, place, ["lock", "show", "--json", "nix"])?.out)?
-	BuildHarness.require!(locked.format == 1 and locked.sources.nix.fetchTree.narHash == suite.pins.nixpkgs.nar_hash and locked.sources.nix.ref == suite.pins.nixpkgs.ref, "probe lock projection differs from committed package pin")?
+	BuildHarness.require!(locked.format == 1 and locked.sources.nix.metadata.nix.fetchTree.narHash == suite.pins.nixpkgs.nar_hash and locked.sources.nix.ref == suite.pins.nixpkgs.ref, "probe lock projection differs from committed package pin")?
 	first = ReproducibleGates.record(BuildHarness.ok!(online, place, ["build", "copy", "--json"])?.out)?
 	checked = ReproducibleGates.record(BuildHarness.ok!(suite, place, ["build", "copy", "--rebuild", "--json"])?.out)?
 	BuildHarness.require!(first == checked, "offline rebuild changed probe provenance")?
-	BuildHarness.require!(first.sources.len() == 1 and first.sources.any(|pin| pin.name == "nix" and pin.digest == locked.sources.nix.identity and pin.ref == locked.sources.nix.ref and pin.rev == locked.sources.nix.fetchTree.rev), "probe provenance differs from verified package pin")?
+	BuildHarness.require!(first.sources.len() == 1 and first.sources.any(|pin| pin.name == "nix" and pin.digest == locked.sources.nix.identity and pin.ref == locked.sources.nix.ref and pin.rev == locked.sources.nix.metadata.nix.fetchTree.rev), "probe provenance differs from verified package pin")?
 	BuildHarness.require!(Path.read_utf8!(Path.utf8(first.outputs.first()?.path))? == "same producer bytes on both independent hosts\n", "probe output differs from selected input")?
 	observation : ReproducibleProbe.Observation
 	observation = { schema_version: 1, variant, cli_version: actual_version, host: Cmd.new("uname").arg("-n").capture!()?.trim(), image: Env.var_str!("ImageOS")?, provenance: first }

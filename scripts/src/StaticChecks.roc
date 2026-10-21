@@ -39,13 +39,13 @@ StaticChecks := [].{
 		}
 	}
 
-	## Inspector projections follow the same provider boundary, and have no
-	## platform imports through which they could evaluate or mutate a project.
+	## Report projections and their JSON helper share the pure provider boundary.
+	## None may import a platform through which it could evaluate or mutate.
 	lock_inspector_contract_problem : Str -> Str
 	lock_inspector_contract_problem = |source| {
 		import_lines = source.split_on("\n").keep_if(|line| line.starts_with("import "))
-		if import_lines.any(|line| !line.starts_with("import core.")) or !provider_references(source).is_empty() {
-			"blueprint-cli/LockReport.roc must inspect only through the pure Provider contract"
+		if import_lines.any(|line| !line.starts_with("import core.") and line != "import ReportJson") or !provider_references(source).is_empty() {
+			"report modules must use only pure Core and ReportJson interfaces"
 		} else ""
 	}
 
@@ -304,3 +304,6 @@ expect StaticChecks.version_problem("", "version = \"0.4.1\"\n") != ""
 expect StaticChecks.lock_inspector_contract_problem("import core.Lock\nimport core.Provider\n") == ""
 expect !StaticChecks.lock_inspector_contract_problem("import nix.Locks\n").is_empty()
 expect !StaticChecks.lock_inspector_contract_problem("import pf.Path\n").is_empty()
+
+expect StaticChecks.lock_inspector_contract_problem("import core.Value\nimport ReportJson\n") == ""
+expect !StaticChecks.lock_inspector_contract_problem("import Store\n").is_empty()
