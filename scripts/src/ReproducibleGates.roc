@@ -77,11 +77,17 @@ ReproducibleGates := [].{
 		setpriv = BuildHarness.which!("setpriv")?
 		uid = Cmd.new("id").arg("-u").capture!()?.trim()
 		gid = Cmd.new("id").arg("-g").capture!()?.trim()
+		# sudo's secure_path replaces PATH even with -E. Restore the suite's
+		# declared recorder/tools path explicitly before the unprivileged caller.
+		(_, path_value) = suite.variables.find_first(|(name, _)| name == OsStr.from_str("PATH"))?
+		caller_path = OsStr.to_str_try(path_value)?
+		env = BuildHarness.which!("env")?
+		BuildHarness.require!(env.starts_with("/nix/store/") and caller_path.starts_with("${suite.work}/bin:"), "namespace caller requires pinned env and the suite's recording PATH")?
 		observed = "${suite.work}/other-caller-namespaces"
 		separated = BuildHarness.command!(
 			suite,
 			{
-				argv: ["sudo", "-n", "-E", "--", unshare, "--mount", "--net", "--", setpriv, "--reuid=${uid}", "--regid=${gid}", "--clear-groups", bridge, "--caller", observed, suite.blueprint, "build", "one", "--json"],
+				argv: ["sudo", "-n", "-E", "--", env, "PATH=${caller_path}", unshare, "--mount", "--net", "--", setpriv, "--reuid=${uid}", "--regid=${gid}", "--clear-groups", bridge, "--caller", observed, suite.blueprint, "build", "one", "--json"],
 				cwd: suite.caller,
 				extra: [("BLUEPRINT_ROOT", root), ("BLUEPRINT_WORKSPACE", place.workspace), ("BLUEPRINT_GENERATED_ROOT", place.generated), ("BLUEPRINT_LOCK", "authority.lock"), ("ROC_BUILD_RUNNER_READLINK", readlink)],
 				stdin: [],
