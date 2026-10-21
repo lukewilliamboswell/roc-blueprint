@@ -3,7 +3,7 @@ import Sexpr
 import Value
 
 ## Versioned semantic configuration, independent of provider selection or host.
-## Major 2 replaces shell packages with reusable environments and source intent.
+## Major 3 gives sources versioned adapter intent and builds named executors.
 ## Tool names remain provider-native strings, not translated package names.
 ## Parents are resolved by Project.validate, parent first with first-occurrence
 ## deduplication. Shells and tasks refer directly to environment identities.
@@ -53,9 +53,8 @@ Spec := {
 
 	Format : { major : U64, minor : U64 }
 
-	## Which package set a source is. `Auto` is read and never written: a
-	## Spec or a Lock from before sources were explicit holds it, and
-	## `Project.validate` refuses a Spec that does.
+	## A provider-owned source declaration. The adapter validates its version
+	## and native reference; the Core never interprets ecosystem grammar.
 	Provider : { name : Str, version : U64, ref : Str }
 	Resolver : { provider : Str, inputs : List(Str) }
 	Executor : { name : Str, provider : Str, source : Str }

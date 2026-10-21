@@ -14,6 +14,7 @@ ProviderContractTest := [].{}
 
 provider : Provider
 provider = Provider.{
+	migrate_lock: |lock| Ok(lock),
 	validate_source: |_source| Ok({}),
 	validate_tool: |_name| Ok({}),
 	name: "guix",

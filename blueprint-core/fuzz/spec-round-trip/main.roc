@@ -44,7 +44,7 @@ source = {
 		{ kind: Fuzz.u8_in(0, 2), ref: Fuzz.str }.Fuzz,
 		|r|
 			match r.kind {
-				0 => Auto
+				0 => { name: "fixture", version: 1, ref: r.ref }
 				1 => { name: "nix", version: 1, ref: r.ref }
 				_ => { name: "guix", version: 1, ref: r.ref }
 			},

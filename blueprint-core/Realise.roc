@@ -53,7 +53,7 @@ Realise :: [].{
 	## expects is the Core's own.
 	resolvers : Spec, List(Provider) -> List(Provider)
 	resolvers = |project, providers| {
-		owners = Project.unique(project.sources.map(|source| source.provider.name).concat(project.resolvers.map(|resolver| resolver.provider)))
+		owners = Project.unique(project.sources.map(|source| source.provider.name).concat(project.resolvers.keep_if(|resolver| !resolver.inputs.is_empty()).map(|resolver| resolver.provider)))
 		providers.keep_if(|candidate| owners.contains(candidate.name))
 	}
 
@@ -495,6 +495,7 @@ Realise :: [].{
 ## It refuses the task `broken`, as a provider refuses what it cannot render.
 stub : Provider
 stub = Provider.{
+	migrate_lock: |lock| Ok(lock),
 	validate_source: |_source| Ok({}),
 	validate_tool: |_name| Ok({}),
 	name: "nix",

@@ -159,11 +159,12 @@ Lower :: [].{
 				if $selected.len() > 1 {
 					return Err("DuplicateFiles: build ${name.to_str()}")
 				}
+				lowered_build = build(name.to_str(), inner)?
 				if $executors.len() != 1 {
 					return Err("build ${name.to_str()} requires exactly one Execute")
 				}
 				files = $selected.map(|paths| { build: name.to_str(), paths })
-				{ ..acc, builds: acc.builds.append(build(name.to_str(), inner)?), build_files: acc.build_files.concat(files), build_executors: acc.build_executors.concat($executors) }
+				{ ..acc, builds: acc.builds.append(lowered_build), build_files: acc.build_files.concat(files), build_executors: acc.build_executors.concat($executors) }
 			}
 			Workflow(name, steps) => {
 				..acc,
@@ -621,7 +622,7 @@ expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev
 expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(Archive("https://example.test/tool.zip", Zip, "tool.exe"), ["https://mirror.example.test/tool.zip", "https://mirror.example.test/tool.zip"]))])])]) == Err("program tool on x86_64-linux names a URL twice:\n    https://mirror.example.test/tool.zip")
 
 # File selection is optional; an explicit empty selection is distinct from omitted.
-expect Lower.lower([Name("selected"), Environment("build", []), Build("app", [Use("build"), Files(["scripts", "recipe.txt"]), Run(["build"]), Output("out")])]).map_ok(|spec| { files: spec.build_files, feature: spec.requires_.contains("build-files") }) == Ok({ files: [{ build: "app", paths: ["scripts", "recipe.txt"] }], feature: True })
-expect Lower.lower([Name("empty"), Environment("build", []), Build("app", [Use("build"), Files([]), Run(["build"]), Output("out")])]).map_ok(|spec| spec.build_files) == Ok([{ build: "app", paths: [] }])
-expect Lower.lower([Name("duplicate"), Environment("build", []), Build("app", [Use("build"), Files([]), Files([]), Run(["build"]), Output("out")])]) == Err("DuplicateFiles: build app")
-expect Lower.lower([Name("escape"), Environment("build", []), Build("app", [Use("build"), Files(["../outside"]), Run(["build"]), Output("out")])]) == Err("invalid selected build path: ../outside")
+expect Lower.lower([Name("selected"), Environment("build", []), Executor("native", "fixture", ""), Build("app", [Execute("native"), Use("build"), Files(["scripts", "recipe.txt"]), Run(["build"]), Output("out")])]).map_ok(|spec| { files: spec.build_files, feature: spec.requires_.contains("build-files") }) == Ok({ files: [{ build: "app", paths: ["scripts", "recipe.txt"] }], feature: True })
+expect Lower.lower([Name("empty"), Environment("build", []), Executor("native", "fixture", ""), Build("app", [Execute("native"), Use("build"), Files([]), Run(["build"]), Output("out")])]).map_ok(|spec| spec.build_files) == Ok([{ build: "app", paths: [] }])
+expect Lower.lower([Name("duplicate"), Environment("build", []), Executor("native", "fixture", ""), Build("app", [Execute("native"), Use("build"), Files([]), Files([]), Run(["build"]), Output("out")])]) == Err("DuplicateFiles: build app")
+expect Lower.lower([Name("escape"), Environment("build", []), Executor("native", "fixture", ""), Build("app", [Execute("native"), Use("build"), Files(["../outside"]), Run(["build"]), Output("out")])]) == Err("invalid selected build path: ../outside")

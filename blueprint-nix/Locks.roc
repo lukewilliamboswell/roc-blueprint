@@ -226,6 +226,59 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	encode : Locks -> Str
 	encode = |locks| Lock.to_str(to_lock(locks))
 
+	## Upgrade the pre-explicit-source native declaration only. Native pin
+	## nodes, downloads and trust evidence remain byte-for-byte data-equal.
+	## derive already adds the working shell alias for pre-alias graphs.
+	migrate_legacy : Lock -> Try(Lock, Str)
+	migrate_legacy = |authority| {
+		if !authority.hints.any(|hint| hint.provider == "nix") {
+			return Ok(authority)
+		}
+		locks = from_lock(authority)?
+		inputs_ = LockJson.object(LockJson.field(locks.identity, "inputs")?)?
+		var $changed = False
+		var $inputs = []
+		for input in inputs_ {
+			kind = LockJson.string(LockJson.field(input.value, "kind")?)?
+			value = if kind == "auto" {
+				ref = LockJson.string(LockJson.field(input.value, "ref")?)?
+				if !authority.intent.sources.any(|source| source.name == input.name and source.provider.name == "nix" and source.provider.version == 1 and source.provider.ref == ref) {
+					return Err("cannot establish legacy Nix source ownership: ${input.name}")
+				}
+				$changed = True
+				replace_existing(input.value, "kind", LockJson.String("packages"))?
+			} else {
+				input.value
+			}
+			$inputs = $inputs.append({ name: input.name, value })
+		}
+		if !$changed {
+			return Ok(authority)
+		}
+		identity = replace_existing(locks.identity, "inputs", LockJson.Object($inputs))?
+		validate_identity(identity)?
+		validate_binding(identity, locks.graph)?
+		hint = authority.hint("nix").map_err(|_| "missing Nix hint")?
+		fields = match hint {
+			Value.Attrs(entries) => entries
+			_ => return Err("invalid Nix hint")
+		}
+		value = Value.Attrs(fields.map(|field| if (field.name == "identity") { name: field.name, value: to_value(identity) } else field))
+		migrated = { ..authority, hints: authority.hints.map(|entry| if (entry.provider == "nix") { provider: entry.provider, value } else entry) }
+		_ = from_lock(migrated)?
+		Ok(migrated)
+	}
+
+	## Preserve field order because authoritative source entries retain it.
+	replace_existing : LockJson, Str, LockJson -> Try(LockJson, Str)
+	replace_existing = |object, name, value| {
+		fields = LockJson.object(object)?
+		if !fields.any(|field| field.name == name) {
+			return Err("missing legacy declaration field: ${name}")
+		}
+		Ok(LockJson.Object(fields.map(|field| if (field.name == name) { name, value } else field)))
+	}
+
 	## The Nix pins as a Lock. Its intent is left empty: the Core records it.
 	to_lock : Locks -> Lock
 	to_lock = |locks| Lock.{
@@ -1518,4 +1571,18 @@ expect match locked_fixture {
 expect match (aliased_locks, locked_fixture) {
 	(Ok(aliased), Ok(original_)) => Locks.inspect(Locks.to_lock(aliased)) == Locks.inspect(Locks.to_lock(original_))
 	_ => False
+}
+
+# A migrated 0.5 native authority changes declaration vocabulary without
+# changing any source pin, graph node, content digest or download trust.
+expect {
+	locks = locked_fixture?
+	project = TestData.project(TestData.data)
+	identity_inputs = LockJson.field(locks.identity, "inputs")?
+	declaration = LockJson.field(identity_inputs, "default")?
+	legacy_identity = Locks.replace_existing(locks.identity, "inputs", Locks.replace_existing(identity_inputs, "default", Locks.replace_existing(declaration, "kind", LockJson.String("auto"))?)?)?
+	legacy = { ..Locks.to_lock({ ..locks, identity: legacy_identity }), intent: Lock.intent_of(project) }
+	migrated = Locks.migrate_legacy(legacy)?
+	decoded = Locks.from_lock(migrated)?
+	migrated.sources == legacy.sources and migrated.fetched == legacy.fetched and decoded.graph == locks.graph and decoded.identity == locks.identity and Locks.derive(decoded, project, TestData.layout).is_ok() and Locks.migrate_legacy(migrated) == Ok(migrated)
 }
