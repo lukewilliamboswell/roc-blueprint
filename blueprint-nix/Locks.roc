@@ -115,8 +115,27 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 
 	input_url : Input, Layout -> Str
 	input_url = |input, layout| if input.ref.starts_with("path:") {
-		"path:${layout.project_root}/${local_path(input)}"
+		path_reference("${layout.project_root}/${local_path(input)}")
 	} else input.ref
+
+	## A local flake URI, not a shell argument. Nix only recognizes `path:`
+	## with URI-safe path bytes; otherwise it treats the whole value as a
+	## relative filename. Preserve path separators and encode UTF-8 bytes.
+	path_reference : Str -> Str
+	path_reference = |path| {
+		hex = "0123456789ABCDEF".to_utf8()
+		encoded = path.to_utf8().fold(
+			[],
+			|out, byte| {
+				if (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z') or (byte >= '0' and byte <= '9') or ['/', '-', '_', '.', '~'].contains(byte) {
+					out.append(byte)
+				} else {
+					out.concat(['%', hex.get((byte // 16).to_u64()) ?? '0', hex.get((byte % 16).to_u64()) ?? '0'])
+				}
+			},
+		)
+		"path:${Str.from_utf8_lossy(encoded)}"
+	}
 
 	identity_for : Spec -> Try(LockJson, Str)
 	identity_for = |spec| {
@@ -1072,6 +1091,9 @@ expect match (aliased_locks, locked_fixture) {
 		and Locks.sources(locks) == Locks.sources(before)
 	_ => False
 }
+
+expect Locks.path_reference("/tmp/a [b]#%/雪") == "path:/tmp/a%20%5Bb%5D%23%25/%E9%9B%AA"
+expect Locks.path_reference("/tmp/unchanged-a_b.c~d/123") == "path:/tmp/unchanged-a_b.c~d/123"
 
 # A Lock written before the alias existed is still authority, unchanged. Its
 # working lock gains the edge, so it is byte for byte the one a new Lock

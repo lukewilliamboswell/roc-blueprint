@@ -83,7 +83,7 @@ NixProvider :: [].{
 		files = update_files(spec, target, layout)?
 		locals = local_checks(spec, target, layout)?
 		native_lock = "${layout.generated_root}/flake.lock"
-		flake = ["--flake", "path:${layout.generated_root}"]
+		flake = ["--flake", Locks.path_reference(layout.generated_root)]
 		# The machine must have Nix itself: nothing installs it.
 		present = [{ program: "nix", because: resolving(Project.validate(spec)?) }]
 		match update {
@@ -227,7 +227,7 @@ NixProvider :: [].{
 		var $builds = []
 		var $argv = []
 		var $action = Generate
-		base_ref = "path:${layout.generated_root}"
+		base_ref = Locks.path_reference(layout.generated_root)
 		read_only = ["--no-update-lock-file", "--no-write-lock-file"]
 		match request {
 			Request.Generate => {
@@ -360,7 +360,7 @@ NixProvider :: [].{
 	## Recheck supplied local pins on every step, including after source-editing tasks.
 	materialize_plan = |selected, target, layout, derived| {
 		{ builds, argv, contents, action, needs_nix, .. } = selected
-		base_ref = "path:${layout.generated_root}"
+		base_ref = Locks.path_reference(layout.generated_root)
 		var $operations = derived.operations
 		for source in selected.project.source_files {
 			if builds.any(|build| build.inputs.contains(source.name)) {
@@ -1702,6 +1702,14 @@ expect {
 		Ok(all) => all.argv == ["nix", "flake", "update", "--flake", "path:${root}"] and all.files.map(|file| file.path) == ["${root}/flake.nix"]
 		Err(_) => False
 	}
+}
+
+# Native references encode path bytes; filesystem destinations stay literal.
+expect {
+	layout = { ..TestData.layout, generated_root: "/generated a [b]/雪" }
+	resolved_plan = (NixProvider.provider.resolve)(TestData.project(TestData.data), "x86_64-linux", layout, All)?
+	resolved_plan.argv == ["nix", "flake", "update", "--flake", "path:/generated%20a%20%5Bb%5D/%E9%9B%AA"]
+		and resolved_plan.native_lock == "/generated a [b]/雪/flake.lock"
 }
 
 # A named update stages the Lock's native lock for Nix to keep the other pins
