@@ -598,6 +598,9 @@ NixProvider :: [].{
 			return Err("unsupported features: ${Str.join_with(missing, ", ")}")
 		}
 		spec = Project.validate(input_spec)?
+		if builds.any(|build| build.inputs.contains("blueprint-input-evidence")) {
+			return Err("build input name blueprint-input-evidence is reserved for selected reproduction evidence")
+		}
 		if !spec.extensions.is_empty() {
 			kinds = spec.extensions.map(|e| "'${e.kind}' (${e.name})")
 			return Err(
@@ -1159,6 +1162,9 @@ NixProvider :: [].{
 		file_evidence = source_files.keep_if(|entry| build.inputs.contains(entry.name)).map(
 			|entry| "{ name = ${quote(entry.name)}; provider = \"file\"; sha256 = ${quote(entry.sha256)}; }",
 		)
+		source_evidence = build.inputs.keep_if(|name| !source_files.any(|entry| entry.name == name)).map(
+			|name| "{ name = ${quote(name)}; path = inputs.${quote(name)}; rev = inputs.${quote(name)}.rev or \"\"; narHash = inputs.${quote(name)}.narHash or \"\"; }",
+		)
 		inputs = build.inputs.map(
 			|name|
 				"{ name = ${quote(name)}; path = inputs.${quote(name)}; }",
@@ -1186,6 +1192,7 @@ NixProvider :: [].{
 				"            runner = \"\${runnerFor pkgs}/bin/roc-build-runner\";",
 				"            input_evidence = pkgs.writeText \"blueprint-input-evidence.json\" (builtins.toJSON {",
 				"              format = 1; packages = [ ${Str.join_with(package_evidence, " ")} ]; files = [ ${Str.join_with(file_evidence, " ")} ];",
+				"              sources = [ ${Str.join_with(source_evidence, " ")} ]; dependencies = [ ${Str.join_with(dependencies, " ")} ]; roc_packages = [ ${Str.join_with(bundles, " ")} ];",
 				"              project = ${project}; tools = [ ${Str.join_with(tool_roots, " ")} ];",
 				"            });",
 				"            inputs_view = pkgs.linkFarm ${quote("blueprint-inputs-${build.name}")} ([ ${Str.join_with(inputs, " ")} ] ++ [ { name = \"blueprint-input-evidence\"; path = input_evidence; } ]);",
@@ -3321,4 +3328,13 @@ expect {
 		and NixProvider.build_prepared("{}").is_err()
 		and NixProvider.build_prepared("{\"/tmp/not-store.drv\":{\"outputs\":{}}}").is_err()
 		and NixProvider.build_prepared("{\"/nix/store/captured.drv\":{\"outputs\":{\"out\":{}}}}").is_err()
+}
+
+# Executor bootstrap ownership is independent of the package supplying tools.
+expect {
+	build = { name: "copy", environment: "builder", inputs: [], needs: [], run: ["cp", "input", "out"], output: "out" }
+	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [{ source: "tools", name: "coreutils" }], overlays: [] }, [], [], [], [], [], [], "x86_64-linux", ["bootstrap"])
+	rendered.contains("pkgs = sets.\"bootstrap\";")
+		and rendered.contains("sets.\"tools\".\"coreutils\"")
+		and rendered.contains("inputs.\"bootstrap\".narHash")
 }

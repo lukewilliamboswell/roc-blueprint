@@ -207,7 +207,8 @@ need: Blueprint cannot infer dependencies hidden in arbitrary commands.
 
 The Nix executor supplies a read-only JSON file at
 `$BLUEPRINT_INPUTS/blueprint-input-evidence`. Its native format 1 records selected
-package revisions and NAR hashes, original-file SHA-256 pins, the captured
+package revisions and NAR hashes, original-file SHA-256 pins, other source
+tree paths, dependency artifact paths, Roc package paths, the captured
 project store path and tool roots. This is provider-native reproduction material,
 not another provider-neutral report API or a complete lock export.
 
