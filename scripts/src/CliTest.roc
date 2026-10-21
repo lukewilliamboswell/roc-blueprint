@@ -362,7 +362,7 @@ cases! = |bench| {
 	# to its source's grammar as the configuration is read, and a source that
 	# names no package set is told what to write.
 	incompatible = [
-		{ name: "source", command: ["shell", "ci"], tool: "default#git", declaration: "Packages(\"default\", From(GuixPackages(\"current\"))),", diagnostic: "environment ci takes tools from the source default (GuixPackages), which no provider of this blueprint supplies" },
+		{ name: "source", command: ["shell", "ci"], tool: "default#git", declaration: "Packages(\"default\", From(GuixPackages(\"current\"))),", diagnostic: "environment ci takes tools from the source default (guix v1), which no provider of this blueprint supplies" },
 		{ name: "grammar", command: ["run", "echo-args"], tool: "default#python@3.12:out", declaration: CliTest.source, diagnostic: "invalid Nix tool: python@3.12:out" },
 		{ name: "auto", command: ["run", "echo-args"], tool: "default#git", declaration: "Packages(\"default\", Auto),", diagnostic: "the Auto source was removed in 0.6; name the package set, as in From(NixPackages(" },
 	]
