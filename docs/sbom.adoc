@@ -113,19 +113,31 @@ remain unresolved uses `other` with an explicit basis, rather than asserting a
 runtime edge. Each relationship has one SPDX 2.3 spelling, so both renderings
 state the same graph:
 
-[cols="2,3"]
+[cols="1,1",options="header"]
 |===
-|SPDX 3.0.1 composition |SPDX 2.3
+| SPDX 3.0.1 composition | SPDX 2.3
 
-|`A contains B` |`A CONTAINS B`
-|`A dependsOn B` |`A DEPENDS_ON B`
-|`A dependsOn B`, scope `build` |`B BUILD_DEPENDENCY_OF A`
-|`A dependsOn B`, scope `test`, `development`, `runtime` |`B TEST_DEPENDENCY_OF A`, `DEV_DEPENDENCY_OF`, `RUNTIME_DEPENDENCY_OF`
-|`A generates B` |`A GENERATES B`
-|`A patchedBy B` |`B PATCH_FOR A`
-|`A hasVariant B` |`B VARIANT_OF A`
-|`A copiedTo B` |`B COPY_OF A`
-|`A other B` |`A OTHER B`
+| `A contains B` | `A CONTAINS B`
+
+| `A dependsOn B` | `A DEPENDS_ON B`
+
+| `A dependsOn B`, scope `build` | `B BUILD_DEPENDENCY_OF A`
+
+| `A dependsOn B`, scope `test` | `B TEST_DEPENDENCY_OF A`
+
+| `A dependsOn B`, scope `development` | `B DEV_DEPENDENCY_OF A`
+
+| `A dependsOn B`, scope `runtime` | `B RUNTIME_DEPENDENCY_OF A`
+
+| `A generates B` | `A GENERATES B`
+
+| `A patchedBy B` | `B PATCH_FOR A`
+
+| `A hasVariant B` | `B VARIANT_OF A`
+
+| `A copiedTo B` | `B COPY_OF A`
+
+| `A other B` | `A OTHER B`
 |===
 
 All components must connect to the subject. Duplicate identities, disconnected
