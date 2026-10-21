@@ -21,6 +21,9 @@ import "build-runner-v1.sh" as build_runner_v1 : Str
 NixProvider :: [].{
 	provider : Provider
 	provider = Provider.{
+		build_argv,
+		build_result,
+		build_sources: provenance_sources,
 		name: "nix",
 		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools", "build-files"],
 		realises,
@@ -361,8 +364,8 @@ NixProvider :: [].{
 		var $operations = derived.operations
 		match action {
 			Build(_) => {
-				$operations = $operations.append(Isolation({ mnt: caller_mnt, net: caller_net }))
-					.append(Runner({ executable: caller_executable, system: target }))
+				$operations = $operations.append(Isolation({ directory: "${layout.generated_root}/isolation", placeholder: "@blueprint-isolation-source@" }))
+					.append(LocalSystem(target))
 			}
 			_ => {}
 		}
@@ -383,6 +386,7 @@ NixProvider :: [].{
 			artifacts: builds.map(
 				|build| {
 					name: build.name,
+					provider: "nix",
 					installable: "${base_ref}#packages.${target}.${build.name}",
 					output: build.output,
 					dependencies: build.needs,
@@ -390,18 +394,6 @@ NixProvider :: [].{
 			),
 		}
 	}
-
-	## Placeholders the executor replaces with the caller's namespace identities
-	## and its own executable path when it stages a build's files (see
-	## `Steps.Operation`).
-	caller_mnt : Str
-	caller_mnt = "@blueprint-caller-mnt-namespace@"
-
-	caller_net : Str
-	caller_net = "@blueprint-caller-net-namespace@"
-
-	caller_executable : Str
-	caller_executable = "@blueprint-caller-executable@"
 
 	## What a build never reads from the project: VCS metadata names at every
 	## depth, then caller-generated roots, the authority and local inputs.
@@ -824,6 +816,26 @@ NixProvider :: [].{
 		)
 	}
 
+	build_argv : Steps.Step, Provider.BuildOptions -> Try(List(Str), Str)
+	build_argv = |step, options| {
+		argv = if options.json {
+			step.argv.keep_if(|arg| arg != "--print-out-paths").append("--json")
+		} else {
+			step.argv
+		}
+		Ok(if (options.rebuild) argv.append("--rebuild") else argv)
+	}
+
+	build_result : Str -> Try(Provider.BuildResult, Str)
+	build_result = |text| {
+		parsed : Try(List({ drvPath : Str, outputs : { out : Str } }), _)
+		parsed = Json.parse(text)
+		match parsed.map_err(|_| "Nix returned invalid build JSON")? {
+			[built] => Ok({ derivation: built.drvPath, outputs: [{ name: "out", path: built.outputs.out }] })
+			_ => Err("Nix returned an unexpected number of build results")
+		}
+	}
+
 	## Exactly the root lock entries imported by a build and its dependencies.
 	provenance_sources : Spec, Str -> Try(List(Str), Str)
 	provenance_sources = |spec, name| {
@@ -911,9 +923,8 @@ NixProvider :: [].{
 	## Open `packages` with what every build shares. Nix makes the one project
 	## copy: excluded entries are never inspected, and any other symlink or
 	## special file aborts evaluation. Nix records only whether the owner may
-	## execute a file. Namespace observations belong to materialization, not
-	## project bytes, so the executor fills them in per build. The runner is the
-	## executor's own executable, copied into the store from where it is.
+	## execute a file. Namespace authorization travels outside these bytes.
+	## The versioned runner's source is independent of the CLI executable.
 	render_source : Source -> Str
 	render_source = |source| match source {
 		Unplanned => lines([
@@ -958,8 +969,8 @@ NixProvider :: [].{
 	}
 
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
-	## The builder is `blueprint __build-runner`, with no shell around it. Its
-	## own tools are absolute paths; argv and metadata enter through JSON.
+	## The standalone versioned runner uses the locked package set's Bash.
+	## Its own tools are absolute paths; argv and metadata enter through JSON.
 	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Spec.RocPackage), List(Spec.BuildFiles), Str, List(Str) -> Str
 	render_build = |build, environment, system_tools, commands, configured, roc_packages, build_files, system, builder| {
 		# A build has no network, so the runner gives Roc a cache of its own
@@ -1737,12 +1748,14 @@ expect match plan_fixture(Request.Build("app")) {
 	Ok({ steps: [plan] }) => plan.action == Build("app") and plan.artifacts == [
 		{
 			name: "library",
+			provider: "nix",
 			installable: "path:/generated#packages.x86_64-linux.library",
 			output: "dist/library",
 			dependencies: [],
 		},
 		{
 			name: "app",
+			provider: "nix",
 			installable: "path:/generated#packages.x86_64-linux.app",
 			output: "dist/app",
 			dependencies: ["library"],
@@ -1775,11 +1788,8 @@ expect match plan_fixture(Request.Build("app")) {
 expect match plan_fixture(Request.Build("app")) {
 	Ok({ steps: [plan] }) => plan.operations == [
 		VerifyTree({ path: "/project/assets", digest: assets_tree }),
-		Isolation({
-			mnt: "@blueprint-caller-mnt-namespace@",
-			net: "@blueprint-caller-net-namespace@",
-		}),
-		Runner({ executable: "@blueprint-caller-executable@", system: "x86_64-linux" }),
+		Isolation({ directory: "/generated/isolation", placeholder: "@blueprint-isolation-source@" }),
+		LocalSystem("x86_64-linux"),
 		Present([{ program: "nix", because: "build app runs in the Nix sandbox" }]),
 	] and plan.files.map(|file| file.path) == [
 		"/generated/flake.nix",
@@ -3104,3 +3114,12 @@ expect {
 	selected.contains("project = projectFor [ \"recipe.sh\" ];") and
 		selected.contains("name = \"nix#glibc\"; path = sets.\"nix\".\"glibc\";")
 }
+
+# Native flags/result schema never enter the consumer's build report path.
+expect {
+	step = { action: Build("app"), files: [], argv: ["nix", "build", "--print-out-paths", "example#app"], artifacts: [], operations: [] }
+	NixProvider.build_argv(step, { json: True, rebuild: True }) == Ok(["nix", "build", "example#app", "--json", "--rebuild"])
+}
+expect NixProvider.build_result("[{\"drvPath\":\"/nix/store/recipe.drv\",\"outputs\":{\"out\":\"/nix/store/result\"}}]") == Ok({ derivation: "/nix/store/recipe.drv", outputs: [{ name: "out", path: "/nix/store/result" }] })
+expect NixProvider.build_result("[]").is_err()
+expect NixProvider.build_result("[{\"drvPath\":\"/nix/store/recipe.drv\",\"outputs\":{\"out\":\"/nix/store/result\"}}]\n/nix/store/result\n").is_err()

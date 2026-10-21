@@ -517,6 +517,9 @@ stub = Provider.{
 			NixPackages(_) => True
 			_ => False
 		},
+	build_argv: |step, _options| Ok(step.argv),
+	build_result: |_text| Err("not built here"),
+	build_sources: |_spec, _name| Ok([]),
 	render: |_spec| Ok([]),
 	inspect_lock: |_lock| Ok([]),
 	preflight: |_spec, _request, _system, _layout| Ok({}),

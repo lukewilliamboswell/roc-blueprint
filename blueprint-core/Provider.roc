@@ -37,6 +37,12 @@ Provider := {
 	## a stale Lock.
 	realise : Spec, Request, Str, Layout, Lock -> Try(Steps, [InvalidLock(Str), Unrealisable(Str)]),
 
+	## Build execution options and native-result decoding belong to the provider.
+	## The consumer executes argv and prints this provider-neutral result.
+	build_argv : Steps.Step, BuildOptions -> Try(List(Str), Str),
+	build_result : Str -> Try(BuildResult, Str),
+	build_sources : Spec, Str -> Try(List(Str), Str),
+
 	## Resolve: what the Core must stage and run to produce a native lock, for
 	## every input or for the named ones alone. The Core asks only a provider
 	## that has something to resolve (see `Realise.resolvers`).
@@ -47,6 +53,9 @@ Provider := {
 	## records the Spec's intent in the result before publishing.
 	lock_from_native : Spec, Layout, Str, List({ path : Str, digest : Str }) -> Try(Lock, Str),
 }.{
+
+	BuildOptions : { json : Bool, rebuild : Bool }
+	BuildResult : { derivation : Str, outputs : List({ name : Str, path : Str }) }
 
 	## Inspection returns relative names; executable Steps files are absolute.
 	File : { path : Str, contents : Str }

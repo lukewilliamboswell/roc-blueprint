@@ -582,8 +582,7 @@ host_target! = || host_system!() ?? "x86_64-linux"
 host_system! : () => Try(Str, [UnsupportedHost])
 host_system! = || supported_host(Env.platform!())
 
-## A build runs this executable as its builder, so it must be built for the
-## System the build runs on.
+## Runtime namespace authorization is local to one kernel and system.
 runner_host : Try(Str, [UnsupportedHost]), Str -> Try({}, _)
 runner_host = |host, system|
 	if host == Ok(system) {
@@ -603,36 +602,6 @@ expect
 	[Ok("aarch64-linux"), Ok("x86_64-darwin"), Ok("aarch64-darwin"), Err(UnsupportedHost)].all(
 		|host| runner_host(host, "x86_64-linux").is_err(),
 	)
-
-## A path a provider can place in generated text without inspecting it.
-plain_path : Str -> Bool
-plain_path = |value|
-	value.starts_with("/")
-		and Paths.normalize(value) == value
-		and !value.to_utf8().any(
-			|byte| byte < 32 or byte == 127 or byte == '"' or byte == '\\' or byte == '$',
-		)
-
-expect plain_path("/nix/store/abc-blueprint/bin/.blueprint-wrapped")
-expect plain_path("/home/user name/bin/blueprint")
-expect
-	["blueprint", "/a/../b", "/a\"b", "/a\\b", "/a\${b}", "/a\nb", ""].all(
-		|value| !plain_path(value),
-	)
-
-## This executable's own path, for a build that runs on `system`.
-runner_executable! : Str => Try(Str, _)
-runner_executable! = |system| {
-	runner_host(host_system!(), system)?
-	executable = Env.exe_path!()
-		.map_err(|_| Refused("cannot locate the blueprint executable to run builds"))?
-	text = executable.to_str()
-		.map_err(|_| Refused("blueprint cannot run builds from ${executable.display()}"))?
-	if !plain_path(text) {
-		return Err(Refused("blueprint cannot run builds from ${text}"))
-	}
-	Ok(text)
-}
 
 ## Refuse destination/source aliases before touching caller-owned files.
 safe_path! : Str => Try({}, _)
@@ -1081,7 +1050,7 @@ realise! = |spec, request, ctx| {
 	for step in steps.steps {
 		for operation in step.operations {
 			match operation {
-				Runner({ system, .. }) => runner_host(host_system!(), system)?
+				LocalSystem(system) => runner_host(host_system!(), system)?
 				_ => {}
 			}
 		}
@@ -1090,7 +1059,11 @@ realise! = |spec, request, ctx| {
 	fetched = fetch_programs!(steps.steps)?
 	for step in steps.steps {
 		used = match step.action {
-			Build(name) => NixProvider.provenance_sources(spec, name).map_err(|message| RenderFailed(message))?
+			Build(name) => {
+				artifact = step.artifacts.find_first(|item| item.name == name).map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
+				adapter = providers.find_first(|candidate| candidate.name == artifact.provider).map_err(|_| RenderFailed("unknown build provider: ${artifact.provider}"))?
+				(adapter.build_sources)(spec, name).map_err(|message| RenderFailed(message))?
+			}
 			_ => []
 		}
 		execute_step!(step, fetched, { ..ctx, build_sources: lock.sources.keep_if(|source| used.contains(source.name)) })?
@@ -1197,16 +1170,15 @@ execute_step! = |step, fetched, ctx| {
 					)
 				}
 			}
-			Isolation(_) => {
+			Isolation({ directory, placeholder }) => {
 				mnt = namespace!("mnt")?
 				net = namespace!("net")?
-				directory = "${layout.generated_root}/isolation"
 				safe_path!(directory)?
 				path(directory).create_all!()?
 				atomic_write!("${directory}/witness", "${mnt}\n${net}\n")?
-				$argv = $argv.map(|arg| arg.replace_each("@blueprint-isolation-source@", directory))
+				$argv = $argv.map(|arg| arg.replace_each(placeholder, directory))
 			}
-			Runner({ system, .. }) => {
+			LocalSystem(system) => {
 				runner_host(host_system!(), system)?
 			}
 
@@ -1521,17 +1493,15 @@ report_build! = |plan, name, ctx| {
 	}
 	artifact = plan.artifacts.find_first(|item| item.name == name)
 		.map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
-	match plan.argv {
+	adapter = providers.find_first(|candidate| candidate.name == artifact.provider).map_err(|_| RenderFailed("unknown build provider: ${artifact.provider}"))?
+	argv = (adapter.build_argv)(plan, { json: ctx.build_json, rebuild: ctx.rebuild }).map_err(|message| RenderFailed(message))?
+	match argv {
 		[program, .. as args] => {
-			extra = (if (ctx.rebuild) ["--rebuild"] else []).concat(if (ctx.build_json) ["--json"] else [])
-			result = native_command!(OsStr.from_str(program)).args(args.concat(extra).map(OsStr.from_str)).cwd(path(root))
+			result = native_command!(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(root))
 				.stderr(Inherit).capture!()?
 			reported = if ctx.build_json {
-				records : Try(List({ drvPath : Str, outputs : { out : Str } }), _)
-				records = Json.parse(result)
-				built = records.map_err(|_| RenderFailed("Nix returned invalid build JSON"))?
-				record = built.first().map_err(|_| RenderFailed("Nix returned no build result"))?
-				Json.to_str({ schema_version: 1.U64, name, system: ctx.target, derivation: record.drvPath, outputs: [{ name: "out", path: record.outputs.out }], sources: ctx.build_sources }).concat("\n")
+				built = (adapter.build_result)(result).map_err(|message| RenderFailed(message))?
+				Json.to_str({ schema_version: 1.U64, name, system: ctx.target, derivation: built.derivation, outputs: built.outputs, sources: ctx.build_sources }).concat("\n")
 			} else {
 				result
 			}
