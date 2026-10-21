@@ -36,19 +36,20 @@ provider = Provider.{
 		}
 		Ok(Steps.{ steps: [{ action, argv, artifacts, files: [{ path: "${layout.generated_root}/channel.plan", contents: Json.to_str({ files: spec.build_files, inputs: spec.source_files }) }], operations: spec.source_files.map(|source| SourceFile(source)) }] })
 	},
-	build_argv: |step, options| Ok(step.argv.concat(if (options.json) ["--report"] else []).concat(if (options.rebuild) ["--verify-rebuild"] else [])),
+
 	build_prepare_argv: |step| Ok(step.argv.append("--prepare")),
 	build_prepared: |text| {
 		wire : { recipe : Str, artifact : Str }
 		wire = Json.parse(text).map_err(|_| "invalid fixture preparation")?
 		Ok({ build_identity: wire.recipe, outputs: [{ name: "artifact", path: wire.artifact }] })
 	},
-	build_execute_argv: |step, _prepared, options| Ok(step.argv.concat(if (options.rebuild) ["--verify-rebuild"] else []).append("--report")),
+	build_execute_argv: |step, _prepared, options| Ok(step.argv.append("--report").concat(if (options.rebuild) ["--verify-rebuild"] else [])),
 	build_result: |text| {
 		wire : { recipe : Str, artifact : Str }
 		wire = Json.parse(text).map_err(|_| "invalid fixture result")?
 		Ok({ build_identity: wire.recipe, outputs: [{ name: "artifact", path: wire.artifact }], metadata: [{ name: "substituted", value: Value.Bool(False) }, { name: "attempts", value: Value.Int(2) }] })
 	},
+	build_exclusions: |_spec, _layout| Ok([]),
 	build_sources: |_spec, _name| Ok(["channel", "archive"]),
 	resolve: |_spec, _system, layout, _update| Ok({ present: [{ program: "guix-fixture", because: "resolve channel" }], files: [], locals: [], argv: ["guix-fixture", "describe", "--save", "${layout.generated_root}/channel.lock"], native_lock: "${layout.generated_root}/channel.lock" }),
 	lock_from_native: |spec, _layout, native, _trees| Ok(Lock.{ format: Lock.current_format, intent: Lock.intent_of(spec), sources: [{ name: "channel", provider: "guix", ref: "https://example.test/channel.git", rev: "abc", digest: "guix:commit:abc" }], hints: [{ provider: "guix", value: Value.Str(native) }], fetched: [] }),
@@ -63,6 +64,8 @@ spec = {
 	environments: [{ name: "producer", parents: [], tools: [{ source: "channel", name: "git@2.50" }], overlays: [] }],
 	tasks: [{ name: "check", environment: "producer", run: ["git", "--version"] }],
 	source_files: [{ name: "archive", url: "https://example.test/source.tar.gz", sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+	executors: [{ name: "native", provider: "guix", source: "channel" }],
+	build_executors: [{ build: "base", executor: "native" }, { build: "app", executor: "native" }],
 	build_files: [{ build: "app", paths: ["recipe.roc"] }],
 	builds: [
 		{ name: "base", environment: "producer", inputs: ["archive"], needs: [], run: ["git", "--version"], output: "base" },
@@ -82,7 +85,7 @@ expect {
 		validated = Project.validate(spec)?
 		steps = Realise.plan(validated, Build("app"), "x86_64-linux", layout, lock, [provider]).map_err(|_| "plan refused")?
 		step = steps.steps.first().map_err(|_| "no step")?
-		argv = (provider.build_argv)(step, { json: True, rebuild: True })?
+		argv = (provider.build_execute_argv)(step, { build_identity: "fixture:prepared", outputs: [{ name: "artifact", path: "/fixture" }] }, { rebuild: True })?
 		Ok(
 			argv == ["guix-fixture", "build", "app", "--report", "--verify-rebuild"]
 				and step.operations == spec.source_files.map(|source| SourceFile(source))

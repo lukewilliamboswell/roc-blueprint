@@ -19,7 +19,7 @@ StaticChecks := [].{
 	tracked_binaries_problem : Str -> Str
 	tracked_binaries_problem = |listed| {
 		tracked = listed.split_on("\n").keep_if(|line| !line.is_empty())
-		if tracked.is_empty() "" else "object files, archives and import libraries must not be committed:\n${Str.join_with(tracked, "\n")}"
+		if (tracked.is_empty()) "" else "object files, archives and import libraries must not be committed:\n${Str.join_with(tracked, "\n")}"
 	}
 
 	## docs/architecture.adoc invariant 7: the CLI reaches a provider through
@@ -52,7 +52,7 @@ StaticChecks := [].{
 	## Exported report codecs stay in the pure core package; no adapter or IO.
 	core_report_contract_problem : Str -> Str
 	core_report_contract_problem = |source| {
-		allowed = ["import Lock", "import Provider", "import Value", "import JsonData", "import Project"]
+		allowed = ["import Lock", "import Provider", "import Value", "import JsonData", "import Project", "import Spec", "import Sexpr", "import Tree"]
 		if source.split_on("\n").any(|line| line.starts_with("import ") and !allowed.contains(line)) {
 			"core report modules must use only pure protocol modules"
 		} else ""
@@ -90,7 +90,7 @@ StaticChecks := [].{
 	bootstrap_problem = |compiler_version, bootstrap_source| {
 		tag = compiler_version.trim()
 		missing = host_systems.keep_if(|system| !bootstrap_source.contains("\t\t\ttag: \"${tag}\",\n\t\t\tsystem: \"${system}\",\n"))
-		if missing.is_empty() "" else "record the download of the ${tag} compiler for ${Str.join_with(missing, ", ")} in compilers in blueprint-cli/Bootstrap.roc"
+		if (missing.is_empty()) "" else "record the download of the ${tag} compiler for ${Str.join_with(missing, ", ")} in compilers in blueprint-cli/Bootstrap.roc"
 	}
 
 	## The scripts run on `roc-stable`, which the flake names as `rocStableTag`.
@@ -120,7 +120,7 @@ StaticChecks := [].{
 				Err(NoConstant) => "flake.nix does not name rocStableTag"
 				Ok(tag) => {
 					wrong = pinned.keep_if(|script| found.keep_if(|(file, _)| file == script).map(|(_, pin)| pin) != [tag])
-					if wrong.is_empty() "" else "scripts must pin rocStableTag in their header, as roc: \"${tag}\": ${Str.join_with(wrong, " ")}"
+					if (wrong.is_empty()) "" else "scripts must pin rocStableTag in their header, as roc: \"${tag}\": ${Str.join_with(wrong, " ")}"
 				}
 			}
 		}
@@ -210,7 +210,7 @@ StaticChecks := [].{
 	version_problem : Str, Str -> Str
 	version_problem = |flake, cli_source|
 		match (constant(flake, "version"), constant(cli_source, "version")) {
-			(Ok(packaged), Ok(reported)) => if packaged == reported "" else "flake.nix packages version ${packaged}, but blueprint-cli/main.roc reports ${reported}"
+			(Ok(packaged), Ok(reported)) => if (packaged == reported) "" else "flake.nix packages version ${packaged}, but blueprint-cli/main.roc reports ${reported}"
 			_ => "flake.nix and blueprint-cli/main.roc must each set version"
 		}
 }

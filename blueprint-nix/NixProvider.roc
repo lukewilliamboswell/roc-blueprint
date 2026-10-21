@@ -26,12 +26,15 @@ NixProvider :: [].{
 		migrate_lock: Locks.migrate_legacy,
 		validate_source: validate_source,
 		validate_tool: |name| Native.check_tool(Nix, name),
-		build_argv,
 		build_prepare_argv,
 		build_prepared,
 		build_execute_argv,
 		build_result,
 		build_sources: provenance_sources,
+		build_exclusions: |spec, layout| {
+			project = Project.validate(spec)?
+			Ok(excluded(layout, Locks.inputs(project)?))
+		},
 		name: "nix",
 		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools", "build-files"],
 		realises,
@@ -892,7 +895,21 @@ NixProvider :: [].{
 	build_prepare_argv : Steps.Step -> Try(List(Str), Str)
 	build_prepare_argv = |step| {
 		match step.argv {
-			[program, "build", .. as args] => Ok([program, "derivation", "show"].concat(args.keep_if(|arg| arg != "--no-link" and arg != "--print-out-paths")).concat(["--option", "allow-import-from-derivation", "false"]))
+			[program, "build", .. as args] => {
+				var $kept = []
+				var $skip = 0.U64
+				for arg in args {
+					if $skip > 0 {
+						$skip = $skip - 1
+					} else if arg == "extra-sandbox-paths" {
+						$kept = $kept.drop_last(1)
+						$skip = 1
+					} else if arg != "--no-link" and arg != "--print-out-paths" {
+						$kept = $kept.append(arg)
+					}
+				}
+				Ok([program, "derivation", "show"].concat($kept).concat(["--option", "allow-import-from-derivation", "false"]))
+			}
 			_ => Err("Nix build plan has no build command")
 		}
 	}
@@ -905,22 +922,34 @@ NixProvider :: [].{
 				if !entry.name.starts_with("/nix/store/") or !entry.name.ends_with(".drv") {
 					return Err("Nix returned an invalid derivation identity")
 				}
-				fields = match entry.value { Object(values) => values
-					_ => return Err("Nix derivation is not an object") }
+				fields = match entry.value {
+					Object(values) => values
+					_ => return Err("Nix derivation is not an object")
+				}
 				output_field = fields.find_first(|field| field.name == "outputs").map_err(|_| "Nix derivation has no outputs")?
-				outputs = match output_field.value { Object(values) => values
-					_ => return Err("Nix derivation outputs are invalid") }
+				outputs = match output_field.value {
+					Object(values) => values
+					_ => return Err("Nix derivation outputs are invalid")
+				}
 				var $paths = []
 				for output in outputs {
-					properties = match output.value { Object(values) => values
-					_ => return Err("Nix output is invalid") }
+					properties = match output.value {
+						Object(values) => values
+						_ => return Err("Nix output is invalid")
+					}
 					field = properties.find_first(|property| property.name == "path").map_err(|_| "Nix output has no static path")?
-					value = match field.value { String(path) => path
-					_ => return Err("Nix output path is invalid") }
-					if !value.starts_with("/nix/store/") { return Err("Nix output is not a store path") }
+					value = match field.value {
+						String(path) => path
+						_ => return Err("Nix output path is invalid")
+					}
+					if !value.starts_with("/nix/store/") {
+						return Err("Nix output is not a store path")
+					}
 					$paths = $paths.append({ name: output.name, path: value })
 				}
-				if $paths.is_empty() { return Err("Nix derivation has no outputs") }
+				if $paths.is_empty() {
+					return Err("Nix derivation has no outputs")
+				}
 				Ok({ build_identity: entry.name, outputs: $paths })
 			}
 			_ => Err("Nix returned an unexpected number of derivations")
@@ -930,10 +959,14 @@ NixProvider :: [].{
 	## Execute the captured recipe, never evaluate the mutable installable again.
 	build_execute_argv : Steps.Step, Provider.PreparedBuild, Provider.BuildOptions -> Try(List(Str), Str)
 	build_execute_argv = |step, prepared, options| {
-		if !prepared.build_identity.starts_with("/nix/store/") or !prepared.build_identity.ends_with(".drv") { return Err("invalid prepared Nix build identity") }
+		if !prepared.build_identity.starts_with("/nix/store/") or !prepared.build_identity.ends_with(".drv") {
+			return Err("invalid prepared Nix build identity")
+		}
 		argv = build_argv(step, options)?
-		artifact = match step.action { Build(name) => step.artifacts.find_first(|item| item.name == name).map_err(|_| "missing selected artifact")?
-					_ => return Err("not a build plan") }
+		artifact = match step.action {
+			Build(name) => step.artifacts.find_first(|item| item.name == name).map_err(|_| "missing selected artifact")?
+			_ => return Err("not a build plan")
+		}
 		Ok(argv.map(|arg| if (arg == artifact.installable) "${prepared.build_identity}^*" else arg))
 	}
 
@@ -1321,7 +1354,10 @@ simple = {
 }
 
 mk : TestSpec -> Spec
-mk = |t| Spec.{ resolvers: [{ provider: "nix", inputs: t.inputs.map(|input| input.name) }], executors: [], build_executors: [], 
+mk = |t| Spec.{
+	resolvers: [{ provider: "nix", inputs: t.inputs.map(|input| input.name) }],
+	executors: [],
+	build_executors: [],
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -3257,7 +3293,7 @@ expect {
 # Native flags/result schema never enter the consumer's build report path.
 expect {
 	step = { action: Build("app"), files: [], argv: ["nix", "build", "--print-out-paths", "example#app"], artifacts: [], operations: [] }
-	NixProvider.build_argv(step, { json: True, rebuild: True }) == Ok(["nix", "build", "example#app", "--json", "--rebuild"])
+	NixProvider.build_argv(step, { rebuild: True }) == Ok(["nix", "build", "example#app", "--json", "--rebuild"])
 }
 expect NixProvider.build_result("[{\"drvPath\":\"/nix/store/recipe.drv\",\"outputs\":{\"out\":\"/nix/store/result\"}}]") == Ok({ build_identity: "/nix/store/recipe.drv", outputs: [{ name: "out", path: "/nix/store/result" }], metadata: [{ name: "derivation", value: Value.Str("/nix/store/recipe.drv") }] })
 expect NixProvider.build_result("[]").is_err()
@@ -3280,7 +3316,7 @@ expect {
 	step = { action: Build("app"), argv: ["nix", "build", "--no-link", "--print-out-paths", "example#app"], files: [], operations: [], artifacts: [{ provider: "nix", name: "app", installable: "example#app", output: "out", dependencies: [] }] }
 	prepared = { build_identity: "/nix/store/captured.drv", outputs: [{ name: "out", path: "/nix/store/result" }] }
 	NixProvider.build_prepare_argv(step) == Ok(["nix", "derivation", "show", "example#app", "--option", "allow-import-from-derivation", "false"])
-		and NixProvider.build_execute_argv(step, prepared, { json: False, rebuild: False }) == Ok(["nix", "build", "--no-link", "/nix/store/captured.drv^*", "--json"])
+		and NixProvider.build_execute_argv(step, prepared, { rebuild: False }) == Ok(["nix", "build", "--no-link", "/nix/store/captured.drv^*", "--json"])
 		and NixProvider.build_prepared("{\"/nix/store/captured.drv\":{\"outputs\":{\"out\":{\"path\":\"/nix/store/result\"}}}}") == Ok(prepared)
 		and NixProvider.build_prepared("{}").is_err()
 		and NixProvider.build_prepared("{\"/tmp/not-store.drv\":{\"outputs\":{}}}").is_err()

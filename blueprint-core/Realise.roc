@@ -245,7 +245,6 @@ Realise :: [].{
 				}
 			}
 		}
-
 	}
 
 	## The one provider that supplies every one of these sources. Tools of an
@@ -501,11 +500,11 @@ stub = Provider.{
 	name: "nix",
 	features: [],
 	realises: |source| source.name == "nix" and source.version == 1,
-	build_argv: |step, _options| Ok(step.argv),
 	build_prepare_argv: |step| Ok(step.argv),
 	build_prepared: |_text| Err("not prepared here"),
 	build_execute_argv: |step, _prepared, _options| Ok(step.argv),
 	build_result: |_text| Err("not built here"),
+	build_exclusions: |_spec, _layout| Ok([]),
 	build_sources: |_spec, _name| Ok([]),
 	render: |_spec| Ok([]),
 	inspect_lock: |_lock| Ok([]),

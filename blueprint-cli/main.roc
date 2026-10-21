@@ -802,7 +802,7 @@ realise! = |spec, request, ctx| {
 		return Err(UnsafePath(layout.lock_path))
 	}
 	lock = Lock.parse(path(layout.lock_path).read_utf8!()?)
-		.map_err(|_| LockFailed("unsupported Blueprint lock format; run blueprint update"))?
+		.map_err(|_| LockFailed("unsupported Blueprint lock format; run blueprint lock migrate"))?
 	# Stale for every project: said as what it is, not as what changed.
 	if Lock.from_before_explicit_sources(lock) {
 		return Err(OldLock)
@@ -816,7 +816,11 @@ realise! = |spec, request, ctx| {
 	for step in steps.steps {
 		for operation in step.operations {
 			match operation {
-				LocalSystem(system) => runner_host(host_system!(), system)?
+				LocalSystem(system) => {
+					if ctx.build_mode == Execute {
+						runner_host(host_system!(), system)?
+					}
+				}
 				_ => {}
 			}
 		}
@@ -824,15 +828,16 @@ realise! = |spec, request, ctx| {
 	present!(steps.steps, request)?
 	fetched = fetch_programs!(steps.steps)?
 	for step in steps.steps {
-		used = match step.action {
+		(used, measured_pins) = match step.action {
 			Build(name) => {
 				artifact = step.artifacts.find_first(|item| item.name == name).map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
 				adapter = providers.find_first(|candidate| candidate.name == artifact.provider).map_err(|_| RenderFailed("unknown build provider: ${artifact.provider}"))?
-				(adapter.build_sources)(spec, name).map_err(|message| RenderFailed(message))?
+				names = (adapter.build_sources)(spec, name).map_err(|message| RenderFailed(message))?
+				(names, snapshot_pins(lock, ctx.target, adapter).map_err(|message| RenderFailed(message))?)
 			}
-			_ => []
+			_ => ([], [])
 		}
-		execute_step!(step, fetched, { ..ctx, build_spec: spec, build_pins: snapshot_pins(lock, ctx.target), build_sources: lock.sources.keep_if(|source| used.contains(source.name)) })?
+		execute_step!(step, fetched, { ..ctx, build_spec: spec, build_pins: measured_pins, build_sources: lock.sources.keep_if(|source| used.contains(source.name)) })?
 	}
 	Ok({})
 }
@@ -946,6 +951,9 @@ execute_step! = |step, fetched, ctx| {
 			_ => False
 		},
 	)
+	if ctx.build_mode != Execute {
+		return execute_prepared!(step, fetched, ctx, "")
+	}
 	match isolation {
 		Ok(Isolation({ directory, .. })) => {
 			safe_path!(directory)?
@@ -989,18 +997,22 @@ execute_prepared! = |step, fetched, ctx, witness_directory| {
 				}
 			}
 			Isolation({ placeholder, .. }) => {
-				mnt = namespace!("mnt")?
-				net = namespace!("net")?
-				atomic_write!("${witness_directory}/witness", "${mnt}\n${net}\n")?
-				# Nix checks the source as its build user before mounting it. The
-				# owned parent permits traversal but no listing or other-user writes;
-				# the witness is readable even with a restrictive caller umask.
-				Cmd.new("chmod").args(["0444", "--", "${witness_directory}/witness"].map(OsStr.from_str)).exec!()?
-				Cmd.new("chmod").args(["0711", "--", witness_directory].map(OsStr.from_str)).exec!()?
-				$argv = $argv.map(|arg| arg.replace_each(placeholder, witness_directory))
+				if ctx.build_mode == Execute {
+					mnt = namespace!("mnt")?
+					net = namespace!("net")?
+					atomic_write!("${witness_directory}/witness", "${mnt}\n${net}\n")?
+					# Nix checks the source as its build user before mounting it. The
+					# owned parent permits traversal but no listing or other-user writes;
+					# the witness is readable even with a restrictive caller umask.
+					Cmd.new("chmod").args(["0444", "--", "${witness_directory}/witness"].map(OsStr.from_str)).exec!()?
+					Cmd.new("chmod").args(["0711", "--", witness_directory].map(OsStr.from_str)).exec!()?
+					$argv = $argv.map(|arg| arg.replace_each(placeholder, witness_directory))
+				}
 			}
 			LocalSystem(system) => {
-				runner_host(host_system!(), system)?
+				if ctx.build_mode == Execute {
+					runner_host(host_system!(), system)?
+				}
 			}
 
 			RocBundles(bundles) => {
@@ -1301,7 +1313,6 @@ copy_roc_package! = |source, target| {
 	Ok({})
 }
 
-
 ## Decode every provider result once; execution uses the exact prepared recipe.
 report_build! : Steps.Step, Str, Context => Try({}, _)
 report_build! = |plan, name, ctx| {
@@ -1314,16 +1325,20 @@ report_build! = |plan, name, ctx| {
 	# The exact native recipe captures inputs during evaluation. Refuse evidence
 	# if local content changed while it was being captured.
 	observed = build_snapshot!(ctx.build_spec, name, adapter, ctx.build_pins, ctx)?
-	if snapshot != observed { return Err(RenderFailed("selected build inputs changed during preparation; retry")) }
+	if snapshot != observed {
+		return Err(RenderFailed("selected build inputs changed during preparation; retry"))
+	}
 	match ctx.build_mode {
 		Plan => render_build_inspection!(snapshot, prepared, True, False, ctx)
 		Explain => render_build_inspection!(snapshot, prepared, True, True, ctx)
 		Execute => {
-			argv = (adapter.build_execute_argv)(plan, prepared, { json: True, rebuild: ctx.rebuild }).map_err(|message| RenderFailed(message))?
+			argv = (adapter.build_execute_argv)(plan, prepared, { rebuild: ctx.rebuild }).map_err(|message| RenderFailed(message))?
 			Stderr.line!("building ${name}: ${prepared.build_identity}")?
 			result = capture_build_command!(argv, ctx)?
 			built = (adapter.build_result)(result).map_err(|message| RenderFailed(message))?
-			if built.build_identity != prepared.build_identity or built.outputs != prepared.outputs { return Err(RenderFailed("provider result does not match the prepared build")) }
+			if built.build_identity != prepared.build_identity or built.outputs != prepared.outputs {
+				return Err(RenderFailed("provider result does not match the prepared build"))
+			}
 			# Validate and publish evidence before announcing success.
 			record = { schema_version: 1, snapshot, build_identity: built.build_identity, outputs: built.outputs }
 			save_build_record!(record, ctx)?
@@ -1355,35 +1370,55 @@ inspect_build! = |spec, options, ctx| {
 		# Structural inspection needs no native execution preflight.
 		executor = Project.build_executor(validated, options.name).map_err(|message| RenderFailed(message))?
 		adapter = providers.find_first(|candidate| candidate.name == executor.provider).map_err(|_| RenderFailed("no build executor provider"))?
-		lock = Lock.parse(path(ctx.layout.lock_path).read_utf8!()?).map_err(|_| LockFailed("unsupported Blueprint.lock"))?
+		lock = Lock.parse(path(ctx.layout.lock_path).read_utf8!()?).map_err(|_| LockFailed("unsupported Blueprint.lock; run blueprint lock migrate"))?
 		lock.stale(spec).map_err(|message| LockFailed(message))?
-		snapshot = build_snapshot!(validated, options.name, adapter, snapshot_pins(lock, ctx.target), ctx)?
+		snapshot = build_snapshot!(validated, options.name, adapter, snapshot_pins(lock, ctx.target, adapter).map_err(|message| RenderFailed(message))?, ctx)?
 		render_build_inspection!(snapshot, { build_identity: "", outputs: [] }, False, options.explain, { ..ctx, build_json: options.json })
 	}
 }
 
 ## Verified fetched tools share the named content-evidence model, not provider hints.
-snapshot_pins : Lock, Str -> List(Lock.Source)
-snapshot_pins = |lock, system| lock.sources.concat(lock.fetched.keep_if(|entry| entry.system == system).map(|entry| { name: entry.name, provider: "blueprint", ref: "", rev: "", digest: "sha256:${entry.sha256}" }))
+snapshot_pins : Lock, Str, Provider -> Try(List(Lock.Source), Str)
+snapshot_pins = |lock, system, adapter| {
+	projected = if lock.sources.any(|source| source.provider == adapter.name) {
+		(adapter.inspect_lock)(lock)?
+	} else {
+		[]
+	}
+	pins = lock.sources.map(
+		|source| {
+			match projected.find_first(|entry| entry.name == source.name) {
+				Ok(entry) => { ..source, digest: entry.content_identity }
+				Err(_) => source
+			}
+		},
+	)
+	Ok(pins.concat(lock.fetched.keep_if(|entry| entry.system == system).map(|entry| { name: entry.name, provider: "blueprint", ref: "", rev: "", digest: "sha256:${entry.sha256}" })))
+}
 
 build_snapshot! : Spec, Str, Provider, List(Lock.Source), Context => Try(BuildModel.Snapshot, _)
 build_snapshot! = |input_spec, name, adapter, pins, ctx| {
 	spec = Project.validate(input_spec).map_err(|message| RenderFailed(message))?
 	closure = Project.build_closure(spec, name).map_err(|message| RenderFailed(message))?
+	exclusions = (adapter.build_exclusions)(spec, ctx.layout).map_err(|message| RenderFailed(message))?
 	var $nodes = []
 	for build in closure {
 		selected = spec.build_files.find_first(|entry| entry.build == build.name)
 		paths = selected.map_ok(|entry| entry.paths) ?? []
 		all = selected.is_err()
-		entries = selected_entries!(ctx.layout.project_root, "", paths, all, ctx.layout)?
+		entries = selected_entries!(ctx.layout.project_root, "", paths, all, exclusions, ctx.layout)?
 		# A missing selected path is an error, not an unchanged or empty input.
 		for selected_path in paths {
-			if !entries.any(|entry| entry.path == selected_path) { return Err(RenderFailed("missing selected build path: ${selected_path}")) }
+			if !entries.any(|entry| entry.path == selected_path) {
+				return Err(RenderFailed("missing selected build path: ${selected_path}"))
+			}
 		}
-		files = entries.map(|entry| {
-			digest = Tree.digest([entry]).map_err(|message| RenderFailed(message))?
-			Ok({ path: entry.path, digest })
-		}).fold(Ok([]), |acc, item| Ok(acc?.append(item?)))?
+		files = entries.map(
+			|entry| {
+				digest = Tree.digest([entry]).map_err(|message| RenderFailed(message))?
+				Ok({ path: entry.path, digest })
+			},
+		).fold(Ok([]), |acc, item| Ok(acc?.append(item?)))?
 		sources = (adapter.build_sources)(spec, build.name).map_err(|message| RenderFailed(message))?
 		$nodes = $nodes.append(BuildModel.capture_node(spec, build, ctx.target, files, sources, pins))
 	}
@@ -1391,20 +1426,24 @@ build_snapshot! = |input_spec, name, adapter, pins, ctx| {
 }
 
 ## Match the selected-project snapshot contract without traversing excluded trees.
-selected_entries! : Str, Str, List(Str), Bool, Layout => Try(List(Tree.Entry), _)
-selected_entries! = |root, prefix, selected, all, layout| {
+selected_entries! : Str, Str, List(Str), Bool, List(Str), Layout => Try(List(Tree.Entry), _)
+selected_entries! = |root, prefix, selected, all, exclusions, layout| {
 	var $entries = []
 	directory = if (prefix == "") root else "${root}/${prefix}"
 	for entry_path in path(directory).list!()? {
 		full = Paths.portable(entry_path.to_str()?)
 		name = full.split_on("/").last() ?? full
 		relative = if (prefix == "") name else "${prefix}/${name}"
-		excluded = [".git", ".hg", ".svn", ".jj"].contains(name) or [layout.workspace, layout.generated_root, layout.lock_path].contains(full)
+		excluded = [".git", ".hg", ".svn", ".jj"].contains(name) or [layout.workspace, layout.generated_root, layout.lock_path].contains(full) or exclusions.contains(name) or exclusions.contains(full)
 		included = all or selected.any(|item| relative == item or relative.starts_with("${item}/") or item.starts_with("${relative}/"))
 		if !excluded and included {
 			match entry_path.type!()? {
-				IsDir => { $entries = $entries.append({ path: relative, kind: Dir }).concat(selected_entries!(root, relative, selected, all, layout)?) }
-				IsFile => { $entries = $entries.append({ path: relative, kind: File({ executable: entry_path.is_executable!()?, digest: Store.file_digest!(full)? }) }) }
+				IsDir => {
+					$entries = $entries.append({ path: relative, kind: Dir }).concat(selected_entries!(root, relative, selected, all, exclusions, layout)?)
+				}
+				IsFile => {
+					$entries = $entries.append({ path: relative, kind: File({ executable: entry_path.is_executable!()?, digest: Store.file_digest!(full)? }) })
+				}
 				_ => return Err(UnsafePath(full))
 			}
 		}
@@ -1432,33 +1471,56 @@ render_build_inspection! = |snapshot, prepared, exact, explain, ctx| {
 	baseline = if path(file).exists!()? {
 		text = path(file).read_utf8!()?
 		BuildModel.parse_record(text)
-	} else { Err("no successful local build record") }
+	} else {
+		Err("no successful local build record")
+	}
 	comparison = match baseline {
 		Ok(previous) => BuildModel.compare(previous.snapshot, snapshot)
 		Err(message) => Err(message)
 	}
 	changes = comparison ?? []
-	status = match comparison { Ok(_) => "available"
-		Err(_) => "unavailable" }
-	reason = match comparison { Ok(_) => ""
-		Err(message) => message }
-	identity_status = if !exact { "unavailable" } else {
-		match baseline { Ok(previous) if previous.snapshot.provider == snapshot.provider => if (previous.build_identity == prepared.build_identity) "unchanged" else "changed"
-			_ => "unavailable" }
+	status = match comparison {
+		Ok(_) => "available"
+		Err(_) => "unavailable"
+	}
+	reason = match comparison {
+		Ok(_) => ""
+		Err(message) => message
+	}
+	identity_status = if !exact or comparison.is_err() {
+		"unavailable"
+	} else {
+		match baseline {
+			Ok(previous) if previous.snapshot.provider == snapshot.provider => if (previous.build_identity == prepared.build_identity) "unchanged" else "changed"
+			_ => "unavailable"
+		}
 	}
 	if ctx.build_json {
-		Stdout.line!(Json.to_str({ schema_version: 1, name: snapshot.name, system: snapshot.system, provider: snapshot.provider, prepared: exact, build_identity: prepared.build_identity, outputs: prepared.outputs, snapshot_digest: BuildModel.digest(snapshot), snapshot, baseline: status, baseline_reason: reason, build_identity_status: identity_status, changes }))
+		inspection : BuildModel.Inspection
+		inspection = { schema_version: 1, name: snapshot.name, system: snapshot.system, provider: snapshot.provider, prepared: exact, build_identity: prepared.build_identity, outputs: prepared.outputs, snapshot_digest: BuildModel.digest(snapshot), snapshot, baseline: status, baseline_reason: reason, build_identity_status: identity_status, changes }
+		Stdout.line!(Json.to_str(inspection))
 	} else {
 		Stdout.line!("build ${snapshot.name} [${snapshot.system}] via ${snapshot.provider}")?
 		for node in snapshot.nodes {
+			Stdout.line!("  ${node.name}: ${Json.to_str(node.command)} [${node.environment}; executor ${node.executor}] -> ${node.output}")?
 			Stdout.line!("  ${node.name}: ${node.files.len().to_str()} selected entries; inputs ${Str.join_with(node.inputs.map(|input| input.name), ", ")}; needs ${Str.join_with(node.dependencies, ", ")}")?
 		}
-		if exact { Stdout.line!("build identity: ${prepared.build_identity}")? }
+		if exact {
+			Stdout.line!("build identity: ${prepared.build_identity}")?
+		}
 		if explain {
-			if status == "unavailable" { Stdout.line!("baseline unavailable: ${reason}")? } else {
-				if changes.is_empty() { Stdout.line!("declared inputs unchanged")? }
-				for change in changes { Stdout.line!("${Str.join_with(change.dependency_path, " -> ")}: ${change.kind}: ${change.name}")? }
-				if exact { Stdout.line!("build identity ${identity_status}")? }
+			if status == "unavailable" {
+				Stdout.line!("baseline unavailable: ${reason}")?
+			} else {
+				if changes.is_empty() {
+					Stdout.line!("declared inputs unchanged")?
+				}
+				for change in changes {
+					Stdout.line!("${Str.join_with(change.dependency_path, " -> ")}: ${change.kind}: ${change.name}")?
+				}
+				if exact {
+					Stdout.line!("build identity ${identity_status}")?
+				}
 			}
 		}
 		Ok({})
@@ -1603,7 +1665,8 @@ list_tasks! = |spec| {
 ## of the authority, which must exist and be current for Blueprint.roc. An
 ## update of programs alone asks no provider.
 resolve! : Spec, List(Str), Context => Try({}, _)
-resolve! = |spec, names, ctx| {
+resolve! = |input_spec, names, ctx| {
+	spec = Project.validate(input_spec).map_err(|message| Refused(message))?
 	layout = ctx.layout
 	safe_path!(layout.lock_path)?
 	prior = authority_token!(layout.lock_path)?
@@ -1611,6 +1674,16 @@ resolve! = |spec, names, ctx| {
 	declared = Project.unique(spec.programs.map(|program| program.name).concat(spec.source_files.map(|source| source.name)))
 	wanted = names.keep_if(|name| declared.contains(name))
 	others = names.keep_if(|name| !declared.contains(name))
+	if names.is_empty() or !others.is_empty() {
+		owners = Project.unique(spec.sources.map(|source| source.provider.name).concat(spec.resolvers.map(|resolver| resolver.provider)))
+		missing = owners.keep_if(|owner| !providers.any(|adapter| adapter.name == owner))
+		if !missing.is_empty() {
+			return Err(Refused("no registered resolver for ${Str.join_with(missing, ", ")}"))
+		}
+		if owners.len() > 1 {
+			return Err(Refused("mixed resolver ownership is not supported"))
+		}
+	}
 	several = Refused("several providers have pins to resolve for this project, and one lock holds those of one")
 	pins = if names.is_empty() {
 		match Realise.resolvers(spec, providers) {
@@ -1622,7 +1695,7 @@ resolve! = |spec, names, ctx| {
 		lock = match before {
 			Held(found) => found
 			Absent => return Err(LockFailed("no lock to keep the other pins from; run `blueprint update` without input names first"))
-			Unreadable => return Err(LockFailed("unsupported Blueprint lock format; run `blueprint update` without input names"))
+			Unreadable => return Err(LockFailed("unsupported Blueprint lock format; run `blueprint lock migrate`"))
 		}
 		if Lock.from_before_explicit_sources(lock) {
 			return Err(OldLock)

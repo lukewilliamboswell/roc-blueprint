@@ -157,6 +157,7 @@
                 ./blueprint-cli
                 ./blueprint-nix
                 ./fixtures/consumer/authority.lock
+                ./blueprint-core/BuildModel.roc
                 ./blueprint-core/JsonData.roc
                 ./blueprint-core/LockSnapshot.roc
                 ./blueprint-core/main.roc

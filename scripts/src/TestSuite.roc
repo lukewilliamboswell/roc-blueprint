@@ -26,7 +26,7 @@ TestSuite := [].{
 	requested = |args|
 		match args.find_first(|name| !groups.contains(name)) {
 			Ok(name) => Err(UnknownGroup(name))
-			Err(_) => Ok(if args.is_empty() groups else args)
+			Err(_) => Ok(if (args.is_empty()) groups else args)
 		}
 
 	## A project whose one build copies a file with a tool of its environment.
@@ -84,7 +84,7 @@ read! : Context, Str => Try(Str, _)
 read! = |context, file| Path.read_utf8!(Path.utf8("${context.root}/${file}"))
 
 problem! : Str => Try({}, _)
-problem! = |reason| if reason.is_empty() Ok({}) else Script.fail!(reason)
+problem! = |reason| if (reason.is_empty()) Ok({}) else Script.fail!(reason)
 
 file_names! : Str => Try(List(Str), _)
 file_names! = |directory| {
@@ -217,7 +217,7 @@ static! = |context| {
 		problem!(StaticChecks.lock_inspector_contract_problem(read!(context, report)?))?
 	}
 
-	for report in ["blueprint-core/LockSnapshot.roc", "blueprint-core/JsonData.roc"] {
+	for report in ["blueprint-core/LockSnapshot.roc", "blueprint-core/JsonData.roc", "blueprint-core/BuildModel.roc"] {
 		problem!(StaticChecks.core_report_contract_problem(read!(context, report)?))?
 	}
 
