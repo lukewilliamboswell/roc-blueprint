@@ -15,8 +15,12 @@ blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
 blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
   Project.roc            pure normalization, references and provider capability checks
   Realise.roc            pure planning of a request: what the Core supplies, and what it asks of a provider
+  Sbom.roc               pure SBOM inventory; writes SPDX 3.0.1, SPDX 2.3 and CycloneDX 1.7, reads SPDX 3.0.1, 2.3 and 2.2 and its own CycloneDX
+  Spdx3.roc, Spdx2.roc   the SPDX 3.0.1 and 2.x rules, held to the schemas pinned in tests/sbom/schema/
+  CycloneDx.roc          the CycloneDX 1.7 rules, held to the schema pinned in tests/sbom/schema/
   fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip, lock-parse,
-                         lock-snapshot-parse, lock-snapshot-round-trip, lock-snapshot-project
+                         lock-snapshot-parse, lock-snapshot-round-trip, lock-snapshot-project,
+                         sbom-render, sbom-read
 blueprint-nix/           importable pure Nix provider (depends only on blueprint-core)
   NixProvider.roc        shared pure request planning and flake rendering
   Locks.roc              Nix pins <-> the Lock: Sources plus a "nix" hint
@@ -48,6 +52,7 @@ scripts/                 Roc scripts, run from the repository root; their module
   check_version.roc      check a release's version before building and against the public API after
   package_docs.roc       archive the rendered site
   release_assets.roc     gather a release's assets and check the names other repositories depend on
+  test_lock_snapshot.roc  check the official lock snapshot consumer against the vendored schema and profile
   test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
   reproducible_probe.roc  compare a producer on independent CI hosts and synthetic CLI patch builds
 docs/                    the manual: index.adoc includes one chapter per top-level .adoc file
@@ -102,8 +107,8 @@ gives two Roc compilers from
 https://github.com/roc-lang/roc-overlay[roc-overlay], Zig 0.16 and the
 programs the scripts start: coreutils, git, curl, tar, gzip, zip, unzip and gh.
 On Linux it also supplies Bubblewrap, util-linux and Python for isolated
-runner tests and a restrictive-umask launcher. Independent SPDX validation
-uses its own pinned Python environment; the product and reporting app run in Roc.
+runner tests and a restrictive-umask launcher. Nothing else uses Python: the
+product, the reporting app and every conformance check run in Roc.
 `roc` is the product compiler, the nightly in
 `blueprint-cli/compiler-version`: it builds and tests the CLI, the packages and
 the platform, and a released `blueprint` embeds it. `roc-stable` is the
@@ -227,6 +232,34 @@ revisions in `fixtures/consumer/inputs.lock` and `flake.lock`, and its
 `fixtures/consumer/main.roc` holds the staged bytes and supplied-lock
 preservation as `expect`s. Parse fuzzing also checks successful semantic
 normalization for idempotence.
+SBOMs are SPDX 3.0.1 JSON-LD, with SPDX 2.3 and CycloneDX 1.7 renderings of
+the same inventory for consumers that read only those, and conformance is
+checked in Roc, with no other validator. `blueprint-core/Spdx3.roc`,
+`Spdx2.roc` and `CycloneDx.roc` hold the classes or objects, members,
+enumerations and prose rules of each format, and `scripts/src/SbomTest.roc`
+holds them to the digest-pinned schemas in `tests/sbom/schema/` (the published
+SPDX 3.0.1 JSON schema, the SPDX 2.3 schema and the CycloneDX 1.7 schema):
+every class, member and enumeration the validators accept is the schema's own.
+The same expects require that each committed fixture in `tests/sbom/fixtures/`
+is what the renderers write now (regenerate them with
+`scripts/test_sbom.roc fixtures tests/sbom/fixtures`) and that all three
+renderings of a fixture read back to one package graph. `scripts/test_sbom.roc binding`
+then runs the built `scripts/sbom.roc` against read-only inputs. The
+`sbom-render` fuzz target generates inventories with arbitrary text and
+graphs: each must render to valid, canonical SPDX 3.0.1, SPDX 2.3 and
+CycloneDX 1.7, read back from each to exactly its own packages and
+relationships, with CycloneDX's standard fields (dependencies, scopes, hashes,
+purls, licenses, suppliers) derived from the inventory, and the validators
+must reject a rendering once one of a list of SPDX 3.0.1 or CycloneDX rule
+violations is injected into it. It also strips Blueprint's properties from
+the CycloneDX rendering, which must then import as plain CycloneDX to a
+projection of the inventory, and adds files to the SPDX renderings, which
+must read to the same package graph with the files counted as gaps.
+`sbom-read` mutates the fixtures of every format, including what Syft and
+Trivy write (`tests/sbom/fixtures/upstream/`): reading must never crash, what
+it accepts must be a sound package graph, and it must import as an upstream
+SBOM unless the import is refused for a developer path, a credential, its
+size or a subject digest that is not a SHA-256.
 `scripts/test_builds.roc` runs real sandboxed builds of artifacts,
 dependencies and sources, including host-file and TCP isolation with positive
 host controls, fail-closed runner checks, exact argv, immutable locks,

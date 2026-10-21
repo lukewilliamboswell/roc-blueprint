@@ -4,9 +4,10 @@
 `basic-cli-rust-toolchain.toml` are the files at basic-cli tag 0.26.0-rc2,
 commit `392b1df2856a4944c0fefdfa7dcd8abfdfa2622f`.
 `../basic-cli-cargo.json` preserves all 107 package instances and 201
-resolution edges. Unclassified feature/target/build edges use SPDX OTHER;
-they do not assert runtime dependency or containment. Known `cc`, `pkg-config`
-and `vcpkg` edges of libsqlite3-sys are BUILD_DEPENDENCY_OF.
+resolution edges. Unclassified feature/target/build edges use the SPDX 3.0.1
+relationship `other`; they do not assert runtime dependency or containment.
+Known `cc`, `pkg-config` and `vcpkg` edges of libsqlite3-sys are `dependsOn`
+with lifecycle scope `build` (SPDX 2.3 `BUILD_DEPENDENCY_OF`).
 
 `linker-runtime-sources.json` and `msvc-runtime-UPSTREAM.json` are from
 roc-platform-template-zig commit
@@ -27,8 +28,11 @@ Changes to the compiler, CLI imports, or linker-input producer fail closed
 until this metadata and the generation recipe are reviewed together.
 
 SPDX license identifiers and exceptions come from license-list-data v3.26.0.
-The complete SPDX 2.3.1 JSON schema in tests/sbom/schema comes from the SPDX
-specification v2.3.1 tag; its SHA-256 is independently pinned in the validator.
+The SPDX 3.0.1 JSON schema in tests/sbom/schema is the one published at
+https://spdx.org/schema/3.0.1/spdx-json-schema.json, and the SPDX 2.3.1 schema
+comes from the SPDX specification v2.3.1 tag. Both are kept byte for byte, and
+`scripts/src/SbomTest.roc` pins their SHA-256 and holds the Roc validators to
+their classes, members and enumerations.
 
 Unknown Cargo licenses, target feature selection, optimized link elimination,
 and opaque compiler/native closures remain explicit gaps. Resolution candidates

@@ -1,4 +1,5 @@
 (
+	(build_files ())
 	(build_sources ())
 	(builds ())
 	(commands ())
@@ -9,7 +10,7 @@
 	(extensions ())
 	(format (
 		(major 2)
-		(minor 7)))
+		(minor 8)))
 	(inputs ())
 	(name "fixture")
 	(programs ())
@@ -17,6 +18,7 @@
 	(requires ())
 	(roc_packages ())
 	(shells ())
+	(source_files ())
 	(sources ())
 	(system_tools ())
 	(systems ("x86_64-linux" "aarch64-linux"))

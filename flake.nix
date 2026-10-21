@@ -173,6 +173,11 @@
                 ./blueprint-core/Tree.roc
                 ./blueprint-core/Sbom.roc
                 ./blueprint-core/SbomLicenses.roc
+                ./blueprint-core/Sidecar.roc
+                ./blueprint-core/CycloneDx.roc
+                ./blueprint-core/Lookup.roc
+                ./blueprint-core/Spdx2.roc
+                ./blueprint-core/Spdx3.roc
               ];
             };
             nativeBuildInputs = [
@@ -218,20 +223,6 @@
             default = blueprint;
             roc-glue-spec = rocGlueSpec;
             roc-docs = rocDocs;
-            lock-snapshot-validator = pkgs.writeShellApplication {
-              name = "validate-lock-snapshot";
-              runtimeInputs = [ (pkgs.python3.withPackages (ps: [ ps.jsonschema ])) ];
-              text = ''
-                exec python3 -I ${./scripts/validate_lock_snapshot.py} --schema ${./blueprint-core/lock-snapshot-v1.schema.json} "$@"
-              '';
-            };
-            sbom-validator = pkgs.writeShellApplication {
-              name = "validate-blueprint-sbom";
-              runtimeInputs = [ (pkgs.python3.withPackages (ps: [ ps.jsonschema ])) ];
-              text = ''
-                exec python3 -I ${./scripts/validate_sbom.py} --schema ${./tests/sbom/schema/spdx-2.3.schema.json} "$@"
-              '';
-            };
           }
           # Not in the development shell: only a release build needs it, and
           # with it the macOS archive.

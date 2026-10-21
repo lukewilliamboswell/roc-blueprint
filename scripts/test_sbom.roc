@@ -7,13 +7,18 @@ app [main!] {
 import cli.OsStr
 import cli.Path
 import cli.Stderr
+import src/SbomBindingTest
 import src/SbomTest
 import core.Spec
 import core.Lock
 
-## Native offline SBOM fixture generator
-## All tests also run via roc test.
-## `scripts/test_sbom.roc OUTPUT` writes the stable interoperable fixture.
+## Native offline SBOM fixtures and binding checks. All expects run via
+## `roc test`.
+##
+##   scripts/test_sbom.roc fixtures DIRECTORY   write every SPDX 3.0.1 and 2.3 fixture
+##   scripts/test_sbom.roc inputs DIRECTORY     write the binding tool's inputs
+##   scripts/test_sbom.roc binding TOOL INPUTS  check a built scripts/sbom.roc
+##   scripts/test_sbom.roc OUTPUT               write the native-linux SPDX 3.0.1 fixture
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| match args.map(OsStr.display) {
 	["fixtures", directory] => {
@@ -38,12 +43,13 @@ main! = |args| match args.map(OsStr.display) {
 		}
 		Ok({})
 	}
+	["binding", tool, inputs] => SbomBindingTest.run!(tool, inputs).map_err(|_| Exit(1))
 	[output] => {
 		text = SbomTest.output.map_err(|_| Exit(1))?
 		Path.write_utf8!(Path.utf8(output), text).map_err(|_| Exit(1))
 	}
 	_ => {
-		_ = Stderr.line!("usage: scripts/test_sbom.roc OUTPUT")
+		_ = Stderr.line!("usage: scripts/test_sbom.roc fixtures DIRECTORY | inputs DIRECTORY | binding TOOL INPUTS | OUTPUT")
 		Err(Exit(2))
 	}
 }

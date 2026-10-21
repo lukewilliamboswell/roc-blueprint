@@ -98,8 +98,9 @@ the evaluation of a `Blueprint.roc` work too. Sandboxed builds, and so the
 One release holds the platform bundle, the roc-blueprint-core bundle it
 depends on, the standalone Roc SBOM reporting app, the `blueprint` binaries
 with their checksums, the examples archive, the documentation archive and
-the manual. Each executable and Roc source bundle has an artifact-bound
-SPDX sidecar. It is made by
+the manual. Each executable and Roc source bundle has artifact-bound SBOM
+sidecars: SPDX 3.0.1 (`.spdx.json`), SPDX 2.3 (`.spdx-2.3.json`) and
+CycloneDX 1.7 (`.cdx.json`). It is made by
 `.github/workflows/release.yml`, run by hand from `main` with a version. Every
 pull request runs the same workflow as a dry run, under the version
 `0.0.1-dry-run`, which is never published.
@@ -135,9 +136,9 @@ suite on them, bundles the core, platform and reporting app for the version
 (`scripts/package_examples.roc`), renders the manual with the release's
 platform URL and archives the site (`scripts/docs_snippet.roc`,
 `scripts/package_docs.roc`), renders the notes
-(`scripts/release_notes.roc`), generates artifact-bound SPDX sidecars
-(`scripts/release_sbom.roc`), independently validates their schemas, subjects
-and known inputs, and gathers the assets
+(`scripts/release_notes.roc`), generates artifact-bound SPDX and CycloneDX
+sidecars (`scripts/release_sbom.roc`), independently validates their schemas,
+subjects, known inputs and agreement on one package graph, and gathers the assets
 (`scripts/release_assets.roc`). On a pull request the test suite is left to
 `ci.yml`.
 

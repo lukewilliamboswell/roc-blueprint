@@ -1,1 +1,3 @@
 * text=auto eol=lf
+# Vendored specifications are pinned by SHA-256 of their published bytes.
+tests/sbom/schema/**/*.json -text
