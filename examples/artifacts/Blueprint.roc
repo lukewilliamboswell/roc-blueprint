@@ -26,6 +26,7 @@ config = [
 		"library",
 		[
 			Use("dev"),
+			Files(["scripts"]),
 			Run(["roc-stable", "scripts/build_library.roc"]),
 			Output("dist/library.txt"),
 		],
@@ -34,6 +35,7 @@ config = [
 		"app",
 		[
 			Use("dev"),
+			Files(["scripts"]),
 			Inputs(["assets"]),
 			Needs(["library"]),
 			Run(["roc-stable", "scripts/build_app.roc"]),

@@ -157,3 +157,36 @@ on stderr. Both flags may be combined. Version 1 has these fields:
 Consumers should reject unsupported schema versions and tolerate additional
 fields. Derivation and output identities come from Nix; Blueprint does not
 infer them from the declared output name.
+
+== Override packages in a producer
+
+`Overlay("producer-overrides", "path:./producer-overrides")` may name a local
+flake with an `overlays.default` output. Select it with
+`Overlays(["producer-overrides"])` in the producer's environment. For example,
+that flake can define:
+
+[source,nix]
+----
+{
+  outputs = { self }: {
+    overlays.default = final: prev: {
+      meson = prev.meson.overrideAttrs (old: {
+        version = "1.12.0";
+        src = prev.fetchurl {
+          url = "https://github.com/mesonbuild/meson/releases/download/1.12.0/meson-1.12.0.tar.gz";
+          # Replace with the checksum published for this exact upstream archive.
+          hash = "sha256-<published-base64-sha256>";
+        };
+        # Apply a specific patch here when the upstream test change needs one.
+      });
+    };
+  };
+}
+----
+
+The checksum is an intentional placeholder; fill it before building. Blueprint
+locks the local flake's tree and refuses edits until `blueprint update`.
+The override applies to builds whose environment selects that overlay. The
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/examples/artifacts/Blueprint.roc[artifact example]
+declares two single-output builds selecting their recipe directory and sharing
+the same pinned package environment.
