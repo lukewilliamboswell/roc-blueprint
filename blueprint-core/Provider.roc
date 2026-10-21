@@ -55,12 +55,17 @@ Provider := {
 }.{
 
 	BuildOptions : { json : Bool, rebuild : Bool }
-	BuildResult : { derivation : Str, outputs : List({ name : Str, path : Str }) }
+
+	## Identity is opaque outside its provider: a Nix derivation, for example.
+	## Native details stay namespaced when rendered, never mandatory core fields.
+	BuildResult : { recipe_identity : Str, outputs : List({ name : Str, path : Str }), metadata : List({ name : Str, value : Value }) }
 
 	## Inspection returns relative names; executable Steps files are absolute.
 	File : { path : Str, contents : Str }
 
-	LockedSource : { name : Str, identity : Str, metadata : List({ name : Str, value : Value }) }
+	## Unknown means the adapter has not established the kind of content.
+	DigestKind : [File, Tree, Unknown]
+	LockedSource : { name : Str, identity : Str, digest_kind : DigestKind, metadata : List({ name : Str, value : Value }) }
 
 	## Which pins an update resolves again. `Named` moves only the inputs with
 	## these names and keeps every other pin of the Lock, which the Core has

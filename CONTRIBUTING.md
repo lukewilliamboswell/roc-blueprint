@@ -9,6 +9,9 @@ Releasing and moving a compiler are in the
 ([source](docs/maintaining.adoc)).
 
 Use issues for bugs and design discussion, and pull requests for changes.
+Shared capabilities must remain provider neutral: see the
+[architecture principle](docs/architecture.adoc#provider-neutrality) and
+[review guidance](docs/contributing.adoc#review-provider-neutrality).
 Before opening a pull request, run from the repository root:
 
 ```sh

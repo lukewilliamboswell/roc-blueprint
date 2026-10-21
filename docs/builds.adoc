@@ -90,7 +90,7 @@ location, and the recipe sees the original archive bytes. Unrelated files
 that no selected build uses are not fetched.
 
 `blueprint lock show --json NAME` reports `digestKind: "file"` and the original
-`flatSha256` separately from tree identities, with `fetchTree: null`. A NAR
+`flatSha256` separately from tree identities, with empty `metadata: {}`. A NAR
 hash is not a publisher's hash of an archive; do not compare them as if they
 were the same digest. Build provenance includes the selected file source's
 name, original URL and flat digest alongside the other locked sources used.
@@ -148,15 +148,20 @@ on stderr. Both flags may be combined. Version 1 has these fields:
 
 * `schema_version`: `1`.
 * `name` and `system`: the requested build and target system.
-* `derivation`: the actual builder derivation path reported by Nix.
+* `provider`: the provider that executed the build, currently `"nix"`.
+* `recipe_identity`: the provider's opaque locked recipe identity. Compare it
+  only together with `provider`; it is not necessarily a path or a SHA-256.
+* `metadata`: typed native details namespaced by provider. Nix supplies
+  `metadata.nix.derivation`, the actual builder derivation path reported by Nix,
+  which is also its `recipe_identity`. Other providers need no Nix fields.
 * `outputs`: a list of `{ "name": "out", "path": "..." }` records.
 * `sources`: the root lock entries used by this build and its dependencies,
   each with `name`, `provider`, `ref`, `rev` and `digest`. Sources without a
   revision have an empty `rev`; these digests retain the lock's representation.
 
 Consumers should reject unsupported schema versions and tolerate additional
-fields. Derivation and output identities come from Nix; Blueprint does not
-infer them from the declared output name.
+fields. Recipe and output identities come from the selected provider; Blueprint does
+not infer them from the declared output name.
 
 == Override packages in a producer
 

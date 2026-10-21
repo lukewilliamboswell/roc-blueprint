@@ -73,6 +73,9 @@ or creating cache state. Its documented JSON format 1 includes exact remote
 Nix `fetchTree` attributes and per-entry content identities, so external
 scripts can use the locked revision and `narHash` without parsing the lock's
 internal representation or maintaining a second pin.
+Provider-specific details are namespaced, such as
+`metadata.nix.fetchTree`; the common report does not require every provider
+to use Nix retrieval recipes or tree identities.
 
 An entry's identity stays the same when an unrelated source, fetched program
 or task changes. Relative local sources retain their tree identity and have
@@ -101,8 +104,11 @@ See xref:builds.adoc#original-files-with-published-hashes[Original file sources]
 
 `blueprint build NAME --rebuild` checks an existing output by rebuilding the
 same derivation and failing when the bytes differ. `--json` reports versioned
-provenance with the actual derivation, outputs and locked sources used by the
-build. `BLUEPRINT_TOOLS` exposes full roots of declared packages, so recipes
+provenance with the provider, opaque `recipe_identity`, outputs and locked
+sources used by the build. Nix uses the actual derivation path as its recipe
+identity and exposes it in `metadata.nix.derivation` too. Other providers can
+describe their own recipe identities and native metadata without imitating
+Nix. `BLUEPRINT_TOOLS` exposes full roots of declared packages, so recipes
 can reach libraries and loaders as well as executables. See
 xref:builds.adoc#check-reproducibility-and-record-provenance[Build checks and provenance].
 

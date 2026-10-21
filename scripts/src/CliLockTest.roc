@@ -39,7 +39,7 @@ cases! = |bench| {
 	CliHarness.exited!(query, 0, "offline lock show")?
 	decoded = LockJson.decode(query.stdout).map_err(|_| ScriptFailed)?
 	pin = LockJson.field(LockJson.field(decoded, "sources").map_err(|_| ScriptFailed)?, "nixpkgs").map_err(|_| ScriptFailed)?
-	fetch = LockJson.field(pin, "fetchTree").map_err(|_| ScriptFailed)?
+	fetch = LockJson.field(LockJson.field(LockJson.field(pin, "metadata").map_err(|_| ScriptFailed)?, "nix").map_err(|_| ScriptFailed)?, "fetchTree").map_err(|_| ScriptFailed)?
 	CliHarness.check!(LockJson.field(fetch, "rev") == Ok(LockJson.String("4975466d324710c576dc11ad614684e6bd8cad8e")) and LockJson.field(fetch, "narHash") == Ok(LockJson.String("sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=")) and query.stderr == "", "inspector did not expose exact committed pin")?
 	CliHarness.check!(Path.read_utf8!(file)? == authority and !CliHarness.present!(cache) and !CliHarness.present!("${cwd}/missing") and !CliHarness.present!("${cwd}/.blueprint"), "inspector changed authority or created state")?
 	Path.write_utf8!(file, authority.replace_each("(minor 1)", "(minor 9)"))?

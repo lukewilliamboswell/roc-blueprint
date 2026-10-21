@@ -213,6 +213,9 @@ static! = |context| {
 	problem!(StaticChecks.provider_contract_problem(cli_source))?
 	lock_inspector = read!(context, "blueprint-cli/LockReport.roc")?
 	problem!(StaticChecks.lock_inspector_contract_problem(lock_inspector))?
+	for report in ["blueprint-cli/BuildReport.roc", "blueprint-cli/ReportJson.roc"] {
+		problem!(StaticChecks.lock_inspector_contract_problem(read!(context, report)?))?
+	}
 
 	step!("The CLI records a download of its compiler for every system it runs on")?
 	problem!(StaticChecks.bootstrap_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-cli/Bootstrap.roc")?))?
