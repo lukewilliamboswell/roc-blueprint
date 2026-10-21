@@ -939,10 +939,11 @@ execute_prepared! = |step, fetched, ctx, witness_directory| {
 				mnt = namespace!("mnt")?
 				net = namespace!("net")?
 				atomic_write!("${witness_directory}/witness", "${mnt}\n${net}\n")?
-				# The daemon binds this leaf directly: keep its parent private,
-				# while allowing the sandbox build user to read the mounted file
-				# even when the caller's umask is restrictive.
+				# Nix checks the source as its build user before mounting it. The
+				# owned parent permits traversal but no listing or other-user writes;
+				# the witness is readable even with a restrictive caller umask.
 				Cmd.new("chmod").args(["0444", "--", "${witness_directory}/witness"].map(OsStr.from_str)).exec!()?
+				Cmd.new("chmod").args(["0711", "--", witness_directory].map(OsStr.from_str)).exec!()?
 				$argv = $argv.map(|arg| arg.replace_each(placeholder, witness_directory))
 			}
 			LocalSystem(system) => {
