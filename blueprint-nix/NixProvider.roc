@@ -270,6 +270,9 @@ NixProvider :: [].{
 					return Err("sandboxed builds currently require target x86_64-linux")
 				}
 				$builds = Project.build_closure(project, name)?
+				if $builds.any(|build| build.inputs.contains("blueprint-input-evidence")) {
+					return Err("build input name blueprint-input-evidence is reserved for selected reproduction evidence")
+				}
 				$names = $builds.map(|b| b.environment)
 				# Namespace witnesses compare caller/build on the same kernel.
 				# Never dispatch this local isolation contract to a remote builder.
@@ -776,7 +779,7 @@ NixProvider :: [].{
 						.map_err(|_| "unknown build environment")?
 					$rendered = append_rendered(
 						$rendered,
-						render_build(build, env, spec.system_tools, spec.commands, spec.configured_tools, spec.roc_packages, spec.build_files, system, builder),
+						render_build(build, env, spec.system_tools, spec.commands, spec.configured_tools, spec.roc_packages, spec.build_files, spec.source_files, system, builder),
 					)?
 				}
 				$rendered = append_rendered(
@@ -1005,8 +1008,8 @@ NixProvider :: [].{
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
 	## The standalone versioned runner uses the locked package set's native Roc utility.
 	## Its own tools are absolute paths; argv and metadata enter through JSON.
-	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Spec.RocPackage), List(Spec.BuildFiles), Str, List(Str) -> Str
-	render_build = |build, environment, system_tools, commands, configured, roc_packages, build_files, system, builder| {
+	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Spec.RocPackage), List(Spec.BuildFiles), List(Spec.SourceFile), Str, List(Str) -> Str
+	render_build = |build, environment, system_tools, commands, configured, roc_packages, build_files, source_files, system, builder| {
 		# A build has no network, so the runner gives Roc a cache of its own
 		# holding these. Other builds' derivations stay as they were.
 		bundles = roc_packages.keep_if(|entry| entry.environment == environment.name).map(roc_package_location)
@@ -1038,6 +1041,14 @@ NixProvider :: [].{
 			.concat(configured.keep_if(|entry| entry.environment == environment.name).map(|entry| { name: "${entry.tool.source}#${entry.tool.name}", root_path: configured_package(entry) }))
 			.concat(commands.keep_if(|entry| entry.environment == environment.name).map(|entry| { name: entry.name, root_path: "sets.${quote(entry.tool.source)}.${attr_path(tool_path(entry.tool.name))}" }))
 			.map(|entry| "{ name = ${quote(entry.name)}; path = ${entry.root_path}; }")
+		# Selected reproduction evidence is an input, never the identity of the
+		# final derivation. Unrelated authority and mutable locators stay out.
+		package_evidence = sources.concat(environment.overlays).map(
+			|name| "{ name = ${quote(name)}; provider = \"nix\"; rev = inputs.${quote(name)}.rev or \"\"; narHash = inputs.${quote(name)}.narHash or \"\"; }",
+		)
+		file_evidence = source_files.keep_if(|entry| build.inputs.contains(entry.name)).map(
+			|entry| "{ name = ${quote(entry.name)}; provider = \"file\"; sha256 = ${quote(entry.sha256)}; }",
+		)
 		inputs = build.inputs.map(
 			|name|
 				"{ name = ${quote(name)}; path = inputs.${quote(name)}; }",
@@ -1063,7 +1074,11 @@ NixProvider :: [].{
 				"            pkgs = sets.${quote(primary)};",
 				"            tools = [ ${Str.join_with(tools, " ")} ];",
 				"            runner = \"\${runnerFor pkgs}/bin/roc-build-runner\";",
-				"            inputs_view = pkgs.linkFarm ${quote("blueprint-inputs-${build.name}")} [ ${Str.join_with(inputs, " ")} ];",
+				"            input_evidence = pkgs.writeText \"blueprint-input-evidence.json\" (builtins.toJSON {",
+				"              format = 1; packages = [ ${Str.join_with(package_evidence, " ")} ]; files = [ ${Str.join_with(file_evidence, " ")} ];",
+				"              project = ${project}; tools = [ ${Str.join_with(tool_roots, " ")} ];",
+				"            });",
+				"            inputs_view = pkgs.linkFarm ${quote("blueprint-inputs-${build.name}")} ([ ${Str.join_with(inputs, " ")} ] ++ [ { name = \"blueprint-input-evidence\"; path = input_evidence; } ]);",
 				"            artifacts_view = pkgs.linkFarm ${quote("blueprint-artifacts-${build.name}")} [ ${Str.join_with(dependencies, " ")} ];",
 				"            tools_view = pkgs.linkFarm ${quote("blueprint-tools-${build.name}")} [ ${Str.join_with(tool_roots, " ")} ];",
 				"          in derivation {",
@@ -1566,8 +1581,8 @@ expect NixProvider.render({ ..mk(simple), configured_tools: [{ environment: "dev
 expect {
 	entry = { environment: "builder", tool: { source: "default", name: "zig" }, options: Value.Attrs([{ name: "debug", value: Value.Bool(True) }]) }
 	build = { name: "app", environment: "builder", inputs: [], needs: [], run: ["true"], output: "out" }
-	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [], overlays: [] }, [], [], [entry, { ..entry, environment: "other" }], [], [], "x86_64-linux", [])
-	rendered.split_on("(sets.\"default\".\"zig\".override { \"debug\" = true; })").len() == 3
+	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [], overlays: [] }, [], [], [entry, { ..entry, environment: "other" }], [], [], [], "x86_64-linux", [])
+	rendered.split_on("(sets.\"default\".\"zig\".override { \"debug\" = true; })").len() == 4
 }
 
 # A tool name that is not a Nix attribute path is refused before any effects.
@@ -3156,7 +3171,7 @@ expect {
 
 # Selecting recipe files changes only that build's project snapshot.
 expect {
-	selected = NixProvider.render_build(TestData.library, { name: "builder", parents: [], tools: [{ source: "nix", name: "glibc" }], overlays: [] }, [], [], [], [], [{ build: "library", paths: ["recipe.sh"] }], "x86_64-linux", [])
+	selected = NixProvider.render_build(TestData.library, { name: "builder", parents: [], tools: [{ source: "nix", name: "glibc" }], overlays: [] }, [], [], [], [], [{ build: "library", paths: ["recipe.sh"] }], [], "x86_64-linux", [])
 	selected.contains("project = projectFor [ \"recipe.sh\" ];") and
 		selected.contains("name = \"nix#glibc\"; path = sets.\"nix\".\"glibc\";")
 }
@@ -3169,3 +3184,15 @@ expect {
 expect NixProvider.build_result("[{\"drvPath\":\"/nix/store/recipe.drv\",\"outputs\":{\"out\":\"/nix/store/result\"}}]") == Ok({ recipe_identity: "/nix/store/recipe.drv", outputs: [{ name: "out", path: "/nix/store/result" }], metadata: [{ name: "derivation", value: Value.Str("/nix/store/recipe.drv") }] })
 expect NixProvider.build_result("[]").is_err()
 expect NixProvider.build_result("[{\"drvPath\":\"/nix/store/recipe.drv\",\"outputs\":{\"out\":\"/nix/store/result\"}}]\n/nix/store/result\n").is_err()
+
+# Reproduction material contains selected pins only, not the whole lock or
+# the final build identity. Original file hashes remain file identities.
+expect {
+	selected = { name: "upstream", url: "https://example.test/source.tar.gz", sha256: "a".repeat(64) }
+	unrelated = { name: "unused", url: "https://example.test/other.tar.gz", sha256: "b".repeat(64) }
+	build = { name: "copy", environment: "builder", inputs: ["upstream"], needs: [], run: ["cp", "input", "out"], output: "out" }
+	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [{ source: "nix", name: "coreutils" }], overlays: [] }, [], [], [], [], [], [selected, unrelated], "x86_64-linux", [])
+	rendered.contains("blueprint-input-evidence") and rendered.contains(selected.sha256)
+		and !rendered.contains(unrelated.sha256) and !rendered.contains("build_identity")
+		and rendered.contains("inputs.\"nix\".narHash")
+}
