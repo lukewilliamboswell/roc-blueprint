@@ -215,7 +215,8 @@ expect {
 	inventory.components.any(|entry| entry.id == program_component.id and entry.sha256 == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 }
 expect {
-	file_spec = { ..locked_spec, sources: [] }
+	file_wire = { ..locked_spec, sources: [], requires_: ["source-files"] }.to_str().trim().drop_suffix(")")
+	file_spec = Spec.parse("${file_wire} (source_files (((name \"upstream\") (url \"https://example.org/source/1.0.0.tar.gz\") (sha256 \"${digest}\")))) )") ?? crash "invalid SourceFile fixture"
 	file_lock = { ..locked_lock, intent: Lock.intent_of(file_spec), sources: [{ name: "upstream", provider: "file", ref: "https://example.org/source/1.0.0.tar.gz", rev: "", digest: "sha256:${digest}" }] }
 	inventory = Sbom.inspect(file_spec, file_lock, "x86_64-linux", unpinned_composition) ?? crash "flat file should resolve"
 	inventory.components.any(|entry| entry.id == source_component.id and entry.sha256 == digest and entry.version == "sha256:${digest}")
