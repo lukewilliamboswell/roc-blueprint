@@ -258,7 +258,7 @@
               pkgs.zip
               pkgs.unzip
               pkgs.gh
-            ];
+            ] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.bubblewrap pkgs.util-linux ];
           };
         };
       outputs = nixpkgs.lib.genAttrs systems forSystem;

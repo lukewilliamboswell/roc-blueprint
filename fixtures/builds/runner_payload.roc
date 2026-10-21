@@ -6,8 +6,8 @@ import cli.OsStr
 import cli.Path
 import cli.Stderr
 
-## Build commands for `blueprint __build-runner` when the suite runs it on the
-## host, where no environment supplies `roc-stable`. The suite builds this
+## Build commands for the versioned native runner when the suite runs it in a
+## private namespace, where no environment supplies `roc-stable`. The suite builds this
 ## program once and names it by absolute path.
 ##
 ##   runner_payload exit CODE          exit with that code
@@ -53,7 +53,7 @@ direct_out! = || {
 replace_workspace! : () => Try({}, _)
 replace_workspace! = || {
 	Path.rename!(Env.cwd!()?, "../moved")?
-	Cmd.new("ln").args(["-s", "moved", "../blueprint-work"]).exec!()?
+	Cmd.new("ln").args(["-s", "moved", "../runner-work"]).exec!()?
 	Path.write_utf8!("../moved/output", "moved")
 }
 

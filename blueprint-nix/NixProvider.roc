@@ -9,7 +9,7 @@ import core.Provider
 import core.Realise
 import Locks
 import LockJson
-import "build-runner-v1.sh" as build_runner_v1 : Str
+import Runner
 
 ## Package names are native Nix attributes, never translated or filtered.
 ## Each environment imports its sources with only its ordered overlay stack.
@@ -369,10 +369,14 @@ NixProvider :: [].{
 		}
 		match action {
 			Build(_) => {
-				$operations = $operations.append(Isolation({ directory: "${layout.generated_root}/isolation", placeholder: "@blueprint-isolation-source@" }))
+				$operations = $operations.append(SourceFile(Runner.compiler)).append(Isolation({ directory: "${layout.generated_root}/isolation", placeholder: "@blueprint-isolation-source@" }))
 					.append(LocalSystem(target))
 			}
 			_ => {}
+		}
+		compiler_files = match action {
+			Build(_) => [{ path: "${layout.generated_root}/source-file-${Runner.compiler.sha256}.json", contents: "@blueprint-source-file-${Runner.compiler.sha256}@" }]
+			_ => []
 		}
 		files = staged_files(layout, contents)
 			.append({
@@ -386,13 +390,14 @@ NixProvider :: [].{
 				},
 			),
 		)
+		all_files = files.concat(compiler_files)
 		# The machine must have Nix itself: nothing installs it.
 		if !needs_nix.is_empty() {
 			$operations = $operations.append(Present([{ program: "nix", because: needs_nix }]))
 		}
 		{
 			action,
-			files,
+			files: all_files,
 			argv,
 			operations: $operations,
 			artifacts: builds.map(
@@ -952,7 +957,8 @@ NixProvider :: [].{
 	render_source = |source| match source {
 		Unplanned => lines([
 			"      packages = let",
-			"        runnerSource = ${quote(build_runner_v1)};",
+			"        runnerSource = { url = ${quote(Runner.source.url)}; sha256 = ${quote(Runner.source.sha256)}; };",
+			"        runnerFor = pkgs: (${Runner.nix}) { inherit pkgs; source = pkgs.fetchurl runnerSource; compilerArchive = builtins.path { path = /. + (builtins.fromJSON (builtins.readFile ./source-file-${Runner.compiler.sha256}.json)); name = ${quote("blueprint-source-${Runner.compiler.sha256}")}; recursive = false; sha256 = ${quote(Runner.compiler.sha256)}; }; };",
 			"        projectFor = _: builtins.throw \"build execution requires NixProvider.plan "
 				.concat("and a caller project\";"),
 			"        isolation = builtins.throw "
@@ -967,7 +973,8 @@ NixProvider :: [].{
 				.map(quote)
 			lines([
 				"      packages = let",
-				"        runnerSource = ${quote(build_runner_v1)};",
+				"        runnerSource = { url = ${quote(Runner.source.url)}; sha256 = ${quote(Runner.source.sha256)}; };",
+				"        runnerFor = pkgs: (${Runner.nix}) { inherit pkgs; source = pkgs.fetchurl runnerSource; compilerArchive = builtins.path { path = /. + (builtins.fromJSON (builtins.readFile ./source-file-${Runner.compiler.sha256}.json)); name = ${quote("blueprint-source-${Runner.compiler.sha256}")}; recursive = false; sha256 = ${quote(Runner.compiler.sha256)}; }; };",
 				"        projectFor = selected: assert selected == null || builtins.all (item: builtins.pathExists (${quote(root)} + \"/\" + item)) selected; builtins.path {",
 				"          path = /. + ${quote(root)};",
 				"          name = \"blueprint-project\";",
@@ -992,7 +999,7 @@ NixProvider :: [].{
 	}
 
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
-	## The standalone versioned runner uses the locked package set's Bash.
+	## The standalone versioned runner uses the locked package set's native Roc utility.
 	## Its own tools are absolute paths; argv and metadata enter through JSON.
 	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Spec.RocPackage), List(Spec.BuildFiles), Str, List(Str) -> Str
 	render_build = |build, environment, system_tools, commands, configured, roc_packages, build_files, system, builder| {
@@ -1051,34 +1058,35 @@ NixProvider :: [].{
 				"            };",
 				"            pkgs = sets.${quote(primary)};",
 				"            tools = [ ${Str.join_with(tools, " ")} ];",
+				"            runner = \"\${runnerFor pkgs}/bin/roc-build-runner\";",
+				"            inputs_view = pkgs.linkFarm ${quote("blueprint-inputs-${build.name}")} [ ${Str.join_with(inputs, " ")} ];",
+				"            artifacts_view = pkgs.linkFarm ${quote("blueprint-artifacts-${build.name}")} [ ${Str.join_with(dependencies, " ")} ];",
+				"            tools_view = pkgs.linkFarm ${quote("blueprint-tools-${build.name}")} [ ${Str.join_with(tool_roots, " ")} ];",
 				"          in derivation {",
 				"            name = ${quote("blueprint-${build.name}")};",
 				"            inherit system;",
-				"            builder = \"\${pkgs.bash}/bin/bash\";",
-				"            args = [ (builtins.toFile \"blueprint-build-runner-v1\" runnerSource) ];",
-				"            blueprintCoreutils = pkgs.coreutils;",
-				"            blueprintFind = pkgs.findutils;",
-				"            blueprintJq = pkgs.jq;",
-				"            blueprintSpec = builtins.toJSON {",
+				"            builder = runner;",
+				"            args = [ ];",
+				"            ROC_BUILD_RUNNER_WITNESS = \"/blueprint-isolation/witness\";",
+				"            ROC_BUILD_RUNNER_READLINK = \"\${pkgs.coreutils}/bin/readlink\";",
+				"            runnerSpec = builtins.toJSON {",
+				"              schema_version = 1;",
+				"              env = [ { name = \"BLUEPRINT_INPUTS\"; value = inputs_view; } { name = \"BLUEPRINT_ARTIFACTS\"; value = artifacts_view; } { name = \"BLUEPRINT_TOOLS\"; value = tools_view; } ];",
 				"              project = ${project};",
 				"              argv = [ ${argv} ];",
 				"              output = ${quote(build.output)};",
 				# Exactly the environment's tools: nothing implicit is on PATH.
 				"              path = pkgs.lib.makeBinPath tools;",
-				"              tools = pkgs.linkFarm ${quote("blueprint-tools-${build.name}")} [ ${Str.join_with(tool_roots, " ")} ];",
-				"              inputs = pkgs.linkFarm "
-					.concat(quote("blueprint-inputs-${build.name}"))
-					.concat(" [ ${Str.join_with(inputs, " ")} ];"),
-				"              artifacts = pkgs.linkFarm "
-					.concat(quote("blueprint-artifacts-${build.name}"))
-					.concat(" [ ${Str.join_with(dependencies, " ")} ];"),
+				"              tools = tools_view;",
+				"              inputs = inputs_view;",
+				"              artifacts = artifacts_view;",
 				"              readlink = \"\${pkgs.coreutils}/bin/readlink\";",
 				"              chmod = \"\${pkgs.coreutils}/bin/chmod\";",
 			]),
 		).concat(lines(package_lines)).concat(
 			lines([
 				"            };",
-				"            passAsFile = [ \"blueprintSpec\" ];",
+				"            passAsFile = [ \"runnerSpec\" ];",
 				"          };",
 			]),
 		)
@@ -1812,12 +1820,14 @@ expect match plan_fixture(Request.Build("app")) {
 expect match plan_fixture(Request.Build("app")) {
 	Ok({ steps: [plan] }) => plan.operations == [
 		VerifyTree({ path: "/project/assets", digest: assets_tree }),
+		SourceFile(Runner.compiler),
 		Isolation({ directory: "/generated/isolation", placeholder: "@blueprint-isolation-source@" }),
 		LocalSystem("x86_64-linux"),
 		Present([{ program: "nix", because: "build app runs in the Nix sandbox" }]),
 	] and plan.files.map(|file| file.path) == [
 		"/generated/flake.nix",
 		"/generated/flake.lock",
+		"/generated/source-file-${Runner.compiler.sha256}.json",
 	]
 	_ => False
 }
@@ -1829,8 +1839,8 @@ expect match plan_fixture(Request.Build("app")) {
 		Ok(file) => file.contents.contains("\"\" \"two words\" \"line\\nbreak\" \"$HOME\"")
 			and file.contents.contains("path = artifacts.\"library\";")
 			and file.contents.contains("path = inputs.\"assets\";")
-			and file.contents.contains("builder = \"\${pkgs.bash}/bin/bash\";")
-			and file.contents.contains("builtins.toFile \"blueprint-build-runner-v1\" runnerSource")
+			and file.contents.contains("builder = runner;")
+			and file.contents.contains("name = \"blueprint-build-runner-v1\";")
 			and file.contents.contains("path = pkgs.lib.makeBinPath tools;")
 			and !file.contents.contains("@blueprint-caller")
 			and !file.contents.contains("outputHash")
@@ -2740,7 +2750,7 @@ expect {
 	match atomic.steps {
 		[library] => sequence.steps.all(
 			|step| step.operations.first() == library.operations.first()
-				and step.files.last() == library.files.last()
+				and step.files.find_first(|file| file.path.ends_with("/flake.lock")) == library.files.find_first(|file| file.path.ends_with("/flake.lock"))
 				and !step.files.any(
 					|file| file.path == TestData.layout.lock_path,
 				),

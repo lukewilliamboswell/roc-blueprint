@@ -7,13 +7,14 @@ import BuildHarness
 import Integrity
 import Script
 import ReproducibleGates
+import StandaloneRunner
 
 ## The sandboxed-build gates, against the real `./blueprint` and real Nix.
 ##
 ## Builds are real derivations whose commands are the Roc scripts of
 ## `fixtures/builds`, run as `roc-stable` inside the sandbox. No build is
 ## mocked and no gate rests on a sandbox option alone. The gates that need no
-## sandbox run `./blueprint __build-runner` on the host, as a derivation would.
+## sandbox run the exact standalone runner in private test namespaces.
 BuildGates := [].{
 
 	## A project file the build must see: the suite's own record of what it
@@ -55,7 +56,8 @@ BuildGates := [].{
 	## A build specification: each field with its JSON value. A later field of
 	## the same name replaces an earlier one.
 	specification : List((Str, Str)) -> Str
-	specification = |fields| {
+	specification = |provided| {
+		fields = [("schema_version", "1"), ("env", "[]")].concat(provided)
 		chosen = |name| List.last(fields.keep_if(|(field, _)| field == name))
 		var $names = []
 		for (name, _) in fields {
@@ -338,6 +340,7 @@ host_specification! = |suite| {
 		("project", quote(empty)),
 		("inputs", quote(empty)),
 		("artifacts", quote(empty)),
+		("tools", quote(empty)),
 		("path", quote(Env.var_str!("PATH") ?? "")),
 		("output", quote("output")),
 		("isolation", "{\"mnt\":\"mnt:[0]\",\"net\":\"net:[0]\"}"),
@@ -347,18 +350,12 @@ host_specification! = |suite| {
 	])
 }
 
-## Run the production build runner on the host, as a derivation does. Each
-## run gets its own build directory, specification and `$out`.
+## Exact runner mechanics in a test namespace; real production uses Nix.
 runner! : BuildHarness.Suite, Str, I32 => Try({ ran : BuildHarness.Outcome, top : Str }, _)
 runner! = |suite, specification, code| {
-	top = Path.to_str(Env.create_temp_dir_in!(Path.utf8(suite.work), "runner-")?)?
-	Path.create_dir!(Path.utf8("${top}/build"))?
-	Path.write_utf8!(Path.utf8("${top}/spec.json"), specification)?
-	ran = BuildHarness.command!(
-		suite,
-		{ argv: [suite.blueprint, "__build-runner", "${top}/spec.json"], cwd: "${top}/build", extra: [("out", "${top}/out")], stdin: [], code, service: NoService },
-	)?
-	Ok({ ran, top })
+	result = StandaloneRunner.run!({ root: suite.root, work: suite.work }, specification, Observed)?
+	BuildHarness.require!(result.code == code, "standalone runner: exit ${result.code.to_str()}, expected ${code.to_str()}:\n${result.stderr}")?
+	Ok({ ran: { code: result.code, stdout: result.stdout.to_utf8(), stderr: result.stderr.to_utf8(), out: result.stdout, err: result.stderr, requests: [] }, top: result.top })
 }
 
 ## Exit codes, the declared PATH and output checks, without Nix.
@@ -378,7 +375,7 @@ runner_mechanics! = |suite, base, payload| {
 	] {
 		failed = runner!(suite, BuildGates.specification(base.concat(fields)), 1)?
 		BuildHarness.require!(failed.ran.err.contains(diagnostic), "the runner did not say \"${diagnostic}\":\n${failed.ran.err}")?
-		BuildHarness.require!(failed.ran.err.starts_with("blueprint build: "), "the runner's diagnostic has another prefix:\n${failed.ran.err}")?
+		BuildHarness.require!(failed.ran.err.starts_with("roc-build-runner: "), "the runner's diagnostic has another prefix:\n${failed.ran.err}")?
 		if !diagnostic.contains("$out") {
 			BuildHarness.require!(!BuildHarness.exists!("${failed.top}/out"), "failure published")?
 		}
@@ -433,57 +430,25 @@ namespace! = |name| {
 	Ok(output.stdout_utf8_lossy().drop_suffix("\n"))
 }
 
-## Execute the real runner on the host; it must never reach the user's Run.
-## Uses the namespace identities the CLI staged for a real build.
+## The exact runner rejects missing, malformed and shared namespace witnesses
+## before creating a workspace. Valid different namespaces are covered above.
 reject_unsandboxed_runner! : BuildHarness.Suite, State, List((Str, Str)) => Try({}, _)
 reject_unsandboxed_runner! = |suite, state, base| {
-	source = "${suite.work}/runner-source"
-	Path.create_dir!(Path.utf8(source))?
-	write!("${source}/input", "project bytes only\n".to_utf8())?
-	mnt = namespace!("mnt")?
-	net = namespace!("net")?
 	flake = "${state.place.generated}/flake.nix"
 	_ = build!(suite, state.place, "library", NoService)?
 	staged = read!(flake)?
-	BuildHarness.require!(
-		text(read!("${state.place.generated}/isolation/witness")?) == "${mnt}\n${net}\n",
-		"runtime witness did not capture caller namespaces",
-	)?
-	BuildHarness.require!(!text(staged).contains("@blueprint-caller"), "staged build kept an unobserved placeholder")?
+	BuildHarness.require!(!text(staged).contains("@blueprint-caller"), "caller identity entered derivation")?
 	_ = build!(suite, state.place, "library", NoService)?
 	BuildHarness.require!(read!(flake)? == staged, "witness defeats build caching")?
-	marker = "${suite.work}/unsandboxed-run-was-executed"
-	fields = base.concat([("project", quote(source)), ("inputs", quote(source)), ("artifacts", quote(source)), ("argv", Json.to_str(["touch", marker]))])
-	witness = |mnt_value, net_value| ("isolation", "{\"mnt\":${quote(mnt_value)},\"net\":${quote(net_value)}}")
-	cases = [
-		(fields.append(witness(mnt, net)), "Build shares caller mnt namespace."),
-		(fields.append(witness(mnt, "net:[0]")), "Build shares caller mnt namespace."),
-		(fields.append(witness("mnt:[0]", net)), "Build shares caller net namespace."),
-		(fields.append(witness("invalid", net)), "Invalid caller mnt namespace."),
-		(fields.append(witness("mnt:[0]", "net:[0] ")), "Invalid caller net namespace."),
-		(fields.append(("isolation", "null")), "Missing caller namespace observations."),
-		(fields.append(("isolation", "{\"mnt\":\"mnt:[0]\"}")), "Missing caller namespace observations."),
-		# A witness that differs still fails closed when the build's own
-		# namespaces cannot be read.
-		(fields.append(("readlink", quote("${suite.work}/no-readlink"))), "Cannot read build mnt namespace"),
-		(fields.keep_if(|(name, _)| name != "isolation"), "Missing caller namespace observations."),
-	]
-	for (candidate, reason) in cases {
-		failed = runner!(suite, BuildGates.specification(candidate), 1)?
-		BuildHarness.require!(
-			failed.ran.err.contains("blueprint build: cannot verify build isolation; user Run was not executed"),
-			"the runner did not refuse an unverified build:\n${failed.ran.err}",
-		)?
-		BuildHarness.require!(failed.ran.err.contains("daemon configuration"), "the refusal names no remedy:\n${failed.ran.err}")?
-		BuildHarness.require!(failed.ran.err.contains(reason), "the refusal did not say \"${reason}\":\n${failed.ran.err}")?
-		BuildHarness.require!(!BuildHarness.exists!(marker), "unsandboxed user Run executed")?
-		BuildHarness.require!(BuildHarness.sorted(BuildHarness.names!(failed.top)?) == ["build", "spec.json"], "isolation check happened after an effect")?
+	for (witness, reason) in [(Missing, "Invalid sandbox witness"), (Provided("invalid\nnet:[0]\n"), "Invalid caller mnt namespace"), (Provided("mnt:[0]\ninvalid\n"), "Invalid caller net namespace"), (Provided("mnt:[0]\n"), "Invalid sandbox witness"), (Shared, "shares caller mnt namespace")] {
+		failed = StandaloneRunner.run!({ root: suite.root, work: suite.work }, BuildGates.specification(base), witness)?
+		BuildHarness.require!(failed.code == 1 and failed.stderr.contains(reason), "standalone runner did not refuse ${reason}:\n${failed.stderr}")?
 		BuildHarness.require!(BuildHarness.names!("${failed.top}/build")?.is_empty(), "isolation check happened after workspace setup")?
 	}
-	Script.pass!("unsandboxed runner fails closed before user Run (${cases.len().to_str()} cases)")
+	Script.pass!("exact standalone runner fails closed before effects: missing, malformed and shared witnesses")
 }
 
-## Symlinks and special files are refused wherever the build reads.
+## Unsafe project entries remain rejected by real Nix snapshots.
 reject_unsafe_project_entries! : BuildHarness.Suite, BuildHarness.Layout => Try({}, _)
 reject_unsafe_project_entries! = |suite, place| {
 	project = place.project
