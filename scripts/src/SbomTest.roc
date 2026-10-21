@@ -6,6 +6,8 @@ import core.Sbom
 import core.Spdx2
 import core.Spdx3
 import core.CycloneDx
+import "../../tests/sbom/fixtures/input/Spec" as fixture_input_spec : Str
+import "../../tests/sbom/fixtures/input/Lock" as fixture_input_lock : Str
 import "../../tests/sbom/schema/cyclonedx-1.7/bom-1.7.schema.json" as schema_cdx : Str
 import "../../tests/sbom/schema/spdx-3.0.1.schema.json" as schema_3 : Str
 import "../../tests/sbom/schema/spdx-2.3.schema.json" as schema_2 : Str
@@ -220,7 +222,7 @@ expect inspect({ ..SbomTest.composition, components: SbomTest.composition.compon
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, download: "https://example.org/source?token=secret" }) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, download: "file:///etc/passwd" }) }).is_err()
 
-locked_spec = { ..SbomTest.spec, sources: [{ name: "upstream", provider: NixPackages("github:example/source/stable") }], programs: [{ name: "roc", system: "x86_64-linux", urls: ["https://example.org/roc/3.0.0.tar.gz"], unpack: TarGz, path: "roc/roc" }] }
+locked_spec = { ..SbomTest.spec, sources: [{ name: "upstream", provider: { name: "nix", version: 1, ref: "github:example/source/stable" } }], programs: [{ name: "roc", system: "x86_64-linux", urls: ["https://example.org/roc/3.0.0.tar.gz"], unpack: TarGz, path: "roc/roc" }] }
 
 locked_lock = Lock.{ format: Lock.current_format, intent: Lock.intent_of(locked_spec), sources: [{ name: "upstream", provider: "nix", ref: "github:example/source/stable", rev: "1111111111111111111111111111111111111111", digest: "sha256-Zml4dHVyZQ==" }], fetched: [{ name: "roc", system: "x86_64-linux", urls: ["https://example.org/roc/3.0.0.tar.gz"], sha256: digest, size: 100, obtained: Both }], hints: [] }
 
@@ -558,3 +560,7 @@ expect {
 # The pin stays the authority: a supplier SBOM for other bytes does not bind.
 expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..consumer, imported_documents: [{ ..supplier_import, subject: { ..supplier_import.subject, sha256: digest } }] }).is_err()
 expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..consumer, components: [{ ..dependency, sha256: digest }] }).is_err()
+
+# Binding inputs must track the current public Spec and Lock wire contracts.
+expect Spec.parse(fixture_input_spec) == Ok(SbomTest.spec)
+expect Lock.parse(fixture_input_lock) == Ok(SbomTest.lock)

@@ -1,12 +1,13 @@
 (
 	(fetched ())
 	(format (
-		(major 1)
-		(minor 1)))
+		(major 2)
+		(minor 0)))
 	(hints ())
 	(intent (
 		(build_sources ())
 		(inputs ())
 		(overlays ())
+		(resolvers ())
 		(sources ())))
 	(sources ()))
