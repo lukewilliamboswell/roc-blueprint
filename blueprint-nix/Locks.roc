@@ -164,6 +164,21 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 		)
 	}
 
+	## Environment existence is not resolution intent. Empty stacks import no
+	## overlays, matching Lock.intent_of. Older hints retain these empty scopes;
+	## compare their semantic projection without rewriting committed authority.
+	without_empty_overlay_scopes : LockJson -> Try(LockJson, Str)
+	without_empty_overlay_scopes = |identity| {
+		overlays = LockJson.object(LockJson.field(identity, "overlays")?)?
+		var $selected = []
+		for scope in overlays {
+			if !LockJson.array(scope.value)?.is_empty() {
+				$selected = $selected.append(scope)
+			}
+		}
+		replace_existing(identity, "overlays", LockJson.Object($selected))
+	}
+
 	## Read the Lock text. The Sources shown to reviewers must be exactly those
 	## derived from the pins, so a hand edit to either side is rejected.
 	decode : Str -> Try(Locks, Str)
@@ -514,7 +529,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 		validate_identity(locks.identity)?
 		validate_graph(locks.graph)?
 		validate_binding(locks.identity, locks.graph)?
-		if !equivalent(locks.identity, identity_for(project)?) {
+		if !equivalent(without_empty_overlay_scopes(locks.identity)?, without_empty_overlay_scopes(identity_for(project)?)?) {
 			return Err(
 				"lock input or ordered-overlay identity changed; "
 					.concat("run blueprint update"),
@@ -1589,4 +1604,21 @@ expect {
 	migrated = Locks.migrate_legacy(legacy)?
 	decoded = Locks.from_lock(migrated)?
 	migrated.sources == legacy.sources and migrated.fetched == legacy.fetched and decoded.graph == locks.graph and decoded.identity == locks.identity and Locks.derive(decoded, project, TestData.layout).is_ok() and Locks.migrate_legacy(migrated) == Ok(migrated)
+}
+
+# Authentic roc-gui 0.4 authority: adding an artifact producer and its flat-file
+# source preserves the reviewed package/overlay pins and native graph. Its new
+# empty overlay scope must not force unrelated dependency resolution.
+import "tests/roc-gui-0.4.authority.scm" as roc_gui_0_4_authority : Str
+
+expect {
+	original = { ..Spec.empty("roc-gui"), systems: ["x86_64-linux", "aarch64-darwin"], sources: [{ name: "default", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/6774f7bc253789b113a4f39285dc0fa100abeacc" } }], inputs: [{ name: "roc", kind: Overlay, url: "github:roc-lang/roc-overlay" }], resolvers: [{ provider: "nix", inputs: ["roc"] }], environments: [{ name: "dev", parents: [], tools: [], overlays: ["roc"] }] }
+	migrated = Locks.migrate_legacy(Lock.migrate(roc_gui_0_4_authority, original)?)?
+	before = Locks.from_lock(migrated)?
+	file = { name: "freetype-source", url: "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz", sha256: "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f" }
+	producer = { name: "freetype-producer", parents: [], tools: [{ source: "default", name: "python3" }], overlays: [] }
+	full = { ..original, requires_: ["builds", "source-files"], source_files: [file], environments: original.environments.append(producer), executors: [{ name: "freetype-native", provider: "nix", source: "default" }], build_executors: [{ build: "freetype", executor: "freetype-native" }], builds: [{ name: "freetype", environment: producer.name, inputs: [file.name], needs: [], run: ["python3", "scripts/build_freetype.py"], output: "dist" }] }
+	selected = { ..migrated, sources: migrated.sources.append(Lock.file_pin(file)) }
+	after = Locks.from_lock(selected)?
+	Lock.stale_except_files(migrated, full, [file.name]) == Ok({}) and Lock.stale(selected, full) == Ok({}) and selected.hints == migrated.hints and after.graph == before.graph and after.identity == before.identity and after.sources() == before.sources() and before.sources().map(|pin| pin.rev) == ["6774f7bc253789b113a4f39285dc0fa100abeacc", "2ef187164e6856a73a53424dd453acb9b4e484c9"] and Locks.derive(after, full, TestData.layout).is_ok() and Locks.derive(after, { ..full, environments: original.environments.append({ ..producer, overlays: ["roc"] }) }, TestData.layout).is_err() and Locks.derive(after, { ..full, environments: [producer, { name: "dev", parents: [], tools: [], overlays: [] }] }, TestData.layout).is_err()
 }
