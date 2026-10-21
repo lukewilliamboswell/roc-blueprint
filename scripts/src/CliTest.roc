@@ -391,8 +391,8 @@ cases! = |bench| {
 	untouched!(sourceless)?
 	Script.pass!("no package source: nothing is generated or implied; a tool of an undeclared source, and a tool with no source, are refused as the configuration is read")?
 
-	# An unselected Guix environment, even one with a shell alias, must not
-	# contaminate a Nix task's requested dependency closure.
+	# Read-only inspection of the Nix task excludes unused Guix tools and
+	# overlays; resolution still requires every declared source owner.
 	foreign = Str.join_with(
 		[
 			"	Packages(\"foreign\", From(GuixPackages(\"current\"))),",
@@ -404,19 +404,19 @@ cases! = |bench| {
 	)
 	closure = isolated!(test, "closure")?
 	settings!(test, closure, "${CliTest.valid}${foreign}")?
-	update!(test, closure)?
-	# Adding an alias does not change input/overlay lock identity.
-	settings!(test, closure, "${CliTest.valid}${foreign}	Shell(\"foreign\", [Use(\"foreign\")]),\n")?
-	_ = run!(test, closure, ["run", "echo-args"], 0, [])?
-	CliHarness.same_calls!(CliHarness.calls!("${closure}/nix-calls")?, [CliTest.develop(closure, "blueprint-env-ci", CliTest.task)], "run echo-args beside a Guix environment")?
-	CliHarness.same_calls!(CliHarness.calls!("${closure}/guix-calls")?, [], "Guix ran for a Nix task")?
-	rendered = Path.read_utf8!(Path.utf8("${closure}/.blueprint/flake.nix"))?
-	CliHarness.check!(!rendered.contains("python@3.12:out") and !rendered.contains("blueprint-env-foreign"), "the generated flake holds the unselected Guix environment:\n${rendered}")?
+	rendered = run!(test, closure, ["flake"], 0, [])?
+	untouched!(closure)?
+	CliHarness.check!(!rendered.contains("python@3.12:out") and !rendered.contains("blueprint-env-foreign"), "the inspected flake holds the unselected Guix environment:\n${rendered}")?
 	# Stable declarations may mention an unused overlay, but neither the
 	# selected package imports nor their overlay stack may use it.
 	outputs = Str.join_with(rendered.split_on("  outputs =").drop_first(1), "  outputs =")
 	CliHarness.check!(!outputs.is_empty() and !outputs.contains("foreign-overlay") and outputs.contains("overlays = [  ];"), "the generated flake's outputs use the unselected overlay:\n${outputs}")?
-	Script.pass!("an unselected Guix environment with a shell alias: the Nix task's flake holds neither its tools nor its overlay")?
+	# Resolution owns every declared source, even if no selected Nix task uses
+	# it. Without a registered Guix resolver, explicit update must refuse it.
+	settings!(test, closure, "${CliTest.valid}${foreign}	Shell(\"foreign\", [Use(\"foreign\")]),\n")?
+	CliHarness.contains!(run!(test, closure, ["update"], 1, [])?, "no registered resolver for guix", "update with an unregistered declared resolver")?
+	untouched!(closure)?
+	Script.pass!("inspection excludes unselected Guix tools and overlays; update refuses the unregistered resolver before effects")?
 
 	# The Core rejects a lock whose recorded intent no longer matches the
 	# Spec, naming what changed, before the provider plans anything.
