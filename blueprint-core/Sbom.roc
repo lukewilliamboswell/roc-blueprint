@@ -2,6 +2,7 @@ import Spec
 import Lock
 import Project
 import JsonTree
+import Lookup
 import SbomLicenses
 import Spdx2
 import Spdx3
@@ -482,7 +483,7 @@ read_spdx3 = |nodes| {
 		fragment = id.drop_prefix("${namespace}#")
 		if (id.starts_with("${namespace}#") and !fragment.is_empty() and !fragment.contains("#")) Ok(fragment) else Err("${id} is not NAMESPACE#name in the document namespace ${namespace}")
 	}
-	by_id = nodes.fold(Dict.empty(), |all, node| if (node.id.is_empty()) all else all.insert(node.id, node))
+	by_id = Lookup.index(nodes.keep_if(|node| !node.id.is_empty()).map(|node| { key: node.id, value: node }))
 	field_text = |tree, key| (tree.field(key) ?? JsonTree.Null).text() ?? ""
 	field_texts = |tree, key| ((tree.field(key) ?? JsonTree.Array([])).items() ?? []).map(|item| item.text() ?? "")
 	declared = nodes.keep_if(|node| (node.type == "Relationship" or node.type == "LifecycleScopedRelationship") and field_text(node.tree, "relationshipType") == "hasDeclaredLicense")
@@ -490,7 +491,7 @@ read_spdx3 = |nodes| {
 	for node in nodes.keep_if(|candidate| candidate.type == "software_Package") {
 		id = local(node.id)?
 		supplied = field_text(node.tree, "suppliedBy")
-		supplied_by = match by_id.get(supplied) {
+		supplied_by = match Lookup.find(by_id, supplied) {
 			Ok(agent_node) => if (agent_node.type == "Person") "Person: ${field_text(agent_node.tree, "name")}" else "Organization: ${field_text(agent_node.tree, "name")}"
 			Err(_) => if (supplied == "SpdxOrganization") "Organization: SPDX" else "NOASSERTION"
 		}
@@ -499,7 +500,7 @@ read_spdx3 = |nodes| {
 			[] | ["expandedlicensing_NoAssertionLicense"] => ("NOASSERTION", "")
 			["expandedlicensing_NoneLicense"] => ("NONE", "")
 			[expression_id] => {
-				expression = (by_id.get(expression_id) ?? { type: "", id: "", tree: JsonTree.Null }).tree
+				expression = (Lookup.find(by_id, expression_id) ?? { type: "", id: "", tree: JsonTree.Null }).tree
 				value = field_text(expression, "simplelicensing_licenseExpression")
 				first = SbomLicenses.custom_ids(value).first() ?? ""
 				entries = (expression.field("simplelicensing_customIdToUri") ?? JsonTree.Array([])).items() ?? []
@@ -529,7 +530,7 @@ read_spdx3 = |nodes| {
 	package_iris = nodes.keep_if(|node| node.type == "software_Package").map(|node| node.id)
 	var $roots = []
 	for root in field_texts(document.tree, "rootElement") {
-		match by_id.get(root) {
+		match Lookup.find(by_id, root) {
 			Ok(node) if node.type == "software_Sbom" => {
 				$roots = $roots.concat(field_texts(node.tree, "rootElement"))
 			}

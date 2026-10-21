@@ -1,4 +1,5 @@
 import JsonTree
+import Lookup
 import SbomLicenses
 
 ## SPDX 3.0.1 JSON-LD serialization, checked against the published model
@@ -49,7 +50,7 @@ Spdx3 := [].{
 			_ => return Err("@graph must be an array")
 		}
 		var $nodes = []
-		var $ids = Dict.empty()
+		var $entries = []
 		for object in objects {
 			type = match object.field("type") {
 				Ok(Text(name)) => name
@@ -71,15 +72,17 @@ Spdx3 := [].{
 				return Err("${type} cannot stand alone in @graph")
 			}
 			if !id.is_empty() {
-				if $ids.contains(id) {
-					return Err("duplicate @graph identity ${id}")
-				}
-				$ids = $ids.insert(id, type)
+				$entries = $entries.append({ key: id, value: type })
 			}
 			$nodes = $nodes.append({ type, id, tree: object })
 		}
+		ids = Lookup.index($entries)
+		match Lookup.repeated(ids) {
+			[] => {}
+			[id, ..] => return Err("duplicate @graph identity ${id}")
+		}
 		for node in $nodes {
-			check_object(node.tree, node.type, $ids)?
+			check_object(node.tree, node.type, ids)?
 		}
 		Ok($nodes)
 	}
@@ -324,7 +327,7 @@ class = |name|
 		_ => Err("SPDX 3.0.1 class ${name} is outside this profile")
 	}
 
-Ids : Dict(Str, Str)
+Ids : List(Lookup.Entry(Str))
 
 check_object : JsonTree, Str, Ids -> Try({}, Str)
 check_object = |tree, type, ids| {
@@ -374,13 +377,13 @@ check_value = |value, kind, ids|
 			if individuals.contains(text) {
 				return Ok({})
 			}
-			match ids.get(text) {
+			match Lookup.find(ids, text) {
 				Ok(found) if classes.contains(found) => Ok({})
 				Ok(found) => Err("${text} is a ${found}, not a ${Str.join_with(classes, " or ")}")
 				Err(_) => Err("${text} does not resolve within the document")
 			}
 		}
-		(Creation, Text(text)) => if (ids.get(text) == Ok("CreationInfo")) Ok({}) else Err("${text} is not a CreationInfo in the document")
+		(Creation, Text(text)) => if (Lookup.find(ids, text) == Ok("CreationInfo")) Ok({}) else Err("${text} is not a CreationInfo in the document")
 		(Creation, Object(_)) => if (value.field("type") == Ok(JsonTree.Text("CreationInfo"))) check_object(value, "CreationInfo", ids) else Err("inline creationInfo must be a CreationInfo")
 		(Inline(name), Object(_)) => if (value.field("type") == Ok(JsonTree.Text(name))) check_object(value, name, ids) else Err("expected an inline ${name}")
 		_ => Err("wrong JSON kind")
@@ -435,10 +438,10 @@ model_rules = |tree, type, ids|
 			if relationship == "hasDeclaredLicense" or relationship == "hasConcludedLicense" {
 				from = (tree.field("from") ?? JsonTree.Null).text() ?? ""
 				destinations = ((tree.field("to") ?? JsonTree.Array([])).items() ?? []).map(|target| target.text() ?? "")
-				if !artifacts.contains(ids.get(from) ?? "") {
+				if !artifacts.contains(Lookup.find(ids, from) ?? "") {
 					return Err("${relationship} must go from an artifact")
 				}
-				if destinations.any(|target| !license_individuals.contains(target) and !licenses.contains(ids.get(target) ?? "")) {
+				if destinations.any(|target| !license_individuals.contains(target) and !licenses.contains(Lookup.find(ids, target) ?? "")) {
 					return Err("${relationship} must go to license information")
 				}
 			}

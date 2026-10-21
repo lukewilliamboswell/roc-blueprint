@@ -1,4 +1,5 @@
 import JsonTree
+import Lookup
 import SbomLicenses
 import Spdx3
 
@@ -55,15 +56,13 @@ Spdx2 := [].{
 		}
 		entries = (tree.field("packages") ?? JsonTree.Array([])).items() ?? []
 		ids = entries.map(|entry| (entry.field("SPDXID") ?? JsonTree.Null).text() ?? "")
-		# Each identifier maps to itself. With `{}` values, `contains` missed
-		# inserted keys in the bundled app under `roc run` on x86_64 Linux
-		# (nightly-2026-10-18-1df370f), while Spdx3's Dict(Str, Str) lookups held.
-		var $seen = Dict.empty()
-		for id in ids {
-			if $seen.contains(id) or id == "SPDXRef-DOCUMENT" {
-				return Err("duplicate SPDX identifier ${id}")
-			}
-			$seen = $seen.insert(id, id)
+		seen = Lookup.index(ids.map(|id| { key: id, value: id }))
+		match Lookup.repeated(seen) {
+			[] => {}
+			[id, ..] => return Err("duplicate SPDX identifier ${id}")
+		}
+		if Lookup.contains(seen, "SPDXRef-DOCUMENT") {
+			return Err("a package cannot be SPDXRef-DOCUMENT")
 		}
 		declared = ((tree.field("hasExtractedLicensingInfos") ?? JsonTree.Array([])).items() ?? []).map(|info| (info.field("licenseId") ?? JsonTree.Null).text() ?? "")
 		for entry in entries {
@@ -83,12 +82,12 @@ Spdx2 := [].{
 		for relationship in (tree.field("relationships") ?? JsonTree.Array([])).items() ?? [] {
 			from = (relationship.field("spdxElementId") ?? JsonTree.Null).text() ?? ""
 			to = (relationship.field("relatedSpdxElement") ?? JsonTree.Null).text() ?? ""
-			if (from != "SPDXRef-DOCUMENT" and !$seen.contains(from)) or (to != "SPDXRef-DOCUMENT" and to != "NONE" and to != "NOASSERTION" and !$seen.contains(to)) {
+			if (from != "SPDXRef-DOCUMENT" and !Lookup.contains(seen, from)) or (to != "SPDXRef-DOCUMENT" and to != "NONE" and to != "NOASSERTION" and !Lookup.contains(seen, to)) {
 				return Err("relationship names an element outside the document: ${from} -> ${to}")
 			}
 		}
 		for described in (tree.field("documentDescribes") ?? JsonTree.Array([])).items() ?? [] {
-			if !$seen.contains(described.text() ?? "") {
+			if !Lookup.contains(seen, described.text() ?? "") {
 				return Err("documentDescribes names an element outside the document")
 			}
 		}
