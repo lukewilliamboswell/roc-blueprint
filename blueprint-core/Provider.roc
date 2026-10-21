@@ -1,5 +1,5 @@
-# The Core <-> Provider contract: pure functions only. The Core (a consumer
-# such as the blueprint CLI) performs every effect these results describe.
+# Pure core-library <-> provider-adapter contract. These functions describe
+# effects; a host such as the Blueprint CLI performs and verifies them.
 # See docs/architecture.adoc, invariant 7.
 import Spec
 import Request
@@ -14,6 +14,9 @@ Provider := {
 
 	## The Spec `requires` features this provider implements.
 	features : List(Str),
+
+	## Supported operations and guarantees of successful execution, not
+	## observations that planning has executed or validated a sandbox.
 	build_capabilities : List(Str),
 	build_guarantees : List(Str),
 
@@ -42,8 +45,8 @@ Provider := {
 	preflight : Spec, Request, Str, Layout -> Try({}, Str),
 
 	## Fetch + Realise + Activate: the ordered steps for one request, from the
-	## Lock only. Never resolves or changes pins. The Core has already rejected
-	## a stale Lock.
+	## validated Spec and Lock. The host captures declared project files and
+	## performs the described effects. Never resolves or changes pins.
 	realise : Spec, Request, Str, Layout, Lock -> Try(Steps, [InvalidLock(Str), Unrealisable(Str)]),
 
 	## Build execution options and native-result decoding belong to the provider.
@@ -52,9 +55,15 @@ Provider := {
 	build_prepared : Str -> Try(PreparedBuild, Str),
 	build_execute_argv : Steps.Step, PreparedBuild, BuildOptions -> Try(List(Str), Str),
 	build_result : Str -> Try(BuildResult, Str),
+
+	## Direct imported pins of one build, versus closure-wide provenance.
 	build_inputs : Spec, Str -> Try(List(Str), Str),
 	build_sources : Spec, Str -> Try(List(Str), Str),
 	build_exclusions : Spec, Layout -> Try(List(Str), Str),
+
+	## Selected local pins can be inspected without native execution/layout
+	## restrictions. The host measures and verifies these paths.
+	build_local_inputs : Spec, Str, Layout, Lock -> Try(List({ name : Str, path : Str, digest : Str }), Str),
 
 	## Resolve: what the Core must stage and run to produce a native lock, for
 	## every input or for the named ones alone. The Core asks only a provider

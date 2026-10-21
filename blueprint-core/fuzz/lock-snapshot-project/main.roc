@@ -71,6 +71,7 @@ provider = |pins| Provider.{
 	build_execute_argv: |step, _prepared, _options| Ok(step.argv),
 	build_result: |_text| Err("not built here"),
 	build_exclusions: |_spec, _layout| Ok([]),
+	build_local_inputs: |_spec, _name, _layout, _lock| Ok([]),
 	build_capabilities: [],
 	build_guarantees: [],
 	build_inputs: |_spec, _name| Ok([]),

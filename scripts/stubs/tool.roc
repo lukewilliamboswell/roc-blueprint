@@ -237,7 +237,11 @@ flake_update! = |target, names| {
 			StubTool.declared_graph(fixture, StubTool.declared(flake))?
 		}
 		"local" => StubTool.local_graph(fixture, optional!("STUB_NIX_REV") ?? "c")?
-		_ => return Err("STUB_NIX_MODE must be declared or local, not ${mode}")
+		"local-inputs" => {
+			root = Path.display(Env.cwd!().map_err(|_| "cannot read project root")?)
+			fixture.replace_each("/project/assets", "${root}/assets")
+		}
+		_ => return Err("STUB_NIX_MODE must be declared, local or local-inputs, not ${mode}")
 	}
 	Path.write_utf8!(Path.utf8("${generated}/flake.lock"), graph).map_err(|_| "cannot write ${generated}/flake.lock")?
 	Ok(0)

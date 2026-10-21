@@ -5,6 +5,7 @@ import Native
 import core.Value
 import core.Request
 import core.Layout
+import core.Lock
 import core.Steps
 import core.Provider
 import core.Realise
@@ -31,6 +32,7 @@ NixProvider :: [].{
 		build_execute_argv,
 		build_result,
 		build_inputs: direct_sources,
+		build_local_inputs: local_build_inputs,
 		build_sources: provenance_sources,
 		build_capabilities: ["builds", "build-files", "dependency-builds", "prepare", "checked-rebuild"],
 		build_guarantees: ["captured-declared-inputs", "sandboxed-filesystem", "sandboxed-network", "checked-rebuild-comparison"],
@@ -858,10 +860,9 @@ NixProvider :: [].{
 			.concat(project.builds.map(|b| b.environment))
 	}
 
-	## What builds an environment that has no tool of its own to take a
-	## builder from: the first Nix source the project declares, in the order
-	## of Blueprint.roc, whatever it is called. Empty when there is none, and
-	## then such an environment cannot be rendered.
+	## Bootstrap sources for environment rendering come from selected Nix
+	## executors. A shell-only environment may fall back to its first declared
+	## Nix package source. Builds always use their own explicit executor source.
 	builder_source : Spec -> List(Str)
 	builder_source = |spec| {
 		selected = spec.build_executors.map(|entry| entry.executor)
@@ -1005,6 +1006,24 @@ NixProvider :: [].{
 					.concat(project.roc_packages.keep_if(|entry| entry.environment == env.name).map(|entry| entry.source)),
 			),
 		)
+	}
+
+	## Structural inspection verifies selected local pins without native layout,
+	## host restrictions or preparation effects. The host owns the tree reads.
+	local_build_inputs : Spec, Str, Layout, Lock -> Try(List({ name : Str, path : Str, digest : Str }), Str)
+	local_build_inputs = |spec, name, layout, lock| {
+		selected = provenance_sources(spec, name)?
+		inputs = Locks.inputs(Project.validate(spec)?)?.keep_if(|input| selected.contains(input.name) and input.ref.starts_with("path:"))
+		if inputs.is_empty() {
+			return Ok([])
+		}
+		locked = Locks.from_lock(lock)?
+		var $locals = []
+		for input in inputs {
+			pin = locked.locals.find_first(|entry| entry.name == input.name).map_err(|_| "missing local build pin: ${input.name}")?
+			$locals = $locals.append({ name: input.name, path: "${layout.project_root}/${Locks.local_path(input)}", digest: pin.digest })
+		}
+		Ok($locals)
 	}
 
 	provenance_sources : Spec, Str -> Try(List(Str), Str)

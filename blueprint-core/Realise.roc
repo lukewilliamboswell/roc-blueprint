@@ -1,5 +1,5 @@
-# Pure planning of a request: what the Core supplies itself, and what it asks
-# of a provider. See docs/architecture.adoc, stages Fetch and Realise.
+# Pure request planning. The core library selects adapters and describes
+# work; an effect host such as the CLI executes and verifies the result.
 import Spec
 import Project
 import Request
@@ -8,13 +8,10 @@ import Lock
 import Steps
 import Provider
 
-## The Core's own plan for a request. An environment's fetched programs, the
-## tools it expects of the machine and its Roc packages are the Core's to
-## supply and check, from the Spec and the Lock alone. A provider is asked
-## only for an environment that has a tool from a package source it
-## supplies, and what the Core supplies is then added to the provider's
-## steps. Nothing here observes the machine: the result is data for an
-## executor.
+## Plans compose core-managed downloads, host-tool requirements and Roc
+## packages with selected provider operations. Tasks and shells route through
+## their environments' declared package-source owners; Builds route through
+## their explicit executors. Nothing here observes or changes the machine.
 Realise :: [].{
 
 	## The Spec features planned here, whatever provider is at hand.
@@ -505,6 +502,7 @@ stub = Provider.{
 	build_execute_argv: |step, _prepared, _options| Ok(step.argv),
 	build_result: |_text| Err("not built here"),
 	build_exclusions: |_spec, _layout| Ok([]),
+	build_local_inputs: |_spec, _name, _layout, _lock| Ok([]),
 	build_capabilities: [],
 	build_guarantees: [],
 	build_inputs: |_spec, _name| Ok([]),

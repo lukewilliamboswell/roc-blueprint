@@ -51,6 +51,7 @@ provider = Provider.{
 		Ok({ build_identity: wire.recipe, outputs: [{ name: "artifact", path: wire.artifact }], metadata: [{ name: "substituted", value: Value.Bool(False) }, { name: "attempts", value: Value.Int(2) }] })
 	},
 	build_exclusions: |_spec, _layout| Ok([]),
+	build_local_inputs: |_spec, _name, _layout, _lock| Ok([]),
 	build_capabilities: ["builds", "build-files", "dependency-builds", "prepare"],
 	build_guarantees: ["captured-declared-inputs"],
 	build_inputs: |project, name| {

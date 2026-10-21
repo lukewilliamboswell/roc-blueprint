@@ -50,7 +50,7 @@ cases! = |bench| {
 			("NO_COLOR", "1"),
 			("STUB_ROC_VERSION", bench.roc_version),
 			("STUB_NIX_FIXTURE", "${bench.root}/blueprint-nix/tests/local.nix-lock.json"),
-			("STUB_NIX_MODE", "local"),
+			("STUB_NIX_MODE", "local-inputs"),
 			("BLUEPRINT_TARGET", "x86_64-linux"),
 		],
 	)

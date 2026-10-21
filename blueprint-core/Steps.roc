@@ -2,7 +2,8 @@
 Steps := { steps : List(Step) }.{
 
 	## A complete ordered sequence, not a scheduler or artifact-name cache.
-	## Execute each step's operations, then stage its files, then run its argv.
+	## Execute operations and stage files before dispatching the action. Builds
+	## prepare an exact provider recipe, then execute that captured recipe.
 	## Stop immediately on failure. Each explicit build repeats materialization.
 	Step : {
 		action : [Generate, Shell(Str), Run(Str), Build(Str)],

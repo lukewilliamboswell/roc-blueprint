@@ -1,4 +1,4 @@
-## `blueprint`: turns a `Blueprint.roc` into a reproducible development environment.
+## `blueprint`: executes declared environments, tasks, builds and workflows.
 ##
 ## The Roc compiler validates `Blueprint.roc` and prints the blueprint Spec;
 ## this CLI consumes pure plans and owns file/process effects. Only explicit
@@ -51,8 +51,8 @@ version = "0.7.0"
 ## a concrete provider: everything else uses the Provider contract
 ## (docs/architecture.adoc, invariant 7; checked by scripts/test.roc). Which
 ## of them a request needs is not chosen here or by the caller's environment:
-## `Realise.plan` asks one only for an environment that has a tool from a
-## source it supplies.
+## `Realise.plan` routes environments through declared package-source owners
+## and Builds through their explicit executors.
 providers : List(Provider)
 providers = [NixProvider.provider]
 
@@ -824,6 +824,21 @@ realise! = |spec, request, ctx| {
 	# the first effect of any step.
 	steps = Realise.plan(spec, request, ctx.target, layout, lock, providers)
 		.map_err(|problems| PlanFailed(problems))?
+	# Capability refusals precede downloads, staging and runtime authorization.
+	for step in steps.steps {
+		match step.action {
+			Build(name) => {
+				artifact = step.artifacts.find_first(|entry| entry.name == name).map_err(|_| RenderFailed("missing build artifact"))?
+				adapter = providers.find_first(|entry| entry.name == artifact.provider).map_err(|_| RenderFailed("missing build adapter"))?
+				required = ["builds", "prepare"].concat(if (ctx.rebuild) ["checked-rebuild"] else [])
+				missing = required.keep_if(|capability| !adapter.build_capabilities.contains(capability))
+				if !missing.is_empty() {
+					return Err(RenderFailed("provider ${adapter.name} does not support ${Str.join_with(missing, ", ")}"))
+				}
+			}
+			_ => {}
+		}
+	}
 	# A build cannot run on this host: say so before the first step's effects.
 	for step in steps.steps {
 		for operation in step.operations {
@@ -1390,12 +1405,9 @@ inspect_build! = |spec, options, ctx| {
 		adapter = providers.find_first(|candidate| candidate.name == executor.provider).map_err(|_| RenderFailed("no build executor provider"))?
 		lock = Lock.parse(path(ctx.layout.lock_path).read_utf8!()?).map_err(|_| LockFailed("unsupported Blueprint.lock; run blueprint lock migrate"))?
 		lock.stale(spec).map_err(|message| LockFailed(message))?
-		# Provider plans are pure. Observe only pinned local-tree checks; never
-		# require native programs, fetch original files or authorize execution.
-		steps = Realise.plan(validated, Request.Build(options.name), ctx.target, ctx.layout, lock, providers).map_err(|problems| PlanFailed(problems))?
-		for step in steps.steps {
-			verify_tree_operations!(step.operations)?
-		}
+		# Inspect selected local pins independently of native host/layout limits.
+		locals = (adapter.build_local_inputs)(validated, options.name, ctx.layout, lock).map_err(|message| RenderFailed(message))?
+		verify_tree_operations!(locals.map(|local| VerifyTree({ path: local.path, digest: local.digest })))?
 		snapshot = build_snapshot!(validated, options.name, adapter, snapshot_pins(lock, ctx.target, adapter).map_err(|message| RenderFailed(message))?, ctx)?
 		render_build_inspection!(snapshot, { build_identity: "", outputs: [] }, False, options.explain, { ..ctx, build_json: options.json })
 	}
@@ -1520,7 +1532,7 @@ render_build_inspection! = |snapshot, prepared, exact, explain, ctx| {
 		}
 	}
 	adapter = providers.find_first(|candidate| candidate.name == snapshot.provider).map_err(|_| RenderFailed("unknown build provider"))?
-	required = BuildModel.required_capabilities(snapshot)
+	required = BuildModel.required_capabilities(snapshot).concat(if (exact) ["prepare"] else [])
 	if ctx.build_json {
 		inspection : BuildModel.Inspection
 		inspection = { required_capabilities: required, provider_capabilities: adapter.build_capabilities, supported_guarantees: adapter.build_guarantees, schema_version: 1, name: snapshot.name, system: snapshot.system, provider: snapshot.provider, prepared: exact, build_identity: prepared.build_identity, outputs: prepared.outputs, snapshot_digest: BuildModel.digest(snapshot), snapshot, baseline: status, baseline_reason: reason, build_identity_status: identity_status, changes }
