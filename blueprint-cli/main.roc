@@ -1400,6 +1400,9 @@ inspect_build! = |spec, options, ctx| {
 		realise!(spec, Request.Build(options.name), { ..ctx, build_mode: mode, build_json: options.json })
 	} else {
 		validated = Project.validate(spec).map_err(|message| RenderFailed(message))?
+		if !validated.systems.contains(ctx.target) {
+			return Err(RenderFailed("execution system ${ctx.target} is not declared by the project"))
+		}
 		# Structural inspection needs no native execution preflight.
 		executor = Project.build_executor(validated, options.name).map_err(|message| RenderFailed(message))?
 		adapter = providers.find_first(|candidate| candidate.name == executor.provider).map_err(|_| RenderFailed("no build executor provider"))?
