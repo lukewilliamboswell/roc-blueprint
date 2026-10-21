@@ -264,6 +264,11 @@ unit! = |context| {
 	tested = Process.together!(scripts.map(|name| Process.command(stable, ["test", "scripts/${name}"], context.root)))?
 	report_tests!(scripts, tested)?
 
+	step!("Offline SPDX standard/profile and read-only binding conformance")?
+	Path.create_all!(Path.utf8("${context.root}/.cache/sbom-validation"))?
+	Process.passthrough!(Process.command(stable, ["build", "scripts/sbom.roc", "--output=.cache/sbom-validation/sbom"], context.root))?
+	Process.passthrough!(Process.command("nix", ["run", ".#sbom-validator", "--", "--self-test", "tests/sbom/fixtures/native-linux.spdx.json", "--binding-tool", ".cache/sbom-validation/sbom", "--binding-fixtures", "tests/sbom/fixtures/input", "tests/sbom/fixtures/native-linux.spdx.json", "tests/sbom/fixtures/native-arm64.spdx.json", "tests/sbom/fixtures/source-bundle.spdx.json", "tests/sbom/fixtures/verified-empty.spdx.json", "tests/sbom/fixtures/unknown-closure.spdx.json", "tests/sbom/fixtures/verified-import.spdx.json"], context.root))?
+
 	step!("Compile-time configuration validation")?
 	script!(context, "test_config", [])?
 

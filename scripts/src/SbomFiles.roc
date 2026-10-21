@@ -14,7 +14,8 @@ SbomFiles := [].{
 		var $bytes = []
 		var $done = False
 		while !$done {
-			match reader.read_up_to!(65536) {
+			remaining = 1024 * 1024 + 1 - $bytes.len()
+			match reader.read_up_to!(if remaining < 65536 remaining else 65536) {
 				Ok(chunk) => {
 					$bytes = $bytes.concat(chunk)
 					if $bytes.len() > 1024 * 1024 {

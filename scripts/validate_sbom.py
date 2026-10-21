@@ -21,6 +21,9 @@ import sys
 import jsonschema
 from referencing import Registry
 
+if not __debug__:
+    raise RuntimeError('SBOM conformance checks require assertions; run without Python optimization')
+
 SCHEMA_SHA256 = '4126dc29f15e92feec92e9622f4939131ad58b125d6f578aa93e980a6e6f3212'
 PROFILE = 'blueprint-spdx-2.3-v1'
 MAX_BYTES = 4 * 1024 * 1024
@@ -114,7 +117,7 @@ def validate(document, schema, artifact=None, inventory=None):
         if entry['SPDXID'] != 'SPDXRef-Subject':
             identity = json.loads(entry['comment'])
             assert identity['identity'] and identity['origin']
-            assert not identity['target'] or identity['target'] == evidence['target']
+            assert evidence['target'] == 'source' or not identity['target'] or identity['target'] == evidence['target']
     encoded = json.dumps(document)
     assert not any(marker in encoded for marker in ('/Users/', '/home/', '/private/', '/tmp/', '/nix/store/', 'github_pat_', 'ghp_', 'BEGIN PRIVATE KEY'))
     if artifact is not None:
@@ -151,6 +154,15 @@ def release_evidence(document, root):
         assert entries['SPDXRef-roc-embedded']['versionInfo'] == tag
         cargo = load(root / 'sbom/basic-cli-cargo.json')
         assert {entry['id'] for entry in cargo['components']} <= entries.keys(), 'known upstream resolution component omitted'
+    if 'SPDXRef-core' in entries:
+        source = (root / 'blueprint-platform/main.roc').read_text()
+        for target, names in re.findall(r'(\w+): \{ inputs: \[([^\]]+)\]', source):
+            for member_name in re.findall(r'"([^"]+)"', names):
+                member = 'targets/' + target + '/' + member_name
+                digest = hashlib.sha256((root / 'blueprint-platform' / member).read_bytes()).hexdigest()
+                assert 'platform-member:' + member + ':' + digest in evidence['inspected'], 'known delivered native member omitted'
+        core_name = next(line.split(' ', 1)[1] for line in (root / 'dist/bundles.txt').read_text().splitlines() if line.startswith('roc-blueprint-core '))
+        assert entries['SPDXRef-core']['checksums'][0]['checksumValue'] == hashlib.sha256((root / 'dist' / core_name).read_bytes()).hexdigest()
     native = load(root / 'link-inputs.lock.json')
     assert 'linker-archive:' + native['targets']['all']['sha256'] in evidence['inspected']
 
@@ -231,7 +243,9 @@ def binding_tests(tool, fixture):
             pass
         else:
             call([*base, 'artifact-symlink'], False)
-            call(['bind', 'inventory.json', 'subject.json', 'context.json', 'artifact-symlink', 'symlink-result.json'], False)
+            (work / 'symlink-parent').mkdir()
+            (work / 'symlink-parent/sample-artifact').symlink_to(work / 'sample-artifact')
+            call(['bind', 'inventory.json', 'subject.json', 'context.json', 'symlink-parent/sample-artifact', 'symlink-result.json'], False)
         if hasattr(os, 'mkfifo'):
             os.mkfifo(work / 'input-fifo')
             call(['bind', 'inventory.json', 'subject.json', 'input-fifo', 'sample-artifact', 'fifo-result.json'], False)

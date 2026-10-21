@@ -19,6 +19,6 @@
 	(shells ())
 	(sources ())
 	(system_tools ())
-	(systems ())
+	(systems ("x86_64-linux" "aarch64-linux"))
 	(tasks ())
 	(workflows ()))

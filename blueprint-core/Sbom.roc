@@ -11,8 +11,8 @@ Sbom := [].{
 	Edge : { from : Str, to : Str, relation : Str, basis : Str }
 	Coverage : { scope : Str, status : Str, reason : Str, contact : Str }
 	Disposition : { input : Str, component : Str, reason : Str }
-	Imported : { id : Str, url : Str, sha256 : Str, namespace : Str, target : Str, document : Str, relation : Str, basis : Str, contact : Str }
-	ImportedPackage : { spdxid : Str, name : Str, versionInfo : Str, supplier : Str, downloadLocation : Str, licenseDeclared : Str, checksums : List({ algorithm : Str, checksumValue : Str }) }
+	Imported : { subject : { component : Str, filename : Str, version : Str, sha256 : Str }, id : Str, url : Str, sha256 : Str, namespace : Str, target : Str, document : Str, relation : Str, basis : Str, contact : Str }
+	ImportedPackage : { externalRefs : Try(List({ referenceCategory : Str, referenceType : Str, referenceLocator : Str }), [Missing]), spdxid : Str, name : Str, versionInfo : Str, supplier : Str, downloadLocation : Str, licenseDeclared : Str, checksums : List({ algorithm : Str, checksumValue : Str }), comment : Try(Str, [Missing]) }
 	ImportedDocument : { spdxVersion : Str, spdxid : Str, documentNamespace : Str, entries : List(ImportedPackage), hasExtractedLicensingInfos : Try(List({ licenseId : Str, seeAlsos : List(Str) }), [Missing]), relationships : List({ spdxElementId : Str, relatedSpdxElement : Str, relationshipType : Str, comment : Try(Str, [Missing]) }) }
 	Composition : { profile : Str, imported_documents : List(Imported), components : List(Component), relationships : List(Edge), coverage : List(Coverage), inputs : List(Disposition) }
 	Context : { namespace : Str, revision : Str, created : Str, author : Str, generator : Str }
@@ -26,7 +26,7 @@ Sbom := [].{
 		matches = spec.extensions.keep_if(|extension| extension.kind == "sbom-v1" and extension.name == name)
 		match matches {
 			[extension] => match extension.value {
-				Str(text) => if !json_within_bounds(text) Err("SBOM composition exceeds 1MiB") else Json.parse(text).map_err(|_| "invalid SBOM composition JSON")
+				Str(text) => if (!json_within_bounds(text)) Err("SBOM composition exceeds 1MiB") else Json.parse(text).map_err(|_| "invalid SBOM composition JSON")
 				_ => Err("sbom-v1 extension must hold JSON in Str")
 			}
 			_ => Err("expected exactly one sbom-v1 extension for subject")
@@ -88,6 +88,16 @@ Sbom := [].{
 	## a new pin; conflicting supplemental metadata is rejected.
 	inspect : Spec, Lock, Str, Composition -> Try(Inventory, Str)
 	inspect = |spec, lock, target, composition| {
+		if target != "source" and !spec.systems.contains(target) {
+			return Err("inventory target is not declared by Spec")
+		}
+		if unique(lock.sources.map(|entry| entry.name)).len() != lock.sources.len() or unique(lock.fetched.map(|entry| "${entry.name}:${entry.system}")).len() != lock.fetched.len() {
+			return Err("duplicate authoritative locked identity")
+		}
+		unsupported = spec.unsupported_features(["explicit-sources", "sources", "programs", "expects", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools", "raw", "source-files"])
+		if !unsupported.is_empty() {
+			return Err("unsupported required inventory feature: ${Str.join_with(unsupported, ", ")}")
+		}
 		_ = Lock.stale(lock, spec)?
 		for source in spec.sources {
 			if !lock.sources.any(|pin| pin.name == source.name) {
@@ -102,7 +112,13 @@ Sbom := [].{
 		}
 		var $combined = { ..composition, imported_documents: [] }
 		for imported in composition.imported_documents {
-			expanded = expand_import(imported, target)?
+			binding = if imported.subject.component.is_empty() {
+				Err(Unbound)
+			} else {
+				declared = composition.components.find_first(|entry| entry.id == imported.subject.component).map_err(|_| "import subject binding references missing component")?
+				Ok(resolve(declared, lock)?)
+			}
+			expanded = expand_import(imported, target, binding)?
 			$combined = { ..$combined, components: $combined.components.concat(expanded.components), relationships: $combined.relationships.concat(expanded.relationships), coverage: $combined.coverage.append(expanded.coverage) }
 		}
 		inspect_composition(lock, target, $combined, known_inputs(spec, lock, target))
@@ -130,10 +146,6 @@ Sbom := [].{
 		if composition.components.len() > 4096 or composition.relationships.len() > 16384 or composition.coverage.len() > 1024 {
 			return Err("SBOM input exceeds profile bounds")
 		}
-		identities = composition.components.map(|entry| "${entry.identity}:${entry.target}")
-		if unique(identities).len() != identities.len() {
-			return Err("duplicate/conflicting component identity; variants need distinct stable identities")
-		}
 		ids = composition.components.map(|component| component.id)
 		if unique(ids).len() != ids.len() or ids.contains("SPDXRef-Subject") or ids.any(|id| !valid_id(id)) {
 			return Err("duplicate or invalid component identifier")
@@ -144,7 +156,7 @@ Sbom := [].{
 			if component.id.to_utf8().len() > 256 or Json.to_str(component).to_utf8().len() > 16384 {
 				return Err("component metadata exceeds profile bounds")
 			}
-			if !component.target.is_empty() and component.target != target {
+			if target != "source" and !resolved.target.is_empty() and resolved.target != target {
 				return Err("component target differs from subject target")
 			}
 			if !supplier(component.producer) or !license(component.license) {
@@ -153,7 +165,7 @@ Sbom := [].{
 			if !uri(resolved.download) or (!resolved.license_url.is_empty() and !uri(resolved.license_url)) or !identity(resolved.identity) {
 				return Err("invalid or credential-bearing component URI/identity")
 			}
-			if component.name.is_empty() or component.producer.is_empty() or component.version.is_empty() or component.identity.is_empty() or component.download.is_empty() or component.license.is_empty() {
+			if resolved.name.is_empty() or resolved.producer.is_empty() or resolved.version.is_empty() or resolved.identity.is_empty() or resolved.download.is_empty() or resolved.license.is_empty() {
 				return Err("component identity/license must be explicit, use NOASSERTION for unknown license")
 			}
 			if !component.sha256.is_empty() and !hex(component.sha256) {
@@ -164,12 +176,16 @@ Sbom := [].{
 			}
 			$components = $components.append(resolved)
 		}
+		identities = $components.map(|entry| "${entry.identity}:${entry.target}")
+		if unique(identities).len() != identities.len() {
+			return Err("duplicate/conflicting resolved component identity; variants need distinct identities")
+		}
 		allowed = ids.append("SPDXRef-Subject")
 		for edge in composition.relationships {
 			if !allowed.contains(edge.from) or !allowed.contains(edge.to) or edge.from == edge.to or edge.basis.is_empty() {
 				return Err("dangling relationship or missing relationship basis")
 			}
-			if !["CONTAINS", "DEPENDS_ON", "BUILD_DEPENDENCY_OF", "TEST_DEPENDENCY_OF", "GENERATED_FROM", "PATCH_FOR", "VARIANT_OF", "OTHER"].contains(edge.relation) {
+			if !["CONTAINS", "DEPENDS_ON", "BUILD_DEPENDENCY_OF", "TEST_DEPENDENCY_OF", "GENERATED_FROM", "PATCH_FOR", "VARIANT_OF", "COPY_OF", "OTHER"].contains(edge.relation) {
 				return Err("unsupported relationship type")
 			}
 		}
@@ -232,7 +248,7 @@ Sbom := [].{
 		if inventory.target != subject.target {
 			return Err("subject target differs from inspected target")
 		}
-		_ = inspect(Spec.empty("sbom-validation"), Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], fetched: [], hints: [] }, subject.target, { profile, imported_documents: [], components: inventory.components.map(|entry| { ..entry, origin: "reviewed" }), relationships: inventory.relationships, coverage: inventory.coverage, inputs: [] })?
+		_ = inspect_declared(subject.target, { profile, imported_documents: [], components: inventory.components.map(|entry| { ..entry, origin: "reviewed" }), relationships: inventory.relationships, coverage: inventory.coverage, inputs: inventory.inputs }, inventory.inspected)?
 		if unique(inventory.inspected).len() != inventory.inspected.len() or inventory.inspected.sort_with(Project.bytewise) != inventory.inputs.map(|entry| entry.input).sort_with(Project.bytewise) {
 			return Err("inventory evidence does not account for inspected inputs")
 		}
@@ -242,7 +258,7 @@ Sbom := [].{
 		if !context.namespace.starts_with("https://") or !context.namespace.ends_with("revision-${context.revision}") or context.revision.is_empty() or !valid_date(context.created) or (!context.author.starts_with("Organization: ") and !context.author.starts_with("Person: ")) or !context.generator.starts_with("Tool: ") {
 			return Err("explicit namespace/revision/time/author/generator required")
 		}
-		if inventory.components.any(|component| !component.target.is_empty() and component.target != subject.target) {
+		if inventory.components.any(|component| subject.target != "source" and !component.target.is_empty() and component.target != subject.target) {
 			return Err("subject target differs from inspected inventory")
 		}
 		entries = inventory.components.map(package_json).prepend(subject_json(subject))
@@ -265,7 +281,7 @@ Sbom := [].{
 }
 
 unique : List(Str) -> List(Str)
-unique = |values| values.fold([], |all, value| if all.contains(value) all else all.append(value))
+unique = |values| values.fold([], |all, value| if (all.contains(value)) all else all.append(value))
 
 valid_id : Str -> Bool
 valid_id = |id| id.starts_with("SPDXRef-") and id != "SPDXRef-" and id.to_utf8().all(|byte| (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z') or (byte >= '0' and byte <= '9') or byte == '-' or byte == '.')
@@ -284,11 +300,15 @@ resolve = |component, lock| {
 	if component.origin.starts_with("source:") {
 		name = component.origin.drop_prefix("source:")
 		source = lock.sources.find_first(|candidate| candidate.name == name).map_err(|_| "unresolved locked source")?
-		if component.version != (if source.rev.is_empty() source.digest else source.rev) or component.download != source.ref or component.identity != "${source.ref}@${source.rev}#${source.digest}" {
+		version = if (source.rev.is_empty()) source.digest else source.rev
+		stable_identity = "urn:blueprint:source:${source.name}:${source.rev}:${source.digest}"
+		if (!component.version.is_empty() and component.version != version) or (!component.download.is_empty() and component.download != source.ref) or (!component.identity.is_empty() and component.identity != stable_identity and component.identity != "${source.ref}@${source.rev}#${source.digest}") {
 			return Err("supplemental metadata conflicts with locked source")
 		}
+		var $digest = ""
 		if source.provider == "file" {
-			if !source.digest.starts_with("sha256:") or component.sha256 != source.digest.drop_prefix("sha256:") or !hex(component.sha256) {
+			$digest = source.digest.drop_prefix("sha256:")
+			if !source.digest.starts_with("sha256:") or !hex($digest) or (!component.sha256.is_empty() and component.sha256 != $digest) {
 				return Err("supplemental file SHA-256 conflicts with authoritative flat file pin")
 			}
 		} else if !component.sha256.is_empty() {
@@ -297,24 +317,25 @@ resolve = |component, lock| {
 		canonical = if source.ref.starts_with("github:") and !source.rev.is_empty() {
 			parts = source.ref.drop_prefix("github:").split_on("/")
 			"https://github.com/${Str.join_with(parts.take_first(2), "/")}/tree/${source.rev}"
-		} else if source.ref.starts_with("tarball+https://") source.ref.drop_prefix("tarball+") else if uri(source.ref) source.ref else "NOASSERTION"
-		return Ok({ ..component, download: canonical, identity: "urn:blueprint:source:${source.name}:${source.rev}:${source.digest}" })
+		} else if (source.ref.starts_with("tarball+https://")) source.ref.drop_prefix("tarball+") else if (uri(source.ref)) source.ref else "NOASSERTION"
+		return Ok({ ..component, version, sha256: $digest, download: canonical, identity: stable_identity })
 	}
 	if component.origin.starts_with("program:") {
 		entry = lock.fetched.find_first(|candidate| component.origin == "program:${candidate.name}:${candidate.system}").map_err(|_| "unresolved locked program")?
-		if component.sha256 != entry.sha256 or !entry.urls.contains(component.download) or component.target != entry.system {
+		stable_identity = "urn:blueprint:fetched:${entry.name}:${entry.system}:${entry.sha256}"
+		if (!component.sha256.is_empty() and component.sha256 != entry.sha256) or (!component.download.is_empty() and !entry.urls.contains(component.download)) or (!component.target.is_empty() and component.target != entry.system) or (!component.identity.is_empty() and component.identity != stable_identity) {
 			return Err("supplemental metadata conflicts with locked program")
 		}
-		return Ok(component)
+		return Ok({ ..component, version: if (component.version.is_empty()) "sha256-${entry.sha256}" else component.version, sha256: entry.sha256, download: if (component.download.is_empty()) (entry.urls.first() ?? "NOASSERTION") else component.download, identity: stable_identity, target: entry.system })
 	}
 	Err("unknown component origin; use reviewed or an authoritative lock reference")
 }
 
 package_json : Sbom.Component -> Str
 package_json = |component| {
-	checksums = if component.sha256.is_empty() [] else [{ algorithm: "SHA256", checksumValue: component.sha256 }]
+	checksums = if (component.sha256.is_empty()) [] else [{ algorithm: "SHA256", checksumValue: component.sha256 }]
 	comment = Json.to_str({ identity: component.identity, origin: component.origin, target: component.target, modifications: component.modified })
-	Json.to_str({ spdxid: component.id, name: component.name, versionInfo: component.version, supplier: component.producer, downloadLocation: component.download, filesAnalyzed: not_analyzed, licenseConcluded: "NOASSERTION", licenseDeclared: component.license, copyrightText: "NOASSERTION", checksums, comment, externalRefs: if component.identity.starts_with("pkg:") [{ referenceCategory: "PACKAGE-MANAGER", referenceType: "purl", referenceLocator: component.identity }] else [] }).replace_each("\"spdxid\":", "\"SPDXID\":")
+	Json.to_str({ spdxid: component.id, name: component.name, versionInfo: component.version, supplier: component.producer, downloadLocation: component.download, filesAnalyzed: not_analyzed, licenseConcluded: "NOASSERTION", licenseDeclared: component.license, copyrightText: "NOASSERTION", checksums, comment, externalRefs: if (component.identity.starts_with("pkg:")) [{ referenceCategory: "PACKAGE-MANAGER", referenceType: "purl", referenceLocator: component.identity }] else [] }).replace_each("\"spdxid\":", "\"SPDXID\":")
 }
 
 subject_json : Sbom.Subject -> Str
@@ -329,6 +350,9 @@ valid_date = |text| {
 	match parts {
 		[date, time] => match (date.split_on("-"), time.split_on(":")) {
 			([year, month, day], [hour, minute, second]) => {
+				if year.to_utf8().len() != 4 or [month, day, hour, minute, second].any(|part| part.to_utf8().len() != 2) {
+					return False
+				}
 				numbers = [year, month, day, hour, minute, second]
 				if !numbers.all(|number| number.to_utf8().all(|byte| byte >= '0' and byte <= '9')) {
 					return False
@@ -338,7 +362,10 @@ valid_date = |text| {
 				h = U64.from_str(hour) ?? 99
 				minute_number = U64.from_str(minute) ?? 99
 				s = U64.from_str(second) ?? 99
-				m >= 1 and m <= 12 and d >= 1 and d <= 31 and h <= 23 and minute_number <= 59 and s <= 60
+				y = U64.from_str(year) ?? 0
+				leap = y % 400 == 0 or (y % 4 == 0 and y % 100 != 0)
+				days = if (m == 2) (if (leap) 29 else 28) else if ([4, 6, 9, 11].contains(m)) 30 else 31
+				m >= 1 and m <= 12 and d >= 1 and d <= days and h <= 23 and minute_number <= 59 and (s <= 59 or (s == 60 and h == 23 and minute_number == 59))
 			}
 			_ => False
 		}
@@ -369,7 +396,7 @@ identity = |value| {
 		return !value.contains("?") and !value.contains("\\") and !value.contains(" ") and value.contains("@")
 	}
 	if value.starts_with("urn:") {
-		return !value.contains(" ") and !value.contains("\\")
+		return !value.contains(" ") and !value.contains("\\") and !value.contains("?")
 	}
 	# Source identity is the provider reference + immutable revision + tree digest.
 	value.starts_with("github:") and !value.contains("?") and !value.contains(" ") and value.contains("#sha256-")
@@ -421,7 +448,7 @@ license_atom = |tokens, depth| {
 				return Err(InvalidLicense)
 			}
 			match after {
-				["WITH", exception, .. as remaining] => if SbomLicenses.exceptions.contains(exception) Ok(remaining) else Err(InvalidLicense)
+				["WITH", exception, .. as remaining] => if (SbomLicenses.exceptions.contains(exception)) Ok(remaining) else Err(InvalidLicense)
 				_ => Ok(after)
 			}
 		}
@@ -431,19 +458,19 @@ license_atom = |tokens, depth| {
 
 # Import inert, caller-supplied bytes only. Namespace and checksum are distinct
 # identities; imports never download a URI or execute a document's contents.
-expand_import : Sbom.Imported, Str -> Try({ components : List(Sbom.Component), relationships : List(Sbom.Edge), coverage : Sbom.Coverage }, Str)
-expand_import = |imported, target| {
+expand_import : Sbom.Imported, Str, Try(Sbom.Component, [Unbound]) -> Try({ components : List(Sbom.Component), relationships : List(Sbom.Edge), coverage : Sbom.Coverage }, Str)
+expand_import = |imported, target, binding| {
 	if !valid_id(imported.id) or !uri(imported.url) or !uri(imported.namespace) or !hex(imported.sha256) or !Sbom.json_within_bounds(imported.document) or imported.contact.is_empty() or imported.basis.is_empty() {
 		return Err("invalid or oversized imported reference")
 	}
-	if imported.target != target {
+	if target != "source" and imported.target != target {
 		return Err("import target differs from subject")
 	}
 	if Crypto.SHA256.hash(imported.document.to_utf8()).to_hex() != imported.sha256 {
 		return Err("imported SBOM content digest mismatch")
 	}
 	decoded : Sbom.ImportedDocument
-	decoded = Json.parse(imported.document.replace_each("\"SPDXID\":", "\"spdxid\":").replace_each("\"packages\":", "\"entries\":")).map_err(|_| "imported SBOM outside supported SPDX package profile")?
+	decoded = Json.parse(import_keys(imported.document)).map_err(|_| "imported SBOM outside supported SPDX package profile")?
 	if decoded.spdxVersion != "SPDX-2.3" or decoded.documentNamespace != imported.namespace or decoded.spdxid != "SPDXRef-DOCUMENT" or decoded.entries.is_empty() or decoded.entries.len() > 4096 or decoded.relationships.len() > 16384 {
 		return Err("invalid imported document identity or bounds")
 	}
@@ -459,8 +486,31 @@ expand_import = |imported, target| {
 			if !ids.contains(relation.relatedSpdxElement) {
 				return Err("dangling imported subject")
 			}
+			root = decoded.entries.find_first(|entry| entry.spdxid == relation.relatedSpdxElement).map_err(|_| "missing imported subject")?
+			root_digest = root.checksums.find_first(|checksum| checksum.algorithm == "SHA256").map_ok(|checksum| checksum.checksumValue) ?? ""
+			if root.name != imported.subject.filename or root.versionInfo != imported.subject.version or root_digest != imported.subject.sha256 or !hex(root_digest) {
+				return Err("import subject filename/version/SHA256 mismatch")
+			}
+			root_comment : Try({ target : Str }, _)
+			root_comment = Json.parse(root.comment ?? "{}")
+			match root_comment {
+				Ok(metadata) => if metadata.target != imported.target {
+					return Err("imported document subject target mismatch")
+				}
+				Err(_) => {}
+			}
+			match binding {
+				Ok(component) => {
+					if component.sha256.is_empty() or component.sha256 != root_digest or component.version != root.versionInfo or (!component.target.is_empty() and component.target != imported.target) {
+						return Err("imported subject conflicts with authoritative component artifact")
+					}
+					$edges = $edges.append({ from: component.id, to: map_id(root.spdxid), relation: "COPY_OF", basis: "Artifact identity, version and target match resolved input; ${imported.basis}" })
+				}
+				Err(Unbound) => {
+					$edges = $edges.append({ from: "SPDXRef-Subject", to: map_id(root.spdxid), relation: imported.relation, basis: "UNBOUND upstream artifact statement; ${imported.basis}" })
+				}
+			}
 			$roots = $roots.append(relation.relatedSpdxElement)
-			$edges = $edges.append({ from: "SPDXRef-Subject", to: map_id(relation.relatedSpdxElement), relation: imported.relation, basis: imported.basis })
 		} else {
 			if !ids.contains(relation.spdxElementId) or !ids.contains(relation.relatedSpdxElement) {
 				return Err("dangling/external imported relationship; provide referenced graph explicitly")
@@ -474,12 +524,56 @@ expand_import = |imported, target| {
 	components = decoded.entries.map(
 		|entry| {
 			digest = entry.checksums.find_first(|checksum| checksum.algorithm == "SHA256").map_ok(|checksum| checksum.checksumValue) ?? ""
-			{ id: map_id(entry.spdxid), name: entry.name, version: entry.versionInfo, producer: entry.supplier, download: entry.downloadLocation, license: entry.licenseDeclared, license_url: (decoded.hasExtractedLicensingInfos ?? []).find_first(|terms| entry.licenseDeclared.contains(terms.licenseId)).map_ok(|terms| terms.seeAlsos.first() ?? "") ?? "", sha256: digest, identity: "${imported.namespace}#${entry.spdxid}", origin: "reviewed", target, modified: "Imported inert SPDX graph from ${imported.url}; document SHA256 ${imported.sha256}" }
+			{ id: map_id(entry.spdxid), name: entry.name, version: entry.versionInfo, producer: entry.supplier, download: entry.downloadLocation, license: entry.licenseDeclared, license_url: (decoded.hasExtractedLicensingInfos ?? []).find_first(|terms| entry.licenseDeclared.contains(terms.licenseId)).map_ok(|terms| terms.seeAlsos.first() ?? "") ?? "", sha256: digest, identity: (entry.externalRefs ?? []).find_first(|reference| reference.referenceCategory == "PACKAGE-MANAGER" and reference.referenceType == "purl").map_ok(|reference| reference.referenceLocator) ?? "${imported.namespace}#${entry.spdxid}", origin: "reviewed", target: imported.target, modified: "Imported ${imported.namespace}#${entry.spdxid} from ${imported.url}; document SHA256 ${imported.sha256}; upstream metadata ${entry.comment ?? "NOASSERTION"}" }
 		},
 	)
-	Ok({ components, relationships: $edges, coverage: { scope: "import:${imported.id}", status: "incomplete", reason: "Imported graph is verified by digest; upstream completeness and undisclosed closure are not independently established", contact: imported.contact } })
+	Ok({ components, relationships: $edges, coverage: { scope: "import:${imported.id}", status: "incomplete", reason: if (binding.is_ok()) "Document digest and upstream subject artifact identity match; completeness and undisclosed closure remain unverified" else "Document integrity verified; upstream subject not bound to a resolved artifact, so composition claims remain unverified", contact: imported.contact } })
 }
 
 # Keep JSON boolean nominal rather than an inferred single tag.
 not_analyzed : Bool
 not_analyzed = False
+
+# Alias reserved/uppercase JSON field names without modifying string values.
+# Whitespace around keys/colons is immaterial; escaped quotes remain inert.
+import_keys : Str -> Str
+import_keys = |text| {
+	bytes = text.to_utf8()
+	var $index = 0.U64
+	var $out = []
+	while $index < bytes.len() {
+		if (bytes.get($index) ?? 0) != '"' {
+			$out = $out.append(bytes.get($index) ?? 0)
+			$index = $index + 1
+		} else {
+			start = $index
+			$index = $index + 1
+			var $escaped = not_analyzed
+			var $closed = not_analyzed
+			while $index < bytes.len() and !$closed {
+				byte = bytes.get($index) ?? 0
+				if $escaped {
+					$escaped = False
+				} else if byte == '\\' {
+					$escaped = True
+				} else if byte == '"' {
+					$closed = True
+				}
+				$index = $index + 1
+			}
+			token = bytes.drop_first(start).take_first($index - start)
+			var $next = $index
+			while $next < bytes.len() and [32, 9, 10, 13].contains(bytes.get($next) ?? 0) {
+				$next = $next + 1
+			}
+			if (bytes.get($next) ?? 0) == ':' and token == "\"SPDXID\"".to_utf8() {
+				$out = $out.concat("\"spdxid\"".to_utf8())
+			} else if (bytes.get($next) ?? 0) == ':' and token == "\"packages\"".to_utf8() {
+				$out = $out.concat("\"entries\"".to_utf8())
+			} else {
+				$out = $out.concat(token)
+			}
+		}
+	}
+	Str.from_utf8($out) ?? ""
+}

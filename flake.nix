@@ -218,7 +218,7 @@
               name = "validate-blueprint-sbom";
               runtimeInputs = [ (pkgs.python3.withPackages (ps: [ ps.jsonschema ])) ];
               text = ''
-                exec python3 ${./scripts/validate_sbom.py} --schema ${./tests/sbom/schema/spdx-2.3.schema.json} "$@"
+                exec python3 -I ${./scripts/validate_sbom.py} --schema ${./tests/sbom/schema/spdx-2.3.schema.json} "$@"
               '';
             };
           }

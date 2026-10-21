@@ -16,6 +16,13 @@ import core.Lock
 ## `scripts/test_sbom.roc OUTPUT` writes the stable interoperable fixture.
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| match args.map(OsStr.display) {
+	["fixtures", directory] => {
+		Path.create_all!(Path.utf8(directory)).map_err(|_| Exit(1))?
+		for fixture in SbomTest.outputs {
+			Path.write_utf8!(Path.utf8("${directory}/${fixture.name}"), fixture.text).map_err(|_| Exit(1))?
+		}
+		Ok({})
+	}
 	["inputs", directory] => {
 		Path.create_all!(Path.utf8(directory)).map_err(|_| Exit(1))?
 		for (name, text) in [

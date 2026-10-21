@@ -1,6 +1,7 @@
 import core.Spec
 import core.Lock
 import core.Sbom
+import "../../tests/sbom/fixtures/native-linux.spdx.json" as native_fixture : Str
 
 ## Consumer fixtures intentionally include a transitive native library, a build
 ## compiler, a patched proprietary component, and a locked source identity.
@@ -9,7 +10,7 @@ SbomTest := [].{
 	context = { namespace: "https://example.org/sbom/fixture/revision-1", revision: "1", created: "2026-10-21T00:00:00Z", author: "Organization: Fixture producers", generator: "Tool: blueprint-sbom-0.7.0" }
 	subject : Sbom.Subject
 	subject = { filename: "sample-artifact", version: "1.0.0", target: "x86_64-linux", sha256: Crypto.SHA256.hash("fixture subject\n".to_utf8()).to_hex(), url: "https://example.org/releases/1.0.0/sample-artifact" }
-	spec = Spec.empty("fixture")
+	spec = { ..Spec.empty("fixture"), systems: ["x86_64-linux", "aarch64-linux"] }
 	lock = Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], fetched: [], hints: [] }
 	composition : Sbom.Composition
 	composition = {
@@ -33,6 +34,29 @@ SbomTest := [].{
 
 	inventory : Try(Sbom.Inventory, Str)
 	inventory = Sbom.inspect(spec, lock, subject.target, composition)
+
+	outputs : List({ name : Str, text : Str })
+	outputs = {
+		linux = output ?? crash "invalid fixture"
+		arm_composition = { ..composition, components: composition.components.map(|entry| { ..entry, target: "aarch64-linux" }) }
+		arm_inventory = Sbom.inspect(spec, lock, "aarch64-linux", arm_composition) ?? crash "invalid arm fixture"
+		arm = Sbom.render(arm_inventory, { ..subject, target: "aarch64-linux" }, { ..context, namespace: "https://example.org/sbom/fixture/arm64/revision-1" }) ?? crash "invalid arm document"
+		source_composition = { ..composition, components: composition.components.map(|entry| { ..entry, target: "" }) }
+		source_inventory = Sbom.inspect(spec, lock, "source", source_composition) ?? crash "invalid source fixture"
+		source = Sbom.render(source_inventory, { ..subject, filename: "sample-source-bundle", target: "source", sha256: Crypto.SHA256.hash("fixture source bundle\n".to_utf8()).to_hex() }, { ..context, namespace: "https://example.org/sbom/fixture/source/revision-1" }) ?? crash "invalid source document"
+		empty = { ..composition, components: [], relationships: [], coverage: [{ scope: "all", status: "verified-empty", reason: "Reviewed generated text contains no third-party components", contact: "https://example.org/support" }] }
+		empty_inventory = Sbom.inspect(spec, lock, subject.target, empty) ?? crash "invalid empty fixture"
+		empty_output = Sbom.render(empty_inventory, subject, { ..context, namespace: "https://example.org/sbom/fixture/empty/revision-1" }) ?? crash "invalid empty document"
+		unknown = { ..empty, coverage: [{ scope: "all", status: "incomplete", reason: "Opaque task exposes no component closure", contact: "https://example.org/support" }] }
+		unknown_inventory = Sbom.inspect(spec, lock, subject.target, unknown) ?? crash "invalid unknown fixture"
+		unknown_output = Sbom.render(unknown_inventory, subject, { ..context, namespace: "https://example.org/sbom/fixture/unknown/revision-1" }) ?? crash "invalid unknown document"
+		incoming = { ..component("SPDXRef-consumed-input", "sample-artifact", subject.version), sha256: subject.sha256, download: subject.url, identity: "urn:example:fixture:consumed-input" }
+		bound = { ..imported_document, subject: { ..imported_document.subject, component: incoming.id } }
+		import_composition = { ..composition, components: [incoming], relationships: [edge("SPDXRef-Subject", incoming.id, "DEPENDS_ON")], imported_documents: [bound] }
+		import_inventory = Sbom.inspect(spec, lock, subject.target, import_composition) ?? crash "invalid imported fixture"
+		import_output = Sbom.render(import_inventory, { ..subject, filename: "consumer-artifact", sha256: Crypto.SHA256.hash("consumer of fixture\n".to_utf8()).to_hex() }, { ..context, namespace: "https://example.org/sbom/fixture/imported/revision-1" }) ?? crash "invalid imported document"
+		[{ name: "verified-import.spdx.json", text: import_output }, { name: "native-linux.spdx.json", text: linux }, { name: "native-arm64.spdx.json", text: arm }, { name: "source-bundle.spdx.json", text: source }, { name: "verified-empty.spdx.json", text: empty_output }, { name: "unknown-closure.spdx.json", text: unknown_output }]
+	}
 
 	output : Try(Str, Str)
 	output = Sbom.render(inventory ?? crash "invalid fixture", subject, context)
@@ -121,6 +145,7 @@ expect {
 
 imported_document : Sbom.Imported
 imported_document = {
+	subject: { component: "", filename: SbomTest.subject.filename, version: SbomTest.subject.version, sha256: SbomTest.subject.sha256 },
 	id: "SPDXRef-upstream",
 	url: "https://example.org/sbom/releases/1.0.0/revision-1.spdx.json",
 	sha256: Crypto.SHA256.hash((SbomTest.output ?? "").to_utf8()).to_hex(),
@@ -154,7 +179,7 @@ locked_lock = Lock.{ format: Lock.current_format, intent: Lock.intent_of(locked_
 
 source_component = { ..component("SPDXRef-source", "upstream", "1111111111111111111111111111111111111111"), download: "github:example/source/stable", identity: "github:example/source/stable@1111111111111111111111111111111111111111#sha256-Zml4dHVyZQ==", origin: "source:upstream" }
 
-program_component = { ..component("SPDXRef-program", "roc", "3.0.0"), download: "https://example.org/roc/3.0.0.tar.gz", identity: "https://example.org/roc/3.0.0.tar.gz#3.0.0", sha256: digest, origin: "program:roc:x86_64-linux" }
+program_component = { ..component("SPDXRef-program", "roc", "3.0.0"), download: "https://example.org/roc/3.0.0.tar.gz", identity: "", sha256: digest, origin: "program:roc:x86_64-linux" }
 
 locked_composition = { ..SbomTest.composition, components: [source_component, program_component], relationships: [edge("SPDXRef-Subject", source_component.id, "DEPENDS_ON"), edge(program_component.id, "SPDXRef-Subject", "BUILD_DEPENDENCY_OF")], inputs: [{ input: "source:upstream", component: source_component.id, reason: "Resolved source tree identity; no archive digest inferred" }, { input: "program:roc:x86_64-linux", component: program_component.id, reason: "Authoritative locked download archive" }] }
 
@@ -173,3 +198,44 @@ expect {
 expect Sbom.json_within_bounds("[[[[[]]]]]")
 expect !Sbom.json_within_bounds(Str.join_with(List.repeat("[", 65), "").concat(Str.join_with(List.repeat("]", 65), "")))
 expect !Sbom.json_within_bounds("{unclosed")
+
+expect SbomTest.output == Ok(native_fixture)
+
+# Pin-derived metadata is populated, never duplicated in composition.
+unpinned_composition = { ..locked_composition, components: [{ ..source_component, version: "", identity: "", download: "", sha256: "" }, { ..program_component, version: "", identity: "", download: "", sha256: "", target: "" }] }
+expect inspect_locked(unpinned_composition).is_ok()
+expect {
+	changed_lock = { ..locked_lock, sources: locked_lock.sources.map(|entry| { ..entry, rev: "2222222222222222222222222222222222222222" }) }
+	inventory = Sbom.inspect(locked_spec, changed_lock, "x86_64-linux", unpinned_composition) ?? crash "pin should resolve"
+	inventory.components.any(|entry| entry.id == source_component.id and entry.version == "2222222222222222222222222222222222222222")
+}
+expect {
+	changed_lock = { ..locked_lock, fetched: locked_lock.fetched.map(|entry| { ..entry, sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }) }
+	inventory = Sbom.inspect(locked_spec, changed_lock, "x86_64-linux", unpinned_composition) ?? crash "program pin should resolve"
+	inventory.components.any(|entry| entry.id == program_component.id and entry.sha256 == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+}
+expect {
+	file_spec = { ..locked_spec, sources: [] }
+	file_lock = { ..locked_lock, intent: Lock.intent_of(file_spec), sources: [{ name: "upstream", provider: "file", ref: "https://example.org/source/1.0.0.tar.gz", rev: "", digest: "sha256:${digest}" }] }
+	inventory = Sbom.inspect(file_spec, file_lock, "x86_64-linux", unpinned_composition) ?? crash "flat file should resolve"
+	inventory.components.any(|entry| entry.id == source_component.id and entry.sha256 == digest and entry.version == "sha256:${digest}")
+}
+
+expect Sbom.inspect({ ..SbomTest.spec, requires_: ["unknown-future-feature"] }, SbomTest.lock, "x86_64-linux", SbomTest.composition).is_err()
+expect {
+	spaced = imported_document.document.replace_each("\"SPDXID\":", "\"SPDXID\" : ").replace_each("\"packages\":", "\"packages\" : ")
+	inspect({ ..imported_composition, imported_documents: [{ ..imported_document, document: spaced, sha256: Crypto.SHA256.hash(spaced.to_utf8()).to_hex() }] }).is_ok()
+}
+
+# Upstream subject binding is separate from document integrity. A real locked
+# artifact's digest/version/target must match before imported claims are bound.
+program_document = (SbomTest.output ?? "").replace_each("\"sample-artifact\"", "\"3.0.0.tar.gz\"").replace_each("\"versionInfo\":\"1.0.0\"", "\"versionInfo\":\"3.0.0\"").replace_each(SbomTest.subject.sha256, digest)
+
+bound_import = { ..imported_document, document: program_document, sha256: Crypto.SHA256.hash(program_document.to_utf8()).to_hex(), subject: { component: program_component.id, filename: "3.0.0.tar.gz", version: "3.0.0", sha256: digest } }
+expect inspect_locked({ ..locked_composition, imported_documents: [bound_import] }).is_ok()
+expect inspect_locked({ ..locked_composition, imported_documents: [{ ..bound_import, subject: { ..bound_import.subject, sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }] }).is_err()
+expect {
+	changed_lock = { ..locked_lock, fetched: locked_lock.fetched.map(|entry| { ..entry, sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }) }
+	Sbom.inspect(locked_spec, changed_lock, "x86_64-linux", { ..unpinned_composition, imported_documents: [bound_import] }).is_err()
+}
+expect inspect_locked({ ..locked_composition, imported_documents: [{ ..bound_import, target: "aarch64-linux" }] }).is_err()
