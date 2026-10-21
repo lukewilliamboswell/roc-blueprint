@@ -21,7 +21,7 @@ provider = Provider.{
 		_ => False
 	},
 	render: |_spec| Ok([{ path: "channel.plan", contents: "reviewed channel" }]),
-	inspect_lock: |_lock| Ok([{ name: "channel", identity: "guix:commit:abc", digest_kind: Unknown, metadata: [{ name: "commit", value: Value.Str("abc") }, { name: "settings", value: Value.Attrs([{ name: "substitutes", value: Value.Bool(False) }]) }] }]),
+	inspect_lock: |_lock| Ok([{ name: "channel", content_identity: "guix:commit:abc", digest_kind: Unknown, metadata: [{ name: "commit", value: Value.Str("abc") }, { name: "settings", value: Value.Attrs([{ name: "substitutes", value: Value.Bool(False) }]) }] }]),
 	preflight: |_spec, _request, _system, _layout| Ok({}),
 	realise: |spec, request, _system, layout, _lock| {
 		(action, argv, artifacts) = match request {
@@ -115,14 +115,14 @@ expect {
 expect {
 	result = || {
 		text = LockReport.render(locked?, ["channel"], True, [provider])?
-		decoded : { sources : { channel : { identity : Str, digestKind : Str, metadata : { guix : { commit : Str, settings : { substitutes : Bool } } } } } }
+		decoded : { sources : { channel : { content_identity : Str, digestKind : Str, metadata : { guix : { commit : Str, settings : { substitutes : Bool } } } } } }
 		decoded = Json.parse(text).map_err(|_| "invalid public lock report")?
-		Ok(decoded.sources.channel.identity == "guix:commit:abc" and decoded.sources.channel.digestKind == "unknown" and decoded.sources.channel.metadata.guix == { commit: "abc", settings: { substitutes: False } } and !text.contains("fetchTree"))
+		Ok(decoded.sources.channel.content_identity == "guix:commit:abc" and decoded.sources.channel.digestKind == "unknown" and decoded.sources.channel.metadata.guix == { commit: "abc", settings: { substitutes: False } } and !text.contains("fetchTree"))
 	}
 	result() == Ok(True)
 }
 
-# Unknown adapters retain authoritative identity without guessing its kind.
+# Unknown adapters retain authoritative content_identity without guessing its kind.
 expect {
 	result = || {
 		text = LockReport.render(locked?, ["channel"], True, [])?
@@ -165,6 +165,6 @@ expect {
 
 expect {
 	built = { recipe_identity: "opaque", outputs: [], metadata: [] }
-	BuildReport.render("app", "x86_64-linux", "", built, []) == Err("build report has no provider identity")
-		and BuildReport.render("app", "x86_64-linux", "guix", { ..built, recipe_identity: " " }, []) == Err("build report has no recipe identity")
+	BuildReport.render("app", "x86_64-linux", "", built, []) == Err("build report has no provider content_identity")
+		and BuildReport.render("app", "x86_64-linux", "guix", { ..built, recipe_identity: " " }, []) == Err("build report has no recipe content_identity")
 }

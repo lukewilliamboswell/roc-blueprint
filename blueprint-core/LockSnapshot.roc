@@ -1,4 +1,4 @@
-## Version-1 operational inspection data. Never authoritative Lock state.
+## Version-2 operational inspection data. Never authoritative Lock state.
 ## No filesystem, process, Store, freshness check or provider-native execution.
 import Lock
 import Provider
@@ -8,12 +8,12 @@ import JsonData
 LockSnapshot := { sources : List(Source), fetched : List(Fetched) }.{
 	is_eq : _
 
-	Source : { name : Str, provider : Str, ref : Str, rev : Str, digest : Str, identity : Str, digest_kind : [File, Tree, Unknown(Str)], flat_sha256 : [Absent, Present(Str)], metadata : JsonData }
-	Fetched : { name : Str, system : Str, urls : List(Str), sha256 : Str, identity : Str, size : U64, obtained : Str }
-	Identity : { provider : Str, value : Str }
+	Source : { name : Str, provider : Str, ref : Str, rev : Str, digest : Str, content_identity : Str, digest_kind : [File, Tree, Unknown(Str)], flat_sha256 : [Absent, Present(Str)], metadata : JsonData }
+	Fetched : { name : Str, system : Str, urls : List(Str), sha256 : Str, content_identity : Str, size : U64, obtained : Str }
+	ContentIdentity : { provider : Str, value : Str }
 	Error : [InvalidJson(Str), LimitExceeded(Str), UnsupportedFormat(U64), InvalidReport(Str)]
 	format : U64
-	format = 1
+	format = 2
 
 	source : LockSnapshot, Str -> Try(Source, [MissingSource(Str)])
 	source = |snapshot, name| snapshot.sources.find_first(|entry| entry.name == name).map_err(|_| MissingSource(name))
@@ -21,8 +21,8 @@ LockSnapshot := { sources : List(Source), fetched : List(Fetched) }.{
 	fetched_program : LockSnapshot, Str, Str -> Try(Fetched, [MissingProgram({ name : Str, system : Str })])
 	fetched_program = |snapshot, name, system| snapshot.fetched.find_first(|entry| entry.name == name and entry.system == system).map_err(|_| MissingProgram({ name, system }))
 
-	source_identity : Source -> Identity
-	source_identity = |entry| { provider: entry.provider, value: entry.identity }
+	source_content_identity : Source -> ContentIdentity
+	source_content_identity = |entry| { provider: entry.provider, value: entry.content_identity }
 
 	## Caller-supplied serialized data only. Validate the format before its fields.
 	parse_json : Str -> Try(LockSnapshot, Error)
@@ -40,9 +40,9 @@ LockSnapshot := { sources : List(Source), fetched : List(Fetched) }.{
 				return Err(InvalidReport("source object key does not match name: ${field.name}"))
 			}
 			provider = string(entry, "provider")?
-			identity = string(entry, "identity")?
-			if name.trim().is_empty() or provider.trim().is_empty() or identity.trim().is_empty() {
-				return Err(InvalidReport("source name, provider and identity must be nonempty"))
+			content_identity = string(entry, "content_identity")?
+			if name.trim().is_empty() or provider.trim().is_empty() or content_identity.trim().is_empty() {
+				return Err(InvalidReport("source name, provider and content_identity must be nonempty"))
 			}
 			kind = string(entry, "digestKind")?
 			if kind.trim().is_empty() {
@@ -64,8 +64,8 @@ LockSnapshot := { sources : List(Source), fetched : List(Fetched) }.{
 					return Err(InvalidReport("core file revision must be empty"))
 				}
 				match flat {
-					Present(hash) => if kind != "file" or identity != "sha256:${hash}" or digest != identity {
-						return Err(InvalidReport("core file identity/digest/flatSha256 disagree"))
+					Present(hash) => if kind != "file" or content_identity != "sha256:${hash}" or digest != content_identity {
+						return Err(InvalidReport("core file content_identity/digest/flatSha256 disagree"))
 					}
 					Absent => return Err(InvalidReport("core file source requires flatSha256"))
 				}
@@ -77,7 +77,7 @@ LockSnapshot := { sources : List(Source), fetched : List(Fetched) }.{
 			for namespace in JsonData.object(metadata).map_err(|_| InvalidReport("source metadata must be an object"))? {
 				_ = JsonData.object(namespace.value).map_err(|_| InvalidReport("metadata namespaces must be objects"))?
 			}
-			$sources = $sources.append({ name, provider, ref: string(entry, "ref")?, rev: string(entry, "rev")?, digest, identity, digest_kind: when_kind(kind), flat_sha256: flat, metadata })
+			$sources = $sources.append({ name, provider, ref: string(entry, "ref")?, rev: string(entry, "rev")?, digest, content_identity, digest_kind: when_kind(kind), flat_sha256: flat, metadata })
 		}
 		var $fetched = []
 		for entry in JsonData.array(required(data, "fetched")?).map_err(|_| InvalidReport("fetched must be an array"))? {
@@ -90,9 +90,9 @@ LockSnapshot := { sources : List(Source), fetched : List(Fetched) }.{
 				return Err(InvalidReport("duplicate fetched program/system: ${name}/${system}"))
 			}
 			sha256 = string(entry, "sha256")?
-			identity = string(entry, "identity")?
-			if !hex(sha256) or identity != "sha256:${sha256}" {
-				return Err(InvalidReport("program SHA-256 and identity disagree"))
+			content_identity = string(entry, "content_identity")?
+			if !hex(sha256) or content_identity != "sha256:${sha256}" {
+				return Err(InvalidReport("program SHA-256 and content_identity disagree"))
 			}
 			var $urls = []
 			for item in JsonData.array(required(entry, "urls")?).map_err(|_| InvalidReport("urls must be an array"))? {
@@ -108,7 +108,7 @@ LockSnapshot := { sources : List(Source), fetched : List(Fetched) }.{
 			if string(entry, "obtained")?.trim().is_empty() {
 				return Err(InvalidReport("obtained must be nonempty"))
 			}
-			$fetched = $fetched.append({ name, system, urls: $urls, sha256, identity, size: unsigned(entry, "size")?, obtained: string(entry, "obtained")? })
+			$fetched = $fetched.append({ name, system, urls: $urls, sha256, content_identity, size: unsigned(entry, "size")?, obtained: string(entry, "obtained")? })
 		}
 		Ok(LockSnapshot.{ sources: $sources, fetched: $fetched })
 	}
@@ -163,9 +163,9 @@ LockSnapshot := { sources : List(Source), fetched : List(Fetched) }.{
 					return Err(InvalidReport("duplicate locked source: ${locked_source.name}"))
 				}
 				pin = $pins.find_first(|entry| entry.name == locked_source.name)
-				identity = pin.map_ok(|entry| entry.identity) ?? locked_source.digest
-				if identity.is_empty() {
-					return Err(InvalidReport("locked source ${locked_source.name} has no content identity"))
+				content_identity = pin.map_ok(|entry| entry.content_identity) ?? locked_source.digest
+				if content_identity.is_empty() {
+					return Err(InvalidReport("locked source ${locked_source.name} has no content content_identity"))
 				}
 				metadata = match pin {
 					Ok(entry) => JsonData.Object([{ name: locked_source.provider, value: from_value(Value.Attrs(entry.metadata)) }])
@@ -180,7 +180,7 @@ LockSnapshot := { sources : List(Source), fetched : List(Fetched) }.{
 						Unknown => Unknown("unknown")
 					}
 				}
-				$sources = $sources.append({ name: locked_source.name, provider: locked_source.provider, ref: locked_source.ref, rev: locked_source.rev, digest: locked_source.digest, identity, digest_kind: kind, flat_sha256: if (locked_source.provider == "file") Present(locked_source.digest.drop_prefix("sha256:")) else Absent, metadata })
+				$sources = $sources.append({ name: locked_source.name, provider: locked_source.provider, ref: locked_source.ref, rev: locked_source.rev, digest: locked_source.digest, content_identity, digest_kind: kind, flat_sha256: if (locked_source.provider == "file") Present(locked_source.digest.drop_prefix("sha256:")) else Absent, metadata })
 			}
 		}
 		fetched = lock.fetched.keep_if(|entry| names.is_empty() or names.contains(entry.name)).map(
@@ -189,7 +189,7 @@ LockSnapshot := { sources : List(Source), fetched : List(Fetched) }.{
 				system: entry.system,
 				urls: entry.urls,
 				sha256: entry.sha256,
-				identity: "sha256:${entry.sha256}",
+				content_identity: "sha256:${entry.sha256}",
 				size: entry.size,
 				obtained: match entry.obtained {
 					Computed => "computed"
@@ -248,7 +248,7 @@ source_data = |entry| JsonData.Object([
 	{ name: "ref", value: JsonData.String(entry.ref) },
 	{ name: "rev", value: JsonData.String(entry.rev) },
 	{ name: "digest", value: JsonData.String(entry.digest) },
-	{ name: "identity", value: JsonData.String(entry.identity) },
+	{ name: "content_identity", value: JsonData.String(entry.content_identity) },
 	{ name: "digestKind", value: JsonData.String(kind_text(entry.digest_kind)) },
 	{
 		name: "flatSha256",
@@ -265,7 +265,7 @@ fetched_data = |entry| JsonData.Object([
 	{ name: "system", value: JsonData.String(entry.system) },
 	{ name: "urls", value: JsonData.Array(entry.urls.map(|url| JsonData.String(url))) },
 	{ name: "sha256", value: JsonData.String(entry.sha256) },
-	{ name: "identity", value: JsonData.String(entry.identity) },
+	{ name: "content_identity", value: JsonData.String(entry.content_identity) },
 	{ name: "size", value: JsonData.Number(entry.size.to_str()) },
 	{ name: "obtained", value: JsonData.String(entry.obtained) },
 ])
@@ -279,7 +279,7 @@ sample = LockSnapshot.{
 			ref: "https://example.test/channel",
 			rev: "abc",
 			digest: "opaque-content",
-			identity: "opaque-identity",
+			content_identity: "opaque-content_identity",
 			digest_kind: Unknown("graph"),
 			flat_sha256: Absent,
 			metadata: JsonData.Object([
@@ -295,33 +295,33 @@ sample = LockSnapshot.{
 			]),
 		},
 	],
-	fetched: [{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc.tar.gz"], sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", identity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", size: 18446744073709551615, obtained: "published" }],
+	fetched: [{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc.tar.gz"], sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", content_identity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", size: 18446744073709551615, obtained: "published" }],
 }
 
 sample_text : Str
 sample_text = LockSnapshot.to_json(sample) ?? ""
 
 expect LockSnapshot.parse_json(sample_text) == Ok(sample)
-expect LockSnapshot.source(sample, "channel").map_ok(LockSnapshot.source_identity) == Ok({ provider: "future", value: "opaque-identity" })
+expect LockSnapshot.source(sample, "channel").map_ok(LockSnapshot.source_content_identity) == Ok({ provider: "future", value: "opaque-content_identity" })
 expect LockSnapshot.source(sample, "missing") == Err(MissingSource("missing"))
 expect LockSnapshot.fetched_program(sample, "roc-stable", "x86_64-linux").map_ok(|entry| entry.size) == Ok(18446744073709551615)
 expect LockSnapshot.fetched_program(sample, "roc-stable", "aarch64-darwin") == Err(MissingProgram({ name: "roc-stable", system: "aarch64-darwin" }))
-expect LockSnapshot.parse_json("{\"format\":2,\"sources\":false,\"fetched\":42}") == Err(UnsupportedFormat(2))
-expect LockSnapshot.parse_json("{\"format\":1,\"sources\":{},\"fetched\":[],\"future\":{\"new\":[null,2.5]}}") == Ok(LockSnapshot.{ sources: [], fetched: [] })
-expect LockSnapshot.parse_json("{\"format\":1,\"sources\":{},\"fetched\":[]}{ }").is_err()
-expect LockSnapshot.parse_json("{\"format\":1,\"format\":2,\"sources\":{},\"fetched\":[]}").is_err()
+expect LockSnapshot.parse_json("{\"format\":3,\"sources\":false,\"fetched\":42}") == Err(UnsupportedFormat(3))
+expect LockSnapshot.parse_json("{\"format\":2,\"sources\":{},\"fetched\":[],\"future\":{\"new\":[null,2.5]}}") == Ok(LockSnapshot.{ sources: [], fetched: [] })
+expect LockSnapshot.parse_json("{\"format\":2,\"sources\":{},\"fetched\":[]}{ }").is_err()
+expect LockSnapshot.parse_json("{\"format\":2,\"format\":3,\"sources\":{},\"fetched\":[]}").is_err()
 expect LockSnapshot.parse_json(sample_text.replace_each("\"channel\":{", "\"different\":{")).is_err()
 expect LockSnapshot.parse_json(sample_text.replace_each("18446744073709551615", "18446744073709551616")).is_err()
 expect LockSnapshot.parse_json(sample_text.replace_each("\"flatSha256\":null", "\"flatSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"")).is_err()
 expect LockSnapshot.parse_json(sample_text.replace_each("\"nothing\":null", "\"nothing\":null,\"nothing\":42")).is_err()
 expect LockSnapshot.parse_json(sample_text.replace_each("\"metadata\":{\"future\":{", "\"metadata\":{\"future\":null,\"extra\":{")).is_err()
 expect {
-	program = sample.fetched.first() ?? { name: "", system: "", urls: [], sha256: "", identity: "", size: 0, obtained: "" }
+	program = sample.fetched.first() ?? { name: "", system: "", urls: [], sha256: "", content_identity: "", size: 0, obtained: "" }
 	LockSnapshot.to_json({ ..sample, fetched: [program, program] }).is_err()
-		and LockSnapshot.to_json({ ..sample, fetched: [{ ..program, identity: "wrong" }] }).is_err()
+		and LockSnapshot.to_json({ ..sample, fetched: [{ ..program, content_identity: "wrong" }] }).is_err()
 }
 expect {
-	file = { ..(sample.sources.first() ?? { name: "", provider: "", ref: "", rev: "", digest: "", identity: "", digest_kind: Unknown("unknown"), flat_sha256: Absent, metadata: JsonData.Object([]) }), name: "archive", provider: "file", digest_kind: File, rev: "", digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", identity: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", flat_sha256: Present("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), metadata: JsonData.Object([]) }
+	file = { ..(sample.sources.first() ?? { name: "", provider: "", ref: "", rev: "", digest: "", content_identity: "", digest_kind: Unknown("unknown"), flat_sha256: Absent, metadata: JsonData.Object([]) }), name: "archive", provider: "file", digest_kind: File, rev: "", digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", content_identity: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", flat_sha256: Present("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), metadata: JsonData.Object([]) }
 	result = || {
 		text = LockSnapshot.to_json(LockSnapshot.{ sources: [file], fetched: [] })?
 		LockSnapshot.parse_json(text)
@@ -331,3 +331,6 @@ expect {
 }
 
 expect LockSnapshot.parse_json(sample_text.replace_each("published", "future-provenance")).map_ok(|snapshot| snapshot.fetched.first().map_ok(|entry| entry.obtained)) == Ok(Ok("future-provenance"))
+
+# A renamed field never makes an old report silently compatible.
+expect LockSnapshot.parse_json("{\"format\":1,\"sources\":{},\"fetched\":[]}") == Err(UnsupportedFormat(1))

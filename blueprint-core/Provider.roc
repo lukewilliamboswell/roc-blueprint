@@ -65,7 +65,7 @@ Provider := {
 
 	## Unknown means the adapter has not established the kind of content.
 	DigestKind : [File, Tree, Unknown]
-	LockedSource : { name : Str, identity : Str, digest_kind : DigestKind, metadata : List({ name : Str, value : Value }) }
+	LockedSource : { name : Str, content_identity : Str, digest_kind : DigestKind, metadata : List({ name : Str, value : Value }) }
 
 	## Which pins an update resolves again. `Named` moves only the inputs with
 	## these names and keeps every other pin of the Lock, which the Core has

@@ -43,7 +43,7 @@ NixProvider :: [].{
 				entries.map(
 					|entry| {
 						name: entry.name,
-						identity: entry.identity,
+						content_identity: entry.identity,
 						digest_kind: Tree,
 						metadata: match entry.fetch_tree {
 							LockJson.Null => []

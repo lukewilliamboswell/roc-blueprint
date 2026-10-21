@@ -108,12 +108,12 @@ metadata = Fuzz.map(
 ## A core file source half the time, otherwise any other provider's source.
 source : Fuzz.Generator(LockSnapshot.Source)
 source = Fuzz.map(
-	{ file: Fuzz.u8_in(0, 1), kind: Fuzz.u8_in(0, 2), name: Fuzz.str, provider: Fuzz.str, ref: Fuzz.str, rev: Fuzz.str, digest: Fuzz.str, identity: Fuzz.str, unknown: Fuzz.str, hash: Fuzz.list(Fuzz.u8, 32), metadata }.Fuzz,
+	{ file: Fuzz.u8_in(0, 1), kind: Fuzz.u8_in(0, 2), name: Fuzz.str, provider: Fuzz.str, ref: Fuzz.str, rev: Fuzz.str, digest: Fuzz.str, content_identity: Fuzz.str, unknown: Fuzz.str, hash: Fuzz.list(Fuzz.u8, 32), metadata }.Fuzz,
 	|r| {
 		name = nonblank(r.name)
 		if r.file == 0 {
 			hash = hex_of(r.hash)
-			{ name, provider: "file", ref: r.ref, rev: "", digest: "sha256:${hash}", identity: "sha256:${hash}", digest_kind: File, flat_sha256: Present(hash), metadata: r.metadata }
+			{ name, provider: "file", ref: r.ref, rev: "", digest: "sha256:${hash}", content_identity: "sha256:${hash}", digest_kind: File, flat_sha256: Present(hash), metadata: r.metadata }
 		} else {
 			provider = if (r.provider == "file") "files" else nonblank(r.provider)
 			# "file" and "tree" parse as the known kinds, so an Unknown names neither.
@@ -123,7 +123,7 @@ source = Fuzz.map(
 				1 => Tree
 				_ => Unknown(unknown)
 			}
-			{ name, provider, ref: r.ref, rev: r.rev, digest: r.digest, identity: nonblank(r.identity), digest_kind, flat_sha256: Absent, metadata: r.metadata }
+			{ name, provider, ref: r.ref, rev: r.rev, digest: r.digest, content_identity: nonblank(r.content_identity), digest_kind, flat_sha256: Absent, metadata: r.metadata }
 		}
 	},
 )
@@ -134,7 +134,7 @@ fetched = Fuzz.map(
 	|r| {
 		hash = hex_of(r.hash)
 		urls = [r.url].concat(r.urls).map(|url| if (url.is_empty()) "u" else url)
-		{ name: nonblank(r.name), system: nonblank(r.system), urls, sha256: hash, identity: "sha256:${hash}", size: r.size, obtained: nonblank(r.obtained) }
+		{ name: nonblank(r.name), system: nonblank(r.system), urls, sha256: hash, content_identity: "sha256:${hash}", size: r.size, obtained: nonblank(r.obtained) }
 	},
 )
 

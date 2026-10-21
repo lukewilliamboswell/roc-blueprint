@@ -230,7 +230,7 @@ bundle_core! : Str, Paths => Try(Str, _)
 bundle_core! = |root, paths| {
 	Script.info!("==>", "Bundling roc-blueprint-core")?
 	directory = "${root}/${Bundle.core_dir}"
-	hashed = bundle!(directory, Bundle.modules(file_names!(directory)?).concat(["lock-snapshot-v1.schema.json"]), paths, [])?
+	hashed = bundle!(directory, Bundle.modules(file_names!(directory)?).concat(["lock-snapshot-v2.schema.json"]), paths, [])?
 	name = "${Bundle.core_prefix}${hashed}"
 	Path.rename!(Path.utf8("${paths.dist}/${hashed}"), Path.utf8("${paths.dist}/${name}"))?
 	Script.info!("   ", name)?
@@ -461,8 +461,8 @@ snapshot_consumer! = |root, paths, server, core_url, route, core| {
 			[outcome] => Process.check!(outcome.code == 0, "official core bundle consumer failed with ${compiler}: ${outcome.stdout}${outcome.stderr}")?
 			_ => return Script.fail!("core bundle consumer returned no result")
 		}
-		resource = "${cache}/roc/packages/${core.drop_prefix(Bundle.core_prefix).drop_suffix(".tar.zst")}/lock-snapshot-v1.schema.json"
-		Process.check!(Path.read_bytes!(Path.utf8(resource))? == Path.read_bytes!(Path.utf8("${root}/blueprint-core/lock-snapshot-v1.schema.json"))?, "core bundle schema differs or was not downloaded")?
+		resource = "${cache}/roc/packages/${core.drop_prefix(Bundle.core_prefix).drop_suffix(".tar.zst")}/lock-snapshot-v2.schema.json"
+		Process.check!(Path.read_bytes!(Path.utf8(resource))? == Path.read_bytes!(Path.utf8("${root}/blueprint-core/lock-snapshot-v2.schema.json"))?, "core bundle schema differs or was not downloaded")?
 	}
 	Script.pass!("official core bundle consumed purely by product and script compilers from independent empty caches; packaged schema verified")
 }

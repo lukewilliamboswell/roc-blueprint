@@ -1769,10 +1769,10 @@ import "../fixtures/consumer/authority.lock" as lock_report_authority : Str
 expect match Lock.parse(lock_report_authority) {
 	Ok(lock) => match LockReport.render(lock, ["nixpkgs"], True, providers) {
 		Ok(text) => {
-			decoded : Try({ format : U64, sources : { nixpkgs : { identity : Str, metadata : { nix : { fetchTree : { rev : Str, narHash : Str, lastModified : U64, owner : Str } } } } }, fetched : List(Str) }, _)
+			decoded : Try({ format : U64, sources : { nixpkgs : { content_identity : Str, metadata : { nix : { fetchTree : { rev : Str, narHash : Str, lastModified : U64, owner : Str } } } } }, fetched : List(Str) }, _)
 			decoded = Json.parse(text)
 			match decoded {
-				Ok(read) => read.format == 1 and read.sources.nixpkgs.metadata.nix.fetchTree == { rev: "4975466d324710c576dc11ad614684e6bd8cad8e", narHash: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=", lastModified: 1790185690, owner: "NixOS" } and read.sources.nixpkgs.identity == "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5" and read.fetched.is_empty() and !text.contains("roc-overlay")
+				Ok(read) => read.format == 2 and read.sources.nixpkgs.metadata.nix.fetchTree == { rev: "4975466d324710c576dc11ad614684e6bd8cad8e", narHash: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=", lastModified: 1790185690, owner: "NixOS" } and read.sources.nixpkgs.content_identity == "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5" and read.fetched.is_empty() and !text.contains("roc-overlay")
 				Err(_) => False
 			}
 		}
@@ -1782,7 +1782,7 @@ expect match Lock.parse(lock_report_authority) {
 }
 
 # Updating another program, adding/removing tasks, and a future minor lock
-# encoding leave a selected source and its content identity unchanged.
+# encoding leave a selected source and its content content_identity unchanged.
 expect match Lock.parse(lock_report_authority) {
 	Ok(lock) => {
 		before = LockReport.render(lock, ["nixpkgs"], True, providers)
@@ -1810,7 +1810,7 @@ expect match Lock.parse(lock_report_authority) {
 	Err(_) => False
 }
 
-# Updating a different remote source preserves the selected identity; changing
+# Updating a different remote source preserves the selected content_identity; changing
 # that source's own NAR content changes it, with no graph-layout fingerprint.
 expect {
 	changed = |sri, hex| {
@@ -1832,7 +1832,7 @@ expect {
 lock_pin_identity : Lock -> Try(Str, Str)
 lock_pin_identity = |lock| {
 	text = LockReport.render(lock, ["nixpkgs"], True, providers)?
-	decoded : Try({ sources : { nixpkgs : { identity : Str } } }, _)
+	decoded : Try({ sources : { nixpkgs : { content_identity : Str } } }, _)
 	decoded = Json.parse(text)
-	decoded.map_ok(|read| read.sources.nixpkgs.identity).map_err(|_| "invalid inspector JSON")
+	decoded.map_ok(|read| read.sources.nixpkgs.content_identity).map_err(|_| "invalid inspector JSON")
 }

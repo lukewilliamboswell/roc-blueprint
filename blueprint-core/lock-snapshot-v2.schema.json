@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/lukewilliamboswell/roc-blueprint/0.7.0/blueprint-core/lock-snapshot-v1.schema.json",
-  "title": "Blueprint lock inspection report, format 1",
-  "description": "Operational projection, not authoritative Lock, SBOM or build provenance. Format-1 readers accept additive fields and preserve unknown digest-kind/obtained strings. Native metadata is inert arbitrary JSON. Runtime profile additionally rejects duplicate keys, mismatched source keys/identities and duplicate program/system pairs, and limits UTF-8 JSON to 8 MiB, depth 128 and 4096 entries per collection.",
+  "$id": "https://raw.githubusercontent.com/lukewilliamboswell/roc-blueprint/0.7.0/blueprint-core/lock-snapshot-v2.schema.json",
+  "title": "Blueprint lock inspection report, format 2",
+  "description": "Operational projection, not authoritative Lock, SBOM or build provenance. Format-2 readers accept additive fields and preserve unknown digest-kind/obtained strings. Native metadata is inert arbitrary JSON. Runtime profile additionally rejects duplicate keys, mismatched source keys/identities and duplicate program/system pairs, and limits UTF-8 JSON to 8 MiB, depth 128 and 4096 entries per collection.",
   "type": "object",
   "required": [
     "format",
@@ -11,7 +11,7 @@
   ],
   "properties": {
     "format": {
-      "const": 1,
+      "const": 2,
       "type": "integer"
     },
     "sources": {
@@ -45,7 +45,7 @@
         "ref",
         "rev",
         "digest",
-        "identity",
+        "content_identity",
         "digestKind",
         "flatSha256",
         "metadata"
@@ -70,7 +70,7 @@
         "digest": {
           "type": "string"
         },
-        "identity": {
+        "content_identity": {
           "type": "string",
           "minLength": 1,
           "pattern": "\\S"
@@ -141,7 +141,7 @@
         "system",
         "urls",
         "sha256",
-        "identity",
+        "content_identity",
         "size",
         "obtained"
       ],
@@ -168,7 +168,7 @@
         "sha256": {
           "$ref": "#/$defs/sha256"
         },
-        "identity": {
+        "content_identity": {
           "type": "string",
           "minLength": 71,
           "maxLength": 71,
