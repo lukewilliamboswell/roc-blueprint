@@ -34,6 +34,23 @@ ReproducibleGates := [].{
 		BuildHarness.require!(output.name == "out" and Path.read_utf8!(Path.utf8(output.path))? == "one", "provenance output differs from built bytes")?
 		checked = record(BuildHarness.ok!(suite, place, ["build", "one", "--rebuild", "--json"])?.out)?
 		BuildHarness.require!(checked == first, "deterministic rebuild changed provenance")?
+		# Python only launches the native CLI under a restrictive inherited umask.
+		# Rebuild forces the sandbox user to read the newly mounted witness.
+		before_restrictive = Path.read_bytes!(Path.utf8(place.lock))?
+		python = BuildHarness.which!("python3")?
+		restrictive = BuildHarness.command!(
+			suite,
+			{
+				argv: [python, "-c", "import os,sys; os.umask(0o077); os.execv(sys.argv[1],sys.argv[1:])", suite.blueprint, "build", "one", "--rebuild", "--json"],
+				cwd: suite.caller,
+				extra: [("BLUEPRINT_ROOT", root), ("BLUEPRINT_WORKSPACE", place.workspace), ("BLUEPRINT_GENERATED_ROOT", place.generated), ("BLUEPRINT_LOCK", "authority.lock")],
+				stdin: [],
+				code: 0,
+				service: NoService,
+			},
+		)?
+		BuildHarness.require!(record(restrictive.out)? == first, "restrictive umask changed build provenance")?
+		BuildHarness.require!(Path.read_bytes!(Path.utf8(place.lock))? == before_restrictive, "restrictive umask changed authority")?
 		Path.write_utf8!(Path.utf8("${root}/unrelated"), "an application edit")?
 		BuildHarness.link!("${root}/absent", "${root}/unrelated-link")?
 		unchanged = record(BuildHarness.ok!(suite, place, ["build", "one", "--json"])?.out)?

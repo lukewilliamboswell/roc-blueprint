@@ -285,7 +285,7 @@ NixProvider :: [].{
 						"false",
 						"--option",
 						"extra-sandbox-paths",
-						"/blueprint-isolation=@blueprint-isolation-source@",
+						"/blueprint-isolation/witness=@blueprint-isolation-source@/witness",
 						"--impure",
 						"${base_ref}#packages.${target}.${name}",
 					])
@@ -1812,7 +1812,7 @@ expect match plan_fixture(Request.Build("app")) {
 		"false",
 		"--option",
 		"extra-sandbox-paths",
-		"/blueprint-isolation=@blueprint-isolation-source@",
+		"/blueprint-isolation/witness=@blueprint-isolation-source@/witness",
 		"--impure",
 		"path:/generated#packages.x86_64-linux.app",
 	]

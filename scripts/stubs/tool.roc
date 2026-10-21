@@ -105,10 +105,11 @@ act! = |role, args| {
 					# Record the witness before the CLI cleans its private directory.
 					match optional!("STUB_NIX_ISOLATION_LOG") {
 						Ok(log) => {
-							mount = argv.find_first(|argument| argument.starts_with("/blueprint-isolation="))
+							mount = argv.find_first(|argument| argument.starts_with("/blueprint-isolation/witness="))
 								.map_err(|_| "build has no runtime isolation mount")?
-							directory = mount.drop_prefix("/blueprint-isolation=")
-							witness = Path.read_utf8!(Path.utf8("${directory}/witness")).map_err(|_| "cannot read runtime witness")?
+							file = mount.drop_prefix("/blueprint-isolation/witness=")
+							directory = file.drop_suffix("/witness")
+							witness = Path.read_utf8!(Path.utf8(file)).map_err(|_| "cannot read runtime witness")?
 							Path.write_utf8!(Path.utf8(log), Json.to_str({ directory, witness })).map_err(|_| "cannot record runtime witness")?
 						}
 						Err(_) => {}

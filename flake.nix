@@ -193,7 +193,8 @@
               runHook preInstall
               install -Dm755 blueprint "$out/bin/blueprint"
               # Bootstrap unpacks the embedded compiler with tar/gzip; builds
-              # observe namespaces with readlink. Host tools still come first.
+              # observe namespaces with readlink and publish readable witnesses
+              # with chmod. Host tools still come first.
               wrapProgram "$out/bin/blueprint" \
                 --suffix PATH : ${lib.makeBinPath [
                   pkgs.coreutils
@@ -259,7 +260,7 @@
               pkgs.zip
               pkgs.unzip
               pkgs.gh
-            ] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.bubblewrap pkgs.util-linux ];
+            ] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.bubblewrap pkgs.util-linux pkgs.python3 ];
           };
         };
       outputs = nixpkgs.lib.genAttrs systems forSystem;

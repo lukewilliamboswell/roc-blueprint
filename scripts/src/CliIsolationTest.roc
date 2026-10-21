@@ -13,8 +13,8 @@ import Script
 ## The stubbed Nix never builds: these cases observe only what `blueprint
 ## build` stages before it runs the provider: the caller's namespaces in a
 ## private runtime witness, separate from the reproducible derivation. `PATH` holds
-## the stubs, `readlink` and a `python3` that records any use, and nothing
-## else, so the CLI is shown to need no Python and no `chmod` of its own.
+## the stubs, `readlink`, `chmod` and a `python3` that records any use.
+## The CLI publishes only the owned witness file's read permissions and needs no Python.
 CliIsolationTest := [].{
 
 	## Run every case from the repository root, in a temporary directory that is
@@ -134,6 +134,8 @@ cases! = |bench| {
 		Err(_) => return Script.fail!("readlink not found")
 	}
 	CliHarness.tool!(["ln", "-s", "--", readlink, "${bench.bin}/readlink"])?
+	chmod = CliHarness.which!("chmod", Env.var_str!(OsStr.from_str("PATH")) ?? "")?
+	CliHarness.tool!(["ln", "-s", "--", chmod, "${bench.bin}/chmod"])?
 	python_log = "${bench.work}/python3-was-used"
 	# Nothing of this process's environment reaches the CLI.
 	test = {
