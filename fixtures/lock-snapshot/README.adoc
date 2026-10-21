@@ -63,7 +63,7 @@ Copy `main.roc` and `Checks.roc` to the same directory in your downstream
 project. In `main.roc`, replace only the local `core` dependency with the
 complete published core asset URL from your selected Blueprint release:
 
-[source,roc]
+[source,text]
 ----
 core: "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.7.0/roc-blueprint-core-<content-hash>.tar.zst",
 ----

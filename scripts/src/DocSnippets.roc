@@ -12,6 +12,8 @@ import Script
 ##
 ## * One that starts `app [` is a whole `Blueprint.roc`. Its platform, written
 ##   as a placeholder in the manual, becomes this repository's.
+## * `[source,roc,snippet=core-module]` is a pure module checked against the
+##   local core package, with its imports and declarations preserved.
 ## * Any other is settings, as they stand inside `config`. They are put in a
 ##   `config` with a `Name`, the imports of the platform modules they use, and
 ##   the package source `nix` when they write a tool of it and do not declare
@@ -22,7 +24,7 @@ import Script
 ##   of program, settings of an earlier release, or settings that refer to
 ##   what another block declares. The count of these is printed.
 DocSnippets := [].{
-	Kind : [App, Settings, Refused, Unchecked]
+	Kind : [App, CoreModule, Settings, Refused, Unchecked]
 
 	Snippet : { file : Str, line : U64, kind : Kind, text : Str }
 
@@ -33,6 +35,8 @@ DocSnippets := [].{
 			Unchecked
 		} else if declared.contains("snippet=refused") {
 			Refused
+		} else if declared.contains("snippet=core-module") {
+			CoreModule
 		} else if text.starts_with("app [") {
 			App
 		} else {
@@ -71,10 +75,11 @@ DocSnippets := [].{
 
 	## The program `roc check` is given for a block, against the platform at
 	## `platform_ref`.
-	program : Str, Snippet -> Str
-	program = |platform_ref, snippet|
+	program : Str, Str, Snippet -> Str
+	program = |platform_ref, core_ref, snippet|
 		match snippet.kind {
 			App => with_platform(platform_ref, snippet.text)
+			CoreModule => "package [] { core: \"${core_ref}\" }\n\n${snippet.text}\n"
 			_ => {
 				modules = [("Recipes.", "Recipes"), ("Config.", "Config"), ("System ->", "System")].keep_if(|(use, _)| snippet.text.contains(use)).map(|(_, name)| "import pf.${name}\n")
 				name = if snippet.text.contains("\tName(") or snippet.text.starts_with("Name(") [] else ["\tName(\"snippet\"),"]
@@ -109,7 +114,7 @@ DocSnippets := [].{
 	}
 
 	## Check every block of the manual under `root`, in `work`.
-	run! : { roc : Str, platform_ref : Str, root : Str, work : Str }, (List(Process.Job) => Try(List(Process.Outcome), _)) => Try({}, _)
+	run! : { roc : Str, platform_ref : Str, core_ref : Str, root : Str, work : Str }, (List(Process.Job) => Try(List(Process.Outcome), _)) => Try({}, _)
 	run! = |options, drive!| {
 		var $snippets = extract(Published.snippet_file, Published.snippet("<the platform URL of the latest release>"))
 		for directory in ["docs", "docs/releases"] {
@@ -125,7 +130,7 @@ DocSnippets := [].{
 		var $jobs = []
 		for snippet in compiled {
 			name = "Snippet${$jobs.len().to_str()}.roc"
-			Path.write_utf8!(Path.utf8("${options.work}/${name}"), program(options.platform_ref, snippet))?
+			Path.write_utf8!(Path.utf8("${options.work}/${name}"), program(options.platform_ref, options.core_ref, snippet))?
 			$jobs = $jobs.append(Process.command(options.roc, ["check", name], options.work))
 		}
 		outcomes = drive!($jobs)?
@@ -135,11 +140,11 @@ DocSnippets := [].{
 			$at = $at + 1
 			reason = problem(snippet, outcome)
 			if !reason.is_empty() {
-				return Script.fail!("${program(options.platform_ref, snippet)}\n${outcome.stdout}${outcome.stderr}\n${reason}")
+				return Script.fail!("${program(options.platform_ref, options.core_ref, snippet)}\n${outcome.stdout}${outcome.stderr}\n${reason}")
 			}
 		}
 		count = |kind| $snippets.keep_if(|snippet| snippet.kind == kind).len().to_str()
-		Script.info!("   ", "the manual's Roc: ${count(App)} whole programs and ${count(Settings)} blocks of settings compile, ${count(Refused)} shown as mistakes are refused, ${count(Unchecked)} are not compiled")
+		Script.info!("   ", "the manual's Roc: ${count(App)} whole programs, ${count(CoreModule)} pure core modules and ${count(Settings)} blocks of settings compile, ${count(Refused)} shown as mistakes are refused, ${count(Unchecked)} are not compiled")
 	}
 }
 
@@ -164,14 +169,14 @@ expect DocSnippets.extract("docs/c.adoc", chapter).map(|snippet| snippet.text).g
 expect DocSnippets.extract("docs/c.adoc", "[source,roc]\n----\nnever closed\n") == []
 
 # A whole program keeps everything but its platform.
-expect DocSnippets.program("../pf/main.roc", { file: "f", line: 1, kind: App, text: "app [config] { pf: platform \"{platform-url}\" }\n\nconfig = [Name(\"x\")]" }) == "app [config] { pf: platform \"../pf/main.roc\" }\n\nconfig = [Name(\"x\")]\n"
+expect DocSnippets.program("../pf/main.roc", "../core/main.roc", { file: "f", line: 1, kind: App, text: "app [config] { pf: platform \"{platform-url}\" }\n\nconfig = [Name(\"x\")]" }) == "app [config] { pf: platform \"../pf/main.roc\" }\n\nconfig = [Name(\"x\")]\n"
 
 # Settings get a config, a name, the modules they use and the source `nix`
 # when they write a tool of it without declaring it.
-expect DocSnippets.program("../pf/main.roc", { file: "f", line: 1, kind: Settings, text: "Programs([Fetch(\"tool\", Recipes.file(\"https://example.org/tool-{system}\"))]),\nEnvironment(\"dev\", [\n\tTools([\"nix#git\"]),\n])," })
+expect DocSnippets.program("../pf/main.roc", "../core/main.roc", { file: "f", line: 1, kind: Settings, text: "Programs([Fetch(\"tool\", Recipes.file(\"https://example.org/tool-{system}\"))]),\nEnvironment(\"dev\", [\n\tTools([\"nix#git\"]),\n])," })
 	== "app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"snippet\"),\n\tPackages(\"nix\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),\n\tPrograms([Fetch(\"tool\", Recipes.file(\"https://example.org/tool-{system}\"))]),\n\tEnvironment(\"dev\", [\n\t\tTools([\"nix#git\"]),\n\t]),\n]\n"
 expect {
-	declared = DocSnippets.program("p", { file: "f", line: 1, kind: Settings, text: "Name(\"mine\"),\nPackages(\"nix\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-25.05\"))),\nEnvironment(\"dev\", [Tools([\"nix#git\"])])," })
+	declared = DocSnippets.program("p", "c", { file: "f", line: 1, kind: Settings, text: "Name(\"mine\"),\nPackages(\"nix\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-25.05\"))),\nEnvironment(\"dev\", [Tools([\"nix#git\"])])," })
 	!declared.contains("Name(\"snippet\")") and !declared.contains("nixos-unstable")
 }
 
@@ -179,3 +184,7 @@ expect {
 expect DocSnippets.problem({ file: "docs/c.adoc", line: 14, kind: Settings, text: "" }, { code: 1, stdout: "", stderr: "" }) == "docs/c.adoc:14: this block of the manual does not compile"
 expect DocSnippets.problem({ file: "docs/c.adoc", line: 25, kind: Refused, text: "" }, { code: 0, stdout: "", stderr: "" }) == "docs/c.adoc:25: the manual says the compiler refuses this, and it was accepted"
 expect DocSnippets.problem({ file: "f", line: 1, kind: App, text: "" }, { code: 0, stdout: "", stderr: "" }) == "" and DocSnippets.problem({ file: "f", line: 1, kind: Refused, text: "" }, { code: 1, stdout: "", stderr: "" }) == ""
+
+# Pure modules retain imports and declarations under an explicit core dependency.
+expect DocSnippets.kind_of("[source,roc,snippet=core-module]", "import core.LockSnapshot") == CoreModule
+expect DocSnippets.program("../pf/main.roc", "../core/main.roc", { file: "f", line: 1, kind: CoreModule, text: "import core.LockSnapshot\n\nidentity = |source| LockSnapshot.source_identity(source)" }) == "package [] { core: \"../core/main.roc\" }\n\nimport core.LockSnapshot\n\nidentity = |source| LockSnapshot.source_identity(source)\n"

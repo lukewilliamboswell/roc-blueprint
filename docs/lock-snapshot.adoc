@@ -37,7 +37,7 @@ Blueprint release. The configuration platform's separate bundle is unnecessary:
 a consumer chooses its own platform for its outer I/O. For example, an app
 header can declare this package dependency:
 
-[source,roc]
+[source,text]
 ----
 core: "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.7.0/roc-blueprint-core-<content-hash>.tar.zst",
 ----
@@ -92,7 +92,7 @@ An outer application runs `blueprint lock show --json NAME`, checks its exit
 status and bounded stdout, or reads a saved export, then passes the text to
 `LockSnapshot.parse_json`. These examples are pure:
 
-[source,roc]
+[source,roc,snippet=core-module]
 ----
 import core.LockSnapshot
 
