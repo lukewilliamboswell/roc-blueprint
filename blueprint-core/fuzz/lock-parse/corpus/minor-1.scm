@@ -1,5 +1,5 @@
-((format ((major 1) (minor 1)))
- (intent ((sources (((name "nix") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
+((format ((major 2) (minor 1)))
+ (intent ((resolvers ()) (sources (((name "nix") (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/nixos-unstable"))))))
           (inputs ()) (build_sources ()) (overlays ())))
  (sources (((name "nix") (provider "nix") (ref "github:NixOS/nixpkgs/nixos-unstable")
             (rev "4975466d324710c576dc11ad614684e6bd8cad8e")

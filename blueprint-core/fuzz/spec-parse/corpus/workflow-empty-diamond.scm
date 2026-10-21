@@ -1,4 +1,4 @@
-((format ((major 2) (minor 2)))
+((format ((major 3) (minor 2)))
  (name "empty-diamond") (requires ("workflows")) (systems ("x86_64-linux"))
  (workflows (
    ((name "root") (steps ((RunWorkflow "left") (RunWorkflow "right"))))

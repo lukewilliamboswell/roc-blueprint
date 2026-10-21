@@ -1,6 +1,6 @@
-((format ((major 2) (minor 0))) (name "tasks")
+((format ((major 3) (minor 0))) (name "tasks")
  (systems ("x86_64-linux"))
- (sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
+ (sources (((name "default") (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/nixos-unstable"))))))
  (environments (((name "ci") (parents ()) (overlays ())
    (tools (((source "default") (name "python3")))))))
  (shells (((name "default") (environment "ci"))))

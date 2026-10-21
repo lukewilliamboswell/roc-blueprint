@@ -1,5 +1,5 @@
-((format ((major 1) (minor 1)))
- (intent ((sources ()) (inputs ()) (build_sources ()) (overlays ())))
+((format ((major 2) (minor 1)))
+ (intent ((resolvers ()) (sources ()) (inputs ()) (build_sources ()) (overlays ())))
  (sources ())
  (hints ())
  (fetched (((name "roc-stable") (system "x86_64-linux")

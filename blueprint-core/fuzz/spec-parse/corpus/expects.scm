@@ -1,4 +1,4 @@
-((format ((major 2) (minor 7)))
+((format ((major 3) (minor 7)))
  (name "expects")
  (requires ("expects" "programs"))
  (systems ("x86_64-linux"))

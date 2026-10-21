@@ -1,7 +1,7 @@
 (
-	(format ((major 2) (minor 0)))
+	(format ((major 3) (minor 0)))
 	(name "roc-blueprint")
-	(sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
+	(sources (((name "default") (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/nixos-unstable"))))))
 	(inputs (((kind Overlay) (name "roc")
 		(url "github:roc-lang/roc-overlay"))))
 	(environments (((name "dev") (parents ())
@@ -12,4 +12,5 @@
 	(shells (((name "default") (environment "dev"))))
 	(systems ("x86_64-linux"))
 	(requires ())
-	(tasks ()))
+	(tasks ())
+ (resolvers (((provider "nix") (inputs ("roc"))))))

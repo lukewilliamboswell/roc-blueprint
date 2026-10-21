@@ -1,8 +1,8 @@
 ; A project that asks no provider for anything: no pins, and for each fetched
 ; program how its digest was obtained. The last entry says nothing of it, as
 ; one written before that was recorded.
-((format ((major 1) (minor 1)))
- (intent ((sources ()) (inputs ()) (build_sources ()) (overlays ())))
+((format ((major 2) (minor 1)))
+ (intent ((resolvers ()) (sources ()) (inputs ()) (build_sources ()) (overlays ())))
  (sources ())
  (hints ())
  (fetched (((name "roc-stable") (system "x86_64-linux") (obtained Both)

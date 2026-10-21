@@ -1,6 +1,6 @@
 ((name "x") (extra ((nested (1 2 "three")) sym))
- (format ((major 2) (minor 0)))
- (sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")) (future 1))))
+ (format ((major 3) (minor 0)))
+ (sources (((name "default") (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/nixos-unstable"))) (future 1))))
  (environments (((name "dev") (parents ()) (tools ()) (overlays ())
    (colour "red"))))
  (shells (((name "s") (environment "dev") (colour "red"))))

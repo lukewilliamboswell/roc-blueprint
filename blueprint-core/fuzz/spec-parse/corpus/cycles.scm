@@ -1,5 +1,5 @@
 ; Codec-valid graphs are not necessarily semantically valid projects.
-((format ((major 2) (minor 0))) (name "cycles")
+((format ((major 3) (minor 0))) (name "cycles")
  (systems ("x86_64-linux"))
  (environments (
    ((name "a") (parents ("b")) (tools ()) (overlays ()))
