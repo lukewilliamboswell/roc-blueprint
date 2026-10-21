@@ -146,6 +146,15 @@ def release_evidence(document, root):
     assert any(edge['spdxElementId'] == 'SPDXRef-roc-builder' and edge['relationshipType'] == 'BUILD_DEPENDENCY_OF' for edge in document['relationships'])
     tag = (root / 'blueprint-cli/compiler-version').read_text().strip()
     assert entries['SPDXRef-roc-builder']['versionInfo'] == tag
+    tool_source = document['name'].startswith('roc-blueprint-sbom-')
+    if tool_source:
+        source = (root / 'scripts/sbom.roc').read_text().split('\n}\n', 1)[0]
+        imports = [uri for name, uri in re.findall(r'^\s*(\w+): (?:platform )?"([^"]+)"', source, re.M) if name != 'roc']
+        observed = [entry.removeprefix('tool-import:') for entry in evidence['inspected'] if entry.startswith('tool-import:')]
+        assert sorted(imports) == sorted(observed), 'standalone tool import omitted'
+        for name in ['scripts/sbom.roc', 'scripts/src/SbomFiles.roc']:
+            digest = hashlib.sha256((root / name).read_bytes()).hexdigest()
+            assert 'tool-source:' + name + ':' + digest in evidence['inspected']
     if evidence['target'] != 'source':
         assert {'SPDXRef-basic-cli', 'SPDXRef-http', 'SPDXRef-weaver', 'SPDXRef-roc-embedded', 'SPDXRef-sqlite'} <= entries.keys(), 'known shipped/native input omitted'
         bootstrap = (root / 'blueprint-cli/Bootstrap.roc').read_text()
@@ -161,14 +170,20 @@ def release_evidence(document, root):
         assert expected == declared, 'supplemental Cargo graph omits/conflicts with original upstream lock'
 
     if 'SPDXRef-core' in entries:
+        core_name = next(line.split(' ', 1)[1] for line in (root / 'dist/bundles.txt').read_text().splitlines() if line.startswith('roc-blueprint-core '))
+        assert entries['SPDXRef-core']['checksums'][0]['checksumValue'] == hashlib.sha256((root / 'dist' / core_name).read_bytes()).hexdigest()
+    if 'SPDXRef-linker-inputs' in entries:
         source = (root / 'blueprint-platform/main.roc').read_text()
         for target, names in re.findall(r'(\w+): \{ inputs: \[([^\]]+)\]', source):
             for member_name in re.findall(r'"([^"]+)"', names):
                 member = 'targets/' + target + '/' + member_name
                 digest = hashlib.sha256((root / 'blueprint-platform' / member).read_bytes()).hexdigest()
                 assert 'platform-member:' + member + ':' + digest in evidence['inspected'], 'known delivered native member omitted'
-        core_name = next(line.split(' ', 1)[1] for line in (root / 'dist/bundles.txt').read_text().splitlines() if line.startswith('roc-blueprint-core '))
-        assert entries['SPDXRef-core']['checksums'][0]['checksumValue'] == hashlib.sha256((root / 'dist' / core_name).read_bytes()).hexdigest()
+    if tool_source:
+        assert {'SPDXRef-basic-cli', 'SPDXRef-core', 'SPDXRef-http', 'SPDXRef-sqlite', 'SPDXRef-rust-std'} <= entries.keys()
+        assert 'SPDXRef-roc-embedded' not in entries, 'compiler does not ship in the source-app bundle'
+        cargo = load(root / 'sbom/basic-cli-cargo.json')
+        assert {entry['id'] for entry in cargo['components']} <= entries.keys()
     native = load(root / 'link-inputs.lock.json')
     assert 'linker-archive:' + native['targets']['all']['sha256'] in evidence['inspected']
 

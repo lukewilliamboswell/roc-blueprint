@@ -23,6 +23,29 @@ and declared coverage. They do not replace the shared release-policy validator.
 An SBOM is a composition statement; provenance and vulnerability verdicts are
 separate records.
 
+== Use the released standalone tool
+
+Each release includes `roc-blueprint-sbom-<content-hash>.tar.zst`, a supported
+Roc app bundle containing the same wrapper and filesystem boundary used here.
+The release notes link to its exact immutable URL. Pin that URL in automation:
+its release version and Roc content hash identify the source bytes.
+The compiler pin matches `blueprint compiler-version` for that release.
+
+[source,console]
+----
+roc run <immutable-tool-bundle-url> -- inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
+roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx.json
+----
+
+No Blueprint project is required; even an unrelated invalid `Blueprint.roc`
+in the working directory is ignored. Supply the already evaluated Spec and
+Lock paths explicitly. A matching Roc compiler prepares the immutable core
+and native platform dependencies in its package cache before execution;
+materialize those dependencies before taking a release job offline. The report
+itself performs no resolution, provider execution or network request.
+The source app's own sidecar distinguishes its contained wrapper/I/O source
+from the core/platform/compiler dependencies fetched separately.
+
 == Inspect without executing a provider
 
 The pure `core.Sbom.inspect(spec, lock, target, composition)` function consumes
@@ -33,7 +56,8 @@ The existing optional extension seam accepts
 `Sbom.from_spec(spec, subjectName)` reads that declaration. A separate reviewed
 JSON file can supply the same `Sbom.Composition` value.
 
-The native repository command consumes those evaluated inputs:
+When developing Blueprint itself, the repository entry point runs the same
+code as the published app bundle:
 
 [source,console]
 ----
@@ -157,7 +181,8 @@ binding operation.
 == Blueprint's own release evidence
 
 The read-only release build runs `scripts/release_sbom.roc VERSION` after the
-four target executables and both Roc source bundles exist. Its generation
+four target executables, both library/platform source bundles and the
+standalone tool app bundle exist. Its generation
 time comes from the selected source commit, not the wall clock. The extended
 command `VERSION CREATED SOURCE_COMMIT DOCUMENT_REVISION` supplies an explicit
 context for reproducible local checks or corrections.

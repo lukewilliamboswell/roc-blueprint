@@ -49,6 +49,7 @@ ReleaseNotes := [].{
 		archives : List({ system : Str, hash : Str }),
 		nixpkgs_rev : Str,
 		core_url : Str,
+		sbom_url : Str,
 		bundles : List(Str),
 		link_inputs : Str,
 		lock_sha256 : Str,
@@ -90,6 +91,7 @@ ReleaseNotes := [].{
 				"- Compiler archives from roc-overlay `${built.overlay_rev}`: ${Str.join_with(archives, ", ")}",
 				"- nixpkgs `${built.nixpkgs_rev}`",
 				"- roc-blueprint-core `${built.core_url}`",
+				"- Standalone SBOM tool: [pinned Roc app bundle](${built.sbom_url}) (same compiler pin; no Blueprint project required)",
 				"- Roc packages in the CLI: ${Str.join_with(built.bundles, ", ")}",
 				"- Linker inputs: roc-platform-template-zig release `${built.link_inputs}` (`link-inputs.lock.json` sha256 `${built.lock_sha256}`)",
 				"",
@@ -118,6 +120,7 @@ ReleaseNotes := [].{
 		list = Path.read_utf8!(Path.utf8("${root}/dist/bundles.txt"))?
 		archive = bundled!(list, "roc-blueprint")?
 		core_archive = bundled!(list, "roc-blueprint-core")?
+		sbom_archive = bundled!(list, "roc-blueprint-sbom")?
 		lock_bytes = Path.read_bytes!(Path.utf8("${root}/${LinkInputs.lock_file}"))?
 		link_inputs = match LinkInputs.parse_lock(Str.from_utf8_lossy(lock_bytes)) {
 			Ok(lock) => lock.release
@@ -136,6 +139,7 @@ ReleaseNotes := [].{
 			],
 			nixpkgs_rev: revision!(flake_lock, "nixpkgs")?,
 			core_url: Bundle.release_url(repository, tag, core_archive),
+			sbom_url: Bundle.release_url(repository, tag, sbom_archive),
 			bundles: bundles(deps),
 			link_inputs,
 			lock_sha256: Integrity.digest(lock_bytes),
@@ -211,6 +215,7 @@ built_sample = {
 	archives: [{ system: "x86_64-linux", hash: "sha256-iTyG=" }, { system: "aarch64-darwin", hash: "sha256-4BR/=" }],
 	nixpkgs_rev: "4975466d",
 	core_url: "https://example.test/core.tar.zst",
+	sbom_url: "https://example.test/roc-blueprint-sbom-tool.tar.zst",
 	bundles: ["basic-cli 0.24.0 `AEjfyaMF`", "http 1.0.0 `6ZUwqYhC`"],
 	link_inputs: "link-inputs-sha256-2d",
 	lock_sha256: "ff00",
@@ -223,6 +228,7 @@ expect ReleaseNotes.built_from(built_sample) ==
 	\\- Compiler archives from roc-overlay `fb02fef7`: x86_64-linux `sha256-iTyG=`, aarch64-darwin `sha256-4BR/=`
 	\\- nixpkgs `4975466d`
 	\\- roc-blueprint-core `https://example.test/core.tar.zst`
+	\\- Standalone SBOM tool: [pinned Roc app bundle](https://example.test/roc-blueprint-sbom-tool.tar.zst) (same compiler pin; no Blueprint project required)
 	\\- Roc packages in the CLI: basic-cli 0.24.0 `AEjfyaMF`, http 1.0.0 `6ZUwqYhC`
 	\\- Linker inputs: roc-platform-template-zig release `link-inputs-sha256-2d` (`link-inputs.lock.json` sha256 `ff00`)
 	\\

@@ -10,7 +10,7 @@ import cli.Path
 import cli.Stderr
 import src/Bundle
 
-## Bundle roc-blueprint-core and the roc-blueprint platform into `dist/`.
+## Bundle core, the platform and the supported standalone SBOM app into `dist/`.
 ## Run from the repository root; the platform needs the linker inputs
 ## installed by `scripts/link_inputs.roc fetch`.
 ##
@@ -22,7 +22,8 @@ import src/Bundle
 ##
 ## The platform's archive is `dist/<hash>.tar.zst` and the core package's
 ## `dist/roc-blueprint-core-<hash>.tar.zst`; both are listed in
-## `dist/bundles.txt`. They are smoke-tested from localhost before this
+## `dist/bundles.txt`, alongside `roc-blueprint-sbom-<hash>.tar.zst`. The app
+## uses the selected release compiler pin and immutable core URL. All are smoke-tested from localhost before this
 ## returns.
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {

@@ -56,9 +56,9 @@ ReleaseSbom := [].{
 			write!(root, filename, version, released.system, composition, created, commit, revision)?
 		}
 		bundles = Path.read_utf8!(Path.utf8("${root}/dist/bundles.txt"))?
-		for name in ["roc-blueprint", "roc-blueprint-core"] {
+		for name in ["roc-blueprint", "roc-blueprint-core", "roc-blueprint-sbom"] {
 			filename = Bundle.archive(bundles, name).map_err(|_| Invalid("missing source bundle"))?
-			composition = source_composition(name, version, commit, native)
+			composition = if name == "roc-blueprint-sbom" tool_composition(version, commit, cargo) else source_composition(name, version, commit, native)
 			write!(root, filename, version, "source", composition, created, commit, revision)?
 		}
 		Ok({})
@@ -102,6 +102,25 @@ ReleaseSbom := [].{
 		Ok({ profile: Sbom.profile, imported_documents: [], components, relationships, coverage, inputs: [] })
 	}
 
+	tool_composition : Str, Str, Cargo -> Sbom.Composition
+	tool_composition = |version, commit, cargo| {
+		own = component("sources", "roc-blueprint-sbom", version, "https://github.com/lukewilliamboswell/roc-blueprint/tree/${commit}/scripts", "UPL-1.0", "")
+		core = component("core", "roc-blueprint-core", version, "https://github.com/lukewilliamboswell/roc-blueprint/tree/${commit}/blueprint-core", "UPL-1.0", "")
+		compiler = component("roc-builder", "Roc source-app compiler", compiler_version.trim(), "https://github.com/roc-lang/roc/tree/1df370f0660e2086db08e6370b77689594db8928", "UPL-1.0", "")
+		host = component("basic-cli", "basic-cli", "0.26.0-rc2", "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst", "UPL-1.0", "")
+		http = component("http", "roc-lang/http", "1.0.0", "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst", "UPL-1.0", "")
+		sqlite = { ..component("sqlite", "SQLite", "3.49.1", "https://www.sqlite.org/2025/sqlite-amalgamation-3490100.zip", "LicenseRef-SQLite-Public-Domain", ""), license_url: "https://www.sqlite.org/copyright.html" }
+		std = component("rust-std", "Rust standard library", "1.97.1", "https://github.com/rust-lang/rust/tree/1.97.1", "MIT OR Apache-2.0", "")
+		{
+			profile: Sbom.profile,
+			imported_documents: [],
+			components: [own, core, compiler, host, http, sqlite, std].concat(cargo.components),
+			relationships: [edge("SPDXRef-Subject", own.id, "CONTAINS", "Exactly scripts/sbom.roc and src/SbomFiles.roc; staged main filename and dependency/compiler pins only"), edge(own.id, core.id, "DEPENDS_ON", "Released core bundle, fetched separately by Roc"), edge(own.id, host.id, "DEPENDS_ON", "Pinned native CLI platform, fetched separately by Roc"), edge(host.id, http.id, "DEPENDS_ON", "Pinned platform imports the HTTP package"), edge(compiler.id, "SPDXRef-Subject", "BUILD_DEPENDENCY_OF", "roc bundle produces the delivered source-app archive"), edge(own.id, compiler.id, "DEPENDS_ON", "App source requires the explicit matching compiler to run"), edge(host.id, std.id, "CONTAINS", "Platform bundle distributes Rust staticlib native hosts"), edge("SPDXRef-cargo-libsqlite3-sys-0.33.0", sqlite.id, "CONTAINS", "Pinned bundled SQLite source in verified Rust crate")].concat(cargo.components.map(|entry| edge(host.id, entry.id, "OTHER", "Upstream platform Cargo resolution candidate; native target/features/role unresolved"))).concat(cargo.relationships),
+			coverage: [gap("upstream-platform-closure", "App ships only its wrapper/I/O source and fetches core/basic-cli later; available Cargo graph retained, exact native target/feature/license closure remains incomplete")],
+			inputs: [],
+		}
+	}
+
 	source_composition : Str, Str, Str, Native -> Sbom.Composition
 	source_composition = |name, version, commit, native| {
 		own = component("sources", name, version, "https://github.com/lukewilliamboswell/roc-blueprint/tree/${commit}/${if name == "roc-blueprint" "blueprint-platform" else "blueprint-core"}", "UPL-1.0", "")
@@ -141,7 +160,17 @@ write! = |root, filename, version, target, composition, created, commit, revisio
 	cargo : ReleaseSbom.Cargo
 	cargo = Json.parse(cargo_json).map_err(|_| Invalid("invalid Cargo graph"))?
 	for crate in cargo.components {
-		$inputs = $inputs.append({ input: "cargo:${crate.name}@${crate.version}:${crate.sha256}", component: if target == "source" "" else crate.id, reason: if target == "source" "CLI/release-script runtime resolution candidate excluded from this source software's import closure" else "Pinned upstream Cargo resolution candidate; exact runtime/build/target role recorded separately or incomplete" })
+		$inputs = $inputs.append({ input: "cargo:${crate.name}@${crate.version}:${crate.sha256}", component: if composition.components.any(|entry| entry.id == crate.id) crate.id else "", reason: if !composition.components.any(|entry| entry.id == crate.id) "CLI/release-script runtime resolution candidate excluded from this source software's import closure" else "Pinned upstream Cargo resolution candidate; exact runtime/build/target role recorded separately or incomplete" })
+	}
+	if composition.components.any(|entry| entry.name == "roc-blueprint-sbom") {
+		tool_imports = reviewed_tool_imports!(root)?
+		for entry in tool_imports {
+			$inputs = $inputs.append({ input: "tool-import:${entry.url}", component: entry.component, reason: "Observed standalone wrapper import; staged core URL uses the separately hashed released core bundle" })
+		}
+		for source in ["scripts/sbom.roc", "scripts/src/SbomFiles.roc"] {
+			sha = SbomFiles.digest!("${root}/${source}")?
+			$inputs = $inputs.append({ input: "tool-source:${source}:${sha}", component: "SPDXRef-sources", reason: "Exact copied wrapper/I/O source; only entry filename and core/compiler metadata are staged" })
+		}
 	}
 	for entry in observed {
 		component_id = if target == "source" "" else entry.component
@@ -183,6 +212,8 @@ write! = |root, filename, version, target, composition, created, commit, revisio
 		core_filename = Bundle.archive(bundles, "roc-blueprint-core").map_err(|_| Invalid("missing core source bundle"))?
 		core_sha = SbomFiles.digest!("${root}/dist/${core_filename}")?
 		$delivered_components = $delivered_components.map(|entry| if entry.id == "SPDXRef-core" { ..entry, download: Bundle.release_url(Bundle.default_repository, version, core_filename), sha256: core_sha, identity: "urn:blueprint:source-bundle:${core_filename}:${core_sha}" } else entry)
+	}
+	if composition.components.any(|entry| entry.id == "SPDXRef-linker-inputs") {
 		platform_source = Path.read_utf8!(Path.utf8("${root}/blueprint-platform/main.roc"))?
 		members = Bundle.target_inputs(platform_source).map_err(|_| Invalid("platform recipe has no declared linker members"))?
 		for member in members {
@@ -306,3 +337,15 @@ expect verify_cargo(cargo_lock_fixture, reviewed_cargo).is_ok()
 expect verify_cargo(cargo_lock_fixture, { ..reviewed_cargo, components: reviewed_cargo.components.drop_first(1) }).is_err()
 expect verify_cargo(cargo_lock_fixture, { ..reviewed_cargo, relationships: reviewed_cargo.relationships.drop_first(1) }).is_err()
 expect verify_cargo(cargo_lock_fixture, { ..reviewed_cargo, components: reviewed_cargo.components.map(|entry| { ..entry, sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }) }).is_err()
+
+reviewed_tool_imports! : Str => Try(List({ url : Str, component : Str }), _)
+reviewed_tool_imports! = |root| {
+	source = SbomFiles.read!("${root}/scripts/sbom.roc")?
+	header = source.split_on("\n}\n").first() ?? ""
+	observed = header.split_on("\n").keep_if(|line| !line.trim().starts_with("#") and !line.trim().starts_with("roc:") and line.contains(": ")).map(|line| line.split_on("\"").get(1) ?? "")
+	expected = [{ url: "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst", component: "SPDXRef-basic-cli" }, { url: "../blueprint-core/main.roc", component: "SPDXRef-core" }]
+	if observed != expected.map(|entry| entry.url) {
+		return Err(Invalid("standalone SBOM wrapper imports changed: review composition"))
+	}
+	Ok(expected)
+}
