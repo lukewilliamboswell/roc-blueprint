@@ -243,7 +243,6 @@ main! = |raw_args| {
 	# A sandboxed build runs this executable as its builder. There is no
 	# Blueprint.roc or compiler there, so dispatch before loading either.
 	match raw_args {
-		[first, .. as rest] if first.to_bytes() == "__build-runner".to_utf8() => return build_runner!(rest)
 		_ => {}
 	}
 	# These inspectors must parse before project paths, configuration, host or
@@ -736,291 +735,10 @@ namespace! = |name| {
 	Ok(identity)
 }
 
-## What the provider's build derivation passes to `blueprint __build-runner`.
-## `readlink`, `chmod` and `ln` are absolute programs: a build has no implicit
-## PATH. Only a build whose environment has Roc packages names them and `ln`.
-BuildSpec : {
-	project : Str,
-	argv : List(Str),
-	output : Str,
-	path : Str,
-	inputs : Str,
-	tools : Try(Str, [Missing]),
-	artifacts : Str,
-	readlink : Str,
-	chmod : Str,
-	roc_packages : Try(List(RocPackage), [Missing]),
-	ln : Try(Str, [Missing]),
-}
-
-## A released Roc bundle: the content hash Roc looks for in its package cache
-## and the directory holding the unpacked bundle.
-RocPackage : { name : Str, path : Str }
-
-## The builder of a sandboxed build: exact argv and one contained,
-## symlink-free output. The specification is the given file, or the one the
-## derivation passes as `blueprintSpecPath`.
-build_runner! : List(OsStr) => Try({}, [Exit(I32)])
-build_runner! = |args| {
-	result = match args {
-		[] =>
-			match Env.var!(OsStr.from_str("blueprintSpecPath")) {
-				Ok(file) => run_build!(Path.from_os_str(file))
-				Err(_) => Err(Invalid("missing build specification"))
-			}
-
-		[file] => run_build!(Path.from_os_str(file))
-		_ => Err(Invalid("expected one build specification"))
-	}
-	match result {
-		Ok({}) => Ok({})
-		Err(Exited(code)) => Err(Exit(code))
-		Err(Invalid(message)) => {
-			_ = Stderr.line!("blueprint build: ${message}")
-			Err(Exit(1))
-		}
-		Err(other) => {
-			_ = Stderr.line!("blueprint build: ${Str.inspect(other)}")
-			Err(Exit(1))
-		}
-	}
-}
-
-run_build! : Path => Try({}, _)
-run_build! = |file| {
-	text = file.read_utf8!()?
-	# Nothing else, not even reading the rest of the specification, precedes
-	# the isolation check.
-	require_isolation!(text)?
-	parsed : Try(BuildSpec, _)
-	parsed = Json.parse(text)
-	spec = parsed.map_err(|_| Invalid("invalid build specification"))?
-	source = path(spec.project)
-	safe_tree!(source)?
-	check_inputs!(spec.readlink, path(spec.inputs))?
-	top = Env.cwd!()?
-	work = top.join("blueprint-work")
-	work.create_dir!()?
-	copy_tree!(source, work)?
-	# Store files are read-only; the project copy is the build's to change.
-	native_command!(OsStr.from_str(spec.chmod)).args(["-R", "u+w", "--"].map(OsStr.from_str)).arg(work.to_os_str()).exec!()?
-	home = top.join("blueprint-home")
-	home.create_dir!()?
-	cache = roc_build_cache!(spec.roc_packages, spec.ln, top)?
-	match spec.argv {
-		[] => return Err(Invalid("empty build command"))
-		[program, .. as rest] => {
-			# A bare program name resolves against the PATH given here.
-			base = native_command!(OsStr.from_str(program)).args(rest.map(OsStr.from_str)).cwd(work)
-				.env(OsStr.from_str("PATH"), OsStr.from_str(spec.path))
-				.env(OsStr.from_str("HOME"), home.to_os_str())
-				.env(OsStr.from_str("BLUEPRINT_INPUTS"), OsStr.from_str(spec.inputs))
-				.env(OsStr.from_str("BLUEPRINT_TOOLS"), OsStr.from_str(spec.tools ?? ""))
-				.env(OsStr.from_str("BLUEPRINT_ARTIFACTS"), OsStr.from_str(spec.artifacts))
-			# Only the user command sees the cache, and only when there is one.
-			command = match cache {
-				Private(directory) => base.env(OsStr.from_str("XDG_CACHE_HOME"), directory.to_os_str())
-				NoCache => base
-			}
-			ran = command.stdout(Inherit).stderr(Inherit).run!()
-			match ran {
-				Ok(Cmd.Output.{ status: Exited(0), .. }) => {}
-				Ok(Cmd.Output.{ status: Exited(code), .. }) => return Err(Exited(code))
-				Ok(Cmd.Output.{ status: Signaled(signal), .. }) => return Err(Exited(128 + signal))
-				Err(CmdErr(StartFailed(NotFound, _))) => return Err(Invalid("build command not found: ${program}"))
-				Err(CmdErr(StartFailed(err, _))) => return Err(Invalid("cannot run ${program}: ${Str.inspect(err)}"))
-				Err(_) => return Err(Invalid("cannot run ${program}"))
-			}
-		}
-	}
-	parts = output_parts(spec.output)?
-	if (work.is_sym_link!() ?? False) or !(work.is_dir!() ?? False) {
-		return Err(Invalid("build replaced the project workspace"))
-	}
-	# basic-cli has no no-follow open, so a build still running in the
-	# background could swap an entry between these checks and the copy.
-	var $depth = parts.len()
-	while $depth > 0 {
-		ancestor = work.join(Str.join_with(parts.take_first($depth), "/"))
-		if ancestor.is_sym_link!() ?? False {
-			return Err(Invalid("symlink in declared output path: ${ancestor.display()}"))
-		}
-		$depth = $depth - 1
-	}
-	output = work.join(spec.output)
-	if !(output.exists!() ?? False) {
-		return Err(Invalid("declared output is missing: ${spec.output}"))
-	}
-	if !within(
-		output.canonicalize!()?.to_os_str().to_bytes(),
-		work.canonicalize!()?.to_os_str().to_bytes(),
-	) {
-		return Err(Invalid("declared output escapes the project workspace"))
-	}
-	safe_tree!(output)?
-	destination = Path.from_os_str(
-		Env.var!(OsStr.from_str("out")).map_err(|_| Invalid("the build has no $out"))?,
-	)
-	if (destination.is_sym_link!() ?? False) or (destination.exists!() ?? False) {
-		return Err(Invalid("build wrote directly to $out instead of declared Output"))
-	}
-	if output.is_dir!()? {
-		destination.create_dir!()?
-		copy_tree!(output, destination)
-	} else {
-		output.copy!(destination)?
-		Ok({})
-	}
-}
-
-## A build has no network, so Roc cannot download a package there. Give the
-## build a cache of its own holding its environment's locked bundles: Roc reads
-## `$XDG_CACHE_HOME/roc/packages/<hash>/main.roc` and does not download what it
-## finds. Links suffice, because the cache is discarded with the build
-## directory and the store cannot be collected while the build runs. basic-cli
-## cannot create a link itself.
-roc_build_cache! : Try(List(RocPackage), [Missing]), Try(Str, [Missing]), Path => Try([Private(Path), NoCache], _)
-roc_build_cache! = |declared, ln, top| {
-	bundles = declared ?? []
-	if bundles.is_empty() {
-		return Ok(NoCache)
-	}
-	program = ln.map_err(|_| Invalid("the build has Roc packages but no ln program"))?
-	cache = top.join("blueprint-cache")
-	directory = cache.join("roc").join("packages")
-	directory.create_all!()?
-	for bundle in bundles {
-		if !Project.valid_name(bundle.name) {
-			return Err(Invalid("invalid Roc package name: ${bundle.name}"))
-		}
-		if !(path(bundle.path).join("main.roc").is_file!() ?? False) {
-			return Err(Invalid("Roc package ${bundle.name} has no main.roc"))
-		}
-		native_command!(OsStr.from_str(program)).args(["-s", "--", bundle.path].map(OsStr.from_str))
-			.arg(directory.join(bundle.name).to_os_str())
-			.exec!()
-			.map_err(|_| Invalid("cannot link Roc package ${bundle.name}"))?
-	}
-	Ok(Private(cache))
-}
-
-## Reject Run even when the daemon ignores client sandbox flags: the build's
-## namespaces must both differ from those the caller observed for itself.
-require_isolation! : Str => Try({}, _)
-require_isolation! = |text| {
-	witness : Try({ isolation : { mnt : Str, net : Str } }, _)
-	witness = Json.parse(text)
-	caller = witness.map_err(|_| Invalid("${isolation_remedy} Missing caller namespace observations."))?.isolation
-	tools : Try({ readlink : Str }, _)
-	tools = Json.parse(text)
-	readlink = tools.map_ok(|parsed| parsed.readlink)
-	# Two calls, not a loop: this Roc nightly miscounts references when a loop
-	# body matches on a value from outside it.
-	require_namespace!(readlink, "mnt", caller.mnt)?
-	require_namespace!(readlink, "net", caller.net)
-}
-
-isolation_remedy : Str
-isolation_remedy =
-	"cannot verify build isolation; user Run was not executed. "
-		.concat("Enable sandbox = true and sandbox-fallback = false in the Nix ")
-		.concat("daemon configuration and use a local Linux sandbox with /proc.")
-
-require_namespace! : Try(Str, _), Str, Str => Try({}, _)
-require_namespace! = |readlink, name, observed| {
-	if !valid_namespace(name, observed) {
-		return Err(Invalid("${isolation_remedy} Invalid caller ${name} namespace."))
-	}
-	current = match readlink {
-		Ok(program) => observe_namespace!(program, name)
-		Err(_) => Err("no readlink program")
-	}
-		.map_err(|reason| Invalid("${isolation_remedy} Cannot read build ${name} namespace: ${reason}"))?
-	if !valid_namespace(name, current) {
-		return Err(Invalid("${isolation_remedy} Invalid build ${name} namespace."))
-	}
-	if current == observed {
-		return Err(Invalid("${isolation_remedy} Build shares caller ${name} namespace."))
-	}
-	Ok({})
-}
-
-## A declared output is a relative path of plain names.
-output_parts : Str -> Try(List(Str), _)
-output_parts = |output| {
-	parts = output.split_on("/")
-	if parts.any(|part| part == "" or part == "." or part == "..") {
-		Err(Invalid("invalid declared relative output"))
-	} else {
-		Ok(parts)
-	}
-}
-
-expect output_parts("dist/my artifact") == Ok(["dist", "my artifact"])
-expect
-	["", "/absolute", ".", "..", "./artifact", "dist/../escape", "dist//file", "dist/"].all(
-		|output| output_parts(output) == Err(Invalid("invalid declared relative output")),
-	)
-
-## Reject links and special files anywhere in a tree, by raw entry names.
-safe_tree! : Path => Try({}, _)
-safe_tree! = |entry|
-	match entry.type!()? {
-		IsSymLink => Err(Invalid("symlink is not allowed in build output/source: ${entry.display()}"))
-		IsDir => {
-			for child in entry.list!()? {
-				safe_tree!(child)?
-			}
-			Ok({})
-		}
-		IsFile => Ok({})
-		IsOther => Err(Invalid("special file is not allowed in build output/source: ${entry.display()}"))
-	}
-
-## Allow generated farm links, not symlinks within fetched source trees.
-check_inputs! : Str, Path => Try({}, _)
-check_inputs! = |readlink, farm| {
-	for entry in farm.list!()? {
-		if !(entry.is_sym_link!()?) {
-			return Err(Invalid("expected generated source link: ${entry.display()}"))
-		}
-		target = native_command!(OsStr.from_str(readlink)).args(["-n", "--"].map(OsStr.from_str)).arg(entry.to_os_str())
-			.run!().map_err(|err| Invalid(Str.inspect(err)))?.require_success()
-			.map_err(|_| Invalid("cannot read generated source link: ${entry.display()}"))?
-			.stdout_bytes
-		# Follow exactly the planner's farm link. safe_tree! rejects a symlink
-		# at the fetched root or anywhere beneath it, including remote inputs.
-		resolved = if target.first() == Ok('/') {
-			target
-		} else {
-			farm.to_os_str().to_bytes().append('/').concat(target)
-		}
-		safe_tree!(Path.unix_bytes(resolved))?
-	}
-	Ok({})
-}
-
 basename : List(U8) -> List(U8)
 basename = |bytes| bytes.fold([], |acc, byte| if (byte == '/') [] else acc.append(byte))
 
 expect basename("/project/src/main.roc".to_utf8()) == "main.roc".to_utf8()
-
-## Copy the directories and regular files of a tree safe_tree! accepted into
-## an existing directory, by raw entry names. Files keep their permissions.
-copy_tree! : Path, Path => Try({}, _)
-copy_tree! = |source, target| {
-	for entry in source.list!()? {
-		name = basename(entry.to_os_str().to_bytes())
-		copy = Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(name))
-		if entry.is_dir!()? {
-			copy.create_dir!()?
-			copy_tree!(entry, copy)?
-		} else {
-			entry.copy!(copy)?
-		}
-	}
-	Ok({})
-}
 
 ## The pure planner validates the entire request before any staging effects.
 realise! : Spec, Request, Context => Try({}, _)
@@ -1153,6 +871,39 @@ fetch_programs! = |steps| {
 ## effect.
 execute_step! : Steps.Step, List(Fetched), Context => Try({}, _)
 execute_step! = |step, fetched, ctx| {
+	# Refuse stale local trees before creating any caller-generated state.
+	for operation in step.operations {
+		match operation {
+			VerifyTree({ path: local, digest }) => {
+				safe_source!(local)?
+				if tree_digest!(local)? != digest {
+					return Err(LockFailed("local source ${local} changed; run `blueprint update`"))
+				}
+			}
+			_ => {}
+		}
+	}
+	isolation = step.operations.find_first(
+		|operation| match operation {
+			Isolation(_) => True
+			_ => False
+		},
+	)
+	match isolation {
+		Ok(Isolation({ directory, .. })) => {
+			safe_path!(directory)?
+			path(directory).create_all!()?
+			created = Env.create_temp_dir_in!(path(directory), "caller-")?
+			result = execute_prepared!(step, fetched, ctx, Paths.portable(created.to_str()?))
+			_ = created.delete_all!()
+			result
+		}
+		_ => execute_prepared!(step, fetched, ctx, "")
+	}
+}
+
+execute_prepared! : Steps.Step, List(Fetched), Context, Str => Try({}, _)
+execute_prepared! = |step, fetched, ctx, witness_directory| {
 	layout = ctx.layout
 	files = step.files
 	var $argv = step.argv
@@ -1170,13 +921,11 @@ execute_step! = |step, fetched, ctx| {
 					)
 				}
 			}
-			Isolation({ directory, placeholder }) => {
+			Isolation({ placeholder, .. }) => {
 				mnt = namespace!("mnt")?
 				net = namespace!("net")?
-				safe_path!(directory)?
-				path(directory).create_all!()?
-				atomic_write!("${directory}/witness", "${mnt}\n${net}\n")?
-				$argv = $argv.map(|arg| arg.replace_each(placeholder, directory))
+				atomic_write!("${witness_directory}/witness", "${mnt}\n${net}\n")?
+				$argv = $argv.map(|arg| arg.replace_each(placeholder, witness_directory))
 			}
 			LocalSystem(system) => {
 				runner_host(host_system!(), system)?
