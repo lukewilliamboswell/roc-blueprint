@@ -27,9 +27,6 @@ only a committed lock, and works even when `Blueprint.roc` is absent or invalid.
 | `blueprint explain build NAME [--prepare] [--json]`
 | Explain changes against the last successful local build; optionally compare exact prepared build identities
 
-| `blueprint lock migrate`
-| Migrate supported older lock authority without fetching or choosing new pins; see xref:migrating-0.7.adoc[Upgrade to 0.7.0]
-
 | `blueprint workflow NAME`
 | Execute an ordered task/build workflow, stopping on failure
 

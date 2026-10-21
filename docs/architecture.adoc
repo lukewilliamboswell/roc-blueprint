@@ -311,6 +311,9 @@ coverage is explicit; inspectors must not invent a complete graph from reports.
 Spec, Lock, build records and public reports version their own semantics.
 S-expressions serve the authority and local records; JSON is useful optional
 presentation. A package version, wire format and compiler version are distinct.
+Blueprint 0.7.0 consumes current Spec 3 and Lock 2 contracts. Earlier authority
+is unsupported; adoption uses explicit reviewed resolution, not runtime
+conversion.
 
 [[coupling-test]]
 == The coupling test

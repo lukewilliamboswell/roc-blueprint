@@ -119,10 +119,12 @@ recipes, output hashes or successful execution records. These belong to their
 own declared evidence types. An SBOM describes artifact composition and is not
 a substitute for the build graph.
 
-`blueprint lock migrate` converts supported older authority while preserving
-pins and verification evidence. It does not fetch or resolve; ambiguous
-ownership mappings fail rather than being guessed. See
-xref:migrating-0.7.adoc[Upgrade to 0.7.0].
+Blueprint 0.7.0 consumes the current Lock 2 contract. Earlier authority is
+unsupported. Adopt current configuration and resolve a new lock explicitly with
+`blueprint update`, reviewing the result as a dependency change. Reviewed
+immutable source references can constrain resolution; no lock conversion or
+pin-preservation behavior is provided. See
+xref:migrating-0.7.adoc[Adopt 0.7.0].
 
 == Compatibility of the formats
 

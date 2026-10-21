@@ -20,8 +20,10 @@ Binaries are attached for x86_64 Linux, arm64 Linux, Apple Silicon macOS and
 x86_64 Windows, with SHA-256 sums in `blueprint.sha256`. Use this release's
 binary with its platform URL. The importable core package is `{core-url}`.
 This is an intentionally breaking pre-1.0 release. Upgrade configurations and
-report consumers together, then migrate supported locks explicitly; see
-xref:migrating-0.7.adoc[Upgrade to 0.7.0].
+report consumers together. Adopt current configuration, then resolve and review
+a current Lock 2 authority with `blueprint update`. Earlier lock formats are
+unsupported; there is no product migration path. See
+xref:migrating-0.7.adoc[Adopt 0.7.0].
 
 == Compiler available on first use
 

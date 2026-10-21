@@ -1,4 +1,4 @@
-= Upgrade to 0.7.0
+= Adopt 0.7.0
 
 Blueprint 0.7.0 intentionally changes configuration and public APIs before 1.0.
 Upgrade the CLI, platform, imported core/provider packages and report consumers
@@ -30,39 +30,42 @@ Build("assets", [
 The executor no longer follows whichever package source is declared first.
 Core-owned `SourceFile` inputs need no external resolver. Every referenced
 source and executor must be declared; unsupported combinations fail rather than
-selecting a fallback. Keep compilation and packaging behavior in your scripts.
+guessing an owner. Keep compilation and packaging behavior in your scripts.
 
-== Preserve existing dependency decisions
+== Resolve current authority explicitly
 
-After updating configuration, run `blueprint check`, then
-`blueprint lock migrate`. Review and commit the migrated authority. Migration
-preserves recorded pins and verification evidence and performs no fetching or
-resolution. An ambiguous ownership mapping fails; correct the declarations
-rather than using migration to select new dependencies. Use explicit
-`blueprint update` when you intend to change dependency pins.
+Blueprint 0.7.0 reads the current Lock 2 contract. Earlier lock formats are
+unsupported; there is no lock-conversion command or automatic upgrade path.
 
-Generated state is disposable. Remove incompatible local build records if
-necessary; this loses only the previous explanation baseline. The next
-successful build establishes a new one.
+Update configuration and run `blueprint check`. If the project has an
+unsupported lock, retain it in version history for review and remove that file
+before running `blueprint update`. Review and commit the newly resolved lock as
+an explicit dependency change. The update resolves the adopted configuration;
+it does not promise to reproduce an older lock's dependency decisions.
 
-== Update report and library consumers
+Use reviewed immutable source references in configuration when you want to
+constrain what resolution selects. Review the resulting pins and verification
+evidence before adopting the new authority.
 
-[cols="2,2,3",options="header"]
-|===
-| Previous API | 0.7.0 API | Meaning
-| Lock report format 1 `identity` | Format 2 `content_identity` | Provider-qualified pinned content, not a whole-build fingerprint.
-| `LockSnapshot.source_identity` | `LockSnapshot.source_content_identity` | Returns the provider-qualified `ContentIdentity` value.
-| Build result schema 1 `recipe_identity` | Schema 2 `build_identity` | The fully prepared native build request.
-| `lock-snapshot-v1.schema.json` | `lock-snapshot-v2.schema.json` | Validate the current public projection.
-|===
+Generated state is disposable. Clear the project's generated `.blueprint/`
+state when adopting 0.7.0. The next successful build establishes a fresh local
+explanation baseline.
 
-The current reader does not alias old fields or accept old report versions.
-Historical tools can retain their matching pinned older core bundle; producers
-and consumers moving to 0.7.0 must update together. A content identity, build
-identity, original-file/tree/output digest and result path answer different
-questions. Compare opaque identities only together with their provider.
+== Use current report and library contracts
 
-Spec major 3 introduces explicit ownership and executor declarations. Lock and
+* Lock report format 2 exposes `content_identity` for pinned input content.
+  Compare it together with its provider.
+* `LockSnapshot.source_content_identity` returns the provider-qualified
+  `ContentIdentity` value from the current lock projection.
+* Build result schema 2 exposes `build_identity` for the fully prepared native
+  build request. Its comparison domain also includes the provider.
+* Validate current lock projections with `lock-snapshot-v2.schema.json`.
+
+Use the CLI, platform, imported packages and report consumers from the same
+current contract. A content identity, build identity, original-file/tree/output
+digest and result path answer different questions; they are not interchangeable.
+
+Spec major 3 defines explicit ownership and executor declarations. Lock and
 report formats carry their own versions; they are not determined by package
 version 0.7.0. Check the relevant version before consuming data.
 
