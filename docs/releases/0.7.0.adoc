@@ -83,8 +83,8 @@ for the output schema and compatibility rule.
 
 == Reproducible build recipes
 
-Sandboxed builds use a versioned standalone runner from their locked package
-set. The derivation no longer includes the Blueprint executable or caller
+Sandboxed builds compile a standalone runner from pinned shared Roc source
+and a fixed compiler. The derivation no longer includes the Blueprint executable or caller
 namespace identities. Runtime namespace observations are passed separately
 and still refuse execution when isolation cannot be verified.
 
@@ -92,6 +92,12 @@ and still refuse execution when isolation cannot be verified.
 application edits do not change that recipe's input tree. Omit it for the
 existing whole-project snapshot. `Files([])` selects an empty project tree.
 Separate builds can share a recipe while declaring their own single output.
+
+`SourceFile(name, url, sha256)` declares an unchanged upstream file using its
+published SHA-256. A recipe receives that file through `Inputs`, without
+unpacking an archive or translating its digest into a tree hash. Its pin
+lives in `Blueprint.lock`, and its verified bytes are reused from the store.
+See xref:builds.adoc#original-files-with-published-hashes[Original file sources].
 
 `blueprint build NAME --rebuild` checks an existing output by rebuilding the
 same derivation and failing when the bytes differ. `--json` reports versioned
@@ -103,6 +109,27 @@ xref:builds.adoc#check-reproducibility-and-record-provenance[Build checks and pr
 The platform writes Spec format 2.8. Configurations that do not select new
 features retain their existing meaning; older consumers reject unsupported
 required features explicitly.
+
+== Describe and reuse artifact composition
+
+The public `core.Sbom` API combines resolved Lock identities with reviewed
+artifact composition and emits SPDX 2.3 JSON. It distinguishes build tools
+from contained code and records incomplete or unknown coverage explicitly.
+Inspection runs offline without evaluating a project or starting a provider;
+binding the inventory to the final file's SHA-256 is a separate operation.
+
+Consumers can import an upstream SPDX graph after verifying its document
+digest and namespace, and bind its described subject to the resolved
+artifact's digest, version and target. Imported identities and dependency
+relationships remain available for downstream analysis.
+
+Release executables and Roc source bundles have their own `.spdx.json`
+sidecars, checked against the complete pinned SPDX schema and the actual
+artifact bytes. They include reviewed native and transitive inputs and
+explicit coverage gaps. These documents describe composition; they do not
+establish build provenance or a vulnerability verdict. See
+xref:sbom.adoc#artifact-bound-software-bills-of-materials[Artifact-bound software bills of materials]
+for the API, reporting tool and supported import profile.
 
 == Native documentation builds
 
