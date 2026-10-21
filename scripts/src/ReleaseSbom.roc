@@ -99,7 +99,7 @@ ReleaseSbom := [].{
 			edge("cargo-libsqlite3-sys-0.33.0", sqlite.id, "contains", "Bundled feature in pinned Cargo.toml; sqlite3.h in SHA256-verified crate declares 3.49.1"),
 		].concat(crate_edges).concat(cargo.relationships)
 		coverage = [gap("native-and-compiler-closure", "Roc archive native/compiler dependencies and exact basic-cli Cargo feature/target linkage are not exposed by committed upstream release inventories; Cargo graph is available resolution metadata, not a claim every crate ships"), gap("licenses", "Cargo registry license expressions and compiler distribution constituent notices not fully inventoried; NOASSERTION retained explicitly")]
-		Ok({ profile: Sbom.profile, imported_documents: [], components, relationships, coverage, inputs: [] })
+		Ok({ profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components, relationships, coverage, inputs: [] })
 	}
 
 	tool_composition : Str, Str, Cargo -> Sbom.Composition
@@ -114,6 +114,7 @@ ReleaseSbom := [].{
 		{
 			profile: Sbom.profile,
 			imported_documents: [],
+			unavailable_sboms: [],
 			components: [own, core, compiler, host, http, sqlite, std].concat(cargo.components),
 			relationships: [edge("Subject", own.id, "contains", "Exactly scripts/sbom.roc and src/SbomFiles.roc; staged main filename and dependency/compiler pins only"), edge(own.id, core.id, "dependsOn", "Released core bundle, fetched separately by Roc"), edge(own.id, host.id, "dependsOn", "Pinned native CLI platform, fetched separately by Roc"), edge(host.id, http.id, "dependsOn", "Pinned platform imports the HTTP package"), build_dependency("Subject", compiler.id, "roc bundle produces the delivered source-app archive"), edge(own.id, compiler.id, "dependsOn", "App source requires the explicit matching compiler to run"), edge(host.id, std.id, "contains", "Platform bundle distributes Rust staticlib native hosts"), edge("cargo-libsqlite3-sys-0.33.0", sqlite.id, "contains", "Pinned bundled SQLite source in verified Rust crate")].concat(cargo.components.map(|entry| edge(host.id, entry.id, "other", "Upstream platform Cargo resolution candidate; native target/features/role unresolved"))).concat(cargo.relationships),
 			coverage: [gap("upstream-platform-closure", "App ships only its wrapper/I/O source and fetches core/basic-cli later; available Cargo graph retained, exact native target/feature/license closure remains incomplete")],
@@ -128,7 +129,7 @@ ReleaseSbom := [].{
 		base = [own, compiler]
 		edges = [edge("Subject", own.id, "contains", "Source files in content-addressed Roc bundle"), build_dependency("Subject", compiler.id, "roc bundle generates archive; compiler not shipped in source bundle")]
 		if name == "roc-blueprint-core" {
-			{ profile: Sbom.profile, imported_documents: [], components: base, relationships: edges, coverage: [{ scope: "roc-import-closure", status: "complete", reason: "Core imports only first-party modules and Roc builtins; compiler supplied separately", contact }], inputs: [] }
+			{ profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components: base, relationships: edges, coverage: [{ scope: "roc-import-closure", status: "complete", reason: "Core imports only first-party modules and Roc builtins; compiler supplied separately", contact }], inputs: [] }
 		} else {
 			inputs_base = component("linker-inputs", "Roc/Zig linker-input archive", native.source.sha, "https://github.com/${native.repository}/releases/download/${native.release}/link-inputs-all.tar", "NOASSERTION", "")
 			inputs = { ..inputs_base, sha256: native.artifacts.all.sha256 }
@@ -138,7 +139,7 @@ ReleaseSbom := [].{
 			msvc = component("msvc-runtime", "Roc MSVC startup runtime", "7d256b954603e1170ee0d6df229c795aba6dc70d", "https://github.com/roc-lang/roc/tree/7d256b954603e1170ee0d6df229c795aba6dc70d/src/default_platform/msvc_runtime", "UPL-1.0", "")
 			windows_os = { ..component("windows-os", "Windows system DLLs", "NOASSERTION", "NOASSERTION", "LicenseRef-Windows-System-Terms", ""), identity: "urn:blueprint:runtime:windows-system-dlls", license_url: "https://www.microsoft.com/licensing/terms/", producer: "Organization: Microsoft" }
 			macos_os = { ..component("macos-os", "macOS libSystem", "NOASSERTION", "NOASSERTION", "LicenseRef-Apple-System-Terms", ""), identity: "urn:blueprint:runtime:macos-libSystem", license_url: "https://www.apple.com/legal/sla/", producer: "Organization: Apple" }
-			{ profile: Sbom.profile, imported_documents: [], components: base.concat([inputs, musl, zig, core, msvc, windows_os, macos_os]), relationships: edges.concat([edge(inputs.id, own.id, "generates", "Platform source bundle includes verified extracted members, not the original input archive bytes"), edge(inputs.id, musl.id, "contains", "Pinned producer runtime/sources.json musl_version"), edge(inputs.id, zig.id, "contains", "Pinned producer runtime/sources.json zig_version"), edge(inputs.id, msvc.id, "contains", "Pinned producer linker-inputs/msvc-runtime/UPSTREAM.json"), edge(own.id, core.id, "dependsOn", "Platform references sibling core bundle, fetched later by Roc"), edge(msvc.id, windows_os.id, "dependsOn", "Windows import libraries reference system-provided DLLs; OS bytes are not shipped"), edge(own.id, macos_os.id, "dependsOn", "Bundled macOS native hosts call system-provided libSystem; its version remains unknown")]), coverage: [gap("native-closure", "Known Linux static runtimes and Windows startup included; Windows import library OS dependencies and compiler-generated host closure require deeper upstream metadata")], inputs: [] }
+			{ profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components: base.concat([inputs, musl, zig, core, msvc, windows_os, macos_os]), relationships: edges.concat([edge(inputs.id, own.id, "generates", "Platform source bundle includes verified extracted members, not the original input archive bytes"), edge(inputs.id, musl.id, "contains", "Pinned producer runtime/sources.json musl_version"), edge(inputs.id, zig.id, "contains", "Pinned producer runtime/sources.json zig_version"), edge(inputs.id, msvc.id, "contains", "Pinned producer linker-inputs/msvc-runtime/UPSTREAM.json"), edge(own.id, core.id, "dependsOn", "Platform references sibling core bundle, fetched later by Roc"), edge(msvc.id, windows_os.id, "dependsOn", "Windows import libraries reference system-provided DLLs; OS bytes are not shipped"), edge(own.id, macos_os.id, "dependsOn", "Bundled macOS native hosts call system-provided libSystem; its version remains unknown")]), coverage: [gap("native-closure", "Known Linux static runtimes and Windows startup included; Windows import library OS dependencies and compiler-generated host closure require deeper upstream metadata")], inputs: [] }
 		}
 	}
 }

@@ -6,11 +6,13 @@ app [target] {
 
 import pf.Fuzz
 import core.CycloneDx
-import core.JsonTree
+import core.JsonData
+import core.Lock
 import core.Sbom
+import core.Spec
 import core.Spdx3
 
-## For any text, `JsonTree.parse` and `Sbom.read` return a result rather than
+## For any text, `JsonData.decode_with` and `Sbom.read` return a result rather than
 ## crash or hang. JSON the tree accepts re-encodes to text that parses to the
 ## same tree. A document `Sbom.read` accepts is a sound package graph: package
 ## identifiers are unique local names, every relationship and root names a
@@ -20,6 +22,11 @@ import core.Spdx3
 ## `bom-ref` once and depends only on declared ones, which this checks again
 ## independently; and `Sbom.read_cyclonedx` of it is a sound package graph.
 ##
+## Whatever `Sbom.read` accepts also imports, as an unbound upstream SBOM of
+## its described package: reading normalizes what the profile cannot carry and
+## records it, so the only refusals left are the deliberate ones in
+## `refusals`.
+##
 ## The input is raw bytes read as UTF-8, so the seeds in `corpus/` are the
 ## committed fixtures of every format, which the fuzzer mutates.
 test : List(U8) -> Fuzz.Outcome
@@ -27,10 +34,15 @@ test = |bytes|
 	match Str.from_utf8(bytes) {
 		Err(_) => Fuzz.reject
 		Ok(text) => {
-			match JsonTree.parse(text) {
-				Ok(tree) => if JsonTree.parse(tree.to_str()) != Ok(tree) {
-					crash "accepted JSON did not survive a re-encode"
-				}
+			match JsonData.decode_with(text, JsonData.documents) {
+				Ok(tree) =>
+					match JsonData.encode_with(tree, JsonData.documents) {
+						Ok(encoded) =>
+							if JsonData.decode_with(encoded, JsonData.documents) != Ok(tree) {
+								crash "accepted JSON did not survive a re-encode"
+							}
+						Err(problem) => crash "accepted JSON does not encode: ${JsonData.message(problem)}"
+					}
 				Err(_) => {}
 			}
 			match CycloneDx.validate(text) {
@@ -44,7 +56,10 @@ test = |bytes|
 				Err(_) => {}
 			}
 			match Sbom.read(text) {
-				Ok(document) => sound(document, text)
+				Ok(document) => {
+					_ = importable(document, text)
+					sound(document, text)
+				}
 				Err(_) => Fuzz.keep
 			}
 		}
@@ -83,14 +98,14 @@ sound = |document, text| {
 }
 
 ## The references of an accepted BOM, found without the validator's index.
-declared : JsonTree -> {}
+declared : JsonData -> {}
 declared = |bom| {
 	refs = all_refs(bom)
 	if refs.len() != refs.fold([], |all, ref| if (all.contains(ref)) all else all.append(ref)).len() {
 		crash "CycloneDx.validate accepted a repeated bom-ref"
 	}
-	for dependency in (bom.field("dependencies") ?? JsonTree.Array([])).items() ?? [] {
-		named = ((dependency.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).map(|item| item.text() ?? "").append((dependency.field("ref") ?? JsonTree.Null).text() ?? "")
+	for dependency in (bom.field("dependencies") ?? JsonData.Array([])).array() ?? [] {
+		named = ((dependency.field("dependsOn") ?? JsonData.Array([])).array() ?? []).map(|item| item.string() ?? "").append((dependency.field("ref") ?? JsonData.Null).string() ?? "")
 		if named.any(|ref| !refs.contains(ref)) {
 			crash "CycloneDx.validate accepted a dependency on an undeclared bom-ref"
 		}
@@ -98,12 +113,42 @@ declared = |bom| {
 	{}
 }
 
-all_refs : JsonTree -> List(Str)
+all_refs : JsonData -> List(Str)
 all_refs = |tree|
 	match tree {
-		Object(members) => members.fold([], |all, entry| if (entry.key == "bom-ref") all.append(entry.value.text() ?? "") else if (entry.key == "dependencies" or entry.key == "properties") all else all.concat(all_refs(entry.value)))
+		Object(members) => members.fold([], |all, entry| if (entry.name == "bom-ref") all.append(entry.value.string() ?? "") else if (entry.name == "dependencies" or entry.name == "properties") all else all.concat(all_refs(entry.value)))
 		Array(items) => items.fold([], |all, item| all.concat(all_refs(item)))
 		_ => []
+	}
+
+## Why an import may still be refused: what it would publish, its size, or a
+## described package whose digest is not a SHA-256.
+refusals = ["imported component ", "SBOM input exceeds profile bounds", "component metadata exceeds profile bounds", "invalid or oversized imported reference", "invalid imported document identity or bounds", "import subject filename/version/SHA256 mismatch"]
+
+importable : Sbom.Document, Str -> {}
+importable = |document, text|
+	match document.packages_.find_first(|entry| Ok(entry.id) == document.roots.first()) {
+		Err(_) => {}
+		Ok(root) => {
+			# Import for the target the described package states, if it states one.
+			stated : Try({ target : Str }, _)
+			stated = Json.parse(root.comment)
+			target = match stated {
+				Ok({ target: named }) if !named.is_empty() => named
+				_ => "x86_64-linux"
+			}
+			imported = { subject: { component: "", filename: root.name, version: root.version, sha256: root.sha256 }, id: "upstream", url: "https://example.org/upstream/sbom.json", sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), namespace: document.namespace, target, document: text, relation: "dependsOn", basis: "Fuzzed upstream SBOM", contact: "https://example.org/support" }
+			composition = { profile: Sbom.profile, imported_documents: [imported], unavailable_sboms: [], components: [], relationships: [], coverage: [{ scope: "all", status: "incomplete", reason: "Fuzzed", contact: "https://example.org/support" }], inputs: [] }
+			spec = { ..Spec.empty("fuzz"), systems: if (target == "source") [] else [target] }
+			lock = Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], fetched: [], hints: [] }
+			match Sbom.inspect(spec, lock, target, composition) {
+				Ok(_) => {}
+				Err(problem) =>
+					if !refusals.any(|prefix| problem.starts_with(prefix)) {
+						crash "a document read accepts did not import: ${problem}"
+					}
+			}
+		}
 	}
 
 target = Fuzz.target_with({

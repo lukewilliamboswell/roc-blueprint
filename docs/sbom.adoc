@@ -171,7 +171,7 @@ Where CycloneDX loses meaning:
   `blueprint:` properties, which standard CycloneDX tools ignore.
 
 Nothing is changed silently. Blueprint reads its own CycloneDX back from the
-`blueprint:` properties, and `scripts/check_sbom.roc` refuses a BOM whose
+`blueprint:` properties, and the tool's `check` refuses a BOM whose
 standard dependencies or scopes disagree with them, or whose graph differs
 from the SPDX renderings of the same document. The checks compare
 identities, relationships, coverage and subjects, not bytes.
@@ -242,7 +242,8 @@ cp Blueprint.lock sbom/Lock
      "contact": "https://example.org/security"}
   ],
   "inputs": [],
-  "imported_documents": []
+  "imported_documents": [],
+  "unavailable_sboms": []
 }
 ----
 +
@@ -293,15 +294,14 @@ roc run <tool> -- bind sbom/inventory.json sbom/subject.json sbom/context.json d
 roc run <tool> -- bind sbom/inventory.json sbom/subject.json sbom/context.json dist/my-app dist/my-app.spdx-2.3.json --spdx-2.3
 ----
 
-. *Check.* `scripts/check_sbom.roc` checks each sidecar against its format's
-  specification and the profile. It confirms that each sidecar describes the
-  actual file, matches the inventory, and states the same graph as the other
-  renderings. Run it from a checkout of the Blueprint repository at the
-  release you used:
+. *Check.* `check` holds each sidecar to its format's specification and the
+  profile. With `--artifacts` it confirms each describes the actual file, with
+  `--inventory` that it matches the inventory, and it requires the renderings
+  of one document to state the same graph:
 +
 [source,console]
 ----
-nix develop -c scripts/check_sbom.roc --inventory /path/to/sbom/inventory.json --artifacts /path/to/dist /path/to/dist/my-app.spdx.json /path/to/dist/my-app.cdx.json
+roc run <tool> -- check --inventory sbom/inventory.json --artifacts dist dist/my-app.spdx.json dist/my-app.cdx.json
 ----
 
 . *Publish beside the artifact.* Upload the sidecars to the same place as
@@ -330,6 +330,11 @@ An SBOM is only useful if it is accurate. Before you publish, check:
   terms, use a `LicenseRef-` name with a `license_url`.
 * *Package URLs are present where they exist.* Scanners match
   vulnerabilities by purl. Use the component's real purl as its `identity`.
+* *Your dependencies bring their suppliers' SBOMs.* Pin each dependency
+  file by its SHA-256 and import its supplier's SBOM, bound to it. Where a
+  supplier publishes none, list it in `unavailable_sboms` with the reason;
+  `inspect` refuses an inventory that does neither. See
+  <<chain-sboms-across-dependencies>>.
 * *Build tools are build dependencies, not shipped code.* A compiler is
   `dependsOn` with scope `build`. It is never `contains`.
 * *Gaps are stated, not hidden.* If you do not know part of the
@@ -374,6 +379,45 @@ An SBOM is only useful if it is accurate. Before you publish, check:
 
 The rest of this chapter is reference material.
 
+[#build-and-development-environments]
+=== What about build and development environments?
+
+An SBOM describes the file you deliver. Your build and development
+environments matter to your supply chain too, but they answer different
+questions, and mixing them into a delivered file's SBOM makes it worse.
+
+*Tools that built the file* appear only where they shaped it: the compiler
+and the pinned sources of the build environment are `dependsOn` with scope
+`build` (CycloneDX scope `excluded`), never `contains`. A recipient then knows
+which toolchain produced the bytes without reading it as shipped code. What
+the toolchain copies into the file is different: a statically linked library,
+or a runtime the linker adds, ships, so it is `contains`.
+
+*Everything else your environments provide* is a known input that needs a
+disposition. Every tool, task and build your Spec declares, a linter or test
+runner in a development shell included, must be listed in `inputs`, with the
+component it became or a reason it is excluded, such as "development only;
+does not reach the file". Nothing vanishes silently, and nothing that does
+not ship is listed as if it did. Listing every development tool as a
+component would make scanners report vulnerabilities in software your users
+never receive.
+
+*How the file was built* is provenance, not composition. A build attestation
+(such as SLSA provenance, or the GitHub attestation Blueprint's own releases
+carry) records which workflow, inputs and environment produced which bytes.
+Publish it beside the SBOM; neither replaces the other.
+
+*The full toolchain closure* — every package in the build environment, and
+what each of those contains — is usually more than a composition lists. Say
+so with an `incomplete` coverage scope, as Blueprint's own release SBOMs do
+for their native and compiler closure. Where a tool can describe that closure
+as an SBOM of its own, it can be imported as an unbound document (see
+<<import-inert-verified-upstream-graphs>>).
+
+*An SBOM of a development environment itself*, such as for an internal audit
+of the tools developers and CI run, is a separate document about that
+environment. Keep it out of the SBOMs you deliver.
+
 == Assign the knowledge to its owner
 
 Blueprint collects resolved identities and build relationships and emits the
@@ -403,10 +447,12 @@ The compiler pin matches `blueprint compiler-version` for that release.
 roc run <immutable-tool-bundle-url> -- inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
 roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary
 roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx-2.3.json --spdx-2.3
+roc run <immutable-tool-bundle-url> -- check --inventory inventory.json --artifacts dist dist/my-binary.spdx.json dist/my-binary.cdx.json dist/my-binary.spdx-2.3.json
 ----
 
 The first `bind` writes `dist/my-binary.spdx.json` and `dist/my-binary.cdx.json`;
-the second adds the SPDX 2.3 rendering. See <<bind-the-final-bytes-separately>>.
+the second adds the SPDX 2.3 rendering, and `check` checks all three. See
+<<bind-the-final-bytes-separately>>.
 
 No Blueprint project is required; even an unrelated invalid `Blueprint.roc`
 in the working directory is ignored. Supply the already evaluated Spec and
@@ -452,6 +498,10 @@ composition contains these fields:
 * `inputs`: one reviewed disposition for every known input, with `input`,
   `component` and `reason`. An empty component means an explained exclusion.
 * `imported_documents`: verified upstream graphs, or an empty list.
+* `unavailable_sboms`: one record for each locked dependency whose supplier
+  publishes no SBOM, with `component`, `reason` and `contact`. Every other
+  locked dependency needs a supplier SBOM in `imported_documents`, bound to it:
+  see <<chain-sboms-across-dependencies>>.
 
 A component's `origin` is `reviewed`, `source:<locked-name>`, or
 `program:<locked-name>:<system>`. Locked origins populate `version`,
@@ -523,52 +573,169 @@ available for individually justified scopes. Schema validity alone says
 nothing about the completeness of the underlying software inventory.
 
 [#import-inert-verified-upstream-graphs]
-== Import inert, verified upstream graphs
+== Import your suppliers' SBOMs
+
+You cannot review every dependency yourself. When a supplier publishes an
+SBOM for something you consume, Blueprint can check it and fold it into your
+own inventory, so your SBOM covers that supplier's components too.
 
 An `imported_documents` entry supplies `id`, `url`, `sha256`, `namespace`,
-`target`, `document`, `relation`, `basis`, `contact` and `subject`. `document` contains the
-local SPDX JSON bytes as a string, and `relation` is an SPDX 3.0.1 composition
-relationship. Its checksum and namespace must agree with
-the reviewed reference. Reporting never fetches the URL or executes content.
-Use an immutable release/revision URL and retain those exact verified bytes
-for recipients.
+`target`, `document`, `relation`, `basis`, `contact` and `subject`. `document`
+holds the supplier's SBOM bytes as a string, and `relation` is an SPDX 3.0.1
+composition relationship. The document's SHA-256 and identity must match the
+entry: the namespace of an SPDX document, or the `serialNumber` of a CycloneDX
+BOM. Reporting never fetches the URL or runs anything in the document. Use an
+immutable release URL and keep the exact verified bytes for your recipients.
 
-The import profile reads package-only graphs in SPDX 3.0.1 JSON-LD, SPDX 2.3
-JSON and SPDX 2.2 JSON, after checking each against its version of the
-specification. An SPDX 3.0.1 document holds one `SpdxDocument` whose `spdxId`
-is `NAMESPACE#fragment`; its packages are `NAMESPACE#name`, and its root
-element, or a `software_Sbom` root's, or a `describes` relationship names the
-subject. A reference into another document needs an `import` external map,
-which the profile does not read, so it is rejected. An SPDX 2 document names
-its subject with `DESCRIBES` or `documentDescribes`. Packages carry version,
-supplier, download location, declared license and SHA-256, and relationships
-must have a composition spelling (the table above, plus SPDX 2's
-`CONTAINED_BY`, `DEPENDENCY_OF` and `GENERATED_FROM`). Files, snippets and
-other element kinds are outside the profile and rejected. It prefixes imported identifiers to avoid
-collisions and preserves source namespace and verified-document SHA-256 in
-each imported component. Restricted license terms must name their location:
-`simplelicensing_customIdToUri` in SPDX 3.0.1, `seeAlsos` in SPDX 2.
-`subject` contains `component`, `filename`, `version` and `sha256`.
-Map `component` to the declaration for the consumed archive/program. Its
-resolved Lock digest, version and target must match the upstream described
-subject, in addition to verifying the upstream document's own digest and
-namespace. A `copiedTo` relationship preserves the bound upstream subject
-identity; imported component/edge identities retain their namespace and
-provenance. This lets a reviewed upstream graph replace duplicated dependency
-inventories while the Lock remains the authority for consumed artifact bytes.
-An empty component mapping imports only an integrity-checked upstream
-statement: coverage explicitly says the subject is unbound and its composition
-claims remain unverified. It cannot establish verified artifact composition.
+[cols="1,2",options="header"]
+|===
+| Supplier's format | What Blueprint reads
 
-Dangling external-document references require the referenced graph explicitly;
-they are rejected rather than silently discarded. Imported coverage remains
-incomplete unless the repository separately establishes the relevant closure.
+| SPDX 3.0.1 JSON-LD | Packages, their relationships and declared licenses. The document's root element, a `software_Sbom` root, or a `describes` relationship names the subject.
+
+| SPDX 2.3 and 2.2 JSON | Packages and their relationships. `DESCRIBES`, `DESCRIBED_BY` or `documentDescribes` names the subject.
+
+| CycloneDX 1.4 to 1.7 JSON | `metadata.component` is the subject. `components`, nested ones as `contains`, and `dependencies` as `dependsOn`.
+|===
+
+Each document is checked against its format's schema first. Blueprint then
+reads what its package graph can hold and *counts what it leaves out*: files,
+snippets, relationships to them or into other documents, relationship types
+with no composition meaning, and CycloneDX sections that are not composition,
+such as `vulnerabilities` and `services`. Those counts go into the import's
+coverage, which is always `incomplete`, so a recipient can see exactly what a
+supplier said that your SBOM does not carry. Nothing is dropped silently.
+
+Some values a supplier writes cannot be published as they are. Blueprint
+replaces them and records the original in the component's notes:
+
+* A missing name or version becomes `NOASSERTION`.
+* A download location that is not a plain HTTPS URL, such as
+  `registry+https://...` or `git+ssh://...`, becomes `NOASSERTION`.
+* A license that is not an SPDX expression, or is named only in text,
+  becomes `NOASSERTION`. A `LicenseRef-` with no terms location keeps
+  `NOASSERTION` as its location.
+* A package URL without a version, or one another imported package already
+  uses, gives way to an identity in the supplier's document.
+
+An import that would publish an absolute developer path or a credential is
+refused, with the imported component named.
+
+Imported identifiers are prefixed with the entry's `id`, so they cannot
+collide with yours, and every imported component keeps the supplier's
+document identity and SHA-256 in its notes. CycloneDX `bom-ref`s that are not
+valid identifiers are mapped to ones that are, with a short hash so distinct
+references stay distinct. CycloneDX states no build or test scope for a
+dependency, so imported CycloneDX dependencies carry none. A component a
+CycloneDX BOM lists but relates to nothing is related to its subject as
+`other`, which claims no containment.
+
+`subject` contains `component`, `filename`, `version` and `sha256`. To *bind*
+the supplier's SBOM to what you actually consumed, set `component` to the
+declaration of that archive or program. Its resolved Lock digest, version and
+target must then match the supplier's described subject, and a `copiedTo`
+relationship records the match. This lets a reviewed upstream graph stand in
+for a duplicated dependency inventory while the Lock stays the authority for
+the bytes you consumed. An empty `component` imports an *unbound* statement:
+coverage says the subject is not bound to a resolved artifact and its claims
+are unverified. An unbound subject may state no SHA-256, as a supplier's SBOM
+of a source tree often does; a bound one must.
+
+The importer is tested against what Syft and Trivy write, in both CycloneDX and
+SPDX (`tests/sbom/fixtures/upstream/`), and the `sbom-read` fuzz target requires
+that every document Blueprint can read also imports.
 
 Inputs are limited to 1 MiB, JSON nesting to 64 levels, imports to 16,
-components to 4,096 and relationships to 16,384. Metadata URIs use HTTPS
-without userinfo, query credentials or local filesystem paths. Explicit
-unknown download locations use `NOASSERTION`. SPDX licenses and exceptions
-are validated against the pinned SPDX 3.26.0 identifiers and expression grammar.
+components to 4,096 and relationships to 16,384. Licenses and exceptions are
+checked against the pinned SPDX License List 3.26.0 and expression grammar.
+
+[#chain-sboms-across-dependencies]
+== Chain SBOMs across your dependencies
+
+When every project publishes an SBOM beside each release file and every
+consumer imports the SBOMs of what it consumes, the SBOMs chain. A
+platform's SBOM includes the SBOMs of the packages it uses, and an app's
+includes the platform's. Every link is checked by digest, so the SBOM you
+publish covers your whole supply chain, and what nobody published is stated
+as a gap rather than missing. Nothing in this is specific to one kind of
+dependency: a Roc package bundle, a C library tarball and a downloaded tool
+work the same way.
+
+*Publish beside the file.* Publish `FILE.spdx.json` and `FILE.cdx.json` next
+to each release file at the same URL, as `bind` writes them by default. A
+consumer can then find a dependency's SBOM from the dependency's own URL.
+
+*Pin the file you consume by its SHA-256.* A supplier's SBOM describes a file
+by its SHA-256, so bind it to a dependency pinned the same way: a
+`SourceFile(name, url, sha256)` (see
+xref:builds.adoc#original-files-with-published-hashes[Original files with published hashes])
+or a fetched program. A source pinned by a tree or NAR digest cannot be bound,
+because that digest is not the file's SHA-256.
+
+*Declare it from the pin, and import its SBOM bound to it.* For example, a
+platform that uses a package published as
+`https://example.org/releases/1.2.0/dep-abc.tar.zst`:
+
+[source,json]
+----
+{
+  "components": [
+    {"id": "dep", "name": "dep-abc.tar.zst", "version": "1.2.0",
+     "producer": "Organization: Example", "license": "MIT", "license_url": "",
+     "identity": "", "download": "", "sha256": "", "modified": "",
+     "target": "", "origin": "source:dep"}
+  ],
+  "relationships": [
+    {"from": "Subject", "to": "dep", "relation": "dependsOn", "scope": "",
+     "basis": "Imported by the platform's Roc modules"}
+  ],
+  "imported_documents": [
+    {"id": "dep-sbom", "url": "https://example.org/releases/1.2.0/dep-abc.tar.zst.spdx.json",
+     "sha256": "<SHA-256 of that SBOM file>", "namespace": "<its namespace>",
+     "target": "x86_64-linux", "document": "<the SBOM file's contents>",
+     "relation": "dependsOn", "basis": "Supplier's published SBOM",
+     "contact": "https://example.org/security",
+     "subject": {"component": "dep", "filename": "dep-abc.tar.zst",
+                 "version": "1.2.0", "sha256": "<the bundle's SHA-256>"}}
+  ],
+  "unavailable_sboms": []
+}
+----
+
+The `source:dep` origin takes the download location and SHA-256 from the
+Lock, so the composition never repeats a pin. The reviewed `version` is the
+release the supplier's SBOM names. `inspect` then requires the SBOM's
+described file to have exactly the locked SHA-256 and that version, and
+records a `copiedTo` relationship from the supplier's subject to your
+component. The supplier's components and relationships join your inventory
+under the `dep-sbom-` prefix, so your SBOM states what the package contains
+without you inventorying it again. Because the supplier's SBOM already holds
+whatever it imported, the chain is transitive.
+
+*Requiring SBOMs is the default.* `inspect` refuses an inventory in which a
+locked dependency, a component with a `source:` or `program:` origin, has
+neither a bound supplier SBOM nor an `unavailable_sboms` entry. The message
+names the dependency and what to add. When a supplier publishes no SBOM,
+say so:
+
+[source,json]
+----
+"unavailable_sboms": [
+  {"component": "dep", "reason": "The supplier publishes no SBOM for 1.2.0",
+   "contact": "https://example.org/security"}
+]
+----
+
+Each entry becomes an `incomplete` coverage scope, `sbom:dep`, in every
+rendering, so a recipient can see which dependencies were not covered by
+their supplier and whom to ask. An unbound import does not count: its claims
+are unverified, so the dependency still needs a bound SBOM or an entry.
+
+*Fetch outside Blueprint.* Blueprint never downloads while it reports. Fetch
+each dependency's SBOM in your build or release automation, and put its bytes
+and SHA-256 in the import entry; `inspect` verifies them. Shared CI, such as
+roc-automation's workflows, can find a dependency's SBOM from its URL by the
+naming convention above.
 
 [#bind-the-final-bytes-separately]
 == Bind the final bytes separately
@@ -596,8 +763,7 @@ nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json di
 ----
 
 Bind every format from the same inventory, subject and context: they are then
-renderings of one document, and `scripts/check_sbom.roc` requires them to
-agree (see <<read-the-cyclonedx-rendering>>).
+renderings of one document, and `check` requires them to agree (see <<read-the-cyclonedx-rendering>>).
 
 `subject.json` contains `filename`, `version`, `target`, `sha256` and `url`.
 An empty SHA-256 asks the binder to compute it; a supplied digest must match.
@@ -670,12 +836,11 @@ rendering.
 
 `Sbom.read_cyclonedx` reads a BOM that Blueprint rendered back to the same
 package graph as `Sbom.read` gives for its SPDX renderings, after validating
-it against CycloneDX 1.7 and checking that its `dependencies` are what its
-relationships state. It is not a general CycloneDX importer: a BOM without the
-`blueprint:` properties is refused, and upstream graphs are imported only as
-SPDX (see <<import-inert-verified-upstream-graphs>>). Services, compositions,
-vulnerabilities, formulation and other top-level CycloneDX sections are
-outside the profile.
+it against CycloneDX 1.7 and checking that its `dependencies` and scopes are
+what its relationships state; `Sbom.read` uses it for such BOMs. Other
+CycloneDX BOMs, such as a supplier's, are read by their standard fields (see
+<<import-inert-verified-upstream-graphs>>), and what those cannot carry is
+counted in the import's coverage.
 
 == Blueprint's own release evidence
 
@@ -707,7 +872,8 @@ they do not claim all resolved crates ship in every target. Unknown license
 and optimized native/compiler closure scopes retain explicit gaps.
 
 Every release subject has all three sidecars: `.spdx.json`, `.spdx-2.3.json`
-and `.cdx.json`. `scripts/check_sbom.roc` checks them offline before the
+and `.cdx.json`. `scripts/check_sbom.roc` runs the same checks as the tool's
+`check`, plus checks against this repository's release authorities, offline before the
 release job gathers them into the same tested asset set: each must be valid
 SPDX or CycloneDX of its version, meet the profile, describe the actual
 artifact bytes, account for the release's observed inputs, and state the same

@@ -123,33 +123,45 @@ The platform writes Spec format 2.8. Configurations that do not select new
 features retain their existing meaning; older consumers reject unsupported
 required features explicitly.
 
-== Describe and reuse artifact composition
+== Describe your software's supply chain with SBOMs
 
-The public `core.Sbom` API combines resolved Lock identities with reviewed
-artifact composition and emits SPDX 3.0.1 JSON-LD, with SPDX 2.3 and
-CycloneDX 1.7 renderings of the same inventory for tools that read only SPDX 2
-or CycloneDX. Binding a final file writes its SPDX 3.0.1 and CycloneDX
-sidecars beside it in one step. It distinguishes build tools
+The new public `core.Sbom` API turns resolved Lock identities and a reviewed
+composition into a software bill of materials for each delivered file. One
+inventory renders as SPDX 3.0.1 JSON-LD, CycloneDX 1.7 and SPDX 2.3, for tools
+that read only SPDX 2. Binding a final file writes its SPDX 3.0.1 and
+CycloneDX sidecars beside it in one step. An SBOM distinguishes build tools
 from contained code and records incomplete or unknown coverage explicitly.
-Inspection runs offline without evaluating a project or starting a provider;
-binding the inventory to the final file's SHA-256 is a separate operation.
-A standalone Roc app bundle provides the same `inspect` and `bind` operations
-without a Blueprint project. The published release notes link its immutable
-bundle URL; it uses the same pinned compiler as Blueprint.
+Inspection runs offline without evaluating a project or starting a provider,
+and binding the inventory to the final file's SHA-256 is a separate step.
+Conformance is checked in Roc against the published SPDX 3.0.1, SPDX 2.3 and
+CycloneDX 1.7 schemas, vendored and pinned by SHA-256.
 
-Consumers can import an upstream SPDX 3.0.1, 2.3 or 2.2 graph after verifying
-its document digest and namespace, and bind its described subject to the resolved
-artifact's digest, version and target. Imported identities and dependency
-relationships remain available for downstream analysis.
+A standalone Roc app bundle provides `inspect`, `bind` and `check` without a
+Blueprint project. `check` confirms that sidecars are valid, describe the
+actual file, match their inventory and state one package graph. The
+published release notes link the bundle's immutable URL; it uses the same
+pinned compiler as Blueprint.
+
+SBOMs chain across dependencies. Import a supplier's SBOM, in SPDX 3.0.1, 2.3
+or 2.2 or in CycloneDX 1.4 to 1.7, after verifying its document digest and
+identity, and bind it to the dependency file you locked by its SHA-256, such
+as a `SourceFile` or a fetched program. Your SBOM then includes the supplier's
+components and relationships. What Syft and Trivy publish imports as it is:
+files, vulnerabilities and other parts the package graph cannot carry are
+counted in the import's coverage rather than refused or dropped. Every locked
+dependency needs a bound supplier SBOM, or an `unavailable_sboms` entry that
+states why there is none; each such entry becomes a visible coverage gap.
 
 Release executables and Roc source bundles have their own `.spdx.json`
-(SPDX 3.0.1), `.spdx-2.3.json` and `.cdx.json` (CycloneDX 1.7) sidecars, each
+(SPDX 3.0.1), `.cdx.json` (CycloneDX 1.7) and `.spdx-2.3.json` sidecars, each
 checked against its version of the specification and the actual artifact
-bytes, and all stating one package graph. They include reviewed native and transitive inputs and
-explicit coverage gaps. These documents describe composition; they do not
-establish build provenance or a vulnerability verdict. See
-xref:sbom.adoc#artifact-bound-software-bills-of-materials[Artifact-bound software bills of materials]
-for the API, reporting tool and supported import profile.
+bytes, all stating one package graph, and covered by the release attestation.
+They include reviewed native and transitive inputs and explicit coverage
+gaps. These documents describe composition; they do not establish build
+provenance or a vulnerability verdict. See
+xref:sbom.adoc#artifact-bound-software-bills-of-materials[Describe a delivered artifact with an SBOM]
+for what an SBOM is, which format to send, the quality checklist, chaining
+across dependencies, and the API and tool reference.
 
 == Native documentation builds
 

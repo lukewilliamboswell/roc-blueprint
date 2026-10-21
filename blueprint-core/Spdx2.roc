@@ -1,4 +1,4 @@
-import JsonTree
+import JsonData
 import Lookup
 import SbomLicenses
 import Spdx3
@@ -10,10 +10,13 @@ import Spdx3
 ## identifier is unique, a relationship names elements in the document, a
 ## `LicenseRef-` in a license expression is declared in
 ## `hasExtractedLicensingInfos`, a checksum has its algorithm's length, and
-## creators and suppliers use the `Person:`/`Organization:`/`Tool:` syntax.
+## creators and suppliers use the `Person:`/`Organization:`/`Tool:` syntax, a
+## snippet and a package's files name files in the document, and an external
+## `DocumentRef-` is declared before a relationship uses it.
 ##
-## Blueprint reads package graphs, so documents with `files`, `snippets` or
-## `externalDocumentRefs` are outside this profile and rejected, not skimmed.
+## Every section of the 2.3 schema is checked, files and snippets included.
+## What Blueprint imports from a valid document is the reader's choice, and it
+## records what it leaves out.
 Spdx2 := [].{
 	versions : List(Str)
 	versions = ["SPDX-2.2", "SPDX-2.3"]
@@ -27,6 +30,7 @@ Spdx2 := [].{
 		{ path: ["packages", "externalRefs", "referenceCategory"], values: reference_categories },
 		{ path: ["packages", "primaryPackagePurpose"], values: purposes },
 		{ path: ["annotations", "annotationType"], values: annotation_types },
+		{ path: ["files", "fileTypes"], values: file_types },
 	]
 
 	## The members of each object this profile reads, by their path through the
@@ -42,52 +46,77 @@ Spdx2 := [].{
 		{ path: ["packages", "externalRefs"], members: class("externalRef").map(|property| property.name) },
 		{ path: ["hasExtractedLicensingInfos"], members: class("extractedLicense").map(|property| property.name) },
 		{ path: ["packages", "packageVerificationCode"], members: class("verificationCode").map(|property| property.name) },
+		{ path: ["files"], members: class("file").map(|property| property.name) },
+		{ path: ["snippets"], members: class("snippet").map(|property| property.name) },
+		{ path: ["snippets", "ranges"], members: class("range").map(|property| property.name) },
+		{ path: ["externalDocumentRefs"], members: class("externalDocumentRef").map(|property| property.name) },
+		{ path: ["revieweds"], members: class("reviewed").map(|property| property.name) },
+		{ path: ["hasExtractedLicensingInfos", "crossRefs"], members: class("crossRef").map(|property| property.name) },
 	]
 
-	validate : JsonTree -> Try({}, Str)
+	validate : JsonData -> Try({}, Str)
 	validate = |tree| {
 		check_object(tree, "document")?
-		version = (tree.field("spdxVersion") ?? JsonTree.Null).text() ?? ""
+		version = (tree.field("spdxVersion") ?? JsonData.Null).string() ?? ""
 		if !versions.contains(version) {
 			return Err("spdxVersion must be one of ${Str.join_with(versions, ", ")}")
 		}
-		if tree.field("SPDXID") != Ok(JsonTree.Text("SPDXRef-DOCUMENT")) or tree.field("dataLicense") != Ok(JsonTree.Text("CC0-1.0")) {
+		if tree.field("SPDXID") != Ok(JsonData.String("SPDXRef-DOCUMENT")) or tree.field("dataLicense") != Ok(JsonData.String("CC0-1.0")) {
 			return Err("an SPDX 2 document is SPDXRef-DOCUMENT under CC0-1.0")
 		}
-		entries = (tree.field("packages") ?? JsonTree.Array([])).items() ?? []
-		ids = entries.map(|entry| (entry.field("SPDXID") ?? JsonTree.Null).text() ?? "")
+		entries = (tree.field("packages") ?? JsonData.Array([])).array() ?? []
+		listed = |key| (tree.field(key) ?? JsonData.Array([])).array() ?? []
+		spdx_id = |element| (element.field("SPDXID") ?? JsonData.Null).string() ?? ""
+		file_ids = listed("files").map(spdx_id)
+		ids = entries.map(spdx_id).concat(file_ids).concat(listed("snippets").map(spdx_id))
 		seen = Lookup.index(ids.map(|id| { key: id, value: id }))
 		match Lookup.repeated(seen) {
 			[] => {}
 			[id, ..] => return Err("duplicate SPDX identifier ${id}")
 		}
 		if Lookup.contains(seen, "SPDXRef-DOCUMENT") {
-			return Err("a package cannot be SPDXRef-DOCUMENT")
+			return Err("an element cannot be SPDXRef-DOCUMENT")
 		}
-		declared = ((tree.field("hasExtractedLicensingInfos") ?? JsonTree.Array([])).items() ?? []).map(|info| (info.field("licenseId") ?? JsonTree.Null).text() ?? "")
+		external = listed("externalDocumentRefs").map(|reference| (reference.field("externalDocumentId") ?? JsonData.Null).string() ?? "")
+		if external.any(|id| !id.starts_with("DocumentRef-") or id == "DocumentRef-") or external.len() != external.fold([], |all, id| if (all.contains(id)) all else all.append(id)).len() {
+			return Err("externalDocumentId must be a unique DocumentRef- identifier")
+		}
+		files = Lookup.index(file_ids.map(|id| { key: id, value: id }))
+		for snippet in listed("snippets") {
+			from_file = (snippet.field("snippetFromFile") ?? JsonData.Null).string() ?? ""
+			pointers = ((snippet.field("ranges") ?? JsonData.Array([])).array() ?? []).fold([], |all, range| all.concat(["startPointer", "endPointer"].map(|end| ((range.field(end) ?? JsonData.Null).field("reference") ?? JsonData.Null).string() ?? "")))
+			if !Lookup.contains(files, from_file) or pointers.any(|reference| !Lookup.contains(files, reference)) {
+				return Err("a snippet names a file outside the document")
+			}
+		}
+		named = |id| Lookup.contains(seen, id) or match id.split_on(":") {
+			[document, element] => external.contains(document) and spdx_ref(element)
+			_ => False
+		}
+		declared = ((tree.field("hasExtractedLicensingInfos") ?? JsonData.Array([])).array() ?? []).map(|info| (info.field("licenseId") ?? JsonData.Null).string() ?? "")
 		for entry in entries {
 			if version == "SPDX-2.2" and ["licenseConcluded", "licenseDeclared", "copyrightText"].any(|name| entry.field(name).is_err()) {
 				return Err("SPDX-2.2 packages require licenseConcluded, licenseDeclared and copyrightText")
 			}
 			for name in ["licenseConcluded", "licenseDeclared"] {
-				expression = (entry.field(name) ?? JsonTree.Text("NOASSERTION")).text() ?? ""
+				expression = (entry.field(name) ?? JsonData.String("NOASSERTION")).string() ?? ""
 				if SbomLicenses.custom_ids(expression).any(|id| !declared.contains(id)) {
 					return Err("${name} names a LicenseRef- that hasExtractedLicensingInfos does not declare")
 				}
 			}
-			if ((entry.field("hasFiles") ?? JsonTree.Array([])).items() ?? []).len() > 0 {
-				return Err("package files are outside this profile")
+			if ((entry.field("hasFiles") ?? JsonData.Array([])).array() ?? []).any(|file| !Lookup.contains(files, file.string() ?? "")) {
+				return Err("hasFiles names a file outside the document")
 			}
 		}
-		for relationship in (tree.field("relationships") ?? JsonTree.Array([])).items() ?? [] {
-			from = (relationship.field("spdxElementId") ?? JsonTree.Null).text() ?? ""
-			to = (relationship.field("relatedSpdxElement") ?? JsonTree.Null).text() ?? ""
-			if (from != "SPDXRef-DOCUMENT" and !Lookup.contains(seen, from)) or (to != "SPDXRef-DOCUMENT" and to != "NONE" and to != "NOASSERTION" and !Lookup.contains(seen, to)) {
+		for relationship in (tree.field("relationships") ?? JsonData.Array([])).array() ?? [] {
+			from = (relationship.field("spdxElementId") ?? JsonData.Null).string() ?? ""
+			to = (relationship.field("relatedSpdxElement") ?? JsonData.Null).string() ?? ""
+			if (from != "SPDXRef-DOCUMENT" and !named(from)) or (to != "SPDXRef-DOCUMENT" and to != "NONE" and to != "NOASSERTION" and !named(to)) {
 				return Err("relationship names an element outside the document: ${from} -> ${to}")
 			}
 		}
-		for described in (tree.field("documentDescribes") ?? JsonTree.Array([])).items() ?? [] {
-			if !Lookup.contains(seen, described.text() ?? "") {
+		for described in (tree.field("documentDescribes") ?? JsonData.Array([])).array() ?? [] {
+			if !Lookup.contains(seen, described.string() ?? "") {
 				return Err("documentDescribes names an element outside the document")
 			}
 		}
@@ -95,7 +124,7 @@ Spdx2 := [].{
 	}
 }
 
-Kind : [Text, Bool, Date, Uri, Download, Enum(List(Str)), SpdxRef, Expression, Agent, Creator, ListVersion, Inline(Str), Unsupported]
+Kind : [Text, Bool, Integer, Date, Uri, Download, Enum(List(Str)), SpdxRef, Expression, Agent, Creator, ListVersion, Inline(Str), Unsupported]
 
 Property : { name : Str, kind : Kind, count : [One, Many(U64)], required : Bool }
 
@@ -111,6 +140,8 @@ needs = |property| { ..property, required: True }
 annotation_types = ["OTHER", "REVIEW"]
 
 reference_categories = ["OTHER", "PERSISTENT-ID", "PERSISTENT_ID", "SECURITY", "PACKAGE-MANAGER", "PACKAGE_MANAGER"]
+
+file_types = ["OTHER", "DOCUMENTATION", "IMAGE", "VIDEO", "ARCHIVE", "SPDX", "APPLICATION", "SOURCE", "BINARY", "TEXT", "AUDIO"]
 
 purposes = ["OTHER", "INSTALL", "ARCHIVE", "FIRMWARE", "APPLICATION", "FRAMEWORK", "LIBRARY", "CONTAINER", "SOURCE", "DEVICE", "OPERATING-SYSTEM", "FILE"]
 
@@ -133,14 +164,14 @@ class = |name|
 			needs(one("dataLicense", Text)),
 			many("documentDescribes", SpdxRef),
 			needs(one("documentNamespace", Uri)),
-			one("externalDocumentRefs", Unsupported),
-			one("files", Unsupported),
+			many("externalDocumentRefs", Inline("externalDocumentRef")),
+			many("files", Inline("file")),
 			many("hasExtractedLicensingInfos", Inline("extractedLicense")),
 			needs(one("name", Text)),
 			many("packages", Inline("package")),
 			many("relationships", Inline("relationship")),
-			one("revieweds", Unsupported),
-			one("snippets", Unsupported),
+			many("revieweds", Inline("reviewed")),
+			many("snippets", Inline("snippet")),
 			needs(one("spdxVersion", Text)),
 		]
 		"creationInfo" => [one("comment", Text), needs(one("created", Date)), needs({ ..many("creators", Creator), count: Many(1) }), one("licenseListVersion", ListVersion)]
@@ -178,12 +209,47 @@ class = |name|
 		"annotation" => annotation_props
 		"checksum" => [needs(one("algorithm", Enum(checksum_algorithms))), needs(one("checksumValue", Text))]
 		"externalRef" => [one("comment", Text), needs(one("referenceCategory", Enum(reference_categories))), needs(one("referenceLocator", Text)), needs(one("referenceType", Text))]
-		"extractedLicense" => [one("comment", Text), one("crossRefs", Unsupported), needs(one("extractedText", Text)), needs(one("licenseId", Text)), one("name", Text), many("seeAlsos", Text)]
+		"extractedLicense" => [one("comment", Text), many("crossRefs", Inline("crossRef")), needs(one("extractedText", Text)), needs(one("licenseId", Text)), one("name", Text), many("seeAlsos", Text)]
+		"crossRef" => [one("isLive", Bool), one("isValid", Bool), one("isWayBackLink", Bool), one("match", Text), one("order", Integer), one("timestamp", Text), needs(one("url", Text))]
+		"file" => [
+			needs(one("SPDXID", SpdxRef)),
+			many("annotations", Inline("annotation")),
+			one("artifactOfs", Unsupported),
+			many("attributionTexts", Text),
+			needs({ ..many("checksums", Inline("checksum")), count: Many(1) }),
+			one("comment", Text),
+			one("copyrightText", Text),
+			many("fileContributors", Text),
+			many("fileDependencies", Text),
+			needs(one("fileName", Text)),
+			many("fileTypes", Enum(file_types)),
+			one("licenseComments", Text),
+			one("licenseConcluded", Expression),
+			many("licenseInfoInFiles", Expression),
+			one("noticeText", Text),
+		]
+		"snippet" => [
+			needs(one("SPDXID", SpdxRef)),
+			many("annotations", Inline("annotation")),
+			many("attributionTexts", Text),
+			one("comment", Text),
+			one("copyrightText", Text),
+			one("licenseComments", Text),
+			one("licenseConcluded", Expression),
+			many("licenseInfoInSnippets", Expression),
+			one("name", Text),
+			needs({ ..many("ranges", Inline("range")), count: Many(1) }),
+			needs(one("snippetFromFile", SpdxRef)),
+		]
+		"range" => [needs(one("endPointer", Inline("pointer"))), needs(one("startPointer", Inline("pointer")))]
+		"pointer" => [one("lineNumber", Integer), one("offset", Integer), needs(one("reference", Text))]
+		"externalDocumentRef" => [needs(one("checksum", Inline("checksum"))), needs(one("externalDocumentId", Text)), needs(one("spdxDocument", Uri))]
+		"reviewed" => [one("comment", Text), needs(one("reviewDate", Date)), one("reviewer", Text)]
 		"verificationCode" => [many("packageVerificationCodeExcludedFiles", Text), needs(one("packageVerificationCodeValue", Text))]
 		_ => []
 	}
 
-check_object : JsonTree, Str -> Try({}, Str)
+check_object : JsonData, Str -> Try({}, Str)
 check_object = |tree, kind| {
 	properties = class(kind)
 	match tree {
@@ -201,7 +267,7 @@ check_object = |tree, kind| {
 	}
 	for property in properties {
 		match tree.field(property.name) {
-			Err(Missing) => if property.required {
+			Err(_) => if property.required {
 				return Err("${kind} requires ${property.name}")
 			}
 			Ok(value) => match (property.count, value) {
@@ -219,8 +285,8 @@ check_object = |tree, kind| {
 		}
 	}
 	if kind == "checksum" {
-		algorithm = (tree.field("algorithm") ?? JsonTree.Null).text() ?? ""
-		value = (tree.field("checksumValue") ?? JsonTree.Null).text() ?? ""
+		algorithm = (tree.field("algorithm") ?? JsonData.Null).string() ?? ""
+		value = (tree.field("checksumValue") ?? JsonData.Null).string() ?? ""
 		expected = match algorithm {
 			"MD2" | "MD4" | "MD5" => 32
 			"SHA1" => 40
@@ -238,20 +304,21 @@ check_object = |tree, kind| {
 	Ok({})
 }
 
-check_value : JsonTree, Kind -> Try({}, Str)
+check_value : JsonData, Kind -> Try({}, Str)
 check_value = |value, kind|
 	match (kind, value) {
-		(Text, Text(_)) => Ok({})
-		(Bool, Bool(_)) => Ok({})
-		(Date, Text(text)) => if (Spdx3.timestamp(text)) Ok({}) else Err("not a UTC timestamp")
-		(Uri, Text(text)) => if (text.contains(":") and !text.contains("#") and !text.to_utf8().any(|byte| byte <= 32)) Ok({}) else Err("not an absolute URI without a fragment")
-		(Download, Text(text)) => if (text == "NONE" or text == "NOASSERTION" or (text.contains(":") and !text.to_utf8().any(|byte| byte <= 32))) Ok({}) else Err("not a location, NONE or NOASSERTION")
-		(Enum(allowed), Text(text)) => if (allowed.contains(text)) Ok({}) else Err("${text} is not a permitted value")
-		(SpdxRef, Text(text)) => if (spdx_ref(text)) Ok({}) else Err("${text} is not an SPDXRef- identifier")
-		(Expression, Text(text)) => if (text == "NONE" or text == "NOASSERTION" or SbomLicenses.expression(text)) Ok({}) else Err("invalid license expression ${Json.to_str(text)}")
-		(Agent, Text(text)) => if (text == "NOASSERTION" or agent(text, ["Person: ", "Organization: "])) Ok({}) else Err("not a Person: or Organization: agent")
-		(Creator, Text(text)) => if (agent(text, ["Person: ", "Organization: ", "Tool: "])) Ok({}) else Err("not a Person:, Organization: or Tool: creator")
-		(ListVersion, Text(text)) => match text.split_on(".") {
+		(Text, String(_)) => Ok({})
+		(Bool, Boolean(_)) => Ok({})
+		(Integer, Number(lexeme)) => if (JsonData.whole(lexeme)) Ok({}) else Err("not a non-negative integer")
+		(Date, String(text)) => if (Spdx3.timestamp(text)) Ok({}) else Err("not a UTC timestamp")
+		(Uri, String(text)) => if (text.contains(":") and !text.contains("#") and !text.to_utf8().any(|byte| byte <= 32)) Ok({}) else Err("not an absolute URI without a fragment")
+		(Download, String(text)) => if (text == "NONE" or text == "NOASSERTION" or (text.contains(":") and !text.to_utf8().any(|byte| byte <= 32))) Ok({}) else Err("not a location, NONE or NOASSERTION")
+		(Enum(allowed), String(text)) => if (allowed.contains(text)) Ok({}) else Err("${text} is not a permitted value")
+		(SpdxRef, String(text)) => if (spdx_ref(text)) Ok({}) else Err("${text} is not an SPDXRef- identifier")
+		(Expression, String(text)) => if (text == "NONE" or text == "NOASSERTION" or SbomLicenses.expression(text)) Ok({}) else Err("invalid license expression ${Json.to_str(text)}")
+		(Agent, String(text)) => if (text == "NOASSERTION" or agent(text, ["Person: ", "Organization: "])) Ok({}) else Err("not a Person: or Organization: agent")
+		(Creator, String(text)) => if (agent(text, ["Person: ", "Organization: ", "Tool: "])) Ok({}) else Err("not a Person:, Organization: or Tool: creator")
+		(ListVersion, String(text)) => match text.split_on(".") {
 			[major, minor] if !major.is_empty() and !minor.is_empty() and major.to_utf8().all(|byte| byte >= '0' and byte <= '9') and minor.to_utf8().all(|byte| byte >= '0' and byte <= '9') => Ok({})
 			_ => Err("license list version must be MAJOR.MINOR")
 		}
@@ -269,7 +336,7 @@ minimal : Str
 minimal = "{\"spdxVersion\":\"SPDX-2.3\",\"dataLicense\":\"CC0-1.0\",\"SPDXID\":\"SPDXRef-DOCUMENT\",\"name\":\"d\",\"documentNamespace\":\"https://e.org/d\",\"creationInfo\":{\"created\":\"2026-10-21T00:00:00Z\",\"creators\":[\"Tool: t\"]},\"packages\":[{\"SPDXID\":\"SPDXRef-p\",\"name\":\"p\",\"downloadLocation\":\"NOASSERTION\",\"licenseDeclared\":\"MIT\",\"checksums\":[{\"algorithm\":\"SHA256\",\"checksumValue\":\"${Str.join_with(List.repeat("a", 64), "")}\"}]}],\"relationships\":[{\"spdxElementId\":\"SPDXRef-DOCUMENT\",\"relatedSpdxElement\":\"SPDXRef-p\",\"relationshipType\":\"DESCRIBES\"}]}"
 
 check : Str -> Try({}, Str)
-check = |text| Spdx2.validate(JsonTree.parse(text)?)
+check = |text| Spdx2.validate(JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?)
 
 expect check(minimal).is_ok()
 expect check(minimal.replace_each("SPDX-2.3", "SPDX-2.2")).is_err()
@@ -280,4 +347,9 @@ expect check(minimal.replace_each("\"name\":\"p\"", "\"name\":\"p\",\"versionInf
 expect check(minimal.replace_each("\"name\":\"p\"", "\"name\":\"p\",\"version\":\"1\"")).is_err()
 expect check(minimal.replace_each("\"checksumValue\":\"a", "\"checksumValue\":\"")).is_err()
 expect check(minimal.replace_each("\"creators\":[\"Tool: t\"]", "\"creators\":[]")).is_err()
-expect check(minimal.replace_each("\"packages\":", "\"files\":[],\"packages\":")).is_err()
+expect check(minimal.replace_each("\"packages\":", "\"files\":[],\"packages\":")).is_ok()
+expect check(minimal.replace_each("\"packages\":", "\"files\":[{\"SPDXID\":\"SPDXRef-f\",\"fileName\":\"./a\",\"checksums\":[{\"algorithm\":\"SHA1\",\"checksumValue\":\"${Str.join_with(List.repeat("b", 40), "")}\"}]}],\"packages\":").replace_each("\"relatedSpdxElement\":\"SPDXRef-p\",\"relationshipType\":\"DESCRIBES\"", "\"relatedSpdxElement\":\"SPDXRef-f\",\"relationshipType\":\"DESCRIBES\"")).is_ok()
+expect check(minimal.replace_each("\"packages\":", "\"files\":[{\"SPDXID\":\"SPDXRef-f\",\"fileName\":\"./a\",\"checksums\":[]}],\"packages\":")).is_err()
+expect check(minimal.replace_each("\"packages\":", "\"snippets\":[{\"SPDXID\":\"SPDXRef-s\",\"snippetFromFile\":\"SPDXRef-missing\",\"ranges\":[{\"startPointer\":{\"reference\":\"SPDXRef-missing\",\"offset\":1},\"endPointer\":{\"reference\":\"SPDXRef-missing\",\"offset\":2}}]}],\"packages\":")).is_err()
+expect check(minimal.replace_each("\"relatedSpdxElement\":\"SPDXRef-p\"", "\"relatedSpdxElement\":\"DocumentRef-x:SPDXRef-p\"")).is_err()
+expect check(minimal.replace_each("\"packages\":", "\"externalDocumentRefs\":[{\"externalDocumentId\":\"DocumentRef-x\",\"spdxDocument\":\"https://e.org/x\",\"checksum\":{\"algorithm\":\"SHA1\",\"checksumValue\":\"${Str.join_with(List.repeat("c", 40), "")}\"}}],\"packages\":").replace_each("\"relatedSpdxElement\":\"SPDXRef-p\"", "\"relatedSpdxElement\":\"DocumentRef-x:SPDXRef-p\"")).is_ok()

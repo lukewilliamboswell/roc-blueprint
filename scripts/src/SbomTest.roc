@@ -1,7 +1,7 @@
 import core.Spec
 import core.Lock
 import core.Project
-import core.JsonTree
+import core.JsonData
 import core.Sbom
 import core.Spdx2
 import core.Spdx3
@@ -9,6 +9,10 @@ import core.CycloneDx
 import "../../tests/sbom/schema/cyclonedx-1.7/bom-1.7.schema.json" as schema_cdx : Str
 import "../../tests/sbom/schema/spdx-3.0.1.schema.json" as schema_3 : Str
 import "../../tests/sbom/schema/spdx-2.3.schema.json" as schema_2 : Str
+import "../../tests/sbom/fixtures/upstream/syft.cdx.json" as upstream_syft_cdx : Str
+import "../../tests/sbom/fixtures/upstream/syft.spdx.json" as upstream_syft_spdx : Str
+import "../../tests/sbom/fixtures/upstream/trivy.cdx.json" as upstream_trivy_cdx : Str
+import "../../tests/sbom/fixtures/upstream/trivy.spdx.json" as upstream_trivy_spdx : Str
 import "../../tests/sbom/fixtures/verified-import.cdx.json" as fixture_verified_import_cdx : Str
 import "../../tests/sbom/fixtures/native-linux.cdx.json" as fixture_native_linux_cdx : Str
 import "../../tests/sbom/fixtures/native-arm64.cdx.json" as fixture_native_arm64_cdx : Str
@@ -41,6 +45,7 @@ SbomTest := [].{
 	composition = {
 		profile: Sbom.profile,
 		imported_documents: [],
+		unavailable_sboms: [],
 		components: [
 			component("platform", "platform", "1.0.0"),
 			{ ..component("native", "native-library", "2.0.0"), identity: "pkg:cargo/native-library@2.0.0", sha256: digest },
@@ -223,9 +228,26 @@ source_component = { ..component("source", "upstream", "111111111111111111111111
 
 program_component = { ..component("program", "roc", "3.0.0"), download: "https://example.org/roc/3.0.0.tar.gz", identity: "", sha256: digest, origin: "program:roc:x86_64-linux" }
 
-locked_composition = { ..SbomTest.composition, components: [source_component, program_component], relationships: [edge("Subject", source_component.id, "dependsOn"), { ..edge("Subject", program_component.id, "dependsOn"), scope: "build" }], inputs: [{ input: "source:upstream", component: source_component.id, reason: "Resolved source tree identity; no archive digest inferred" }, { input: "program:roc:x86_64-linux", component: program_component.id, reason: "Authoritative locked download archive" }] }
+locked_composition = { ..SbomTest.composition, components: [source_component, program_component], relationships: [edge("Subject", source_component.id, "dependsOn"), { ..edge("Subject", program_component.id, "dependsOn"), scope: "build" }], inputs: [{ input: "source:upstream", component: source_component.id, reason: "Resolved source tree identity; no archive digest inferred" }, { input: "program:roc:x86_64-linux", component: program_component.id, reason: "Authoritative locked download archive" }], unavailable_sboms: [no_sbom("source"), no_sbom("program")] }
+
+no_sbom = |id| { component: id, reason: "The supplier publishes no SBOM for this release", contact: "https://example.org/support" }
 
 inspect_locked = |composition| Sbom.inspect(locked_spec, locked_lock, "x86_64-linux", composition)
+
+# A locked dependency needs its supplier's SBOM, or a stated reason it has none.
+expect inspect_locked({ ..locked_composition, unavailable_sboms: [] }).is_err()
+expect inspect_locked({ ..locked_composition, unavailable_sboms: [no_sbom("source")] }).is_err()
+expect inspect_locked({ ..locked_composition, unavailable_sboms: [no_sbom("source"), { ..no_sbom("program"), reason: "" }] }).is_err()
+expect inspect_locked({ ..locked_composition, unavailable_sboms: [no_sbom("source"), no_sbom("program"), no_sbom("Subject")] }).is_err()
+expect {
+	inventory = inspect_locked(locked_composition) ?? crash "invalid locked fixture"
+	inventory.coverage.any(|scope| scope.scope == "sbom:program" and scope.status == "incomplete" and scope.reason == "No supplier SBOM: The supplier publishes no SBOM for this release")
+}
+expect
+	match inspect_locked({ ..locked_composition, unavailable_sboms: [no_sbom("program")] }) {
+		Err(problem) => problem.contains("dependency source (source:upstream) has no supplier SBOM") and problem.contains("pin the file by its published SHA-256")
+		Ok(_) => False
+	}
 expect inspect_locked(locked_composition).is_ok()
 expect inspect_locked({ ..locked_composition, inputs: [] }).is_err()
 expect inspect_locked({ ..locked_composition, components: [{ ..source_component, version: "different-revision" }, program_component] }).is_err()
@@ -274,13 +296,25 @@ expect {
 program_document = (SbomTest.output ?? "").replace_each("\"sample-artifact\"", "\"3.0.0.tar.gz\"").replace_each("\"software_packageVersion\":\"1.0.0\"", "\"software_packageVersion\":\"3.0.0\"").replace_each(SbomTest.subject.sha256, digest)
 
 bound_import = { ..imported_document, document: program_document, sha256: Crypto.SHA256.hash(program_document.to_utf8()).to_hex(), subject: { component: program_component.id, filename: "3.0.0.tar.gz", version: "3.0.0", sha256: digest } }
-expect inspect_locked({ ..locked_composition, imported_documents: [bound_import] }).is_ok()
-expect inspect_locked({ ..locked_composition, imported_documents: [{ ..bound_import, subject: { ..bound_import.subject, sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }] }).is_err()
+expect inspect_locked({ ..locked_composition, imported_documents: [bound_import], unavailable_sboms: [no_sbom("source")] }).is_ok()
+expect inspect_locked({ ..locked_composition, imported_documents: [bound_import] }).is_err()
+expect
+	match inspect_locked({ ..locked_composition, imported_documents: [{ ..bound_import, subject: { ..bound_import.subject, sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }], unavailable_sboms: [no_sbom("source")] }) {
+		Err(problem) => problem == "import subject filename/version/SHA256 mismatch"
+		Ok(_) => False
+	}
 expect {
 	changed_lock = { ..locked_lock, fetched: locked_lock.fetched.map(|entry| { ..entry, sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }) }
-	Sbom.inspect(locked_spec, changed_lock, "x86_64-linux", { ..unpinned_composition, imported_documents: [bound_import] }).is_err()
+	match Sbom.inspect(locked_spec, changed_lock, "x86_64-linux", { ..unpinned_composition, imported_documents: [bound_import], unavailable_sboms: [no_sbom("source")] }) {
+		Err(problem) => problem == "imported subject conflicts with authoritative component artifact"
+		Ok(_) => False
+	}
 }
-expect inspect_locked({ ..locked_composition, imported_documents: [{ ..bound_import, target: "aarch64-linux" }] }).is_err()
+expect
+	match inspect_locked({ ..locked_composition, imported_documents: [{ ..bound_import, target: "aarch64-linux" }], unavailable_sboms: [no_sbom("source")] }) {
+		Err(problem) => problem == "import target differs from subject"
+		Ok(_) => False
+	}
 
 # The same inventory reads back to the same package graph from either version,
 # and from SPDX 2.2, whose JSON differs only in its version string here.
@@ -365,11 +399,11 @@ expect Crypto.SHA256.hash(schema_2.to_utf8()).to_hex() == "4126dc29f15e92feec92e
 
 sorted = |values| values.sort_with(Project.bytewise)
 
-enumeration : JsonTree -> List(Str)
-enumeration = |tree| ((tree.field("enum") ?? JsonTree.Array([])).items() ?? []).map(|value| value.text() ?? "")
+enumeration : JsonData -> List(Str)
+enumeration = |tree| ((tree.field("enum") ?? JsonData.Array([])).array() ?? []).map(|value| value.string() ?? "")
 
-definitions_3 : JsonTree
-definitions_3 = (JsonTree.parse(schema_3) ?? crash "schema is not JSON").field("$defs") ?? crash "schema has no $defs"
+definitions_3 : JsonData
+definitions_3 = (JsonData.decode_with(schema_3, { ..JsonData.documents, duplicates: CollapseIdentical }) ?? crash "schema is not JSON").field("$defs") ?? crash "schema has no $defs"
 
 ## The properties a 3.0.1 class has, through its `_props` chain of `allOf`.
 schema_properties : Str -> List(Str)
@@ -379,14 +413,14 @@ schema_properties = |definition| {
 	while !$pending.is_empty() {
 		name = $pending.first() ?? ""
 		$pending = $pending.drop_first(1)
-		parts = ((definitions_3.field(name) ?? JsonTree.Null).field("allOf") ?? JsonTree.Array([])).items() ?? []
+		parts = ((definitions_3.field(name) ?? JsonData.Null).field("allOf") ?? JsonData.Array([])).array() ?? []
 		for part in parts {
 			match part.field("$ref") {
-				Ok(Text(reference)) => {
+				Ok(String(reference)) => {
 					$pending = $pending.append(reference.drop_prefix("#/$defs/"))
 				}
 				_ => {
-					$found = $found.concat((part.field("properties") ?? JsonTree.Null).keys())
+					$found = $found.concat((part.field("properties") ?? JsonData.Null).keys())
 				}
 			}
 		}
@@ -394,21 +428,21 @@ schema_properties = |definition| {
 	$found
 }
 
-expect Spdx3.vocabularies.all(|vocabulary| sorted(enumeration(definitions_3.field(vocabulary.definition) ?? JsonTree.Null)) == sorted(vocabulary.values))
+expect Spdx3.vocabularies.all(|vocabulary| sorted(enumeration(definitions_3.field(vocabulary.definition) ?? JsonData.Null)) == sorted(vocabulary.values))
 expect Spdx3.classes.all(|class| definitions_3.field(class.name).is_ok() and class.properties.all(|property| schema_properties("${class.name}_props").contains(property)))
 
 ## The schema object at `path` through `properties` and `items`.
-at_2 : List(Str) -> JsonTree
+at_2 : List(Str) -> JsonData
 at_2 = |path| path.fold(
-	JsonTree.parse(schema_2) ?? crash "schema is not JSON",
+	JsonData.decode_with(schema_2, JsonData.documents) ?? crash "schema is not JSON",
 	|node, step| {
-		child = (node.field("properties") ?? JsonTree.Null).field(step) ?? JsonTree.Null
+		child = (node.field("properties") ?? JsonData.Null).field(step) ?? JsonData.Null
 		child.field("items") ?? child
 	},
 )
 
 expect Spdx2.vocabularies.all(|vocabulary| sorted(enumeration(at_2(vocabulary.path))) == sorted(vocabulary.values))
-expect Spdx2.objects.all(|object| sorted((at_2(object.path).field("properties") ?? JsonTree.Null).keys()) == sorted(object.members))
+expect Spdx2.objects.all(|object| sorted((at_2(object.path).field("properties") ?? JsonData.Null).keys()) == sorted(object.members))
 
 # CycloneDX carries the same graph: Blueprint reads its own BOM back to the
 # package graph either SPDX rendering states, and a consumer that reads only
@@ -421,41 +455,106 @@ expect SbomTest.cases.all(
 	},
 )
 expect {
-	bom = JsonTree.parse(fixture_native_linux_cdx) ?? crash "fixture"
-	components = (bom.field("components") ?? JsonTree.Null).items() ?? []
-	scope = |ref| components.find_first(|entry| entry.field("bom-ref") == Ok(JsonTree.Text(ref))).map_ok(|entry| (entry.field("scope") ?? JsonTree.Null).text() ?? "") ?? ""
+	bom = JsonData.decode_with(fixture_native_linux_cdx, JsonData.documents) ?? crash "fixture"
+	components = (bom.field("components") ?? JsonData.Null).array() ?? []
+	scope = |ref| components.find_first(|entry| entry.field("bom-ref") == Ok(JsonData.String(ref))).map_ok(|entry| (entry.field("scope") ?? JsonData.Null).string() ?? "") ?? ""
 	scope("native") == "required" and scope("platform") == "required" and scope("restricted") == "required" and scope("compiler") == "excluded"
 }
 expect {
-	bom = JsonTree.parse(fixture_native_linux_cdx) ?? crash "fixture"
-	serial = (bom.field("serialNumber") ?? JsonTree.Null).text() ?? ""
-	other = JsonTree.parse(fixture_verified_empty_cdx) ?? crash "fixture"
-	serial.starts_with("urn:uuid:") and serial.to_utf8().get(23) == Ok('8') and other.field("serialNumber") != bom.field("serialNumber") and bom.field("version") == Ok(JsonTree.Num(1))
+	bom = JsonData.decode_with(fixture_native_linux_cdx, JsonData.documents) ?? crash "fixture"
+	serial = (bom.field("serialNumber") ?? JsonData.Null).string() ?? ""
+	other = JsonData.decode_with(fixture_verified_empty_cdx, JsonData.documents) ?? crash "fixture"
+	serial.starts_with("urn:uuid:") and serial.to_utf8().get(23) == Ok('8') and other.field("serialNumber") != bom.field("serialNumber") and bom.field("version") == Ok(JsonData.Number("1"))
 }
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each(",\"compiler\"]", "]")).is_err()
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("blueprint:namespace", "other:namespace")).is_err()
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"scope\":\"excluded\"", "\"scope\":\"required\"")).is_err()
-expect Sbom.read(fixture_native_linux_cdx).is_err()
+expect Sbom.read(fixture_native_linux_cdx) == Sbom.read_cyclonedx(fixture_native_linux_cdx)
 
 # The CycloneDX validator follows the vendored, digest-pinned 1.7 schema.
 expect Crypto.SHA256.hash(schema_cdx.to_utf8()).to_hex() == "73308edec3ab2d38bfffd993e96a042b594314143b6971a6e9ed98bbb6bd76ce"
 
-definitions_cdx : JsonTree
-definitions_cdx = (JsonTree.parse(schema_cdx) ?? crash "schema is not JSON").field("definitions") ?? crash "schema has no definitions"
+definitions_cdx : JsonData
+definitions_cdx = (JsonData.decode_with(schema_cdx, JsonData.documents) ?? crash "schema is not JSON").field("definitions") ?? crash "schema has no definitions"
 
-at_cdx : List(Str) -> JsonTree
+at_cdx : List(Str) -> JsonData
 at_cdx = |path|
 	match path {
 		[definition, .. as rest] => rest.fold(
-			definitions_cdx.field(definition) ?? JsonTree.Null,
+			definitions_cdx.field(definition) ?? JsonData.Null,
 			|node, step| {
-				child = (node.field("properties") ?? JsonTree.Null).field(step) ?? JsonTree.Null
+				child = (node.field("properties") ?? JsonData.Null).field(step) ?? JsonData.Null
 				child.field("items") ?? child
 			},
 		)
-		[] => JsonTree.Null
+		[] => JsonData.Null
 	}
 
 expect CycloneDx.vocabularies.all(|vocabulary| sorted(enumeration(at_cdx(vocabulary.path))) == sorted(vocabulary.values))
-expect CycloneDx.objects.all(|object| object.members.all(|name| (at_cdx([object.definition]).field("properties") ?? JsonTree.Null).keys().contains(name)))
-expect CycloneDx.objects.all(|object| sorted((at_cdx([object.definition]).field("properties") ?? JsonTree.Null).keys()) == sorted(object.members))
+expect CycloneDx.objects.all(|object| object.members.all(|name| (at_cdx([object.definition]).field("properties") ?? JsonData.Null).keys().contains(name)))
+expect CycloneDx.objects.all(|object| sorted((at_cdx([object.definition]).field("properties") ?? JsonData.Null).keys()) == sorted(object.members))
+
+# What real generators publish imports: Syft and Trivy, in CycloneDX and SPDX.
+# What the profile cannot carry is counted in the document's gaps and stated
+# in the import's coverage, never dropped silently.
+upstream_import : Str -> Try(Sbom.Inventory, Str)
+upstream_import = |text| {
+	document = Sbom.read(text)?
+	root = document.packages_.find_first(|entry| Ok(entry.id) == document.roots.first()).map_err(|_| "no described package")?
+	imported = { subject: { component: "", filename: root.name, version: root.version, sha256: root.sha256 }, id: "upstream", url: "https://example.org/upstream/sbom.json", sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), namespace: document.namespace, target: "x86_64-linux", document: text, relation: "dependsOn", basis: "Supplier SBOM for a consumed source", contact: "https://example.org/support" }
+	inspect({ ..SbomTest.composition, components: [], relationships: [], imported_documents: [imported] })
+}
+
+expect (Sbom.read(upstream_syft_cdx) ?? crash "syft cdx").gaps == ["1 × component.author"]
+expect (Sbom.read(upstream_trivy_cdx) ?? crash "trivy cdx").gaps == ["1 × bom.vulnerabilities"]
+expect (Sbom.read(upstream_syft_spdx) ?? crash "syft spdx").gaps == ["1 × file", "108 × relationship to a file or snippet"]
+expect (Sbom.read(upstream_trivy_spdx) ?? crash "trivy spdx").gaps == []
+expect [upstream_syft_cdx, upstream_syft_spdx, upstream_trivy_cdx, upstream_trivy_spdx].all(
+	|text|
+		match upstream_import(text) {
+			Ok(inventory) => inventory.components.len() >= 109 and inventory.coverage.any(|scope| scope.scope == "import:upstream" and scope.status == "incomplete")
+			Err(_) => False
+		},
+)
+expect {
+	inventory = upstream_import(upstream_syft_spdx) ?? crash "syft spdx import"
+	coverage = inventory.coverage.find_first(|scope| scope.scope == "import:upstream") ?? crash "no import coverage"
+	coverage.reason.contains("108 × relationship to a file or snippet") and inventory.components.any(|entry| entry.identity.starts_with("pkg:cargo/libsqlite3-sys@0.33.0"))
+}
+expect {
+	# Both formats from one tool describe the same crates.
+	crates = |text| (Sbom.read(text) ?? crash "unreadable").packages_.map(|entry| entry.identity).keep_if(|id| id.starts_with("pkg:cargo/")).map(|id| id.split_on("?").first() ?? id).sort_with(Project.bytewise)
+	crates(upstream_syft_cdx) == crates(upstream_syft_spdx) and crates(upstream_trivy_cdx) == crates(upstream_trivy_spdx)
+}
+expect upstream_import(upstream_syft_cdx.replace_each("/src/Cargo.lock", "/home/someone/src/Cargo.lock")).is_err()
+
+# A dependency consumed as a file whose supplier publishes an SBOM, such as a
+# Roc package bundle: pin the file by its published SHA-256, declare the
+# component from that pin, and bind the supplier's SBOM to it. Nothing here is
+# specific to Roc.
+bundle_bytes = "dependency bundle bytes\n"
+
+bundle_digest = Crypto.SHA256.hash(bundle_bytes.to_utf8()).to_hex()
+
+bundle_url = "https://example.org/releases/1.2.0/dep-abc.tar.zst"
+
+supplier_sbom = Sbom.render(SbomTest.inventory ?? crash "fixture", { ..SbomTest.subject, filename: "dep-abc.tar.zst", version: "1.2.0", sha256: bundle_digest, url: bundle_url }, { ..SbomTest.context, namespace: "https://example.org/sbom/dep/revision-1" }) ?? crash "supplier SBOM"
+
+consumer_spec = { ..SbomTest.spec, requires_: ["source-files"], source_files: [{ name: "dep", url: bundle_url, sha256: bundle_digest }] }
+
+consumer_lock = Lock.{ format: Lock.current_format, intent: Lock.intent_of(consumer_spec), sources: [{ name: "dep", provider: "file", ref: bundle_url, rev: "", digest: "sha256:${bundle_digest}" }], fetched: [], hints: [] }
+
+dependency = { ..component("dep", "dep-abc.tar.zst", "1.2.0"), identity: "", download: "", sha256: "", origin: "source:dep" }
+
+supplier_import = { ..imported_document, id: "dep-sbom", url: "https://example.org/releases/1.2.0/dep-abc.tar.zst.spdx.json", namespace: "https://example.org/sbom/dep/revision-1", document: supplier_sbom, sha256: Crypto.SHA256.hash(supplier_sbom.to_utf8()).to_hex(), subject: { component: "dep", filename: "dep-abc.tar.zst", version: "1.2.0", sha256: bundle_digest } }
+
+consumer = { ..SbomTest.composition, components: [dependency], relationships: [edge("Subject", "dep", "dependsOn")], imported_documents: [supplier_import], inputs: [{ input: "source:dep", component: "dep", reason: "Dependency bundle pinned by its published SHA-256" }] }
+expect {
+	match Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", consumer) {
+		Ok(inventory) => inventory.relationships.any(|relation| relation.to == "dep" and relation.relation == "copiedTo") and inventory.coverage.any(|scope| scope.scope == "import:dep-sbom" and scope.reason.starts_with("Document digest and upstream subject artifact identity match"))
+		Err(_) => False
+	}
+}
+# The pin stays the authority: a supplier SBOM for other bytes does not bind.
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..consumer, imported_documents: [{ ..supplier_import, subject: { ..supplier_import.subject, sha256: digest } }] }).is_err()
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..consumer, components: [{ ..dependency, sha256: digest }] }).is_err()

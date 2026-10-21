@@ -52,6 +52,7 @@ scripts/                 Roc scripts, run from the repository root; their module
   check_version.roc      check a release's version before building and against the public API after
   package_docs.roc       archive the rendered site
   release_assets.roc     gather a release's assets and check the names other repositories depend on
+  test_lock_snapshot.roc  check the official lock snapshot consumer against the vendored schema and profile
   test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
   reproducible_probe.roc  compare a producer on independent CI hosts and synthetic CLI patch builds
 docs/                    the manual: index.adoc includes one chapter per top-level .adoc file
@@ -106,8 +107,8 @@ gives two Roc compilers from
 https://github.com/roc-lang/roc-overlay[roc-overlay], Zig 0.16 and the
 programs the scripts start: coreutils, git, curl, tar, gzip, zip, unzip and gh.
 On Linux it also supplies Bubblewrap, util-linux and Python for isolated
-runner tests and a restrictive-umask launcher. Independent SPDX validation
-uses its own pinned Python environment; the product and reporting app run in Roc.
+runner tests and a restrictive-umask launcher. Nothing else uses Python: the
+product, the reporting app and every conformance check run in Roc.
 `roc` is the product compiler, the nightly in
 `blueprint-cli/compiler-version`: it builds and tests the CLI, the packages and
 the platform, and a released `blueprint` embeds it. `roc-stable` is the
@@ -250,9 +251,15 @@ CycloneDX 1.7, read back from each to exactly its own packages and
 relationships, with CycloneDX's standard fields (dependencies, scopes, hashes,
 purls, licenses, suppliers) derived from the inventory, and the validators
 must reject a rendering once one of a list of SPDX 3.0.1 or CycloneDX rule
-violations is injected into it. `sbom-read` mutates the fixtures of every
-format: reading must never crash, and what it accepts must be a sound
-package graph.
+violations is injected into it. It also strips Blueprint's properties from
+the CycloneDX rendering, which must then import as plain CycloneDX to a
+projection of the inventory, and adds files to the SPDX renderings, which
+must read to the same package graph with the files counted as gaps.
+`sbom-read` mutates the fixtures of every format, including what Syft and
+Trivy write (`tests/sbom/fixtures/upstream/`): reading must never crash, what
+it accepts must be a sound package graph, and it must import as an upstream
+SBOM unless the import is refused for a developer path, a credential, its
+size or a subject digest that is not a SHA-256.
 `scripts/test_builds.roc` runs real sandboxed builds of artifacts,
 dependencies and sources, including host-file and TCP isolation with positive
 host controls, fail-closed runner checks, exact argv, immutable locks,
