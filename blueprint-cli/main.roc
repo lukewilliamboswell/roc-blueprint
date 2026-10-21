@@ -865,6 +865,15 @@ fetch_programs! = |steps| {
 	Ok($fetched)
 }
 
+## Immutable provider bootstrap inputs can reuse the exact archive already
+## carried by this executable. A name, version label or URL alone never matches.
+source_is_embedded_compiler : Str, Str -> Bool
+source_is_embedded_compiler = |sha256, system| Bootstrap.compiler(compiler_version.trim(), system).map_ok(|program| program.sha256 == sha256) ?? False
+
+expect source_is_embedded_compiler("0821ea1a9772f921f0b4eb1cd400238abb59b0247db2810f0ea865426f782e9d", "x86_64-linux")
+expect !source_is_embedded_compiler("0821ea1a9772f921f0b4eb1cd400238abb59b0247db2810f0ea865426f782e9d", "aarch64-darwin")
+expect !source_is_embedded_compiler("different bytes", "x86_64-linux")
+
 ## One consumer-owned executor for standalone requests and workflow steps.
 ## All planning has succeeded, every expected program has been found and
 ## every fetched one is in the store before the first materialization or task
@@ -912,7 +921,12 @@ execute_prepared! = |step, fetched, ctx, witness_directory| {
 	for operation in step.operations {
 		match operation {
 			SourceFile(source) => {
-				file = Store.source_file!(Store.root!().map_err(|message| FetchFailed(message))?, source).map_err(|message| FetchFailed(message))?
+				store = Store.root!().map_err(|message| FetchFailed(message))?
+				file = if source_is_embedded_compiler(source.sha256, host_system!() ?? "") {
+					Store.embedded_source_file!(store, source, compiler_archive).map_err(|message| FetchFailed(message))?
+				} else {
+					Store.source_file!(store, source).map_err(|message| FetchFailed(message))?
+				}
 				marker = "@blueprint-source-file-${source.sha256}@"
 				$files = $files.map(|entry| { ..entry, contents: entry.contents.replace_each(marker, Json.to_str(file)) })
 			}
