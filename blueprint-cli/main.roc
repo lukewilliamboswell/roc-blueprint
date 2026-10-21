@@ -1956,8 +1956,8 @@ describe = |err, provider|
 				.concat("not compiler host support")
 		CompilerFailed(message) =>
 			"could not execute the configuration compiler; "
-				.concat("Roc ${compiler_version.trim()} is fetched automatically, ")
-				.concat("or set ROC to its executable:\n${message}")
+				.concat("blueprint includes Roc ${compiler_version.trim()}; ")
+				.concat("set ROC to use another compatible executable:\n${message}")
 		# A message that already names the command is not told it twice.
 		LockFailed(message) => if (message.contains("blueprint update")) message else "${message}; use `blueprint update` to initialize or deliberately refresh pins"
 		OldLock => "Blueprint.lock was written by blueprint 0.5 or older, which gave every project a package source it did not declare; run `blueprint update` to resolve it again with this blueprint, and review what changes"

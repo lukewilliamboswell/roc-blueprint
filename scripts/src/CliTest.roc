@@ -234,9 +234,9 @@ cases! = |bench| {
 	Script.pass!("ROC missing, incompatible or failing: refused before any evaluation, naming ${pin}; help and version still work")?
 
 	# Without ROC, a compatible roc on PATH is used as it is. An incompatible
-	# or absent one makes the CLI take the pinned compiler from its own store
-	# of downloads. No provider is asked for it: here there is nowhere to keep
-	# a store, so the run stops there, before any request leaves the machine.
+	# or absent one makes the CLI install the embedded compiler in its store.
+	# No provider is asked for it: here there is nowhere to keep a store, so
+	# the run stops there, before any request leaves the machine.
 	for case in [{ name: "path", roc: record }, { name: "other", roc: probe }, { name: "absent", roc: "" }] {
 		cwd = isolated!(test, "compiler-${case.name}")?
 		settings!(test, cwd, CliTest.valid)?
@@ -260,12 +260,12 @@ cases! = |bench| {
 			CliHarness.contains!(outcome.stdout, "(name ", what)?
 		} else {
 			CliHarness.exited!(outcome, 1, what)?
-			CliHarness.contains!(outcome.stderr, "could not fetch Roc ${pin}: neither XDG_CACHE_HOME nor HOME names an absolute directory to keep downloads in", what)?
+			CliHarness.contains!(outcome.stderr, "could not install embedded Roc ${pin}: neither XDG_CACHE_HOME nor HOME names an absolute directory to keep downloads in", what)?
 			CliHarness.contains!(outcome.stderr, "set ROC", what)?
 		}
 		CliHarness.same_calls!(CliHarness.calls!("${cwd}/nix-calls")?, [], "${what} started the provider")?
 	}
-	Script.pass!("ROC unset: a compatible roc on PATH is used; otherwise the pinned ${pin} comes from the store of downloads, and no provider is asked")?
+	Script.pass!("ROC unset: a compatible roc on PATH is used; otherwise the pinned ${pin} is installed from embedded bytes, and no provider is asked")?
 
 	# ROC is invocation-relative even when BLUEPRINT_ROOT selects elsewhere.
 	elsewhere = isolated!(test, "compiler-relative-root")?
