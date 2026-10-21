@@ -5,8 +5,16 @@ import core.JsonTree
 import core.Sbom
 import core.Spdx2
 import core.Spdx3
+import core.CycloneDx
+import "../../tests/sbom/schema/cyclonedx-1.7/bom-1.7.schema.json" as schema_cdx : Str
 import "../../tests/sbom/schema/spdx-3.0.1.schema.json" as schema_3 : Str
 import "../../tests/sbom/schema/spdx-2.3.schema.json" as schema_2 : Str
+import "../../tests/sbom/fixtures/verified-import.cdx.json" as fixture_verified_import_cdx : Str
+import "../../tests/sbom/fixtures/native-linux.cdx.json" as fixture_native_linux_cdx : Str
+import "../../tests/sbom/fixtures/native-arm64.cdx.json" as fixture_native_arm64_cdx : Str
+import "../../tests/sbom/fixtures/source-bundle.cdx.json" as fixture_source_bundle_cdx : Str
+import "../../tests/sbom/fixtures/verified-empty.cdx.json" as fixture_verified_empty_cdx : Str
+import "../../tests/sbom/fixtures/unknown-closure.cdx.json" as fixture_unknown_closure_cdx : Str
 import "../../tests/sbom/fixtures/verified-import.spdx.json" as fixture_verified_import_3 : Str
 import "../../tests/sbom/fixtures/verified-import.spdx-2.3.json" as fixture_verified_import_2 : Str
 import "../../tests/sbom/fixtures/native-linux.spdx.json" as fixture_native_linux_3 : Str
@@ -52,14 +60,16 @@ SbomTest := [].{
 	inventory : Try(Sbom.Inventory, Str)
 	inventory = Sbom.inspect(spec, lock, subject.target, composition)
 
-	## Each fixture document, rendered as SPDX 3.0.1 (`NAME.spdx.json`) and as
-	## SPDX 2.3 (`NAME.spdx-2.3.json`) from the same inventory.
+	## Each fixture document, rendered as SPDX 3.0.1 (`NAME.spdx.json`), as
+	## SPDX 2.3 (`NAME.spdx-2.3.json`) and as CycloneDX 1.7 (`NAME.cdx.json`)
+	## from the same inventory.
 	outputs : List({ name : Str, text : Str })
 	outputs = cases.fold(
 		[],
 		|all, case| all.concat([
 			{ name: "${case.name}.spdx.json", text: Sbom.render(case.inventory, case.subject, case.context) ?? crash "invalid ${case.name} document" },
 			{ name: "${case.name}.spdx-2.3.json", text: Sbom.render_spdx2(case.inventory, case.subject, case.context) ?? crash "invalid ${case.name} SPDX 2.3 document" },
+			{ name: "${case.name}.cdx.json", text: Sbom.render_cyclonedx(case.inventory, case.subject, case.context) ?? crash "invalid ${case.name} CycloneDX document" },
 		]),
 	)
 
@@ -309,7 +319,7 @@ expect inspect({ ..SbomTest.composition, components: SbomTest.composition.compon
 
 # The committed fixtures are what the renderers write now; regenerate them
 # with `scripts/test_sbom.roc fixtures tests/sbom/fixtures`.
-committed_fixtures = [{ name: "verified-import.spdx.json", text: fixture_verified_import_3 }, { name: "verified-import.spdx-2.3.json", text: fixture_verified_import_2 }, { name: "native-linux.spdx.json", text: fixture_native_linux_3 }, { name: "native-linux.spdx-2.3.json", text: fixture_native_linux_2 }, { name: "native-arm64.spdx.json", text: fixture_native_arm64_3 }, { name: "native-arm64.spdx-2.3.json", text: fixture_native_arm64_2 }, { name: "source-bundle.spdx.json", text: fixture_source_bundle_3 }, { name: "source-bundle.spdx-2.3.json", text: fixture_source_bundle_2 }, { name: "verified-empty.spdx.json", text: fixture_verified_empty_3 }, { name: "verified-empty.spdx-2.3.json", text: fixture_verified_empty_2 }, { name: "unknown-closure.spdx.json", text: fixture_unknown_closure_3 }, { name: "unknown-closure.spdx-2.3.json", text: fixture_unknown_closure_2 }]
+committed_fixtures = [{ name: "verified-import.cdx.json", text: fixture_verified_import_cdx }, { name: "native-linux.cdx.json", text: fixture_native_linux_cdx }, { name: "native-arm64.cdx.json", text: fixture_native_arm64_cdx }, { name: "source-bundle.cdx.json", text: fixture_source_bundle_cdx }, { name: "verified-empty.cdx.json", text: fixture_verified_empty_cdx }, { name: "unknown-closure.cdx.json", text: fixture_unknown_closure_cdx }, { name: "verified-import.spdx.json", text: fixture_verified_import_3 }, { name: "verified-import.spdx-2.3.json", text: fixture_verified_import_2 }, { name: "native-linux.spdx.json", text: fixture_native_linux_3 }, { name: "native-linux.spdx-2.3.json", text: fixture_native_linux_2 }, { name: "native-arm64.spdx.json", text: fixture_native_arm64_3 }, { name: "native-arm64.spdx-2.3.json", text: fixture_native_arm64_2 }, { name: "source-bundle.spdx.json", text: fixture_source_bundle_3 }, { name: "source-bundle.spdx-2.3.json", text: fixture_source_bundle_2 }, { name: "verified-empty.spdx.json", text: fixture_verified_empty_3 }, { name: "verified-empty.spdx-2.3.json", text: fixture_verified_empty_2 }, { name: "unknown-closure.spdx.json", text: fixture_unknown_closure_3 }, { name: "unknown-closure.spdx-2.3.json", text: fixture_unknown_closure_2 }]
 expect SbomTest.outputs.sort_with(|a, b| Project.bytewise(a.name, b.name)) == committed_fixtures.sort_with(|a, b| Project.bytewise(a.name, b.name))
 
 # What a consumer asks of the native fixture, in either version: the native
@@ -399,3 +409,52 @@ at_2 = |path| path.fold(
 
 expect Spdx2.vocabularies.all(|vocabulary| sorted(enumeration(at_2(vocabulary.path))) == sorted(vocabulary.values))
 expect Spdx2.objects.all(|object| sorted((at_2(object.path).field("properties") ?? JsonTree.Null).keys()) == sorted(object.members))
+
+# CycloneDX carries the same graph: Blueprint reads its own BOM back to the
+# package graph either SPDX rendering states, and a consumer that reads only
+# standard CycloneDX sees the shipped, build-only and unresolved components.
+expect SbomTest.cases.all(
+	|case| {
+		three = Sbom.read(Sbom.render(case.inventory, case.subject, case.context) ?? "") ?? crash "3.0.1 rendering unreadable"
+		bom = Sbom.read_cyclonedx(Sbom.render_cyclonedx(case.inventory, case.subject, case.context) ?? "") ?? crash "CycloneDX rendering unreadable"
+		bom.version == "CycloneDX-1.7" and { ..bom, version: "" } == { ..three, version: "" }
+	},
+)
+expect {
+	bom = JsonTree.parse(fixture_native_linux_cdx) ?? crash "fixture"
+	components = (bom.field("components") ?? JsonTree.Null).items() ?? []
+	scope = |ref| components.find_first(|entry| entry.field("bom-ref") == Ok(JsonTree.Text(ref))).map_ok(|entry| (entry.field("scope") ?? JsonTree.Null).text() ?? "") ?? ""
+	scope("native") == "required" and scope("platform") == "required" and scope("restricted") == "required" and scope("compiler") == "excluded"
+}
+expect {
+	bom = JsonTree.parse(fixture_native_linux_cdx) ?? crash "fixture"
+	serial = (bom.field("serialNumber") ?? JsonTree.Null).text() ?? ""
+	other = JsonTree.parse(fixture_verified_empty_cdx) ?? crash "fixture"
+	serial.starts_with("urn:uuid:") and serial.to_utf8().get(23) == Ok('8') and other.field("serialNumber") != bom.field("serialNumber") and bom.field("version") == Ok(JsonTree.Num(1))
+}
+expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each(",\"compiler\"]", "]")).is_err()
+expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("blueprint:namespace", "other:namespace")).is_err()
+expect Sbom.read(fixture_native_linux_cdx).is_err()
+
+# The CycloneDX validator follows the vendored, digest-pinned 1.7 schema.
+expect Crypto.SHA256.hash(schema_cdx.to_utf8()).to_hex() == "73308edec3ab2d38bfffd993e96a042b594314143b6971a6e9ed98bbb6bd76ce"
+
+definitions_cdx : JsonTree
+definitions_cdx = (JsonTree.parse(schema_cdx) ?? crash "schema is not JSON").field("definitions") ?? crash "schema has no definitions"
+
+at_cdx : List(Str) -> JsonTree
+at_cdx = |path|
+	match path {
+		[definition, .. as rest] => rest.fold(
+			definitions_cdx.field(definition) ?? JsonTree.Null,
+			|node, step| {
+				child = (node.field("properties") ?? JsonTree.Null).field(step) ?? JsonTree.Null
+				child.field("items") ?? child
+			},
+		)
+		[] => JsonTree.Null
+	}
+
+expect CycloneDx.vocabularies.all(|vocabulary| sorted(enumeration(at_cdx(vocabulary.path))) == sorted(vocabulary.values))
+expect CycloneDx.objects.all(|object| object.members.all(|name| (at_cdx([object.definition]).field("properties") ?? JsonTree.Null).keys().contains(name)))
+expect CycloneDx.objects.all(|object| sorted((at_cdx([object.definition]).field("properties") ?? JsonTree.Null).keys()) == sorted(object.members))

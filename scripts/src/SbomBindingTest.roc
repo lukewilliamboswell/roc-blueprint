@@ -7,8 +7,9 @@ import Script
 
 ## The native `scripts/sbom.roc` tool against read-only copies of
 ## `tests/sbom/fixtures/input`: `inspect` reproduces the committed inventory,
-## `bind` writes SPDX 3.0.1 or 2.3 that `Sbom.read` takes back to one package
-## graph, and every refusal the tool promises holds. Inputs are never changed.
+## `bind` writes SPDX 3.0.1, SPDX 2.3 and CycloneDX 1.7 that read back to one
+## package graph, both default sidecars beside the artifact when no output is
+## named, and every refusal the tool promises holds. Inputs are never changed.
 ##
 ## `chmod`, `ln -s` and `mkfifo` set up the cases basic-cli cannot create; the
 ## checks themselves are Roc.
@@ -63,11 +64,24 @@ cases! = |tool, fixtures, work| {
 	if Spdx3.validate(three).is_err() {
 		return Script.fail!("bind wrote SPDX 3.0.1 the model rejects")
 	}
-	match (Sbom.read(three), Sbom.read(two)) {
-		(Ok(from_three), Ok(from_two)) => if { ..from_three, version: "" } != { ..from_two, version: "" } {
-			return Script.fail!("the SPDX 3.0.1 and 2.3 sidecars state different package graphs")
-		}
+	# Without an output, bind writes SPDX 3.0.1 and CycloneDX beside the artifact.
+	call!(base, True)?
+	beside = Path.read_utf8!(Path.utf8("${work}/sample-artifact.spdx.json"))?
+	bom = Path.read_utf8!(Path.utf8("${work}/sample-artifact.cdx.json"))?
+	if beside != three {
+		return Script.fail!("the default SPDX sidecar differs from an explicit one")
+	}
+	match (Sbom.read(three), Sbom.read(two), Sbom.read_cyclonedx(bom)) {
+		(Ok(from_three), Ok(from_two), Ok(from_bom)) =>
+			if { ..from_three, version: "" } != { ..from_two, version: "" } or { ..from_three, version: "" } != { ..from_bom, version: "" } {
+				return Script.fail!("the SPDX 3.0.1, SPDX 2.3 and CycloneDX sidecars state different package graphs")
+			}
 		_ => return Script.fail!("a bound sidecar does not read back")
+	}
+	call!(base, False)?
+	call!(base.concat(["new.cdx.json", "--cyclonedx"]), True)?
+	if Path.read_utf8!(Path.utf8("${work}/new.cdx.json"))? != bom {
+		return Script.fail!("the default CycloneDX sidecar differs from an explicit one")
 	}
 
 	# An existing sidecar, or any input, is never replaced.

@@ -5,6 +5,7 @@ app [target] {
 }
 
 import pf.Fuzz
+import core.CycloneDx
 import core.JsonTree
 import core.Sbom
 import core.Spdx3
@@ -15,9 +16,12 @@ import core.Spdx3
 ## identifiers are unique local names, every relationship and root names a
 ## package, relationships use the composition vocabulary with a scope only on
 ## `dependsOn`, and an SPDX 3 document also passes `Spdx3.validate`.
+## `CycloneDx.validate` is total too; a BOM it accepts declares each
+## `bom-ref` once and depends only on declared ones, which this checks again
+## independently; and `Sbom.read_cyclonedx` of it is a sound package graph.
 ##
 ## The input is raw bytes read as UTF-8, so the seeds in `corpus/` are the
-## committed SPDX fixtures of both versions, which the fuzzer mutates.
+## committed fixtures of every format, which the fuzzer mutates.
 test : List(U8) -> Fuzz.Outcome
 test = |bytes|
 	match Str.from_utf8(bytes) {
@@ -26,6 +30,16 @@ test = |bytes|
 			match JsonTree.parse(text) {
 				Ok(tree) => if JsonTree.parse(tree.to_str()) != Ok(tree) {
 					crash "accepted JSON did not survive a re-encode"
+				}
+				Err(_) => {}
+			}
+			match CycloneDx.validate(text) {
+				Ok(bom) => declared(bom)
+				Err(_) => {}
+			}
+			match Sbom.read_cyclonedx(text) {
+				Ok(document) => {
+					_ = sound(document, text)
 				}
 				Err(_) => {}
 			}
@@ -59,7 +73,7 @@ sound = |document, text| {
 			crash "read returned a lifecycle scope outside dependsOn"
 		}
 	}
-	if !["SPDX-${Spdx3.version}", "SPDX-2.2", "SPDX-2.3"].contains(document.version) {
+	if !["SPDX-${Spdx3.version}", "SPDX-2.2", "SPDX-2.3", "${CycloneDx.format}-${CycloneDx.version}"].contains(document.version) {
 		crash "read returned an unsupported version"
 	}
 	if document.version == "SPDX-${Spdx3.version}" and Spdx3.validate(text).is_err() {
@@ -67,6 +81,30 @@ sound = |document, text| {
 	}
 	Fuzz.keep
 }
+
+## The references of an accepted BOM, found without the validator's index.
+declared : JsonTree -> {}
+declared = |bom| {
+	refs = all_refs(bom)
+	if refs.len() != refs.fold([], |all, ref| if (all.contains(ref)) all else all.append(ref)).len() {
+		crash "CycloneDx.validate accepted a repeated bom-ref"
+	}
+	for dependency in (bom.field("dependencies") ?? JsonTree.Array([])).items() ?? [] {
+		named = ((dependency.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).map(|item| item.text() ?? "").append((dependency.field("ref") ?? JsonTree.Null).text() ?? "")
+		if named.any(|ref| !refs.contains(ref)) {
+			crash "CycloneDx.validate accepted a dependency on an undeclared bom-ref"
+		}
+	}
+	{}
+}
+
+all_refs : JsonTree -> List(Str)
+all_refs = |tree|
+	match tree {
+		Object(members) => members.fold([], |all, entry| if (entry.key == "bom-ref") all.append(entry.value.text() ?? "") else if (entry.key == "dependencies" or entry.key == "properties") all else all.concat(all_refs(entry.value)))
+		Array(items) => items.fold([], |all, item| all.concat(all_refs(item)))
+		_ => []
+	}
 
 target = Fuzz.target_with({
 	name: "sbom-read",

@@ -15,8 +15,10 @@ import core.Sbom
 
 ## Offline report from already evaluated Spec/Lock; no provider/Store effects.
 ## inspect SPEC LOCK COMPOSITION TARGET OUTPUT
-## bind INVENTORY SUBJECT CONTEXT ARTIFACT OUTPUT [--spdx-2.3]
-## `bind` writes SPDX 3.0.1 JSON-LD, or SPDX 2.3 JSON with `--spdx-2.3`.
+## bind INVENTORY SUBJECT CONTEXT ARTIFACT [OUTPUT [--spdx-2.3 | --cyclonedx]]
+## Without OUTPUT, `bind` writes ARTIFACT.spdx.json (SPDX 3.0.1 JSON-LD) and
+## ARTIFACT.cdx.json (CycloneDX 1.7) beside the artifact. With OUTPUT it
+## writes SPDX 3.0.1 there, or SPDX 2.3 or CycloneDX 1.7 with a flag.
 ## JSON input files are bounded to 1MiB. Output sidecars are separate from assets.
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
@@ -48,12 +50,16 @@ run! = |args| match args {
 		SbomFiles.write_new!(output, "${Json.to_str(inventory)}\n")?
 		Stdout.line!(output)
 	}
-	["bind", inventory_path, subject_path, context_path, artifact, output] => bind!(inventory_path, subject_path, context_path, artifact, output, Sbom.render)
-	["bind", inventory_path, subject_path, context_path, artifact, output, "--spdx-2.3"] => bind!(inventory_path, subject_path, context_path, artifact, output, Sbom.render_spdx2)
-	_ => Err(Invalid("usage: scripts/sbom.roc inspect SPEC LOCK COMPOSITION TARGET OUTPUT | bind INVENTORY SUBJECT CONTEXT ARTIFACT OUTPUT [--spdx-2.3]"))
+	["bind", inventory_path, subject_path, context_path, artifact] => bind!(inventory_path, subject_path, context_path, artifact, [("${artifact}.spdx.json", Sbom.render), ("${artifact}.cdx.json", Sbom.render_cyclonedx)])
+	["bind", inventory_path, subject_path, context_path, artifact, output] => bind!(inventory_path, subject_path, context_path, artifact, [(output, Sbom.render)])
+	["bind", inventory_path, subject_path, context_path, artifact, output, "--spdx-2.3"] => bind!(inventory_path, subject_path, context_path, artifact, [(output, Sbom.render_spdx2)])
+	["bind", inventory_path, subject_path, context_path, artifact, output, "--cyclonedx"] => bind!(inventory_path, subject_path, context_path, artifact, [(output, Sbom.render_cyclonedx)])
+	_ => Err(Invalid("usage: scripts/sbom.roc inspect SPEC LOCK COMPOSITION TARGET OUTPUT | bind INVENTORY SUBJECT CONTEXT ARTIFACT [OUTPUT [--spdx-2.3 | --cyclonedx]]"))
 }
 
-bind! = |inventory_path, subject_path, context_path, artifact, output, render| {
+## Render every requested document before writing any, so a refusal leaves
+## no partial set of sidecars.
+bind! = |inventory_path, subject_path, context_path, artifact, outputs| {
 	inventory : Sbom.Inventory
 	inventory = Json.parse(read!(inventory_path)?).map_err(|error| Invalid(Str.inspect(error)))?
 	subject : Sbom.Subject
@@ -63,14 +69,20 @@ bind! = |inventory_path, subject_path, context_path, artifact, output, render| {
 	if artifact.replace_each("\\", "/").split_on("/").last() != Ok(subject.filename) {
 		return Err(Invalid("subject filename differs from final artifact"))
 	}
-	if artifact == output {
+	if outputs.any(|(output, _)| output == artifact) {
 		return Err(Invalid("sidecar must not overwrite subject"))
 	}
 	digest = SbomFiles.digest!(artifact)?
 	if !subject.sha256.is_empty() and subject.sha256 != digest {
 		return Err(Invalid("final subject SHA-256 mismatch"))
 	}
-	text = render(inventory, { ..subject, sha256: digest }, context).map_err(|error| Invalid(error))?
-	SbomFiles.write_new!(output, text)?
-	Stdout.line!(output)
+	var $documents = []
+	for (output, render) in outputs {
+		$documents = $documents.append((output, render(inventory, { ..subject, sha256: digest }, context).map_err(|error| Invalid(error))?))
+	}
+	for (output, text) in $documents {
+		SbomFiles.write_new!(output, text)?
+		Stdout.line!(output)?
+	}
+	Ok({})
 }

@@ -14,15 +14,15 @@ import core.Sbom
 import src/Integrity
 import src/SbomCheck
 
-## Check written SBOM sidecars, SPDX 3.0.1 or 2.3, offline.
+## Check written SBOM sidecars, SPDX 3.0.1, SPDX 2.3 or CycloneDX 1.7, offline.
 ##
 ##   scripts/check_sbom.roc [--release-root ROOT] [--artifacts DIR] [--inventory FILE] DOCUMENT...
 ##
 ## Each document must be valid SPDX and meet the blueprint profile. With
 ## `--artifacts`, its subject is the file of that name in DIR, byte for byte.
 ## With `--inventory`, its evidence is that inventory's. With `--release-root`,
-## it accounts for the release authorities committed there. Two renderings of
-## one document, one of each version, must state the same package graph.
+## it accounts for the release authorities committed there. Renderings of one
+## document in different formats must state the same package graph.
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	match run!(args.map(OsStr.display), { root: "", artifacts: "", inventory: "" }) {

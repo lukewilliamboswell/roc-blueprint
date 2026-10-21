@@ -5,6 +5,7 @@ app [target] {
 }
 
 import pf.Fuzz
+import core.CycloneDx
 import core.JsonTree
 import core.Sbom
 import core.Spdx3
@@ -19,7 +20,12 @@ import core.Spdx3
 ##   of the inventory, as `expected` below states them independently of the
 ##   renderers, so the two versions agree with each other and with the input;
 ## * `Spdx3.check` rejects the rendering after one of `violations` breaks a
-##   rule of the SPDX 3.0.1 model in it, so the validator is not vacuous.
+##   rule of the SPDX 3.0.1 model in it, so the validator is not vacuous;
+## * `render_cyclonedx` succeeds, with canonical CycloneDX 1.7 that
+##   `CycloneDx.check` accepts and `Sbom.read_cyclonedx` reads back to the
+##   same package graph; its standard fields (dependencies, scopes, hashes,
+##   purls, licenses and suppliers) are what `standard` below derives from the
+##   inventory; and `CycloneDx.check` rejects it after one of `bom_violations`.
 test : Input -> Fuzz.Outcome
 test = |input| {
 	subject = subject_of(input)
@@ -54,6 +60,35 @@ test = |input| {
 	if Sbom.read(two) != Ok({ ..wanted, version: "SPDX-2.3" }) {
 		crash "SPDX 2.3 rendering reads back differently: ${Str.inspect(Sbom.read(two))}"
 	}
+	bom_text = match Sbom.render_cyclonedx(inventory, subject, context) {
+		Ok(text) => text
+		Err(problem) => crash "render_cyclonedx refused what render accepted: ${problem}"
+	}
+	bom = match JsonTree.parse(bom_text) {
+		Ok(parsed) => parsed
+		Err(problem) => crash "CycloneDX rendering is not JSON: ${problem}"
+	}
+	if "${bom.to_str()}\n" != bom_text {
+		crash "CycloneDX rendering is not canonical JSON"
+	}
+	match CycloneDx.check(bom) {
+		Ok(_) => {}
+		Err(problem) => crash "CycloneDX rendering fails the schema: ${problem}"
+	}
+	if Sbom.read_cyclonedx(bom_text) != Ok({ ..wanted, version: "CycloneDX-${CycloneDx.version}" }) {
+		crash "CycloneDX rendering reads back differently: ${Str.inspect(Sbom.read_cyclonedx(bom_text))}"
+	}
+	if seen(bom) != standard(inventory, subject) {
+		crash "CycloneDX standard fields differ from the inventory:\n${Str.inspect(seen(bom))}\n${Str.inspect(standard(inventory, subject))}"
+	}
+	bom_violation = bom_violations.get(input.bom_violation.to_u64() % bom_violations.len()) ?? crash "no violations"
+	match (bom_violation.apply)(bom, input.pick) {
+		Ok(broken) =>
+			if CycloneDx.check(broken).is_ok() {
+				crash "CycloneDx.check accepted a BOM with ${bom_violation.name}"
+			}
+		Err(NotApplicable) => {}
+	}
 	violation = violations.get(input.violation.to_u64() % violations.len()) ?? crash "no violations"
 	match (violation.apply)(tree, input.pick) {
 		Ok(broken) => if Spdx3.check(broken).is_ok() {
@@ -87,6 +122,74 @@ expected = |inventory, subject| {
 	{ version: "SPDX-${Spdx3.version}", namespace: context.namespace, name: subject.filename, roots: ["Subject"], packages_: components.prepend(subject_package), relationships: inventory.relationships, evidence: [evidence] }
 }
 
+## What a reader of standard CycloneDX learns about each component, and the
+## subject's digest.
+Standard : { subject : Str, components : List({ ref : Str, scope : Str, purl : Str, sha256 : Str, license : Str, supplier : Str, depends : List(Str) }), dependents : List(Str) }
+
+## The standard fields as the CycloneDX specification says the inventory's
+## facts are spelled: a component the subject needs at run time is required, a
+## build, test or development tool excluded, anything else optional.
+standard : Sbom.Inventory, Sbom.Subject -> Standard
+standard = |inventory, subject| {
+	runtime = |edge| edge.relation == "contains" or (edge.relation == "dependsOn" and (edge.scope == "" or edge.scope == "runtime"))
+	var $needed = ["Subject"]
+	var $grew = True
+	while $grew {
+		$grew = False
+		for edge in inventory.relationships {
+			if runtime(edge) and $needed.contains(edge.from) and !$needed.contains(edge.to) {
+				$needed = $needed.append(edge.to)
+				$grew = True
+			}
+		}
+	}
+	tools = inventory.relationships.keep_if(|edge| edge.relation == "dependsOn" and ["build", "test", "development"].contains(edge.scope)).map(|edge| edge.to)
+	depends = |ref| inventory.relationships.keep_if(|edge| edge.from == ref and (edge.relation == "contains" or edge.relation == "dependsOn")).map(|edge| edge.to).fold([], |all, to| if (all.contains(to)) all else all.append(to))
+	{
+		subject: subject.sha256,
+		components: inventory.components.map(
+			|component| {
+				ref: component.id,
+				scope: if ($needed.contains(component.id)) "required" else if (tools.contains(component.id)) "excluded" else "optional",
+				purl: if (component.identity.starts_with("pkg:")) component.identity else "",
+				sha256: component.sha256,
+				license: if (component.license == "NOASSERTION" or component.license == "NONE") "" else component.license,
+				supplier: if (component.producer.starts_with("Organization: ")) "supplier ${component.producer.drop_prefix("Organization: ")}" else if (component.producer.starts_with("Person: ")) "author ${component.producer.drop_prefix("Person: ")}" else "",
+				depends: depends(component.id),
+			},
+		),
+		dependents: depends("Subject"),
+	}
+}
+
+## The same fields read from a BOM with nothing but the CycloneDX schema.
+seen : JsonTree -> Standard
+seen = |bom| {
+	text_of = |tree, key| (tree.field(key) ?? JsonTree.Null).text() ?? ""
+	list_of = |tree, key| (tree.field(key) ?? JsonTree.Array([])).items() ?? []
+	sha = |tree| list_of(tree, "hashes").find_first(|hash| text_of(hash, "alg") == "SHA-256").map_ok(|hash| text_of(hash, "content")) ?? ""
+	dependencies = list_of(bom, "dependencies")
+	depends = |ref| dependencies.find_first(|entry| text_of(entry, "ref") == ref).map_ok(|entry| list_of(entry, "dependsOn").map(|item| item.text() ?? "")) ?? ["<no dependency entry>"]
+	{
+		subject: sha((bom.field("metadata") ?? JsonTree.Null).field("component") ?? JsonTree.Null),
+		components: list_of(bom, "components").map(
+			|entry| {
+				ref: text_of(entry, "bom-ref"),
+				scope: text_of(entry, "scope"),
+				purl: text_of(entry, "purl"),
+				sha256: sha(entry),
+				license: list_of(entry, "licenses").first().map_ok(|choice| text_of(choice, "expression")) ?? "",
+				supplier: match entry.field("supplier") {
+					Ok(supplier) => "supplier ${text_of(supplier, "name")}"
+					Err(_) => list_of(entry, "authors").first().map_ok(|author| "author ${text_of(author, "name")}") ?? ""
+				},
+				depends: depends(text_of(entry, "bom-ref")),
+			},
+		),
+		dependents: depends("Subject"),
+	}
+}
+
 context : Sbom.Context
 context = { namespace: "https://example.org/sbom/fuzz/revision-1", revision: "1", created: "2026-10-21T00:00:00Z", author: "Organization: Fuzz producers", generator: "Tool: sbom-render-fuzz" }
 
@@ -96,7 +199,7 @@ filled = |text, fallback| if (text.trim().is_empty()) fallback else text
 
 Raw : { name : Str, version : Str, producer : U8, producer_name : Str, license : U8, sha : U8, identity : U8, download : U8, modified : Str, parent : U8, relation : U8, reverse : U8, basis : Str }
 
-Input : { components : List(Raw), extra : List({ from : U8, to : U8, relation : U8 }), filename : Str, version : Str, target : U8, reason : Str, violation : U8, pick : U64 }
+Input : { components : List(Raw), extra : List({ from : U8, to : U8, relation : U8 }), filename : Str, version : Str, target : U8, reason : Str, violation : U8, bom_violation : U8, pick : U64 }
 
 licenses : List({ expression : Str, url : Str })
 licenses = [
@@ -111,10 +214,10 @@ licenses = [
 ]
 
 ## A relationship as the composition states it, by choice.
-relationship : U8 -> { relation : Str, scope : Str }
+relationship : U64 -> { relation : Str, scope : Str }
 relationship = |choice| {
 	options = [("contains", ""), ("dependsOn", ""), ("dependsOn", "build"), ("dependsOn", "test"), ("dependsOn", "development"), ("dependsOn", "runtime"), ("generates", ""), ("patchedBy", ""), ("hasVariant", ""), ("copiedTo", ""), ("other", "")]
-	(relation, scope) = options.get(choice.to_u64() % options.len()) ?? ("contains", "")
+	(relation, scope) = options.get(choice % options.len()) ?? ("contains", "")
 	{ relation, scope }
 }
 
@@ -139,32 +242,37 @@ composition_of = |input| {
 	for raw in input.components {
 		index = $components.len()
 		id = "c${index.to_str()}"
-		chosen = licenses.get(raw.license.to_u64() % licenses.len()) ?? { expression: "MIT", url: "" }
+		# Each choice is salted with the position, so input the fuzzer has
+		# exhausted (decoded as zeros) still varies every choice.
+		pick = |byte, salt| byte.to_u64() + index * salt
+		chosen = licenses.get(pick(raw.license, 3) % licenses.len()) ?? { expression: "MIT", url: "" }
 		$components = $components.append({
 			id,
 			name: filled(raw.name, "component"),
-			producer: match raw.producer % 3 {
+			producer: match pick(raw.producer, 1) % 3 {
 				0 => "NOASSERTION"
 				1 => "Organization: ${filled(raw.producer_name, "Upstream")}"
 				_ => "Person: ${filled(raw.producer_name, "Maintainer")}"
 			},
 			version: filled(raw.version, "0"),
-			identity: match raw.identity % 3 {
+			identity: match pick(raw.identity, 2) % 3 {
 				0 => "pkg:generic/${id}@${(raw.version.to_utf8().len()).to_str()}"
 				1 => "https://example.org/source/${id}"
 				_ => "urn:example:${id}"
 			},
-			download: if (raw.download % 2 == 0) "NOASSERTION" else "https://example.org/download/${id}.tar.gz",
-			sha256: if (raw.sha % 2 == 0) "" else Crypto.SHA256.hash(raw.name.to_utf8()).to_hex(),
+			download: if (pick(raw.download, 1) % 2 == 0) "NOASSERTION" else "https://example.org/download/${id}.tar.gz",
+			sha256: if (pick(raw.sha, 1) % 2 == 0) "" else Crypto.SHA256.hash(raw.name.to_utf8()).to_hex(),
 			license: chosen.expression,
 			license_url: chosen.url,
 			modified: raw.modified,
 			target: if (input.target % 2 == 0) "x86_64-linux" else "",
 			origin: "reviewed",
 		})
-		parent = raw.parent.to_u64() % (index + 1)
+		parent = pick(raw.parent, 1) % (index + 1)
 		other = if (parent == 0) "Subject" else "c${(parent - 1).to_str()}"
-		stated = relationship(raw.relation)
+		stated = relationship(pick(raw.relation, 2))
+		# Point from the earlier node unless the input says otherwise, so every
+		# relation kind also occurs where the subject reaches it.
 		(from, to) = if (raw.reverse % 2 == 0) (other, id) else (id, other)
 		$edges = $edges.append({ from, to, relation: stated.relation, scope: stated.scope, basis: filled(raw.basis, "Generated relationship") })
 	}
@@ -173,7 +281,7 @@ composition_of = |input| {
 	for extra in input.extra {
 		from = nodes.get(extra.from.to_u64() % (count + 1)) ?? "Subject"
 		to = nodes.get(extra.to.to_u64() % (count + 1)) ?? "Subject"
-		stated = relationship(extra.relation)
+		stated = relationship(extra.relation.to_u64())
 		duplicate = $edges.any(|edge| edge.from == from and edge.to == to and edge.relation == stated.relation and edge.scope == stated.scope)
 		if from != to and !duplicate {
 			$edges = $edges.append({ from, to, relation: stated.relation, scope: stated.scope, basis: "Extra generated relationship" })
@@ -282,6 +390,54 @@ violations = [
 	{ name: "a number where text is required", apply: |tree, pick| edit_one(tree, pick, of_type(["software_Package"]), |object| set(object, "name", JsonTree.Num(1))) },
 ]
 
+## Each breaks a rule the CycloneDX 1.7 schema or specification states.
+bom_violations : List({ name : Str, apply : JsonTree, U64 -> Try(JsonTree, [NotApplicable]) })
+bom_violations = [
+	{ name: "another bomFormat", apply: |bom, _| Ok(set(bom, "bomFormat", JsonTree.Text("SPDX"))) },
+	{ name: "a 1.6 specVersion", apply: |bom, _| Ok(set(bom, "specVersion", JsonTree.Text("1.6"))) },
+	{ name: "a BOM version of 0", apply: |bom, _| Ok(set(bom, "version", JsonTree.Num(0))) },
+	{ name: "a fractional BOM version", apply: |bom, _| Ok(set(bom, "version", JsonTree.Num(1.5))) },
+	{ name: "an uppercase serial number", apply: |bom, _| Ok(set(bom, "serialNumber", JsonTree.Text(((bom.field("serialNumber") ?? JsonTree.Null).text() ?? "").replace_each("a", "A").replace_each("b", "B").replace_each("c", "C").replace_each("d", "D").replace_each("e", "E").replace_each("f", "F").replace_each("8", "F")))) },
+	{ name: "a services section", apply: |bom, _| Ok(set(bom, "services", JsonTree.Array([]))) },
+	{ name: "a timestamp without a zone", apply: |bom, _| Ok(set(bom, "metadata", set(bom.field("metadata") ?? JsonTree.Null, "timestamp", JsonTree.Text("2026-10-21T00:00:00")))) },
+	{ name: "a dependency on an undeclared bom-ref", apply: |bom, pick| edit_list(bom, "dependencies", pick, |_| True, |entry| set(entry, "dependsOn", JsonTree.Array([JsonTree.Text("missing")]))) },
+	{ name: "a dependency entry for an undeclared bom-ref", apply: |bom, pick| edit_list(bom, "dependencies", pick, |_| True, |entry| set(entry, "ref", JsonTree.Text("missing"))) },
+	{ name: "a repeated dependsOn reference", apply: |bom, pick| edit_list(bom, "dependencies", pick, |entry| entry.field("dependsOn").is_ok(), |entry| set(entry, "dependsOn", JsonTree.Array(((entry.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).concat(((entry.field("dependsOn") ?? JsonTree.Array([])).items() ?? []).take_first(1))))) },
+	{ name: "a duplicate bom-ref", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "bom-ref", JsonTree.Text("Subject"))) },
+	{ name: "a component without a name", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| remove(entry, "name")) },
+	{ name: "a component type outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "type", JsonTree.Text("crate"))) },
+	{ name: "a scope outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "scope", JsonTree.Text("build"))) },
+	{ name: "an unknown component property", apply: |bom, pick| edit_list(bom, "components", pick, |_| True, |entry| set(entry, "versionInfo", JsonTree.Text("1"))) },
+	{ name: "a truncated SHA-256", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("hashes").is_ok(), |entry| set(entry, "hashes", JsonTree.Array([JsonTree.Object([{ key: "alg", value: JsonTree.Text("SHA-256") }, { key: "content", value: JsonTree.Text("abc") }])]))) },
+	{ name: "a hash algorithm outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("hashes").is_ok(), |entry| set(entry, "hashes", JsonTree.Array([JsonTree.Object([{ key: "alg", value: JsonTree.Text("SHA256") }, { key: "content", value: JsonTree.Text(Str.join_with(List.repeat("a", 64), "")) }])]))) },
+	{ name: "an invalid license expression", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("licenses").is_ok(), |entry| set(entry, "licenses", JsonTree.Array([JsonTree.Object([{ key: "expression", value: JsonTree.Text("MIT AND") }])]))) },
+	{ name: "a purl without its scheme", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("purl").is_ok(), |entry| set(entry, "purl", JsonTree.Text(((entry.field("purl") ?? JsonTree.Null).text() ?? "").drop_prefix("pkg:")))) },
+	{ name: "an external reference type outside the vocabulary", apply: |bom, pick| edit_list(bom, "components", pick, |entry| entry.field("externalReferences").is_ok(), |entry| set(entry, "externalReferences", JsonTree.Array([JsonTree.Object([{ key: "type", value: JsonTree.Text("download") }, { key: "url", value: JsonTree.Text("https://example.org") }])]))) },
+	{ name: "a property without a name", apply: |bom, _| Ok(set(bom, "properties", JsonTree.Array([JsonTree.Object([{ key: "value", value: JsonTree.Text("v") }])]))) },
+]
+
+## Change the `pick`th item of the top-level array `key` that `chosen` accepts.
+edit_list : JsonTree, Str, U64, (JsonTree -> Bool), (JsonTree -> JsonTree) -> Try(JsonTree, [NotApplicable])
+edit_list = |bom, key, pick, chosen, change| {
+	items = (bom.field(key) ?? JsonTree.Array([])).items() ?? []
+	count = items.keep_if(chosen).len()
+	if count == 0 {
+		return Err(NotApplicable)
+	}
+	wanted = pick % count
+	var $seen = 0
+	var $edited = []
+	for item in items {
+		if chosen(item) {
+			$edited = $edited.append(if ($seen == wanted) change(item) else item)
+			$seen = $seen + 1
+		} else {
+			$edited = $edited.append(item)
+		}
+	}
+	Ok(set(bom, key, JsonTree.Array($edited)))
+}
+
 target = Fuzz.target_with({
 	name: "sbom-render",
 	generator: {
@@ -292,6 +448,7 @@ target = Fuzz.target_with({
 		target: Fuzz.u8,
 		reason: Fuzz.str,
 		violation: Fuzz.u8,
+		bom_violation: Fuzz.u8,
 		pick: Fuzz.u64,
 	}.Fuzz,
 	test,

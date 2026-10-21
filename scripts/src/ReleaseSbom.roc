@@ -256,7 +256,11 @@ write! = |root, filename, version, target, composition, created, commit, revisio
 	# The same inventory for consumers that read only SPDX 2.
 	text_2 = Sbom.render_spdx2(inventory, subject, context).map_err(|message| Invalid(message))?
 	SbomFiles.write_new!("${root}/dist/${filename}.spdx-2.3.json", text_2)?
-	Stdout.line!("${filename}.spdx-2.3.json")
+	Stdout.line!("${filename}.spdx-2.3.json")?
+	# And for security tooling that reads CycloneDX.
+	bom = Sbom.render_cyclonedx(inventory, subject, context).map_err(|message| Invalid(message))?
+	SbomFiles.write_new!("${root}/dist/${filename}.cdx.json", bom)?
+	Stdout.line!("${filename}.cdx.json")
 }
 
 # Fail closed on new or changed imports: availability/composition changes must

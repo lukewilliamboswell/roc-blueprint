@@ -35,7 +35,8 @@ JsonTree := [Null, Bool(Bool), Num(Dec), Text(Str), Array(List(JsonTree)), Objec
 		match tree {
 			Null => "null"
 			Bool(b) => if (b) "true" else "false"
-			Num(n) => n.to_str()
+			# Dec writes whole numbers as `1.0`; JSON readers expect `1`.
+			Num(n) => n.to_str().drop_suffix(".0")
 			Text(s) => Json.to_str(s)
 			Array(items) => "[${Str.join_with(items.map(JsonTree.to_str), ",")}]"
 			Object(members) => "{${Str.join_with(members.map(|member| "${Json.to_str(member.key)}:${member.value.to_str()}"), ",")}}"
@@ -150,6 +151,7 @@ parse_at = |encoding, state, depth| {
 
 expect JsonTree.parse("{\"@context\":\"x\",\"n\":[1,-0.5e3,true,null]}") == Ok(Object([{ key: "@context", value: Text("x") }, { key: "n", value: Array([Num(1), Num(-500), Bool(True), Null]) }]))
 expect JsonTree.parse("\"\\u00e9\\ud83d\\ude00\\n\"") == Ok(Text("é😀\n"))
+expect JsonTree.Num(1).to_str() == "1" and JsonTree.Num(-2.5).to_str() == "-2.5" and JsonTree.Num(100).to_str() == "100"
 expect JsonTree.parse(" { \"a\" : [ ] , \"b\" : { } } ") == Ok(Object([{ key: "a", value: Array([]) }, { key: "b", value: Object([]) }]))
 expect JsonTree.parse("{\"a\":1,\"a\":2}").is_err()
 expect JsonTree.parse("{\"a\":[1],\"b\":2,\"a\":[1]}") == Ok(Object([{ key: "a", value: Array([Num(1)]) }, { key: "b", value: Num(2) }]))

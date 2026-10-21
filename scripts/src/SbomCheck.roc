@@ -6,9 +6,11 @@ import Bundle
 import Integrity
 import "../../tests/sbom/fixtures/native-linux.spdx.json" as fixture_3 : Str
 import "../../tests/sbom/fixtures/native-linux.spdx-2.3.json" as fixture_2 : Str
+import "../../tests/sbom/fixtures/native-linux.cdx.json" as fixture_cdx : Str
 import "../../tests/sbom/fixtures/input/inventory.json" as inventory_json : Str
 
-## Independent checks of a written SBOM sidecar, of either SPDX version, for
+## Independent checks of a written SBOM sidecar, SPDX 3.0.1, SPDX 2.3 or
+## CycloneDX 1.7, for
 ## the release job, the bundle smoke test and the test suite. `profile` holds a
 ## document to the blueprint profile beyond the SPDX model `Sbom.read` checks:
 ## one described subject with its final digest, a connected graph, and
@@ -21,7 +23,7 @@ SbomCheck := [].{
 
 	profile : Str -> Try(Checked, Str)
 	profile = |text| {
-		document = Sbom.read(text)?
+		document = if (text.contains("\"bomFormat\"")) Sbom.read_cyclonedx(text)? else Sbom.read(text)?
 		ids = document.packages_.map(|entry| entry.id)
 		if document.roots != ["Subject"] {
 			return Err("the document must describe exactly its delivered subject")
@@ -250,15 +252,16 @@ expect cargo_packages("[[package]]\nname = \"a\"\nversion = \"1\"\nchecksum = \"
 
 # The profile accepts the committed fixtures of both versions, as one graph,
 # and refuses each way a sidecar can misstate its subject or evidence.
-expect [fixture_3, fixture_2].all(|text| SbomCheck.profile(text).is_ok())
+expect [fixture_3, fixture_2, fixture_cdx].all(|text| SbomCheck.profile(text).is_ok())
 expect {
 	three = SbomCheck.profile(fixture_3) ?? crash "fixture"
 	two = SbomCheck.profile(fixture_2) ?? crash "fixture"
 	inventory : Sbom.Inventory
 	inventory = Json.parse(inventory_json) ?? crash "inventory"
-	SbomCheck.same_graph(three, two) and SbomCheck.against_inventory(three, inventory).is_ok() and SbomCheck.against_inventory(two, { ..inventory, components: inventory.components.drop_first(1) }).is_err()
+	bom = SbomCheck.profile(fixture_cdx) ?? crash "fixture"
+	SbomCheck.same_graph(three, two) and SbomCheck.same_graph(three, bom) and SbomCheck.against_inventory(three, inventory).is_ok() and SbomCheck.against_inventory(two, { ..inventory, components: inventory.components.drop_first(1) }).is_err()
 }
-expect [fixture_3, fixture_2].all(
+expect [fixture_3, fixture_2, fixture_cdx].all(
 	|text| [
 		text.replace_each("final-deliverable-sha256", "source-tree"),
 		text.replace_each(Sbom.profile, "blueprint-spdx-2.3-v1"),

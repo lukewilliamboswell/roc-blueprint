@@ -1,6 +1,7 @@
 import Spec
 import Lock
 import Project
+import CycloneDx
 import JsonTree
 import Lookup
 import SbomLicenses
@@ -11,8 +12,10 @@ import Spdx3
 ## Composition is reviewed data; locked references resolve identities from Lock.
 ##
 ## An inventory is independent of SPDX versions. `render` writes it as SPDX
-## 3.0.1 and `render_spdx2` as SPDX 2.3, for consumers that have not moved;
-## `read` takes either back, or SPDX 2.2, to the same `Document`. Component
+## 3.0.1, `render_spdx2` as SPDX 2.3, for consumers that have not moved, and
+## `render_cyclonedx` as CycloneDX 1.7; `read` takes SPDX 3.0.1, 2.3 or 2.2
+## back, and `read_cyclonedx` Blueprint's own CycloneDX, to the same
+## `Document`. Component
 ## and relationship identifiers are local names: `name` becomes `SPDXRef-name`
 ## in SPDX 2 and `NAMESPACE#name` in SPDX 3. Relationships use the SPDX 3.0.1
 ## vocabulary; a lifecycle `scope` on `dependsOn` is how SPDX 3 says what SPDX
@@ -294,6 +297,37 @@ Sbom := [].{
 		text = spdx2(inventory, subject, context)
 		_ = Spdx2.validate(JsonTree.parse(text)?).map_err(|problem| "rendered SPDX 2.3 is invalid: ${problem}")?
 		no_leaks(text)
+	}
+
+	## `render` as CycloneDX 1.7 JSON. The subject is the metadata component
+	## and each inventory component a component with its hashes, purl,
+	## license expression, supplier or authors, download and license terms
+	## locations. `contains` and `dependsOn` relationships are dependencies.
+	## A component's scope is `required` when the subject reaches it through
+	## `contains` or a `dependsOn` without a lifecycle scope or with `runtime`,
+	## `excluded` when it is otherwise the target of a build, test or
+	## development dependency, and `optional` otherwise. CycloneDX has no
+	## relationship types, so every relationship, the evidence and each
+	## component's identity also travel as `blueprint:` properties, which
+	## `read_cyclonedx` reads back without loss.
+	render_cyclonedx : Inventory, Subject, Context -> Try(Str, Str)
+	render_cyclonedx = |inventory, subject, context| {
+		bindable(inventory, subject, context)?
+		text = "${cyclonedx(inventory, subject, context).to_str()}\n"
+		_ = CycloneDx.validate(text).map_err(|problem| "rendered CycloneDX ${CycloneDx.version} is invalid: ${problem}")?
+		no_leaks(text)
+	}
+
+	## The package graph of a CycloneDX BOM that `render_cyclonedx` wrote,
+	## after checking it against CycloneDX 1.7 and checking that its
+	## dependencies are what its relationships state. A BOM without the
+	## `blueprint:` properties is not one of these and is refused.
+	read_cyclonedx : Str -> Try(Document, Str)
+	read_cyclonedx = |text| {
+		if !json_within_bounds(text) {
+			return Err("CycloneDX document exceeds 1MiB or nests deeper than 64 levels")
+		}
+		read_bom(CycloneDx.validate(text)?)
 	}
 
 	## The package graph of an SPDX 3.0.1, 2.3 or 2.2 JSON document, after
@@ -846,3 +880,217 @@ expand_import = |imported, target, binding| {
 # Keep JSON boolean nominal rather than an inferred single tag.
 not_analyzed : Bool
 not_analyzed = False
+
+## CycloneDX 1.7
+
+property : Str, Str -> JsonTree
+property = |name, value| JsonTree.Object([member("name", text(name)), member("value", text(value))])
+
+## An RFC 4122 URN for the document revision: the first 128 bits of the
+## namespace's SHA-256, marked as a version 8 (custom) UUID.
+serial_number : Str -> Str
+serial_number = |namespace| {
+	digits = Crypto.SHA256.hash(namespace.to_utf8()).to_hex().to_utf8().take_first(32)
+	variant = when_digit(digits.get(16) ?? '0')
+	marked = digits.take_first(12).append('8').concat(digits.sublist({ start: 13, len: 3 })).append(variant).concat(digits.drop_first(17))
+	part = |start, len| Str.from_utf8_lossy(marked.sublist({ start, len }))
+	"urn:uuid:${part(0, 8)}-${part(8, 4)}-${part(12, 4)}-${part(16, 4)}-${part(20, 12)}"
+}
+
+## The RFC 4122 variant digit (8, 9, a or b) for a hex digit.
+when_digit : U8 -> U8
+when_digit = |digit| {
+	value = if (digit >= 'a') digit - 'a' + 10 else digit - '0'
+	"89ab".to_utf8().get((value % 4).to_u64()) ?? '8'
+}
+
+## Components the subject reaches through contained or runtime edges.
+shipped : List(Sbom.Edge) -> List(Str)
+shipped = |relationships| {
+	var $found = [subject_id]
+	var $changed = True
+	while $changed {
+		$changed = False
+		for edge in relationships {
+			carries = edge.relation == "contains" or (edge.relation == "dependsOn" and (edge.scope.is_empty() or edge.scope == "runtime"))
+			if carries and $found.contains(edge.from) and !$found.contains(edge.to) {
+				$found = $found.append(edge.to)
+				$changed = True
+			}
+		}
+	}
+	$found
+}
+
+cyclonedx_scope : List(Sbom.Edge), List(Str), Str -> Str
+cyclonedx_scope = |relationships, required, id|
+	if required.contains(id) {
+		"required"
+	} else if relationships.any(|edge| edge.to == id and edge.relation == "dependsOn" and ["build", "test", "development"].contains(edge.scope)) {
+		"excluded"
+	} else {
+		"optional"
+	}
+
+## Who supplied something, in CycloneDX: an organization is a supplier, a
+## person an author.
+supplied : Str -> List({ key : Str, value : JsonTree })
+supplied = |producer|
+	if producer.starts_with("Organization: ") {
+		[member("supplier", JsonTree.Object([member("name", text(producer.drop_prefix("Organization: ")))]))]
+	} else if producer.starts_with("Person: ") {
+		[member("authors", JsonTree.Array([JsonTree.Object([member("name", text(producer.drop_prefix("Person: ")))])]))]
+	} else {
+		[]
+	}
+
+sha256_hashes : Str -> List({ key : Str, value : JsonTree })
+sha256_hashes = |digest| when(!digest.is_empty(), [member("hashes", JsonTree.Array([JsonTree.Object([member("alg", text("SHA-256")), member("content", text(digest))])]))])
+
+references : List({ type : Str, url : Str }) -> List({ key : Str, value : JsonTree })
+references = |listed| when(!listed.is_empty(), [member("externalReferences", JsonTree.Array(listed.map(|reference| JsonTree.Object([member("type", text(reference.type)), member("url", text(reference.url))]))))])
+
+cyclonedx : Sbom.Inventory, Sbom.Subject, Sbom.Context -> JsonTree
+cyclonedx = |inventory, subject, context| {
+	required = shipped(inventory.relationships)
+	expression = |license_text| license_text != "NOASSERTION" and license_text != "NONE"
+	components = inventory.components.map(
+		|component|
+			JsonTree.Object(
+				[member("type", text("library")), member("bom-ref", text(component.id)), member("name", text(component.name)), member("version", text(component.version))]
+					.concat(supplied(component.producer))
+					.append(member("scope", text(cyclonedx_scope(inventory.relationships, required, component.id))))
+					.concat(sha256_hashes(component.sha256))
+					.concat(when(expression(component.license), [member("licenses", JsonTree.Array([JsonTree.Object([member("expression", text(component.license))])]))]))
+					.concat(when(component.identity.starts_with("pkg:"), [member("purl", text(component.identity))]))
+					.concat(
+						references(
+							(if (component.download == "NOASSERTION") [] else [{ type: "distribution", url: component.download }])
+								.concat(if (component.license.contains("LicenseRef-") and !component.license_url.is_empty()) [{ type: "license", url: component.license_url }] else []),
+						),
+					)
+					.append(member("properties", JsonTree.Array([property("blueprint:identity", component.identity), property("blueprint:origin", component.origin), property("blueprint:target", component.target), property("blueprint:modifications", component.modified)].concat(if (component.license == "NONE") [property("blueprint:license", "NONE")] else [])))),
+			),
+	)
+	metadata_component = JsonTree.Object(
+		[member("type", text("file")), member("bom-ref", text(subject_id)), member("name", text(subject.filename)), member("version", text(subject.version))]
+			.concat(sha256_hashes(subject.sha256))
+			.concat(references(if (subject.url == "NOASSERTION") [] else [{ type: "distribution", url: subject.url }]))
+			.append(member("properties", JsonTree.Array([property("blueprint:target", subject.target), property("blueprint:digest-kind", "final-deliverable-sha256")]))),
+	)
+	creator = if context.author.starts_with("Person: ") {
+		member("authors", JsonTree.Array([JsonTree.Object([member("name", text(context.author.drop_prefix("Person: ")))])]))
+	} else {
+		member("manufacturer", JsonTree.Object([member("name", text(context.author.drop_prefix("Organization: ")))]))
+	}
+	metadata = JsonTree.Object([
+		member("timestamp", text(context.created)),
+		member("lifecycles", JsonTree.Array([JsonTree.Object([member("phase", text("build"))])])),
+		member("tools", JsonTree.Object([member("components", JsonTree.Array([JsonTree.Object([member("type", text("application")), member("name", text(context.generator.drop_prefix("Tool: ")))])]))])),
+		creator,
+		member("component", metadata_component),
+		member("properties", JsonTree.Array([property("blueprint:namespace", context.namespace), property("blueprint:evidence", evidence(inventory, subject, context))])),
+	])
+	dependencies = inventory.components.map(|component| component.id).prepend(subject_id).map(
+		|ref| {
+			depends = unique(inventory.relationships.keep_if(|edge| edge.from == ref and (edge.relation == "contains" or edge.relation == "dependsOn")).map(|edge| edge.to))
+			JsonTree.Object([member("ref", text(ref))].concat(when(!depends.is_empty(), [member("dependsOn", texts(depends))])))
+		},
+	)
+	revision = U64.from_str(context.revision) ?? 1
+	JsonTree.Object([
+		member("bomFormat", text(CycloneDx.format)),
+		member("specVersion", text(CycloneDx.version)),
+		member("serialNumber", text(serial_number(context.namespace))),
+		member("version", JsonTree.Num(Dec.from_str((if (revision == 0) 1 else revision).to_str()) ?? 1)),
+		member("metadata", metadata),
+		member("components", JsonTree.Array(components)),
+		member("dependencies", JsonTree.Array(dependencies)),
+		member("properties", JsonTree.Array(inventory.relationships.map(|edge| property("blueprint:relationship", Json.to_str(edge))))),
+	])
+}
+
+read_bom : JsonTree -> Try(Sbom.Document, Str)
+read_bom = |tree| {
+	field_text = |object, key| (object.field(key) ?? JsonTree.Null).text() ?? ""
+	listed = |object, key| (object.field(key) ?? JsonTree.Array([])).items() ?? []
+	values = |object, name| listed(object, "properties").keep_if(|entry| field_text(entry, "name") == name).map(|entry| field_text(entry, "value"))
+	only = |object, name|
+		match values(object, name) {
+			[value] => Ok(value)
+			_ => Err("expected exactly one ${name} property; this is not a BOM Blueprint wrote")
+		}
+	metadata = tree.field("metadata") ?? JsonTree.Null
+	subject = metadata.field("component").map_err(|_| "the BOM describes no component")?
+	if field_text(subject, "bom-ref") != subject_id {
+		return Err("the described component must be ${subject_id}")
+	}
+	reference = |object, type| listed(object, "externalReferences").find_first(|entry| field_text(entry, "type") == type).map_ok(|entry| field_text(entry, "url"))
+	digest = |object| listed(object, "hashes").find_first(|entry| field_text(entry, "alg") == "SHA-256").map_ok(|entry| field_text(entry, "content")) ?? ""
+	supplier_of = |object|
+		match object.field("supplier") {
+			Ok(entity) => "Organization: ${field_text(entity, "name")}"
+			Err(_) =>
+				match listed(object, "authors") {
+					[author, ..] => "Person: ${field_text(author, "name")}"
+					[] => "NOASSERTION"
+				}
+		}
+	subject_package = {
+		id: subject_id,
+		name: field_text(subject, "name"),
+		version: field_text(subject, "version"),
+		supplier: "NOASSERTION",
+		download: reference(subject, "distribution") ?? "NOASSERTION",
+		license: "NOASSERTION",
+		license_url: "",
+		sha256: digest(subject),
+		identity: "",
+		comment: Json.to_str({ target: only(subject, "blueprint:target")?, digest_kind: only(subject, "blueprint:digest-kind")? }),
+	}
+	var $found = [subject_package]
+	for component in listed(tree, "components") {
+		license_text = match listed(component, "licenses") {
+			[choice] => field_text(choice, "expression")
+			[] => if (values(component, "blueprint:license") == ["NONE"]) "NONE" else "NOASSERTION"
+			_ => return Err("a component states more than one license choice")
+		}
+		$found = $found.append({
+			id: field_text(component, "bom-ref"),
+			name: field_text(component, "name"),
+			version: field_text(component, "version"),
+			supplier: supplier_of(component),
+			download: reference(component, "distribution") ?? "NOASSERTION",
+			license: license_text,
+			license_url: reference(component, "license") ?? "",
+			sha256: digest(component),
+			identity: field_text(component, "purl"),
+			comment: Json.to_str({ identity: only(component, "blueprint:identity")?, origin: only(component, "blueprint:origin")?, target: only(component, "blueprint:target")?, modifications: only(component, "blueprint:modifications")? }),
+		})
+	}
+	var $edges = []
+	for value in values(tree, "blueprint:relationship") {
+		decoded : Try(Sbom.Edge, _)
+		decoded = Json.parse(value)
+		$edges = $edges.append(decoded.map_err(|_| "a blueprint:relationship property is not a relationship")?)
+	}
+	ids = $found.map(|entry| entry.id)
+	if $edges.any(|edge| !ids.contains(edge.from) or !ids.contains(edge.to) or !Sbom.relations.contains(edge.relation)) {
+		return Err("a blueprint:relationship names an unknown component or relation")
+	}
+	if $edges.any(|edge| !edge.scope.is_empty() and (edge.relation != "dependsOn" or !Sbom.scopes.contains(edge.scope))) {
+		return Err("a blueprint:relationship has a lifecycle scope outside dependsOn")
+	}
+	for dependency in listed(tree, "dependencies") {
+		ref = field_text(dependency, "ref")
+		stated = listed(dependency, "dependsOn").map(|item| item.text() ?? "")
+		implied = unique($edges.keep_if(|edge| edge.from == ref and (edge.relation == "contains" or edge.relation == "dependsOn")).map(|edge| edge.to))
+		if stated != implied {
+			return Err("the dependencies of ${ref} differ from its relationships")
+		}
+	}
+	if listed(tree, "dependencies").len() != ids.len() {
+		return Err("every component needs a dependency entry")
+	}
+	Ok({ version: "${CycloneDx.format}-${CycloneDx.version}", namespace: only(metadata, "blueprint:namespace")?, name: subject_package.name, roots: [subject_id], packages_: $found, relationships: $edges, evidence: values(metadata, "blueprint:evidence") })
+}

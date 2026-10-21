@@ -410,14 +410,14 @@ bundle_sbom! = |root, paths, core_server, release, core, cache| {
 	base = ["run"].concat(Bundle.replacing(core_url, server.url(Bundle.release_path(release.repository, release.version, core)))).concat([server.url(route), "--"])
 	roc = Process.roc!()
 	invoke = |args| Process.with_env(Process.command(roc, base.concat(args), workspace), [("XDG_CACHE_HOME", cache)])
-	for args in [["inspect", "Spec", "Lock", "composition.json", "x86_64-linux", "inventory.json"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact", "sample-artifact.spdx.json"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact", "sample-artifact.spdx-2.3.json", "--spdx-2.3"]] {
+	for args in [["inspect", "Spec", "Lock", "composition.json", "x86_64-linux", "inventory.json"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact", "sample-artifact.spdx-2.3.json", "--spdx-2.3"]] {
 		outcomes = server.drive!([invoke(args)])?
 		match outcomes {
 			[outcome] => Process.check!(outcome.code == 0, "SBOM app bundle smoke failed: ${outcome.stdout}${outcome.stderr}")?
 			_ => return Script.fail!("SBOM app bundle did not report an outcome")
 		}
 	}
-	_ = Process.succeed!(Process.command("roc-stable", ["scripts/check_sbom.roc", "--inventory", "${workspace}/inventory.json", "--artifacts", workspace, "${workspace}/sample-artifact.spdx.json", "${workspace}/sample-artifact.spdx-2.3.json"], root))?
-	Script.pass!("released SBOM app inspected/bound inputs without project evaluation; SPDX 3.0.1 and 2.3 sidecars and exact artifact verified")?
+	_ = Process.succeed!(Process.command("roc-stable", ["scripts/check_sbom.roc", "--inventory", "${workspace}/inventory.json", "--artifacts", workspace, "${workspace}/sample-artifact.spdx.json", "${workspace}/sample-artifact.spdx-2.3.json", "${workspace}/sample-artifact.cdx.json"], root))?
+	Script.pass!("released SBOM app inspected/bound inputs without project evaluation; SPDX 3.0.1, SPDX 2.3 and CycloneDX sidecars and exact artifact verified")?
 	Ok(name)
 }
