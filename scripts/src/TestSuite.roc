@@ -41,7 +41,7 @@ TestSuite := [].{
 				"	Systems([\"x86_64-linux\"]),",
 				"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
 				"	Environment(\"builder\", [Tools([\"default#coreutils\"])]),",
-				"	Build(\"copy\", [Use(\"builder\"), Run([\"cp\", \"message.txt\", \"copied.txt\"]), Output(\"copied.txt\")]),",
+				"	Executor(\"native\", \"nix\", \"default\"), Build(\"copy\", [Execute(\"native\"), Use(\"builder\"), Run([\"cp\", \"message.txt\", \"copied.txt\"]), Output(\"copied.txt\")]),",
 				"]",
 				"",
 			],

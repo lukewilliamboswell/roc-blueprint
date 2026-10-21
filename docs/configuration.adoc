@@ -439,6 +439,7 @@ and those options:
 
 [source,roc]
 ----
+Resolver("nix", ["rust", "zig"]),
 Overlay("rust", "github:oxalica/rust-overlay"),
 Overlay("zig", "github:mitchellh/zig-overlay"),
 Resolver("nix", ["rust", "zig"]),
@@ -512,6 +513,7 @@ source: select the attribute, quoting a segment that contains dots.
 
 [source,roc]
 ----
+Resolver("nix", ["zig"]),
 Overlay("zig", "github:mitchellh/zig-overlay"),
 Resolver("nix", ["zig"]),
 Environment("dev", [Overlays(["zig"]), Tools(["nix#zigpkgs.\"0.16.0\""])]),
@@ -557,12 +559,14 @@ used by tasks and shells alone has none of them in its lock.
 A sandboxed build cannot download. The bundles of an environment that a build
 runs in, or that it extends, are therefore fetched by Nix as well:
 `blueprint update` records those in `Blueprint.lock` like any other source,
-and Nix checks the bytes against that pin. This example selects its compiler
-from the package source supported by its executor:
+and Nix checks the bytes against that pin. An environment a build uses takes
+its compiler from a Nix source, since the Nix executor does not support downloaded programs in managed builds:
 
 [source,roc]
 ----
 Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
+Resolver("nix", ["roc", "roc-Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af", "roc-6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS"]),
+Executor("native", "nix", "nix"),
 Overlay("roc", "github:roc-lang/roc-overlay/76fdbdc2c34adf35eea5fae1d991ca29591a1a7c"),
 Resolver("nix", ["roc"]),
 Environment("build-scripts", [
@@ -573,7 +577,6 @@ Environment("build-scripts", [
 		"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	]),
 ]),
-Executor("native", "nix", "nix"),
 Build("notes", [Execute("native"), Use("build-scripts"), Run(["roc-stable", "scripts/notes.roc"]), Output("notes.txt")]),
 ----
 

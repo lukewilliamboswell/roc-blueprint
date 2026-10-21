@@ -4,6 +4,8 @@ app [config] {
 }
 
 config = [
+	Resolver("nix", ["roc", "assets", @ROC_SOURCE_NAMES@]),
+	Executor("native", "nix", "default"),
 	Name("workflow-integration"),
 	Systems(["x86_64-linux"]),
 	Packages("default", From(NixPackages("@PACKAGES@"))),
@@ -21,10 +23,11 @@ config = [
 	Task("dirty", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "dirty"])]),
 	Task("fail", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "fail"])]),
 	Task("later", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "record", "unsupported task reached"])]),
-	Build("library", [Use("builder"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
+	Build("library", [Execute("native"), Use("builder"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
 	Build(
 		"app",
 		[
+			Execute("native"),
 			Use("builder"),
 			Inputs(["assets"]),
 			Needs(["library"]),
@@ -32,9 +35,9 @@ config = [
 			Output("dist/app"),
 		],
 	),
-	Build("fail", [Use("builder"), Run(["roc-stable", "build.roc", "--", "fail"]), Output("dist/fail")]),
-	Build("later-library", [Use("builder"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
-	Build("later-app", [Use("builder"), Needs(["later-library"]), Run(["roc-stable", "build.roc", "--", "fail"]), Output("dist/fail")]),
+	Build("fail", [Execute("native"), Use("builder"), Run(["roc-stable", "build.roc", "--", "fail"]), Output("dist/fail")]),
+	Build("later-library", [Execute("native"), Use("builder"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
+	Build("later-app", [Execute("native"), Use("builder"), Needs(["later-library"]), Run(["roc-stable", "build.roc", "--", "fail"]), Output("dist/fail")]),
 	Workflow("empty", []),
 	Workflow("nested-empty", [RunWorkflow("empty"), RunWorkflow("empty")]),
 	Workflow("ci", [RunTask("prepare", []), BuildArtifact("app"), RunTask("record", ["after build"])]),

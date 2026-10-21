@@ -69,7 +69,7 @@ probe! = |suite, variant, output| {
 	Path.create_dir!(Path.utf8(project))?
 	place = BuildHarness.layout(project)
 	platform_path = BuildHarness.relative(project, "${suite.root}/blueprint-platform/main.roc")
-	config = "app [config] { pf: platform \"${platform_path}\" }\nconfig = [Name(\"two-host-producer\"), Systems([\"x86_64-linux\"]), Packages(\"nix\", From(NixPackages(\"${suite.pins.nixpkgs.ref}\"))), Environment(\"producer\", [Tools([\"nix#coreutils\"])]), Build(\"copy\", [Use(\"producer\"), Files([\"input.txt\"]), Run([\"cp\", \"input.txt\", \"output\"]), Output(\"output\")])]\n"
+	config = "app [config] { pf: platform \"${platform_path}\" }\nconfig = [Name(\"two-host-producer\"), Systems([\"x86_64-linux\"]), Packages(\"nix\", From(NixPackages(\"${suite.pins.nixpkgs.ref}\"))), Environment(\"producer\", [Tools([\"nix#coreutils\"])]), Executor(\"native\", \"nix\", \"nix\"), Build(\"copy\", [Execute(\"native\"), Use(\"producer\"), Files([\"input.txt\"]), Run([\"cp\", \"input.txt\", \"output\"]), Output(\"output\")])]\n"
 	Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), config)?
 	Path.write_utf8!(Path.utf8("${project}/input.txt"), "same producer bytes on both independent hosts\n")?
 	_ = BuildHarness.ok!(online, place, ["update"])?

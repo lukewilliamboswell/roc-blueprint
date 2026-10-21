@@ -31,7 +31,7 @@ artifacts::
 A complete local locked source, a sandboxed library and application that
 depends on it, and a typed workflow of tasks and builds. Its
 https://github.com/lukewilliamboswell/roc-blueprint/blob/main/examples/artifacts/README.md[README] shows usage and output, including
-explicit update and the read-only source and artifact locations.
+explicit resolver ownership, named executor selection, update, and the read-only source and artifact locations.
 
 extensions::
 Custom extension blocks and raw values. The platform emits them, and

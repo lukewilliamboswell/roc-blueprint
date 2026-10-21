@@ -316,7 +316,7 @@ reject_capabilities! = |suite, state| {
 	config = Path.utf8("${state.place.project}/Blueprint.roc")
 	for (name, old, new) in [
 		("unsupported-task", "Task(\"later\", [Use(\"builder\")", "Task(\"later\", [Use(\"foreign\")"),
-		("unsupported-build", "Build(\"later-library\", [Use(\"builder\")", "Build(\"later-library\", [Use(\"foreign\")"),
+		("unsupported-build", "Build(\"later-library\", [Execute(\"native\"), Use(\"builder\")", "Build(\"later-library\", [Execute(\"native\"), Use(\"foreign\")"),
 	] {
 		BuildHarness.require!(count(state.config, old) == 1, "vacuous negative fixture edit")?
 		Path.write_utf8!(config, state.config.replace_each(old, new))?

@@ -4,6 +4,8 @@ app [config] {
 }
 
 config = [
+	Resolver("nix", ["roc", "assets", "extra", @ROC_SOURCE_NAMES@]),
+	Executor("native", "nix", "default"),
 	Name("build-integration"),
 	Systems(["x86_64-linux"]),
 	Packages("default", From(NixPackages("@PACKAGES@"))),
@@ -32,6 +34,7 @@ config = [
 	Build(
 		"library",
 		[
+			Execute("native"),
 			Use("builder"),
 			Run(["roc-stable", "build.roc", "--", "library"]),
 			Output("dist/library"),
@@ -40,6 +43,7 @@ config = [
 	Build(
 		"bundle",
 		[
+			Execute("native"),
 			Use("builder"),
 			Inputs(["assets"]),
 			Needs(["library"]),
@@ -50,6 +54,7 @@ config = [
 	Build(
 		"app",
 		[
+			Execute("native"),
 			Use("builder"),
 			Inputs(["assets"]),
 			Needs(["library", "bundle"]),
@@ -75,20 +80,21 @@ config = [
 	Build(
 		"isolation",
 		[
+			Execute("native"),
 			Use("builder"),
 			Run(["roc-stable", "probe.roc", "--", "sandbox"]),
 			Output("dist/isolation"),
 		],
 	),
 	# A command that succeeds without writing its declared output.
-	Build("missing", [Use("coreutils"), Run(["true"]), Output("dist/missing")]),
+	Build("missing", [Execute("native"), Use("coreutils"), Run(["true"]), Output("dist/missing")]),
 	# The declared output is itself a link.
-	Build("symlink", [Use("coreutils"), Run(["ln", "-s", "untracked.txt", "linked"]), Output("linked")]),
+	Build("symlink", [Execute("native"), Use("coreutils"), Run(["ln", "-s", "untracked.txt", "linked"]), Output("linked")]),
 	# The declared output is a project directory that gains a link.
-	Build("nested-link", [Use("coreutils"), Run(["ln", "-s", "/etc/passwd", "nested/escape"]), Output("nested")]),
+	Build("nested-link", [Execute("native"), Use("coreutils"), Run(["ln", "-s", "/etc/passwd", "nested/escape"]), Output("nested")]),
 	# None of these commands is declared: `roc-stable` belongs to another
 	# environment, and `builder` has neither a shell nor coreutils.
-	Build("undeclared", [Use("bare"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
-	Build("undeclared-shell", [Use("builder"), Run(["sh", "-c", "mkdir dist && echo implicit >dist/shell"]), Output("dist/shell")]),
-	Build("undeclared-coreutils", [Use("builder"), Run(["ls"]), Output("dist/listing")]),
+	Build("undeclared", [Execute("native"), Use("bare"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
+	Build("undeclared-shell", [Execute("native"), Use("builder"), Run(["sh", "-c", "mkdir dist && echo implicit >dist/shell"]), Output("dist/shell")]),
+	Build("undeclared-coreutils", [Execute("native"), Use("builder"), Run(["ls"]), Output("dist/listing")]),
 ]

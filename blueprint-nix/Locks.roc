@@ -234,8 +234,12 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 		if !authority.hints.any(|hint| hint.provider == "nix") {
 			return Ok(authority)
 		}
-		locks = from_lock(authority)?
-		inputs_ = LockJson.object(LockJson.field(locks.identity, "inputs")?)?
+		hint = authority.hint("nix").map_err(|_| "missing Nix hint")?
+		identity = from_value(attr(hint, "identity")?)?
+		graph = from_value(attr(hint, "graph")?)?
+		validate_identity(identity)?
+		validate_graph(graph)?
+		inputs_ = LockJson.object(LockJson.field(identity, "inputs")?)?
 		var $changed = False
 		var $inputs = []
 		for input in inputs_ {
@@ -253,17 +257,17 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 			$inputs = $inputs.append({ name: input.name, value })
 		}
 		if !$changed {
+			_ = from_lock(authority)?
 			return Ok(authority)
 		}
-		identity = replace_existing(locks.identity, "inputs", LockJson.Object($inputs))?
-		validate_identity(identity)?
-		validate_binding(identity, locks.graph)?
-		hint = authority.hint("nix").map_err(|_| "missing Nix hint")?
+		normalized = replace_existing(identity, "inputs", LockJson.Object($inputs))?
+		validate_identity(normalized)?
+		validate_binding(normalized, graph)?
 		fields = match hint {
 			Value.Attrs(entries) => entries
 			_ => return Err("invalid Nix hint")
 		}
-		value = Value.Attrs(fields.map(|field| if (field.name == "identity") { name: field.name, value: to_value(identity) } else field))
+		value = Value.Attrs(fields.map(|field| if (field.name == "identity") { name: field.name, value: to_value(normalized) } else field))
 		migrated = { ..authority, hints: authority.hints.map(|entry| if (entry.provider == "nix") { provider: entry.provider, value } else entry) }
 		_ = from_lock(migrated)?
 		Ok(migrated)

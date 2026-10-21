@@ -63,10 +63,10 @@ CliTest := [].{
 	## A Spec as a compiler might print it, which the loader must not trust.
 	wire : Str
 	wire =
-		\\((format ((major 2) (minor 0))) (name "wire")
+		\\((format ((major 3) (minor 0))) (name "wire")
 		\\ (requires ("explicit-sources"))
 		\\ (systems ("x86_64-linux"))
-		\\ (sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
+		\\ (sources (((name "default") (provider ((name "nix") (ref "github:NixOS/nixpkgs/nixos-unstable") (version 1))))))
 		\\ (environments (((name "ci") (parents ()) (tools ()) (overlays ()))))
 		\\ (shells (((name "default") (environment "ci"))))
 		\\ (tasks (((name "echo-args") (environment "ci") (run ("true"))))))
@@ -106,17 +106,17 @@ update! = |test, cwd| {
 	)?
 	authority = Path.read_utf8!(Path.utf8("${cwd}/Blueprint.lock"))?
 	native = Path.read_utf8!(Path.utf8("${cwd}/.blueprint/flake.lock"))?
-	CliHarness.check!(pins_match(authority, native), "Blueprint.lock is not a major-1 Lock holding the native lock graph:\n${authority}")?
+	CliHarness.check!(pins_match(authority, native), "Blueprint.lock is not a major-2 Lock holding the native lock graph:\n${authority}")?
 	CliHarness.tool!(["chmod", "0444", "--", "${cwd}/Blueprint.lock"])?
 	CliHarness.forget!("${cwd}/nix-calls")
 }
 
-## Whether an authority is a major-1 Lock whose Nix hint holds exactly the
+## Whether an authority is a major-2 Lock whose Nix hint holds exactly the
 ## graph in a native lock.
 pins_match : Str, Str -> Bool
 pins_match = |authority, native|
 	match (Lock.parse(authority), CliHarness.authority_graph(authority), LockJson.decode(native)) {
-		(Ok(lock), Ok(pinned), Ok(graph)) => lock.format.major == 1 and Locks.equivalent(pinned, graph)
+		(Ok(lock), Ok(pinned), Ok(graph)) => lock.format.major == Lock.current_format.major and Locks.equivalent(pinned, graph)
 		_ => False
 	}
 
@@ -326,13 +326,13 @@ cases! = |bench| {
 	# The real loader must distrust wire data even if a compiler emits it: one
 	# case for each place `evaluate!` can refuse it.
 	rejected = [
-		{ name: "major-3", text: CliTest.wire.replace_each("(major 2)", "(major 3)"), diagnostic: "Spec format 3.0" },
+		{ name: "major-4", text: CliTest.wire.replace_each("(major 3)", "(major 4)"), diagnostic: "Spec format 4.0" },
 		{ name: "workflow-tag", text: CliTest.workflow_wire.replace_each("RunTask \"echo-args\" ()", "FutureStep \"echo-args\""), diagnostic: "could not read the Spec from Blueprint.roc" },
 		{ name: "requires", text: CliTest.wire.replace_each("(requires (\"explicit-sources\"))", "(requires (\"explicit-sources\" \"future-operation\"))"), diagnostic: "needs features: future-operation" },
 		# A Spec as a platform from before 0.6.0 prints it: it does not say its
 		# sources are all declared, and is told which platform to move to.
 		{ name: "old-platform", text: CliTest.wire.replace_each("(requires (\"explicit-sources\"))", "(requires ())"), diagnostic: "Blueprint.roc uses a roc-blueprint platform older than 0.6.0; update the platform URL in its app header and see docs/releases/0.6.0" },
-		{ name: "old-platform-auto", text: CliTest.wire.replace_each(" (requires (\"explicit-sources\"))\n", "").replace_each("(provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\"))", "(provider Auto)"), diagnostic: "platform older than 0.6.0" },
+		{ name: "old-platform-auto", text: CliTest.wire.replace_each("(major 3)", "(major 2)").replace_each("(provider ((name \"nix\") (ref \"github:NixOS/nixpkgs/nixos-unstable\") (version 1)))", "(provider Auto)"), diagnostic: "Spec format 2.0" },
 		{ name: "reference", text: CliTest.wire.replace_each("(environment \"ci\")", "(environment \"missing\")"), diagnostic: "unknown environment: missing" },
 	]
 	for case in rejected {
@@ -395,7 +395,7 @@ cases! = |bench| {
 	foreign = Str.join_with(
 		[
 			"	Packages(\"foreign\", From(GuixPackages(\"current\"))),",
-			"	Overlay(\"foreign-overlay\", \"github:example/unused-overlay\"),",
+			"	Resolver(\"nix\", [\"foreign-overlay\"]), Overlay(\"foreign-overlay\", \"github:example/unused-overlay\"),",
 			"	Environment(\"foreign\", [Tools([\"foreign#python@3.12:out\"]), Overlays([\"foreign-overlay\"])]),",
 			"",
 		],
@@ -422,8 +422,8 @@ cases! = |bench| {
 	stale = isolated!(test, "stale-intent")?
 	settings!(test, stale, CliTest.valid)?
 	update!(test, stale)?
-	settings!(test, stale, "${CliTest.valid}	Input(\"utils\", \"github:numtide/flake-utils\"),\n")?
-	CliHarness.contains!(run!(test, stale, ["run", "echo-args"], 1, [])?, "changed its inputs since the lock was resolved", "run echo-args with a stale lock")?
+	settings!(test, stale, "${CliTest.valid}	Resolver(\"nix\", [\"utils\"]), Input(\"utils\", \"github:numtide/flake-utils\"),\n")?
+	CliHarness.contains!(run!(test, stale, ["run", "echo-args"], 1, [])?, "changed its inputs, resolver ownership since the lock was resolved", "run echo-args with a stale lock")?
 	CliHarness.same_calls!(CliHarness.calls!("${stale}/nix-calls")?, [], "the provider ran with a stale lock")?
 	Script.pass!("a lock resolved for other inputs is refused, naming them, before the provider runs")?
 
@@ -437,7 +437,7 @@ cases! = |bench| {
 	]
 	for case in collisions {
 		cwd = isolated!(test, "collision-${case.name}")?
-		settings!(test, cwd, "${CliTest.valid}	Build(\"app\", [Use(\"ci\"), Run([\"true\"]), Output(\"result\")]),\n")?
+		settings!(test, cwd, "${CliTest.valid}	Executor(\"native\", \"nix\", \"default\"), Build(\"app\", [Execute(\"native\"), Use(\"ci\"), Run([\"true\"]), Output(\"result\")]),\n")?
 		generated = "${cwd}/generated"
 		output = run!(test, cwd, case.command, 1, [("BLUEPRINT_GENERATED_ROOT", generated), ("BLUEPRINT_WORKSPACE", "${generated}/${case.workspace}")])?
 		CliHarness.contains!(output, "must not overlap", "blueprint ${case.name} with its workspace at ${case.workspace}")?
@@ -505,7 +505,7 @@ expect CliTest.valid.contains("Run([\"printf\", \"%s\\n\", \"configured argument
 expect CliTest.develop("/p", "ci", []) == ["develop", "--no-update-lock-file", "--no-write-lock-file", "path:/p/.blueprint#devShells.x86_64-linux.ci"]
 expect CliTest.develop("/p", "blueprint-env-ci", ["printf", ""]) == ["develop", "--no-update-lock-file", "--no-write-lock-file", "path:/p/.blueprint#devShells.x86_64-linux.blueprint-env-ci", "--command", "printf", ""]
 
-expect CliTest.wire.starts_with("((format ((major 2) (minor 0))) (name \"wire\")\n") and CliTest.wire.ends_with("(run (\"true\"))))))")
+expect CliTest.wire.starts_with("((format ((major 3) (minor 0))) (name \"wire\")\n") and CliTest.wire.ends_with("(run (\"true\"))))))")
 expect CliTest.workflow_wire.ends_with("(run (\"true\")))))(workflows (((name \"ci\") (steps ((RunTask \"echo-args\" ())))))))") and CliTest.workflow_wire.contains("(requires (\"explicit-sources\" \"workflows\"))")
 
 native_sample : Str
@@ -526,5 +526,5 @@ authority_sample = Lock.to_str(
 expect pins_match(authority_sample, native_sample)
 expect pins_match(authority_sample, "{\"version\":7,\"nodes\":{\"default\":{\"locked\":{\"rev\":\"abc\"}}}}")
 expect !pins_match(authority_sample, native_sample.replace_each("abc", "abd"))
-expect !pins_match(authority_sample.replace_each("(major 1)", "(major 2)"), native_sample)
+expect !pins_match(authority_sample.replace_each("(major 2)", "(major 3)"), native_sample)
 expect !pins_match(native_sample, native_sample)

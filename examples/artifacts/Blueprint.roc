@@ -2,6 +2,8 @@
 app [config] { pf: platform "../../blueprint-platform/main.roc" }
 
 config = [
+	Resolver("nix", ["roc", "assets", "roc-Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af", "roc-6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS"]),
+	Executor("native", "nix", "nix"),
 	Name("artifacts"),
 	Systems(["x86_64-linux"]),
 	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
@@ -25,6 +27,7 @@ config = [
 	Build(
 		"library",
 		[
+			Execute("native"),
 			Use("dev"),
 			Files(["scripts/build_library.roc", "src/message.txt"]),
 			Run(["roc-stable", "scripts/build_library.roc"]),
@@ -34,6 +37,7 @@ config = [
 	Build(
 		"app",
 		[
+			Execute("native"),
 			Use("dev"),
 			Files(["scripts/build_app.roc"]),
 			Inputs(["assets"]),

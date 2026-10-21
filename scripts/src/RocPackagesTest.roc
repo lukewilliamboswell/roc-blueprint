@@ -58,8 +58,8 @@ RocPackagesTest := [].{
 	blueprint_roc = |platform_path, overlay, bundles, builds| {
 		urls = Str.join_with(bundles.map(|url| "\"${url}\""), ", ")
 		build = match builds {
-			WithBuild => ["	Build(\"offline\", [Use(\"dev\"), Run([\"roc-stable\", \"main.roc\", \"greeting.txt\"]), Output(\"greeting.txt\")]),"]
-			TasksOnly => []
+			WithBuild => ["	Executor(\"native\", \"nix\", \"nix\"),", "	Resolver(\"nix\", [\"roc\", ${Str.join_with(bundles.map(|url| "\"roc-${(url.split_on("/").last() ?? "").drop_suffix(".tar.zst")}\""), ", ")}]),", "	Build(\"offline\", [Execute(\"native\"), Use(\"dev\"), Run([\"roc-stable\", \"main.roc\", \"greeting.txt\"]), Output(\"greeting.txt\")]),"]
+			TasksOnly => ["	Resolver(\"nix\", [\"roc\"]),"]
 		}
 		Str.join_with(
 			[

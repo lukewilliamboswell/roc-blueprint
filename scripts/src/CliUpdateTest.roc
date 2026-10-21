@@ -6,6 +6,8 @@ import cli.Random
 import cli.Sleep
 import CliHarness
 import Integrity
+import core.Lock
+import core.Sexpr
 import Script
 
 ## `blueprint update` against a stubbed compiler and Nix: what it refuses to
@@ -27,19 +29,19 @@ CliUpdateTest := [].{
 	## The Spec the stub compiler prints: one environment and its shell.
 	wire : Str
 	wire =
-		\\((format ((major 2) (minor 0))) (name "wire")
+		\\((format ((major 3) (minor 0))) (name "wire")
 		\\(requires ("explicit-sources"))
 		\\(systems ("x86_64-linux"))
-		\\(sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
+		\\(sources (((name "default") (provider ((name "nix") (ref "github:NixOS/nixpkgs/nixos-unstable") (version 1))))))
 		\\(environments (((name "ci") (parents ()) (tools ()) (overlays ()))))
 		\\(shells (((name "default") (environment "ci")))))
 
 	## `wire` with a local path as each kind of provider input.
 	local_inputs : List({ kind : Str, wire : Str })
 	local_inputs = [
-		{ kind: "build-source", wire: "${wire.replace_each("(requires (\"explicit-sources\"))", "(requires (\"explicit-sources\" \"sources\"))").drop_suffix(")")}(build_sources (((name \"assets\") (ref \"path:./outer/assets\")))))" },
-		{ kind: "package-source", wire: wire.replace_each("(provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\"))", "(provider (NixPackages \"path:./outer/assets\"))") },
-		{ kind: "overlay", wire: "${wire.drop_suffix(")")}(inputs (((name \"assets\") (url \"path:./outer/assets\") (kind Overlay)))))" },
+		{ kind: "build-source", wire: "${wire.replace_each("(requires (\"explicit-sources\"))", "(requires (\"explicit-sources\" \"sources\"))").drop_suffix(")")}(resolvers (((provider \"nix\") (inputs (\"assets\")))))(build_sources (((name \"assets\") (ref \"path:./outer/assets\")))))" },
+		{ kind: "package-source", wire: wire.replace_each("(provider ((name \"nix\") (ref \"github:NixOS/nixpkgs/nixos-unstable\") (version 1)))", "(provider ((name \"nix\") (ref \"path:./outer/assets\") (version 1)))") },
+		{ kind: "overlay", wire: "${wire.drop_suffix(")")}(resolvers (((provider \"nix\") (inputs (\"assets\")))))(inputs (((name \"assets\") (url \"path:./outer/assets\") (kind Overlay)))))" },
 	]
 
 	## `size` bytes that are not text, different for every seed: the authority
@@ -66,10 +68,10 @@ CliUpdateTest := [].{
 	## A lock for `wire` as blueprint 0.5 wrote one: Lock format 1.0, and a
 	## `default` source that named no package set, which every project had.
 	as_0_5 : Str -> Str
-	as_0_5 = |lock|
-		lock.replace_each("(minor 1)", "(minor 0)")
-			.replace_each("(provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\"))", "(provider Auto)")
-			.replace_each("(Str \"packages\")", "(Str \"auto\")")
+	as_0_5 = |text| {
+		lock = Lock.parse(text) ?? Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], hints: [], fetched: [] }
+		Sexpr.to_str({ format: { major: 1.U64, minor: 0.U64 }, intent: { sources: lock.intent.sources.map(|source| { name: source.name, provider: Auto }), inputs: lock.intent.inputs, build_sources: lock.intent.build_sources, overlays: lock.intent.overlays }, sources: lock.sources, hints: lock.hints, fetched: lock.fetched })
+	}
 
 	## The entries an interrupted publication would leave beside the authority.
 	leftovers : List(Str) -> List(Str)
@@ -341,15 +343,15 @@ cases! = |bench| {
 	Path.delete_all!(Path.utf8("${earlier}/.blueprint"))?
 	CliHarness.forget!("${earlier}/nix-calls")?
 	for args in [["gen"], ["shell", "default"], ["update", "default"]] {
-		refused!(run!(test, earlier, args, [])?, "Blueprint.lock was written by blueprint 0.5 or older, which gave every project a package source it did not declare; run `blueprint update` to resolve it again with this blueprint, and review what changes", "${Str.join_with(args, " ")} with a lock from blueprint 0.5")?
+		refused!(run!(test, earlier, args, [])?, "lock migrate", "${Str.join_with(args, " ")} with a lock from blueprint 0.5")?
 	}
 	no_effects!(earlier, "a lock from blueprint 0.5")?
 	CliHarness.check!(Path.read_utf8!(Path.utf8(earlier_lock))? == lock_0_5, "a refused command rewrote a lock from blueprint 0.5")?
-	CliHarness.exited!(run!(test, earlier, ["update"], [("STUB_NIX_REV", "c")])?, 0, "update over a lock from blueprint 0.5")?
+	CliHarness.exited!(run!(test, earlier, ["lock", "migrate"], [])?, 0, "explicit migration of a lock from blueprint 0.5")?
 	renewed = Path.read_utf8!(Path.utf8(earlier_lock))?
-	CliHarness.check!(!renewed.contains("(provider Auto)") and renewed.contains("(minor 1)") and pinned_rev!(earlier_lock)? == "cccccccccccccccccccccccccccccccccccccccc", "an update did not replace a lock from blueprint 0.5:\n${renewed}")?
+	CliHarness.check!(!renewed.contains("(provider Auto)") and renewed.contains("(major 2)") and pinned_rev!(earlier_lock)? == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "migration did not preserve pins from blueprint 0.5:\n${renewed}")?
 	CliHarness.exited!(run!(test, earlier, ["gen"], [])?, 0, "gen after the lock was resolved again")?
-	Script.pass!("a lock from blueprint 0.5: gen, shell and a named update say it is old and what to run; update resolves it again")?
+	Script.pass!("a lock from blueprint 0.5: commands require explicit migration; migration preserves reviewed pins")?
 
 	used = CliHarness.calls!(python_log)?
 	CliHarness.check!(used.is_empty(), "blueprint ran a host python3: ${Str.inspect(used)}")?
@@ -372,4 +374,4 @@ expect {
 
 expect CliUpdateTest.leftovers(["Blueprint.lock", ".blueprint-write-ab12", "wire.scm", "lock-writer.tmp", ".blueprint"]) == [".blueprint-write-ab12", "lock-writer.tmp"]
 
-expect CliUpdateTest.as_0_5("(format (\n(major 1)\n(minor 1)))\n(sources ((\n(name \"default\")\n(provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\")))))") == "(format (\n(major 1)\n(minor 0)))\n(sources ((\n(name \"default\")\n(provider Auto))))"
+expect CliUpdateTest.as_0_5("((format ((major 2) (minor 0))))").contains("(major 1)")

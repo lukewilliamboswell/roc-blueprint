@@ -37,7 +37,7 @@ config! = |bench, root, source, builds| {
 	Path.create_all!(Path.utf8(root))?
 	platform_path = RocPackagesTest.relative(root, "${bench.root}/blueprint-platform/main.roc")
 	extra = if builds {
-		"Packages(\"nixpkgs\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))), Overlay(\"roc\", \"github:roc-lang/roc-overlay\"), Environment(\"base\", [Tools([\"nixpkgs#python3\"])]), Environment(\"dev\", [Overlays([\"roc\"])]), Build(\"copy\", [Use(\"base\"), Inputs([\"upstream\"]), Run([\"python3\", \"-c\", \"import hashlib, os; from pathlib import Path; data = (Path(os.environ[\\\"BLUEPRINT_INPUTS\\\"]) / \\\"upstream\\\").read_bytes(); Path(\\\"out\\\").write_text(hashlib.sha256(data).hexdigest())\"]), Output(\"out\")]),"
+		"Packages(\"nixpkgs\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))), Resolver(\"nix\", [\"roc\"]), Overlay(\"roc\", \"github:roc-lang/roc-overlay\"), Environment(\"base\", [Tools([\"nixpkgs#python3\"])]), Environment(\"dev\", [Overlays([\"roc\"])]), Executor(\"native\", \"nix\", \"nixpkgs\"), Build(\"copy\", [Execute(\"native\"), Use(\"base\"), Inputs([\"upstream\"]), Run([\"python3\", \"-c\", \"import hashlib, os; from pathlib import Path; data = (Path(os.environ[\\\"BLUEPRINT_INPUTS\\\"]) / \\\"upstream\\\").read_bytes(); Path(\\\"out\\\").write_text(hashlib.sha256(data).hexdigest())\"]), Output(\"out\")]),"
 	} else ""
 	Path.write_utf8!(Path.utf8("${root}/Blueprint.roc"), "app [config] { pf: platform \"${platform_path}\" }\nconfig = [Name(\"source-files\"), Systems([\"x86_64-linux\"]), SourceFile(\"upstream\", \"${source.url}\", \"${source.sha256}\"), ${extra}]\n")
 }

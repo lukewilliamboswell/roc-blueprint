@@ -30,12 +30,14 @@ CliIsolationTest := [].{
 	## The Spec the stub compiler prints: one build, `app`.
 	wire : Str
 	wire =
-		\\((format ((major 2) (minor 1))) (name "wire")
+		\\((format ((major 3) (minor 1))) (name "wire")
 		\\(requires ("explicit-sources" "builds"))
 		\\(systems ("x86_64-linux"))
-		\\(sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
+		\\(sources (((name "default") (provider ((name "nix") (ref "github:NixOS/nixpkgs/nixos-unstable") (version 1))))))
 		\\(environments (((name "ci") (parents ()) (tools ()) (overlays ()))))
 		\\(shells (((name "default") (environment "ci"))))
+		\\(executors (((name "native") (provider "nix") (source "default")))))
+		\\(build_executors (((build "app") (executor "native")))))
 		\\(builds (((name "app") (environment "ci") (inputs ()) (needs ())
 		\\          (run ("true")) (output "result")))))
 
