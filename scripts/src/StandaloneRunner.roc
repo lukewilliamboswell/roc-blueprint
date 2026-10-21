@@ -15,6 +15,15 @@ StandaloneRunner := [].{
 	locate! : Str, Str => Try(Str, _)
 	locate! = |generated, name| Cmd.new("nix").args(["eval", "--raw", "--impure", "--offline", "path:${generated}#packages.x86_64-linux.${name}.builder"].map(OsStr.from_str)).capture!().map_ok(Str.trim)
 
+	bridge! : { root : Str, work : Str } => Try(Str, _)
+	bridge! = |context| {
+		program = "${context.work}/witness-bridge"
+		if !(Path.is_file!(Path.utf8(program)) ?? False) {
+			Cmd.new(OsStr.from_str(Process.roc!())).args(["build", "${context.root}/fixtures/builds/witness_bridge.roc", "--output=${program}"].map(OsStr.from_str)).exec!()?
+		}
+		Ok(program)
+	}
+
 	run! : { root : Str, work : Str }, Str, Witness => Try(Outcome, _)
 	run! = |context, specification, witness| {
 		top = Path.to_str(Env.create_temp_dir_in!(Path.utf8(context.work), "standalone-")?)?
@@ -41,10 +50,7 @@ StandaloneRunner := [].{
 			return Script.fail!("runner tests must use the actual Nix-built production builder")
 		}
 		argv = if witness == Shared {
-			bridge = "${context.work}/witness-bridge"
-			if !(Path.is_file!(Path.utf8(bridge)) ?? False) {
-				Cmd.new(OsStr.from_str(Process.roc!())).args(["build", "${context.root}/fixtures/builds/witness_bridge.roc", "--output=${bridge}"].map(OsStr.from_str)).exec!()?
-			}
+			bridge = bridge!(context)?
 			[bridge, "${top}/witness/witness", runner]
 		} else {
 			[runner]

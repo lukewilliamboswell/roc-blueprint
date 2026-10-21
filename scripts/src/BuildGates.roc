@@ -582,5 +582,5 @@ expect {
 		and made.application == "app".to_utf8().append(0).concat(made.bundle).append('|').concat(BuildGates.arguments_json.to_utf8())
 }
 
-expect BuildGates.specification([("argv", "[\"a\"]"), ("output", "\"o\""), ("argv", "[\"b\"]")]) == "{\"argv\":[\"b\"],\"output\":\"o\"}"
-expect BuildGates.specification([]) == "{}"
+expect BuildGates.specification([("argv", "[\"a\"]"), ("output", "\"o\""), ("argv", "[\"b\"]")]) == "{\"schema_version\":1,\"env\":[],\"argv\":[\"b\"],\"output\":\"o\"}"
+expect BuildGates.specification([]) == "{\"schema_version\":1,\"env\":[]}"

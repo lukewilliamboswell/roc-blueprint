@@ -11,14 +11,15 @@ main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	result! = || {
 		selected = match args {
-			[file, program] => { witness: file, runner: program }
+			[mode, file, program, .. as extra] if mode.to_bytes() == "--caller".to_utf8() => { witness: file, runner: program, args: extra }
+			[file, program] => { witness: file, runner: program, args: [] }
 			_ => return Err(BadArguments)
 		}
 		readlink = Env.var!("ROC_BUILD_RUNNER_READLINK")?
 		mnt = Cmd.new(readlink).arg("/proc/self/ns/mnt").capture!()?.trim()
 		net = Cmd.new(readlink).arg("/proc/self/ns/net").capture!()?.trim()
 		Path.from_os_str(selected.witness).write_utf8!("${mnt}\n${net}\n")?
-		Cmd.new(selected.runner).exec!()
+		Cmd.new(selected.runner).args(selected.args).stdout(Inherit).stderr(Inherit).exec!()
 	}
 	match result!() {
 		Ok({}) => Ok({})

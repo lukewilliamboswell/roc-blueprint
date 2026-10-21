@@ -47,6 +47,33 @@ ReproducibleGates := [].{
 		BuildHarness.mode!("755", Path.utf8(patched))?
 		other = record(BuildHarness.ok!({ ..suite, blueprint: patched }, place, ["build", "one", "--json"])?.out)?
 		BuildHarness.require!(other.derivation == first.derivation, "Blueprint binary identity entered derivation")?
+		# A second actual caller kernel namespace must name the same recipe.
+		# Privileges are dropped before any caller code executes.
+		readlink = BuildHarness.which!("readlink")?
+		mnt = Cmd.new(OsStr.from_str(readlink)).arg("/proc/self/ns/mnt").capture!()?.trim()
+		net = Cmd.new(OsStr.from_str(readlink)).arg("/proc/self/ns/net").capture!()?.trim()
+		before_authority = Path.read_bytes!(Path.utf8(place.lock))?
+		bridge = StandaloneRunner.bridge!({ root: suite.root, work: suite.work })?
+		unshare = BuildHarness.which!("unshare")?
+		setpriv = BuildHarness.which!("setpriv")?
+		uid = Cmd.new("id").arg("-u").capture!()?.trim()
+		gid = Cmd.new("id").arg("-g").capture!()?.trim()
+		observed = "${suite.work}/other-caller-namespaces"
+		separated = BuildHarness.command!(
+			suite,
+			{
+				argv: ["sudo", "-n", "-E", "--", unshare, "--mount", "--net", "--", setpriv, "--reuid=${uid}", "--regid=${gid}", "--clear-groups", bridge, "--caller", observed, suite.blueprint, "build", "one", "--json"],
+				cwd: suite.caller,
+				extra: [("BLUEPRINT_ROOT", root), ("BLUEPRINT_WORKSPACE", place.workspace), ("BLUEPRINT_GENERATED_ROOT", place.generated), ("BLUEPRINT_LOCK", "authority.lock"), ("ROC_BUILD_RUNNER_READLINK", readlink)],
+				stdin: [],
+				code: 0,
+				service: NoService,
+			},
+		)?
+		namespaces = Path.read_utf8!(Path.utf8(observed))?.split_on("\n")
+		BuildHarness.require!(namespaces.first() != Ok(mnt) and namespaces.get(1) != Ok(net), "caller namespace control did not change both namespaces")?
+		BuildHarness.require!(record(separated.out)?.derivation == first.derivation, "caller namespace identity entered derivation")?
+		BuildHarness.require!(Path.read_bytes!(Path.utf8(place.lock))? == before_authority, "second namespace changed authority")?
 
 		moved_root = "${suite.work}/repro-relocated"
 		BuildHarness.tool!("cp", ["-a", "--", root, moved_root])?
