@@ -7,7 +7,6 @@ app [main!] {
 
 import pf.Stdout
 import core.Spec
-import core.Lock
 import core.Project
 import core.Request
 import core.Steps
@@ -61,11 +60,8 @@ expect {
 	encoded == authority
 }
 
-# Legacy authority requires explicit migration. This historical lock also
-# declares the formerly implied default source, so migrating it against a
-# project that no longer declares that source is refused without changing pins.
+# Unsupported Blueprint authority formats are rejected.
 expect Locks.decode(authority_0_5).is_err()
-expect Lock.migrate(authority_0_5, project(wire)?).is_err()
 
 # Inspection preserves the B1 golden; plans add stable, explicit input kinds.
 expect NixProvider.render(project(wire)?) == Ok(golden)

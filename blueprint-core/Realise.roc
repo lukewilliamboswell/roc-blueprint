@@ -491,7 +491,6 @@ Realise :: [].{
 ## It refuses the task `broken`, as a provider refuses what it cannot render.
 stub : Provider
 stub = Provider.{
-	migrate_lock: |lock| Ok(lock),
 	validate_source: |_source| Ok({}),
 	validate_tool: |_name| Ok({}),
 	name: "nix",

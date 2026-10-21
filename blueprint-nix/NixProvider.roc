@@ -24,7 +24,6 @@ import Runner
 NixProvider :: [].{
 	provider : Provider
 	provider = Provider.{
-		migrate_lock: Locks.migrate_legacy,
 		validate_source: validate_source,
 		validate_tool: |name| Native.check_tool(Nix, name),
 		build_prepare_argv,

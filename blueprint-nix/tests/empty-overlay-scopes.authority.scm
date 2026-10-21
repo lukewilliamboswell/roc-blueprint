@@ -1,6 +1,6 @@
 (
 	(format (
-		(major 1)
+		(major 2)
 		(minor 0)))
 	(hints ((
 		(provider "nix")
@@ -154,6 +154,7 @@
 							(name "roc")
 							(value (Str "roc")))))))))))))))))))))))))
 	(intent (
+		(resolvers (((provider "nix") (inputs ("roc")))))
 		(build_sources ())
 		(inputs ((
 			(kind Overlay)
@@ -164,7 +165,7 @@
 			(overlays ("roc")))))
 		(sources ((
 			(name "default")
-			(provider (NixPackages "github:NixOS/nixpkgs/6774f7bc253789b113a4f39285dc0fa100abeacc")))))))
+			(provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/6774f7bc253789b113a4f39285dc0fa100abeacc"))))))))
 	(sources ((
 		(digest "sha256:318888f82ccbd2db968113e31ac2820c7a98b364f73b332531058e6161b4aaca")
 		(name "default")

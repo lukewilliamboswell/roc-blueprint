@@ -241,59 +241,12 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	encode : Locks -> Str
 	encode = |locks| Lock.to_str(to_lock(locks))
 
-	## Upgrade the pre-explicit-source native declaration only. Native pin
-	## nodes, downloads and trust evidence remain byte-for-byte data-equal.
-	## derive already adds the working shell alias for pre-alias graphs.
-	migrate_legacy : Lock -> Try(Lock, Str)
-	migrate_legacy = |authority| {
-		if !authority.hints.any(|hint| hint.provider == "nix") {
-			return Ok(authority)
-		}
-		hint = authority.hint("nix").map_err(|_| "missing Nix hint")?
-		identity = from_value(attr(hint, "identity")?)?
-		graph = from_value(attr(hint, "graph")?)?
-		validate_identity(identity)?
-		validate_graph(graph)?
-		inputs_ = LockJson.object(LockJson.field(identity, "inputs")?)?
-		var $changed = False
-		var $inputs = []
-		for input in inputs_ {
-			kind = LockJson.string(LockJson.field(input.value, "kind")?)?
-			value = if kind == "auto" {
-				ref = LockJson.string(LockJson.field(input.value, "ref")?)?
-				if !authority.intent.sources.any(|source| source.name == input.name and source.provider.name == "nix" and source.provider.version == 1 and source.provider.ref == ref) {
-					return Err("cannot establish legacy Nix source ownership: ${input.name}")
-				}
-				$changed = True
-				replace_existing(input.value, "kind", LockJson.String("packages"))?
-			} else {
-				input.value
-			}
-			$inputs = $inputs.append({ name: input.name, value })
-		}
-		if !$changed {
-			_ = from_lock(authority)?
-			return Ok(authority)
-		}
-		normalized = replace_existing(identity, "inputs", LockJson.Object($inputs))?
-		validate_identity(normalized)?
-		validate_binding(normalized, graph)?
-		fields = match hint {
-			Value.Attrs(entries) => entries
-			_ => return Err("invalid Nix hint")
-		}
-		value = Value.Attrs(fields.map(|field| if (field.name == "identity") { name: field.name, value: to_value(normalized) } else field))
-		migrated = { ..authority, hints: authority.hints.map(|entry| if (entry.provider == "nix") { provider: entry.provider, value } else entry) }
-		_ = from_lock(migrated)?
-		Ok(migrated)
-	}
-
 	## Preserve field order because authoritative source entries retain it.
 	replace_existing : LockJson, Str, LockJson -> Try(LockJson, Str)
 	replace_existing = |object, name, value| {
 		fields = LockJson.object(object)?
 		if !fields.any(|field| field.name == name) {
-			return Err("missing legacy declaration field: ${name}")
+			return Err("missing declaration field: ${name}")
 		}
 		Ok(LockJson.Object(fields.map(|field| if (field.name == name) { name, value } else field)))
 	}
@@ -594,7 +547,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 			}
 			_ = original(ref)?
 			kind = LockJson.string(LockJson.field(input.value, "kind")?)?
-			if !["auto", "packages", "overlay", "flake", "source"].contains(kind) {
+			if !["packages", "overlay", "flake", "source"].contains(kind) {
 				return Err("unsupported lock input kind")
 			}
 			if LockJson.field(
@@ -1556,7 +1509,7 @@ expect match locked_fixture {
 	Err(_) => False
 }
 
-# The pre-Lock JSON authority is refused with an update hint, not migrated.
+# The pre-Lock JSON authority is refused with an update hint, not authority.
 expect Locks.decode("{\"version\":1,\"identity\":{},\"nix\":{}}") == Err("unsupported Blueprint lock format; run blueprint update")
 
 # Nix's SRI hashes become Blueprint's `sha256:<hex>` digests.
@@ -1592,33 +1545,27 @@ expect match (aliased_locks, locked_fixture) {
 	_ => False
 }
 
-# A migrated 0.5 native authority changes declaration vocabulary without
-# changing any source pin, graph node, content digest or download trust.
-expect {
-	locks = locked_fixture?
-	project = TestData.project(TestData.data)
-	identity_inputs = LockJson.field(locks.identity, "inputs")?
-	declaration = LockJson.field(identity_inputs, "default")?
-	legacy_identity = Locks.replace_existing(locks.identity, "inputs", Locks.replace_existing(identity_inputs, "default", Locks.replace_existing(declaration, "kind", LockJson.String("auto"))?)?)?
-	legacy = { ..Locks.to_lock({ ..locks, identity: legacy_identity }), intent: Lock.intent_of(project) }
-	migrated = Locks.migrate_legacy(legacy)?
-	decoded = Locks.from_lock(migrated)?
-	migrated.sources == legacy.sources and migrated.fetched == legacy.fetched and decoded.graph == locks.graph and decoded.identity == locks.identity and Locks.derive(decoded, project, TestData.layout).is_ok() and Locks.migrate_legacy(migrated) == Ok(migrated)
-}
-
-# Authentic roc-gui 0.4 authority: adding an artifact producer and its flat-file
-# source preserves the reviewed package/overlay pins and native graph. Its new
-# empty overlay scope must not force unrelated dependency resolution.
-import "tests/roc-gui-0.4.authority.scm" as roc_gui_0_4_authority : Str
+# Adding an artifact producer and its flat-file source preserves package and
+# overlay pins. A new empty overlay scope does not change resolution intent.
+import "tests/empty-overlay-scopes.authority.scm" as overlay_scopes_authority : Str
 
 expect {
 	original = { ..Spec.empty("roc-gui"), systems: ["x86_64-linux", "aarch64-darwin"], sources: [{ name: "default", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/6774f7bc253789b113a4f39285dc0fa100abeacc" } }], inputs: [{ name: "roc", kind: Overlay, url: "github:roc-lang/roc-overlay" }], resolvers: [{ provider: "nix", inputs: ["roc"] }], environments: [{ name: "dev", parents: [], tools: [], overlays: ["roc"] }] }
-	migrated = Locks.migrate_legacy(Lock.migrate(roc_gui_0_4_authority, original)?)?
-	before = Locks.from_lock(migrated)?
+	authority = Lock.parse(overlay_scopes_authority).map_err(|_| "invalid current authority fixture")?
+	before = Locks.from_lock(authority)?
 	file = { name: "freetype-source", url: "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz", sha256: "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f" }
 	producer = { name: "freetype-producer", parents: [], tools: [{ source: "default", name: "python3" }], overlays: [] }
 	full = { ..original, requires_: ["builds", "source-files"], source_files: [file], environments: original.environments.append(producer), executors: [{ name: "freetype-native", provider: "nix", source: "default" }], build_executors: [{ build: "freetype", executor: "freetype-native" }], builds: [{ name: "freetype", environment: producer.name, inputs: [file.name], needs: [], run: ["python3", "scripts/build_freetype.py"], output: "dist" }] }
-	selected = { ..migrated, sources: migrated.sources.append(Lock.file_pin(file)) }
+	selected = { ..authority, sources: authority.sources.append(Lock.file_pin(file)) }
 	after = Locks.from_lock(selected)?
-	Lock.stale_except_files(migrated, full, [file.name]) == Ok({}) and Lock.stale(selected, full) == Ok({}) and selected.hints == migrated.hints and after.graph == before.graph and after.identity == before.identity and after.sources() == before.sources() and before.sources().map(|pin| pin.rev) == ["6774f7bc253789b113a4f39285dc0fa100abeacc", "2ef187164e6856a73a53424dd453acb9b4e484c9"] and Locks.derive(after, full, TestData.layout).is_ok() and Locks.derive(after, { ..full, environments: original.environments.append({ ..producer, overlays: ["roc"] }) }, TestData.layout).is_err() and Locks.derive(after, { ..full, environments: [producer, { name: "dev", parents: [], tools: [], overlays: [] }] }, TestData.layout).is_err()
+	Lock.stale_except_files(authority, full, [file.name]) == Ok({}) and Lock.stale(selected, full) == Ok({}) and selected.hints == authority.hints and after.graph == before.graph and after.identity == before.identity and after.sources() == before.sources() and before.sources().map(|pin| pin.rev) == ["6774f7bc253789b113a4f39285dc0fa100abeacc", "2ef187164e6856a73a53424dd453acb9b4e484c9"] and Locks.derive(after, full, TestData.layout).is_ok() and Locks.derive(after, { ..full, environments: original.environments.append({ ..producer, overlays: ["roc"] }) }, TestData.layout).is_err() and Locks.derive(after, { ..full, environments: [producer, { name: "dev", parents: [], tools: [], overlays: [] }] }, TestData.layout).is_err()
+}
+
+# An obsolete Blueprint input kind is not a current Nix hint declaration.
+expect {
+	locks = locked_fixture?
+	inputs_ = LockJson.field(locks.identity, "inputs")?
+	declaration = LockJson.field(inputs_, "default")?
+	invalid = Locks.replace_existing(locks.identity, "inputs", Locks.replace_existing(inputs_, "default", Locks.replace_existing(declaration, "kind", LockJson.String("auto"))?)?)?
+	Locks.from_lock(Locks.to_lock({ ..locks, identity: invalid })).is_err()
 }

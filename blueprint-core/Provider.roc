@@ -38,9 +38,6 @@ Provider := {
 	## consumers. The provider validates its private hints before projecting.
 	inspect_lock : Lock -> Try(List(LockedSource), Str),
 
-	## Pure adapter-owned upgrade of legacy private hints; never changes pins.
-	migrate_lock : Lock -> Try(Lock, Str),
-
 	## Reject a request this provider cannot realise, before any effect.
 	preflight : Spec, Request, Str, Layout -> Try({}, Str),
 

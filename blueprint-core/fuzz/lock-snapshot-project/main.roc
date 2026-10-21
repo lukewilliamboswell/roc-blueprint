@@ -56,7 +56,6 @@ test = |case|
 ## A pure provider named "guix" whose Lock inspection reports `pins`.
 provider : List(Provider.LockedSource) -> Provider
 provider = |pins| Provider.{
-	migrate_lock: |lock| Ok(lock),
 	validate_source: |_source| Ok({}),
 	validate_tool: |_name| Ok({}),
 	name: "guix",
