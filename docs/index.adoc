@@ -30,6 +30,7 @@ Using it for the first time:: Follow <<get-started>>.
 Writing a configuration:: <<write-blueprint-roc>> describes every setting, and
 <<build-artifacts-and-run-workflows>> the sandboxed builds.
 Looking up a command or variable:: See <<run-blueprint>>.
+Reading an inspection report in pure Roc:: See <<consume-lock-inspection-in-roc>>.
 Describing release composition:: See <<artifact-bound-software-bills-of-materials>>.
 Running a project where Nix is not installed:: Read <<work-without-nix>>.
 Looking for a project to adapt:: Browse <<learn-from-the-examples>>.
@@ -49,6 +50,8 @@ include::configuration.adoc[leveloffset=+1]
 include::builds.adoc[leveloffset=+1]
 
 include::commands.adoc[leveloffset=+1]
+
+include::lock-snapshot.adoc[leveloffset=+1]
 
 include::sbom.adoc[leveloffset=+1]
 

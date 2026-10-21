@@ -1,0 +1,182 @@
+[#consume-lock-inspection-in-roc]
+= Consume lock inspection in pure Roc
+
+The official `LockSnapshot` module in `roc-blueprint-core` reads format-1
+`blueprint lock show --json` output. It performs no I/O, evaluates no project,
+runs no provider and reads no Store. A decoded snapshot is operational
+inspection data, separate from authoritative `Lock`, build provenance and SBOMs.
+It does not establish freshness, authenticate its producer or verify downloaded
+bytes. Missing entries may reflect a selected-name export, not absence from
+an entire project.
+
+[#choose-the-authority-or-its-public-projection]
+== Choose the authority or its public projection
+
+`Blueprint.lock` has a stable, versioned S-expression schema. It remains the
+committed authority, and pure Roc tools can read it directly with `core.Lock`
+when raw program pins and recorded source revisions or digests are enough.
+
+The optional JSON projection serves tools with native JSON support, such as
+Python, `jq` and Nix, and gives consumers in different languages the same public
+inspection semantics. Blueprint interprets its private provider hints and
+normalizes followed source references into provider-qualified content
+identities, explicit digest kinds and inert native fetch metadata. A consumer
+can use those fields without reimplementing the lock reader and each provider's
+private representation. Roc tools can choose `LockSnapshot` when they need
+that projected view or share exports with tools in other languages.
+
+The JSON report has its own narrow versioned compatibility contract. It is a
+read-only operational view: selected exports may omit entries, and readers
+cannot reconstruct authoritative lock state, establish freshness or infer
+release composition from it. SBOM and provenance contracts remain separate.
+
+== Import the existing core package
+
+Use the exact `roc-blueprint-core-<content-hash>.tar.zst` URL from the selected
+Blueprint release. The configuration platform's separate bundle is unnecessary:
+a consumer chooses its own platform for its outer I/O. For example, an app
+header can declare this package dependency:
+
+[source,text]
+----
+core: "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.7.0/roc-blueprint-core-<content-hash>.tar.zst",
+----
+
+Replace the placeholder with the published asset's complete name. The version
+and Roc bundle hash pin immutable source. Preparing the package cache and
+compiling the consumer may download dependencies; the pure functions do not.
+The library does not install or invoke the Blueprint executable.
+
+This release's consumer is tested with the compiler named by
+`blueprint compiler-version`, `nightly-2026-10-18-1df370f`, and the repository's
+script compiler, `nightly-2026-10-13-b17d287`. Pin the chosen compiler in the
+outer app/toolchain. Matching the Blueprint compiler version does not share
+its embedded executable automatically. Native compiled consumers need no Roc
+or Nix just to decode a report.
+
+== Run the checked consumer
+
+From a Blueprint checkout, with the pinned product compiler available as
+`roc` (see <<build-and-test>>), build the example and export an existing
+project's committed lock:
+
+[source,sh]
+----
+mkdir -p .cache/lock-snapshot
+roc build fixtures/lock-snapshot/main.roc --output=.cache/lock-snapshot/consumer
+BLUEPRINT_ROOT=/absolute/path/to/project blueprint lock show --json > lock-export.json
+.cache/lock-snapshot/consumer lock-export.json > lock-roundtrip.json
+roc test fixtures/lock-snapshot/pure.roc
+----
+
+Replace the project path with a project that already has `Blueprint.lock`.
+The export reads that authority without evaluating the project or fetching.
+The consumer accepts one file argument, validates and re-encodes its snapshot,
+and writes JSON to stdout; invalid input exits unsuccessfully. It is a
+round-trip example, not a pin-check command. With no arguments it emits
+illustrative test data, not information about the current project.
+
+`Checks.roc` contains the practical pure helpers and checked expectations:
+the test command verifies a matching `roc-stable` SHA-256, a missing-system
+mismatch, unchanged source identity, changed provider identity and inert
+metadata extraction. An application can pass its parsed report and its own
+expected pin to those same helpers, keeping file reads and exit policy outside
+them. The
+https://github.com/lukewilliamboswell/roc-blueprint/tree/main/fixtures/lock-snapshot[example README]
+shows how to copy the consumer into a downstream project and replace its
+checkout dependency with the published content-addressed core URL.
+
+== Keep effects at the edge
+
+An outer application runs `blueprint lock show --json NAME`, checks its exit
+status and bounded stdout, or reads a saved export, then passes the text to
+`LockSnapshot.parse_json`. These examples are pure:
+
+[source,roc,snippet=core-module]
+----
+import core.LockSnapshot
+
+pin_matches : LockSnapshot, Str, Str, Str -> Bool
+pin_matches = |snapshot, name, system, expected| {
+    LockSnapshot.fetched_program(snapshot, name, system)
+        .map_ok(|entry| entry.sha256 == expected) ?? False
+}
+
+same_source : LockSnapshot, LockSnapshot, Str -> Try(Bool, [MissingSource(Str)])
+same_source = |before, after, name| {
+    left = LockSnapshot.source(before, name)?
+    right = LockSnapshot.source(after, name)?
+    Ok(LockSnapshot.source_identity(left) == LockSnapshot.source_identity(right))
+}
+----
+
+A source identity is `{ provider, value }`. The value is opaque outside that
+provider: it need not be a SHA-256 or a path. A fetched program is selected
+by both name and system; its identity is the original download's SHA-256.
+`same_source` compares only the selected content identity. It does not infer
+which builds or shipped artifacts are affected by a change.
+
+`Source.digest_kind` is `File`, `Tree`, or `Unknown(originalText)`; even future
+kind strings remain unknown to a reader that does not understand them.
+`flat_sha256` is `Present(hash)` for Core-owned `SourceFile` entries and
+`Absent` otherwise. Tree/NAR identities never become archive hashes.
+The recorded `ref`, `rev` and `digest` are retained separately.
+
+Native metadata is inert `JsonData`. It retains objects, arrays, strings,
+booleans, null and exact JSON number lexemes, including numbers outside I64
+and decimal/exponent forms. It performs no floating-point conversion. A
+Nix-aware consumer can check `entry.provider == "nix"`, get the `"nix"`
+namespace with `JsonData.field(entry.metadata, "nix")`, and then get
+`"fetchTree"`. That only extracts data; an outer Nix evaluation may fetch.
+Unknown providers require no concrete adapter merely to read their exports.
+
+The complete checked example is `fixtures/lock-snapshot/Checks.roc`; its
+`main.roc` owns file reads/stdout. Release bundling tests the unchanged pure
+example against the actual core archive in independent empty package caches
+with both compiler pins.
+
+== Compatibility, errors and validation
+
+`parse_json` returns `InvalidJson(message)`, `LimitExceeded(message)`,
+`UnsupportedFormat(number)` or `InvalidReport(message)`. It validates a
+supported numeric format before that version's field shapes, so a valid
+future-format document is not mistaken for a malformed format-1 report.
+`source` and `fetched_program` return typed missing-entry errors.
+
+Readers accept additive fields at every report record. Unrecognized ordinary
+fields are ignored; native metadata and unrecognized digest-kind/obtained
+strings are retained. `to_json` writes the known model and retained metadata;
+it does not promise to relay unknown top-level extensions byte-for-byte.
+A changed meaning requires another report format. Bundle/API versions,
+report format, Lock format and compiler version are distinct contracts.
+
+The UTF-8 document is limited to 8 MiB, depth 128 (root at zero), and 4096
+entries in any object/array. Encoding checks these bounds before allocating
+output, includes the emitted newline in the byte limit and validates manual
+constructions too. Canonical escaping may expand a bounded input, so encoding
+a successfully decoded value can still return `LimitExceeded` when its output
+would exceed 8 MiB. Duplicate decoded keys, including escaped aliases, invalid
+Unicode, trailing input, mismatched source names and duplicate program/system
+pairs fail. The `format` and `size` fields use unsigned base-10 integer
+lexemes; size must fit U64. Declared flat/program hashes must agree with their
+identities. Generic native numeric lexemes remain lossless and are never
+executed as source text.
+
+The existing core bundle includes `lock-snapshot-v1.schema.json`, also
+https://github.com/lukewilliamboswell/roc-blueprint/blob/0.7.0/blueprint-core/lock-snapshot-v1.schema.json[published with the tagged source].
+The local JSON Schema describes structure and additive-field compatibility.
+The runtime profile additionally checks duplicate keys, resource bounds,
+lexical integers and cross-field identity equality, which standard JSON Schema
+alone cannot express. Independent offline schema/profile tests compare both
+valid and rejected documents with a real native Roc consumer. Schemas and
+external references are never downloaded by the library or validator.
+
+== When reading the authority directly is enough
+
+`core.Lock.parse` remains the supported pure S-expression reader for committed
+`Blueprint.lock`. Use it when the raw fetched-program pins or recorded source
+revisions/digests suffice. It does not need a CLI subprocess or JSON export.
+The snapshot additionally exposes provider-projected identities and public
+native metadata without asking a consumer to decode private lock hints.
+There is no conversion from a snapshot back into authoritative Lock state:
+selection may omit entries, and intent/private hints are deliberately absent.

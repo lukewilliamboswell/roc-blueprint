@@ -58,7 +58,7 @@ checked! = |root, directory| {
 		in_batches!,
 	)?
 	snippets = "${directory}/manual"
-	DocSnippets.run!({ roc: Process.roc!(), platform_ref: Process.relative(snippets, "${root}/blueprint-platform/main.roc"), root, work: snippets }, in_batches!)
+	DocSnippets.run!({ roc: Process.roc!(), platform_ref: Process.relative(snippets, "${root}/blueprint-platform/main.roc"), core_ref: Process.relative(snippets, "${root}/blueprint-core/main.roc"), root, work: snippets }, in_batches!)
 }
 
 ## Eight compilers at a time.
