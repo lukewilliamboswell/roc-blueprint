@@ -94,14 +94,14 @@ cases! = |bench, idle, real_build| {
 	if real_build {
 		first = invoke!(bench, server, build_root, ["build", "copy", "--json"], cache)?
 		CliHarness.check!(first.code == 0, "original-file build failed: ${first.stderr}")?
-		built : { provider : Str, recipe_identity : Str, metadata : { nix : { derivation : Str } }, outputs : List({ path : Str }) }
+		built : { provider : Str, build_identity : Str, metadata : { nix : { derivation : Str } }, outputs : List({ path : Str }) }
 		built = Json.parse(first.stdout).map_err(|_| ScriptFailed)?
-		CliHarness.check!(built.provider == "nix" and built.recipe_identity == built.metadata.nix.derivation and built.recipe_identity.ends_with(".drv"), "build did not report actual provider recipe identity")?
+		CliHarness.check!(built.provider == "nix" and built.build_identity == built.metadata.nix.derivation and built.build_identity.ends_with(".drv"), "build did not report actual provider recipe identity")?
 		CliHarness.check!(Path.read_utf8!(Path.utf8(built.outputs.first()?.path))? == source.sha256, "build did not receive the exact original file")?
 		second_cache = "${bench.work}/other-cache-location"
 		second = invoke!(bench, server, build_root, ["build", "copy", "--json"], second_cache)?
 		CliHarness.check!(second.code == 0, "fresh-cache source build failed: ${second.stderr}")?
-		rebuilt : { provider : Str, recipe_identity : Str, metadata : { nix : { derivation : Str } }, outputs : List({ path : Str }) }
+		rebuilt : { provider : Str, build_identity : Str, metadata : { nix : { derivation : Str } }, outputs : List({ path : Str }) }
 		rebuilt = Json.parse(second.stdout).map_err(|_| ScriptFailed)?
 		CliHarness.check!(rebuilt == built, "source-file cache location changed derivation or output identity")?
 	}

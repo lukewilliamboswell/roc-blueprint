@@ -63,6 +63,7 @@ provider_names = Str.join_with(providers.map(|provider| provider.name), ", ")
 Command : [
 	CompilerVersion,
 	LockShow({ json : Bool, names : List(Str) }),
+	LockMigrate,
 	Gen,
 	Shell(Str),
 	Run({ task : Str, args : List(Str) }),
@@ -117,8 +118,9 @@ cli_for = |loaded| {
 				}.Cli,
 				{ name: "show", description: "Inspect committed pins without evaluating Blueprint.roc", mapper: |r| LockShow(r) },
 			),
+			SubCmd.empty({ name: "migrate", description: "Migrate recorded authority without resolving or fetching", value: LockMigrate }),
 		]),
-		{ name: "lock", description: "Read committed pins without evaluating the project", mapper: |c| c },
+		{ name: "lock", description: "Inspect or explicitly migrate committed pins", mapper: |c| c },
 	)
 	requirements_cmd = SubCmd.finish(
 		{
@@ -264,6 +266,7 @@ main! = |raw_args| {
 	# These inspectors must parse before project paths, configuration, host or
 	# compiler overrides are observed. LockShow selects only its lock path.
 	independent_query = match raw_args {
+		[first, second, ..] if first.to_bytes() == "lock".to_utf8() => second.to_bytes() != "migrate".to_utf8()
 		[first, ..] => first.to_bytes() == "compiler-version".to_utf8() or first.to_bytes() == "lock".to_utf8()
 		_ => False
 	}
@@ -301,6 +304,7 @@ run! = |command, loaded, context| {
 			match command {
 				LockShow({ json, names }) => inspect_lock!(json, names)
 				CompilerVersion => Stdout.line!(compiler_version.trim())
+				LockMigrate => migrate_lock!(spec, ctx)
 				Gen => realise!(spec, Request.Generate, ctx)
 				Shell(name) => realise!(spec, Request.Shell(name), ctx)
 				Run({ task, args }) => realise!(spec, Request.Run(task, args), ctx)
@@ -316,6 +320,30 @@ run! = |command, loaded, context| {
 			}
 		}
 	}
+}
+
+## Explicit format migration changes representation, never dependency choices.
+migrate_lock! : Spec, Context => Try({}, _)
+migrate_lock! = |input_spec, ctx| {
+	spec = Project.validate(input_spec).map_err(|message| LockFailed(message))?
+	for source in spec.sources {
+		adapter = providers.find_first(|candidate| candidate.name == source.provider.name).map_err(|_| LockFailed("no adapter for source ${source.name}"))?
+		(adapter.validate_source)(source.provider).map_err(|message| LockFailed(message))?
+		tools = spec.environments.fold([], |all, environment| all.concat(environment.tools))
+			.concat(spec.system_tools.fold([], |all, entry| all.concat(entry.tools)))
+			.concat(spec.commands.map(|entry| entry.tool))
+			.concat(spec.configured_tools.map(|entry| entry.tool))
+		for tool in tools.keep_if(|entry| entry.source == source.name) {
+			(adapter.validate_tool)(tool.name).map_err(|message| LockFailed(message))?
+		}
+	}
+	file = ctx.layout.lock_path
+	safe_path!(file)?
+	prior = authority_token!(file)?
+	text = path(file).read_utf8!()?
+	migrated = Lock.migrate(text, spec).map_err(|message| LockFailed(message))?
+	publish_authority!(file, prior, migrated.to_str())?
+	Stderr.line!("migrated Blueprint.lock without resolving dependency pins")
 }
 
 ## This path intentionally avoids Context, host probing and project evaluation.
@@ -804,7 +832,7 @@ realise! = |spec, request, ctx| {
 			}
 			_ => []
 		}
-		execute_step!(step, fetched, { ..ctx, build_spec: spec, build_pins: lock.sources, build_sources: lock.sources.keep_if(|source| used.contains(source.name)) })?
+		execute_step!(step, fetched, { ..ctx, build_spec: spec, build_pins: snapshot_pins(lock, ctx.target), build_sources: lock.sources.keep_if(|source| used.contains(source.name)) })?
 	}
 	Ok({})
 }
@@ -1324,17 +1352,23 @@ inspect_build! = |spec, options, ctx| {
 		realise!(spec, Request.Build(options.name), { ..ctx, build_mode: mode, build_json: options.json })
 	} else {
 		validated = Project.validate(spec).map_err(|message| RenderFailed(message))?
-		# Explicit executor ownership replaces this discovery during integration.
-		adapter = providers.find_first(|candidate| validated.sources.any(|source| (candidate.realises)(source.provider))).map_err(|_| RenderFailed("no build executor provider"))?
+		# Structural inspection needs no native execution preflight.
+		executor = Project.build_executor(validated, options.name).map_err(|message| RenderFailed(message))?
+		adapter = providers.find_first(|candidate| candidate.name == executor.provider).map_err(|_| RenderFailed("no build executor provider"))?
 		lock = Lock.parse(path(ctx.layout.lock_path).read_utf8!()?).map_err(|_| LockFailed("unsupported Blueprint.lock"))?
 		lock.stale(spec).map_err(|message| LockFailed(message))?
-		snapshot = build_snapshot!(validated, options.name, adapter, lock.sources, ctx)?
+		snapshot = build_snapshot!(validated, options.name, adapter, snapshot_pins(lock, ctx.target), ctx)?
 		render_build_inspection!(snapshot, { build_identity: "", outputs: [] }, False, options.explain, { ..ctx, build_json: options.json })
 	}
 }
 
+## Verified fetched tools share the named content-evidence model, not provider hints.
+snapshot_pins : Lock, Str -> List(Lock.Source)
+snapshot_pins = |lock, system| lock.sources.concat(lock.fetched.keep_if(|entry| entry.system == system).map(|entry| { name: entry.name, provider: "blueprint", ref: "", rev: "", digest: "sha256:${entry.sha256}" }))
+
 build_snapshot! : Spec, Str, Provider, List(Lock.Source), Context => Try(BuildModel.Snapshot, _)
-build_snapshot! = |spec, name, adapter, pins, ctx| {
+build_snapshot! = |input_spec, name, adapter, pins, ctx| {
+	spec = Project.validate(input_spec).map_err(|message| RenderFailed(message))?
 	closure = Project.build_closure(spec, name).map_err(|message| RenderFailed(message))?
 	var $nodes = []
 	for build in closure {

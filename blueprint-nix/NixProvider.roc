@@ -3273,3 +3273,15 @@ expect {
 		and !rendered.contains(unrelated.sha256) and !rendered.contains("build_identity")
 		and rendered.contains("inputs.\"nix\".narHash")
 }
+
+# Preparation is evaluation-only and execution cannot reselect mutable source.
+expect {
+	step = { action: Build("app"), argv: ["nix", "build", "--no-link", "--print-out-paths", "example#app"], files: [], operations: [], artifacts: [{ provider: "nix", name: "app", installable: "example#app", output: "out", dependencies: [] }] }
+	prepared = { build_identity: "/nix/store/captured.drv", outputs: [{ name: "out", path: "/nix/store/result" }] }
+	NixProvider.build_prepare_argv(step) == Ok(["nix", "derivation", "show", "example#app", "--option", "allow-import-from-derivation", "false"])
+		and NixProvider.build_execute_argv(step, prepared, { json: False, rebuild: False }) == Ok(["nix", "build", "--no-link", "/nix/store/captured.drv^*", "--json"])
+		and NixProvider.build_prepared("{\"/nix/store/captured.drv\":{\"outputs\":{\"out\":{\"path\":\"/nix/store/result\"}}}}") == Ok(prepared)
+		and NixProvider.build_prepared("{}").is_err()
+		and NixProvider.build_prepared("{\"/tmp/not-store.drv\":{\"outputs\":{}}}").is_err()
+		and NixProvider.build_prepared("{\"/nix/store/captured.drv\":{\"outputs\":{\"out\":{}}}}").is_err()
+}
