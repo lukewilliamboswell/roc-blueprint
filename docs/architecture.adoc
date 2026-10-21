@@ -27,6 +27,53 @@ Windows.
 
 **The protocol is the product; providers are adapters.**
 
+[[provider-neutrality]]
+=== Provider neutrality is an enduring constraint
+
+Blueprint defines capabilities and their guarantees; providers implement
+them using a particular deterministic system. Nix is one implementation,
+not the definition of a build, a content identity or a reproducibility check.
+The same rule applies to a future system built within Blueprint itself.
+
+Shared contracts describe selected inputs, verified content, declared tools,
+outputs, isolation guarantees and reproducible execution. Native recipe
+formats, store paths, package grammars and process arguments belong to their
+provider. Reports carry a provider-qualified identity and preserve native
+details as provider-specific metadata. Consumers must not interpret an
+opaque identity as a Nix derivation or assume every digest identifies a tree.
+An identity from one provider does not establish recipe or output equivalence
+with an identity from another provider.
+
+A provider must reject a capability it cannot fulfil before effects begin.
+It must not silently replace an isolated, offline build or a checked rebuild
+with a weaker operation. An operating-system mechanism, such as Linux mount
+and network namespaces, can be an explicit optional executor capability;
+it is not the universal meaning of isolation. New host effects still need
+an explicit, constrained Core operation.
+
+Neutrality does not make ecosystem-specific declarations portable. A Nix
+package source selects Nix, and its package names retain their native
+meaning. Another provider should be able to fulfil the same shared
+capabilities using its own sources and implementation, without depending on
+Nix or imitating its formats. A new shared semantic requirement can extend
+the versioned protocol; one provider's syntax alone is not a reason to do so.
+
+Nix is currently the only complete package resolver and realiser shipped
+with the CLI. Core-managed downloads, Roc packages, host requirements,
+named environments and tasks already work without it, including on Windows.
+Reusable predefined configurations can compose those features without
+selecting any package ecosystem. A future provider backed by Conda-forge,
+for example, could supply resolved environments on Windows and advertise
+the capabilities it supports; it need not own the whole pipeline or provide
+isolated builds to be useful.
+
+Representing Guix source intent does not mean a Guix executor
+has been implemented. Provider-neutral contracts and independent contract
+fixtures preserve the direction; a second complete implementation is the
+stronger integration proof. Source registration, resolution ownership and
+execution selection still need work before another full provider can be
+added through registration alone.
+
 [[terms]]
 == Terms
 
@@ -41,51 +88,31 @@ produces), *stages* (the steps that turn one kind of data into another) and
 |===
 | Term | Definition
 
-| *Blueprint*
-| The authored source: what the user _intends_.
+| *Blueprint* | The authored source: what the user _intends_.
 
-| *Spec*
-| The normalised, validated, provider-neutral form of a Blueprint. Every
-  stage after evaluation consumes it.
+| *Spec* | The normalised, validated, provider-neutral form of a Blueprint. Every stage after evaluation consumes it.
 
-| *Component*
-| One thing a Spec asks for: a package identity plus a version constraint.
+| *Component* | One thing a Spec asks for: a package identity plus a version constraint.
 
-| *Source*
-| A pinned universe that components are chosen from, such as a revision of a
-  package collection, a channel snapshot or a registry commit.
+| *Source* | A pinned universe that components are chosen from, such as a revision of a package collection, a channel snapshot or a registry commit.
 
-| *System*
-| A target platform: operating system, architecture and C library.
+| *System* | A target platform: operating system, architecture and C library.
 
-| *Lock*
-| The _decisions_: the exact pins chosen for each Source and Component, with
-  their digests and how they were verified.
+| *Lock* | The _decisions_: the exact pins chosen for each Source and Component, with their digests and how they were verified.
 
-| *Artifact*
-| Fetched bytes, identified by digest and never modified.
+| *Artifact* | Fetched bytes, identified by digest and never modified.
 
-| *Tree*
-| An unpacked, content-addressed artifact in a Store.
+| *Tree* | An unpacked, content-addressed artifact in a Store.
 
-| *Store*
-| The local collection of artifacts and trees on one machine.
+| *Store* | The local collection of artifacts and trees on one machine.
 
-| *Host facts*
-| What is observed about the machine rather than provided by Blueprint, such
-  as the system C library version, an installed platform toolchain or a
-  program a Blueprint says it expects to find there.
+| *Host facts* | What is observed about the machine rather than provided by Blueprint, such as the system C library version, an installed platform toolchain or a program a Blueprint says it expects to find there.
 
-| *Environment*
-| The realised set of trees and host facts for one shell on one System.
+| *Environment* | The realised set of trees and host facts for one shell on one System.
 
-| *Activation*
-| Data that describes how to enter an Environment: search-path and
-  environment-variable operations. It contains no shell text.
+| *Activation* | Data that describes how to enter an Environment: search-path and environment-variable operations. It contains no shell text.
 
-| *Report*
-| A derived, read-only view of committed data, such as a change summary, a
-  software bill of materials or an attestation.
+| *Report* | A derived, read-only view of committed data, such as a change summary, a software bill of materials or an attestation.
 |===
 
 Tool selections in a Spec may name a System. Evaluate records those selections
@@ -100,13 +127,17 @@ availability from a provider or the host.
 | Stage | Responsibility
 
 | *Evaluate* | Turn a Blueprint into a Spec, rejecting invalid intent.
-| *Resolve* | Decide exactly what to use and whether to trust it. This is the
-  _only_ stage that makes choices.
+
+| *Resolve* | Decide exactly what to use and whether to trust it. This is the _only_ stage that makes choices.
+
 | *Fetch* | Obtain the exact bytes the Lock names, and prove that they match.
+
 | *Realise* | Turn verified artifacts into trees and an Environment.
+
 | *Activate* | Describe how to enter the Environment, as data.
-| *Present* | Render an Activation for one consumer: a shell, CI, an editor, an
-  agent or a container.
+
+| *Present* | Render an Activation for one consumer: a shell, CI, an editor, an agent or a container.
+
 | *Inspect* | Derive Reports from Specs and Locks without touching a Store.
 |===
 
@@ -147,14 +178,14 @@ its data answers, how long that data lives, and which stages may change it.
 | Layer | Data | Question it answers | Lifetime | Changed by
 
 | *Intent* | Blueprint, Spec | What do we want? | committed | people
-| *Decision* | Lock, Sources | What exactly did we choose, and why do we trust
-  it? | committed, reviewed | Resolve only
-| *Materialisation* | Artifact, Tree, Store, Environment | What exists on this
-  machine? | disposable cache | Fetch, Realise
-| *Interface* | Activation, renderings | How is it used? | ephemeral |
-  Activate, Present
-| _Cross-cutting_ | Reports | What changed, and what is in it? | derived |
-  Inspect
+
+| *Decision* | Lock, Sources | What exactly did we choose, and why do we trust it? | committed, reviewed | Resolve only
+
+| *Materialisation* | Artifact, Tree, Store, Environment | What exists on this machine? | disposable cache | Fetch, Realise
+
+| *Interface* | Activation, renderings | How is it used? | ephemeral | Activate, Present
+
+| _Cross-cutting_ | Reports | What changed, and what is in it? | derived | Inspect
 |===
 
 The two committed layers, Intent and Decision, *are the protocol*. Everything
@@ -216,36 +247,61 @@ ones.
 [[stage-responsibilities]]
 === Stage responsibilities
 
-[cols="1,2,2,2,2,3",options="header"]
+[cols="1,2,2",options="header"]
 |===
-| Stage | Input | Output | Effects | Performed by | Must hold
+| Stage | Input | Output
 
-| Evaluate | Blueprint | Spec | none | configuration layer
-| Deterministic. No provider concepts outside namespaced hints.
+| Evaluate | Blueprint | Spec
 
-| Resolve | Spec, Sources, previous Lock | Lock | network reads, signature
-  checks | the Core for declared downloads; a resolver provider, planned by
-  the Core, for its Sources
-| The only stage that makes choices. Trust is recorded, never assumed.
+| Resolve | Spec, Sources, previous Lock | Lock
 
-| Fetch | Lock | Artifacts | network, Store writes | Core, with mirrors and
-  caches | Each artifact's digest equals the digest in the Lock.
+| Fetch | Lock | Artifacts
 
-| Realise | Artifacts, System, host facts | Trees, Environment | Store writes,
-  possibly process execution | the Core for what it fetched; a realiser
-  provider, planned by the Core, for an Environment that takes components
-  from its Sources
-| A function of its inputs only. No network access and no new choices.
+| Realise | Artifacts, System, host facts | Trees, Environment
 
-| Activate | Environment | Activation | none | Core or realiser provider
-| Produces data only, never shell text.
+| Activate | Environment | Activation
 
-| Present | Activation | a rendering | none, except running a command when
-  asked | presenter
-| Each presenter does its own escaping.
+| Present | Activation | a rendering
 
-| Inspect | one or more Specs and Locks | Report | none | inspector
-| Never reads a Store, so it works with every provider.
+| Inspect | one or more Specs and Locks | Report
+|===
+
+[cols="1,5",options="header"]
+|===
+| Stage | Effects and executor
+
+| Evaluate | *Effects:* none. *Performed by:* configuration layer.
+
+| Resolve | *Effects:* network reads, signature checks. *Performed by:* the Core for declared downloads; a resolver provider, planned by the Core, for its Sources.
+
+| Fetch | *Effects:* network, Store writes. *Performed by:* Core, with mirrors and caches.
+
+| Realise | *Effects:* Store writes, possibly process execution. *Performed by:* the Core for what it fetched; a realiser provider, planned by the Core, for an Environment that takes components from its Sources.
+
+| Activate | *Effects:* none. *Performed by:* Core or realiser provider.
+
+| Present | *Effects:* none, except running a command when asked. *Performed by:* presenter.
+
+| Inspect | *Effects:* none. *Performed by:* inspector.
+|===
+
+[cols="1,5",options="header"]
+|===
+| Stage | Must hold
+
+| Evaluate | Deterministic. Shared capabilities are neutral; provider selections and native data are explicitly scoped.
+
+| Resolve | The only stage that makes choices. Trust is recorded, never assumed.
+
+| Fetch | Each artifact's digest equals the digest in the Lock.
+
+| Realise | A function of its inputs only. No network access and no new choices.
+
+| Activate | Produces data only, never shell text.
+
+| Present | Each presenter does its own escaping.
+
+| Inspect | Never reads a Store, so it works with every provider.
 |===
 
 [[commands-as-flows]]
@@ -258,13 +314,14 @@ a stage of its own.
 |===
 | Kind of command | Flow
 
-| Update the pins | Evaluate, then Resolve. The new Lock is committed and
-  reviewed as a diff.
-| Enter, run in or build an environment | Evaluate, Fetch, Realise, Activate,
-  then Present. With a warm Store this works offline.
+| Update the pins | Evaluate, then Resolve. The new Lock is committed and reviewed as a diff.
+
+| Enter, run in or build an environment | Evaluate, Fetch, Realise, Activate, then Present. With a warm Store this works offline.
+
 | Check or describe a project | Evaluate, then Inspect.
-| Review a proposed change | Evaluate and Inspect on two revisions, a base and
-  a head.
+
+| Review a proposed change | Evaluate and Inspect on two revisions, a base and a head.
+
 | Audit what is used | Inspect the Lock.
 |===
 
@@ -275,43 +332,46 @@ These rules keep the model neutral and reproducible. A design that breaks one
 of them breaks the architecture.
 
 [[inv-1]]
-=== 1. Intent is neutral
+=== Invariant 1: Intent is neutral
 
-A Spec contains no provider concepts except inside namespaced hints.
+A Spec defines shared capability semantics independently of their provider's
+implementation. Explicit provider selections and source declarations say who
+supplies a capability. Native data stays in those scoped declarations or
+namespaced hints; it must not become a requirement imposed on other providers.
 
 [[inv-2]]
-=== 2. Only Resolve makes choices
+=== Invariant 2: Only Resolve makes choices
 
 Every later stage is a pure function of the Lock, the System and the host
 facts. This is Blueprint's reproducibility guarantee.
 
 [[inv-3]]
-=== 3. The Lock is the single source of truth and the trust boundary
+=== Invariant 3: The Lock is the single source of truth and the trust boundary
 
 * No later stage changes a pin, URL or digest.
 * Trust decisions happen during Resolve and are recorded in the Lock.
 * An update is always a visible, reviewable diff.
 
 [[inv-4]]
-=== 4. Content is immutable and verified before use
+=== Invariant 4: Content is immutable and verified before use
 
 Caches and mirrors are never trusted. Everything they return is checked
 against the Lock.
 
 [[inv-5]]
-=== 5. Materialisation is disposable
+=== Invariant 5: Materialisation is disposable
 
 Deleting a Store or an Environment loses nothing that the Lock cannot
 rebuild.
 
 [[inv-6]]
-=== 6. Host dependence is explicit
+=== Invariant 6: Host dependence is explicit
 
 Anything Blueprint does not provide is a declared host fact that Reports
 show. Nothing about the host is assumed silently.
 
 [[inv-7]]
-=== 7. Providers are pure
+=== Invariant 7: Providers are pure
 
 * Providers return steps, and the Core executes them.
 * A provider can cause only the effects the Core grants it.
@@ -320,18 +380,18 @@ show. Nothing about the host is assumed silently.
   ambient, such as a variable or what is installed, selects one.
 
 [[inv-8]]
-=== 8. Activation is data, and rendering happens last
+=== Invariant 8: Activation is data, and rendering happens last
 
 No stage before Present produces shell text.
 
 [[inv-9]]
-=== 9. Inspectors read only committed data
+=== Invariant 9: Inspectors read only committed data
 
 If a Report needs anything else, the Lock is incomplete, and the fix belongs
 in the Lock.
 
 [[inv-10]]
-=== 10. One codec, one versioning scheme
+=== Invariant 10: One codec, one versioning scheme
 
 * Spec, Lock and Activation share one codec and one set of major/minor
   compatibility rules.
@@ -341,27 +401,37 @@ in the Lock.
 [[coupling-test]]
 == The coupling test
 
-A new use case should need only a new provider or a new rendering. It should
-never change the Core or the committed data.
+Implementing an existing capability for another ecosystem should need a new
+provider, not a different meaning for the shared capability. A new consumer
+should need a rendering. Genuinely new shared semantics or host effects may
+require a versioned protocol or Core change; provider-specific formats stay
+behind the adapter boundary.
 
 [cols="2,2,1",options="header"]
 |===
-| Use case | What it needs | Core and Lock unchanged?
+| Use case | What it needs | Existing capabilities unchanged?
 
 | Developer shell | presenter | yes
+
 | CI system | presenter | yes
+
 | Editor or AI agent | presenter with machine-readable output | yes
+
 | Container or development container | presenter | yes
-| A new package ecosystem | resolver and realiser providers | yes
-| A machine with no package ecosystem installed | nothing: the Core fetches
-  declared downloads itself | yes
+
+| A new package ecosystem | resolver and realiser providers; explicit source registration | yes
+
+| A machine with no package ecosystem installed | nothing: the Core fetches declared downloads itself | yes
+
 | Remote execution | realiser provider | yes
+
 | Bill of materials or change review | inspector | yes
 |===
 
 A proposal breaks the architecture, and needs redesigning, if it requires any
 of these:
 
-* a provider-specific field outside hints, which breaks <<inv-1,invariant 1>>;
+* a provider's native detail imposed as a shared capability requirement,
+  which breaks <<inv-1,invariant 1>>;
 * a choice made after Resolve, which breaks <<inv-2,invariant 2>>;
 * an inspector that reads a Store, which breaks <<inv-9,invariant 9>>.

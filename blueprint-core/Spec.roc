@@ -26,7 +26,9 @@ Spec := {
 	expects : List({ environment : Str, programs : List(Str) }),
 	shells : List({ name : Str, environment : Str }),
 	tasks : List({ name : Str, environment : Str, run : List(Str) }),
+	source_files : List(SourceFile),
 	build_sources : List({ name : Str, ref : Str }),
+	build_files : List({ build : Str, paths : List(Str) }),
 	builds : List({ name : Str, environment : Str, inputs : List(Str), needs : List(Str), run : List(Str), output : Str }),
 	workflows : List(
 		{
@@ -99,9 +101,12 @@ Spec := {
 
 	## Non-flake locked inputs, distinct from package-provider sources.
 	BuildSource : { name : Str, ref : Str }
+	SourceFile : { name : Str, url : Str, sha256 : Str }
 
 	## Run is exact argv. Output is a relative file or directory path; dependencies
 	## expose only that artifact, separately from the writable project snapshot.
+	BuildFiles : { build : Str, paths : List(Str) }
+
 	Build : { name : Str, environment : Str, inputs : List(Str), needs : List(Str), run : List(Str), output : Str }
 
 	## Ordered declarations, not command strings or executor recipes.
@@ -115,10 +120,11 @@ Spec := {
 	Raw : { backend : Str, target : Str, value : Value }
 
 	current_format : Format
-	current_format = { major: 2, minor: 7 }
+	current_format = { major: 2, minor: 8 }
 
 	empty : Str -> Spec
 	empty = |name| Spec.{
+		source_files: [],
 		format: current_format,
 		name,
 		requires_: [],
@@ -136,6 +142,7 @@ Spec := {
 		shells: [],
 		tasks: [],
 		build_sources: [],
+		build_files: [],
 		builds: [],
 		workflows: [],
 		extensions: [],
@@ -157,6 +164,7 @@ Spec := {
 		wire = Sexpr.parse(text)?
 		Ok(
 			Spec.{
+				source_files: wire.source_files ?? [],
 				format: wire.format,
 				name: wire.name,
 				requires_: wire.requires_ ?? [],
@@ -174,6 +182,7 @@ Spec := {
 				shells: wire.shells ?? [],
 				tasks: wire.tasks ?? [],
 				build_sources: wire.build_sources ?? [],
+				build_files: wire.build_files ?? [],
 				builds: wire.builds ?? [],
 				workflows: wire.workflows ?? [],
 				extensions: wire.extensions ?? [],
@@ -203,7 +212,9 @@ Wire : {
 	expects : Try(List(Spec.Expects), [Missing]),
 	shells : Try(List(Spec.Shell), [Missing]),
 	tasks : Try(List(Spec.Task), [Missing]),
+	source_files : Try(List(Spec.SourceFile), [Missing]),
 	build_sources : Try(List(Spec.BuildSource), [Missing]),
+	build_files : Try(List(Spec.BuildFiles), [Missing]),
 	builds : Try(List(Spec.Build), [Missing]),
 	workflows : Try(List(Spec.Workflow), [Missing]),
 	extensions : Try(List(Spec.Extension), [Missing]),
@@ -250,7 +261,7 @@ expect {
 		environment_programs: [{ environment: "dev", programs: ["roc-stable", "tool"] }],
 		expects: [{ environment: "dev", programs: ["gh", "git"] }],
 	}
-	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 7 }
+	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 8 }
 }
 
 # A 2.6 record, as blueprint 0.5 printed it, has none of them.
@@ -330,3 +341,15 @@ expect Spec.parse(
 # A 2.7 program entry names its URLs as a list; one bare `url` is not it.
 expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (url \"https://example.test/a\") (unpack File) (path \"\")))))").is_err()
 expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a\" \"https://mirror.example.test/a\")) (unpack File) (path \"\")))))").map_ok(|spec| spec.programs.map(|program| program.urls)) == Ok([["https://example.test/a", "https://mirror.example.test/a"]])
+
+expect {
+	spec = { ..Spec.empty("selected"), requires_: ["build-files"], build_files: [{ build: "app", paths: [] }] }
+	Spec.parse(spec.to_str()) == Ok(spec)
+}
+
+# New top-level optional fields preserve old wire records; older consumers
+# reject the required feature instead of mistaking original files for trees.
+expect {
+	spec = { ..Spec.empty("original-file"), requires_: ["source-files"], source_files: [{ name: "upstream", url: "https://example.test/release.tar.xz", sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }] }
+	Spec.parse(spec.to_str()) == Ok(spec) and spec.unsupported_features([]) == ["source-files"]
+}

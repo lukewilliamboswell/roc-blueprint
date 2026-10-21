@@ -6,8 +6,8 @@ import cli.OsStr
 import cli.Path
 import cli.Stderr
 
-## Build commands for `blueprint __build-runner` when the suite runs it on the
-## host, where no environment supplies `roc-stable`. The suite builds this
+## Build commands for the versioned native runner when the suite runs it in a
+## private namespace, where no environment supplies `roc-stable`. The suite builds this
 ## program once and names it by absolute path.
 ##
 ##   runner_payload exit CODE          exit with that code
@@ -15,6 +15,7 @@ import cli.Stderr
 ##   runner_payload direct-out         write `$out` as well as the declared output
 ##   runner_payload replace-workspace  move the project copy and leave a link
 ##   runner_payload mark FILE          write FILE, then the declared output
+##   runner_payload cache              record the recipe's XDG_CACHE_HOME
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	result = match args.map(OsStr.display) {
@@ -23,6 +24,7 @@ main! = |args| {
 		["direct-out"] => direct_out!()
 		["replace-workspace"] => replace_workspace!()
 		["mark", file] => mark!(file)
+		["cache"] => Path.write_utf8!("recorded.txt", Env.var_str!("XDG_CACHE_HOME") ?? "unset")
 		_ => Err(Failed("unknown runner payload"))
 	}
 	match result {
@@ -53,7 +55,7 @@ direct_out! = || {
 replace_workspace! : () => Try({}, _)
 replace_workspace! = || {
 	Path.rename!(Env.cwd!()?, "../moved")?
-	Cmd.new("ln").args(["-s", "moved", "../blueprint-work"]).exec!()?
+	Cmd.new("ln").args(["-s", "moved", "../runner-work"]).exec!()?
 	Path.write_utf8!("../moved/output", "moved")
 }
 

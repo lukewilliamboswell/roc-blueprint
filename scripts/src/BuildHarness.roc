@@ -623,7 +623,7 @@ start! = |root_path, name| {
 	BuildHarness.link!("${caller_cache}/nix", "${cache}/nix")?
 
 	search = Env.var!("PATH") ?? OsStr.from_str("")
-	replaced = ["NO_COLOR", "NIX_CONFIG", "ROC", "PATH", "XDG_CACHE_HOME", "NIX_RECORDER_EVENTS", "NIX_RECORDER_REAL"].map(OsStr.from_str)
+	replaced = ["NO_COLOR", "NIX_CONFIG", "ROC", "PATH", "XDG_CACHE_HOME", "NIX_RECORDER_EVENTS", "NIX_RECORDER_REAL", "NIX_RECORDER_ONLINE"].map(OsStr.from_str)
 	inherited = Env.dict!().keep_if(|(variable, _)| !OsStr.display(variable).starts_with("BLUEPRINT_") and !replaced.contains(variable))
 	# Remote builders would invalidate a host-local isolation proof.
 	nix_config = "${Env.var_str!("NIX_CONFIG") ?? ""}\nbuilders =\n"

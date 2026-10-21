@@ -62,6 +62,9 @@ complete file with the current URL.
 | `Source(InputName, FlakeRef)`
 | Locked non-flake input, e.g. `Source("assets", "path:./assets")`.
 
+| `SourceFile(InputName, Url, Str)`
+| Original file pinned by its published SHA-256 (64 lowercase hexadecimal characters). `Inputs` exposes the unchanged file. See xref:builds.adoc#original-files-with-published-hashes[original file sources].
+
 | `Build(InputName, List(BuildSetting))`
 | Sandboxed artifact with required `Use`, exact argv `Run`, relative `Output`; optional `Inputs` and `Needs`.
 
@@ -288,20 +291,11 @@ different programs are named roc-stable`.
 
 === What is checked, and when
 
-[cols="2,5",options="header"]
-|===
-| When
-| What
+*`roc check`, in an editor or on the command line:* Each text, as what it is where it is written: a system is `<arch>-<os>` of a known architecture and operating system, in a `match` pattern and beside `==` too; a URL is `+https://<host>/<path>+` with no credentials, query or fragment; the path of a program in an archive is relative and not a URL, so the two cannot change places; a nightly tag has its form; a template has only its three placeholders. Then the whole configuration: a program name is a plain file name, one name is only one of a program, an expected tool and a `Command` in an environment, no URL is listed twice for one download, and every program exists for at least one declared system.
 
-| `roc check`, in an editor or on the command line
-| Each text, as what it is where it is written: a system is `<arch>-<os>` of a known architecture and operating system, in a `match` pattern and beside `==` too; a URL is `+https://<host>/<path>+` with no credentials, query or fragment; the path of a program in an archive is relative and not a URL, so the two cannot change places; a nightly tag has its form; a template has only its three placeholders. Then the whole configuration: a program name is a plain file name, one name is only one of a program, an expected tool and a `Command` in an environment, no URL is listed twice for one download, and every program exists for at least one declared system.
+*`blueprint update`:* That every download exists, by downloading it or by taking the digest its release publishes; and, where both are to be had, that they agree. See xref:commands.adoc#what-update-needs-and-records[What update needs and records].
 
-| `blueprint update`
-| That every download exists, by downloading it or by taking the digest its release publishes; and, where both are to be had, that they agree. See xref:commands.adoc#what-update-needs-and-records[What update needs and records].
-
-| `blueprint run`, `shell` and `workflow`
-| That `Blueprint.lock` holds the program for this system under the URLs `Blueprint.roc` now gives; that every expected tool is on `PATH`; then that the download has the recorded length and SHA-256, on every use; that an archive holds nothing that leaves the directory it is unpacked in; and that the program is in it.
-|===
+*`blueprint run`, `shell` and `workflow`:* That `Blueprint.lock` holds the program for this system under the URLs `Blueprint.roc` now gives; that every expected tool is on `PATH`; then that the download has the recorded length and SHA-256, on every use; that an archive holds nothing that leaves the directory it is unpacked in; and that the program is in it.
 
 A program whose URLs changed since the lock was written is stale by itself:
 the message names it, and `blueprint update <name>` resolves it alone.

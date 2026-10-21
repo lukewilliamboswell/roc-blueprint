@@ -1,6 +1,8 @@
 = Run blueprint
 
-Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
+Run project commands in the directory containing `Blueprint.roc`, or set
+`BLUEPRINT_ROOT`. `compiler-version` works in any directory. `lock show` needs
+only a committed lock, and works even when `Blueprint.roc` is absent or invalid.
 
 [cols="3,5",options="header"]
 |===
@@ -34,15 +36,47 @@ Run these in the directory containing `Blueprint.roc`, or set `BLUEPRINT_ROOT`.
 | `blueprint requirements [--json] [TASK...]`
 | Say what the named tasks need, or every task: a provider, fetched programs, tools of the machine. See <<what-tasks-need>>
 
+| `blueprint lock show [--json] [NAME...]`
+| Read committed pins and per-entry content identities without evaluating the project. See <<inspect-committed-pins>>
+
 | `blueprint check`
 | Run the compiler check and validate all shell/task/build environments without requiring a lock
 
 | `blueprint spec` / `blueprint flake`
 | Print the Spec or the generated flake
 
+| `blueprint compiler-version`
+| Print the exact Roc release tag bundled with this Blueprint binary, for automation
+
 | `blueprint --help`
 | Project help; subcommand help lists tasks, aliases and builds
 |===
+
+== Align an automation compiler
+
+`blueprint compiler-version` prints one release tag and a newline, with no
+labels or colour. It reports this binary's pinned compiler even when `ROC`
+or `PATH` selects another executable. It works offline without a project,
+configuration evaluation, compiler installation or cache writes. Native smoke
+tests run the actual bundled `roc version` and require it to match this tag
+on every released system.
+
+A CI check or commit hook can compare an installed automation compiler:
+
+[source,sh]
+----
+test "$(roc-stable version)" = \
+  "Roc compiler version $(blueprint compiler-version)"
+----
+
+A project can also compare its committed compiler pin with the reported tag
+before installing tools. Keep upgrades explicit: align that pin when the
+project's automation is ready for the new compiler.
+
+When a project fetches the same nightly with `Recipes.roc_nightly`, it can
+reuse the compiler archive Blueprint installed in its store. Matching tags
+does not make an independently installed `roc-stable`, such as a Nix package,
+reuse Blueprint's cached executable.
 
 == What a run does, in order
 
@@ -161,10 +195,127 @@ holds `"nix"` for the tasks a job runs:
 blueprint requirements --json check | jq -e '.providers | index("nix")'
 ----
 
+== Inspect committed pins
+
+`blueprint lock show` reads only `Blueprint.lock`. It does not evaluate
+`Blueprint.roc`, check freshness against declarations, invoke Roc or Nix,
+access the network, or write generated files or caches. `BLUEPRINT_ROOT` and
+`BLUEPRINT_LOCK` select the project directory and lock path as usual; other
+workspace, target and compiler settings have no effect. It reports committed
+authority even when a working configuration has changed. Run `blueprint gen`
+when you need the ordinary freshness checks.
+
+The stable S-expression lock remains the authority and is directly readable
+through `core.Lock`. The optional JSON projection gives Python, `jq`, Nix and
+other consumers public provider-qualified identities, digest kinds and native
+metadata without decoding private provider hints. See
+xref:lock-snapshot.adoc#choose-the-authority-or-its-public-projection[Choose the authority or its public projection]
+for when to use each interface and the projection's compatibility boundary.
+
+Names select package sources, inputs, overlays, build sources, or fetched
+programs. With no names, every entry is included. A program name selects all
+its systems. Unknown names, unreadable locks, unsupported lock major versions
+and inconsistent provider pins fail with nonzero status and no report on
+stdout. Diagnostics go to stderr. Output order follows the lock; use the
+per-entry identity when fingerprinting a dependency, rather than the output
+bytes or whole lock.
+
+`--json` emits one JSON object followed by a newline. Its `format` is `1`,
+independent of the lock's own format. Every field listed here is present; a
+change a reader of format 1 could misread gets another number. Readers should
+check `format`, accept extra fields and treat ordering as insignificant.
+
+[source,json]
+----
+{
+  "format": 1,
+  "sources": {
+    "nix": {
+      "name": "nix",
+      "provider": "nix",
+      "ref": "github:NixOS/nixpkgs/nixos-unstable",
+      "rev": "4975466d324710c576dc11ad614684e6bd8cad8e",
+      "digest": "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5",
+      "digestKind": "tree",
+      "flatSha256": null,
+      "identity": "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5",
+      "metadata": {
+        "nix": {
+          "fetchTree": {
+            "type": "github",
+            "owner": "NixOS",
+            "repo": "nixpkgs",
+            "rev": "4975466d324710c576dc11ad614684e6bd8cad8e",
+            "narHash": "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=",
+            "lastModified": 1790185690
+          }
+        }
+      }
+    }
+  },
+  "fetched": []
+}
+----
+
+[cols="1,4",options="header"]
+|===
+| Field
+| Meaning
+
+| `sources`
+| Object keyed by the declared source name, covering package sources, inputs, overlays and build sources.
+
+| `sources.NAME.name`, `provider`, `ref`, `rev`, `digest`
+| The source fields recorded in the lock. `rev` is empty when absent. `digest` is the existing provider content digest; prefer `identity` for fingerprinting because aliases may have an empty recorded digest.
+
+| `sources.NAME.identity`
+| Per-entry pinned content identity, opaque outside the named provider. Compare identities together with `provider`; unknown providers retain their recorded digest. For Nix and core file sources the identity is `sha256:<hex>`. Nix remote entries use the decoded NAR hash, local entries the recorded Blueprint tree digest, and follows entries their resolved target's identity. It is independent of names, mutable reference spelling, tasks, other entries, provider graph node names, and lock format minor versions. Unrelated updates and adding/removing tasks cannot change it. For trees it identifies the full source tree, including when a flake selects a subdirectory within that tree. For `SourceFile`, it identifies the unchanged original file bytes.
+
+| `sources.NAME.digestKind`, `flatSha256`
+| `digestKind` is `"file"`, `"tree"`, or `"unknown"`. Providers establish the kind; an unrecognized provider is never assumed to describe a tree. `flatSha256` is the original file hash as 64 lowercase hexadecimal characters for core `SourceFile` entries, and `null` for all other sources. Core file sources have `provider: "file"`, their URL in `ref`, an empty `rev`, and empty `metadata`; their content identity is the original-file digest.
+
+| `sources.NAME.metadata`
+| All adapter-supplied typed metadata, namespaced by provider name. Consumers may use only fields whose provider-specific contract they understand. Unknown provider entries retain their recorded identity and have empty metadata. Duplicate metadata keys are refused, including nested keys.
+
+| `sources.NAME.metadata.nix.fetchTree`
+| For a remote Nix tree source, the exact locked fetch attributes, with string `type`, `owner`/`repo` or `url`, optional `rev` and numeric `lastModified`, `narHash`, and any applicable locked fetch flags or host metadata. No registry resolution or defaults are inserted. The flake-only `dir` selection is omitted because it is not a `builtins.fetchTree` argument. It is omitted for local paths; other providers define their own metadata. Local paths require a project location and Blueprint's tree verification.
+
+| `fetched`
+| Array of program entries. Each has string `name`, `system`, `sha256`, `identity`, array of string `urls`, integer `size` (download bytes), and string `obtained` (`computed`, `published`, `both`, or `unstated`). `identity` is `sha256:` followed by the download hash. URL or provenance changes do not change byte identity.
+|===
+
+An external producer can save a named pin without parsing Blueprint's lock:
+
+[source,sh]
+----
+blueprint lock show --json nix > locked-input.json
+----
+
+A Nix expression can consume that JSON directly:
+
+[source,nix]
+----
+let
+  locked = builtins.fromJSON (builtins.readFile ./locked-input.json);
+  pin = assert locked.format == 1; locked.sources.nix;
+  nixpkgs = builtins.fetchTree pin.metadata.nix.fetchTree;
+in import nixpkgs.outPath { }
+----
+
+The inspector itself is offline; evaluating `builtins.fetchTree` may fetch the
+source if Nix does not already have it. Use `sources.nix.identity` as the
+producer's input fingerprint so an unrelated `roc-stable` update does not
+invalidate the producer's artifacts.
+
 == What update needs and records
 
 `blueprint update` is the one command that decides what a project uses. It
 writes the whole lock or nothing.
+
+Pure Roc consumers can import the official `core.LockSnapshot` module from
+this release's existing core bundle. See
+xref:lock-snapshot.adoc#consume-lock-inspection-in-roc[Consume lock inspection in pure Roc]
+for typed parsing, lookups, metadata and the offline schema/profile.
 
 === Without Nix, and with it
 

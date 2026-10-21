@@ -1,4 +1,4 @@
-## `blueprint`: turns a `Blueprint.roc` into a working Nix environment.
+## `blueprint`: turns a `Blueprint.roc` into a reproducible development environment.
 ##
 ## The Roc compiler validates `Blueprint.roc` and prints the blueprint Spec;
 ## this CLI consumes pure plans and owns file/process effects. Only explicit
@@ -35,11 +35,15 @@ import Download
 import Paths
 import Published
 import Store
+import LockReport
+import BuildReport
+import ProviderContractTest
 import nix.NixProvider
 import "compiler-version" as compiler_version : Str
+import "compiler-archive" as compiler_archive : List(U8)
 
 version : Str
-version = "0.6.0"
+version = "0.7.0"
 
 ## The providers a request may be planned with. This is the only reference to
 ## a concrete provider: everything else uses the Provider contract
@@ -55,10 +59,12 @@ provider_names : Str
 provider_names = Str.join_with(providers.map(|provider| provider.name), ", ")
 
 Command : [
+	CompilerVersion,
+	LockShow({ json : Bool, names : List(Str) }),
 	Gen,
 	Shell(Str),
 	Run({ task : Str, args : List(Str) }),
-	Build(Str),
+	Build({ name : Str, json : Bool, rebuild : Bool }),
 	Workflow(Str),
 	Tasks,
 	Update(List(Str)),
@@ -85,19 +91,12 @@ cli_for = |loaded| {
 		{ name: "run", description: "Run a task in its environment", mapper: |r| Run(r) },
 	)
 	generic_build_cmd = SubCmd.finish(
-		Cli.map(
-			Param.str({
-				name: "name",
-				help: "The artifact to build.",
-				default: NoDefault,
-			}),
-			|name| Build(name),
-		),
 		{
-			name: "build",
-			description: "Build a sandboxed artifact and its dependencies",
-			mapper: |c| c,
-		},
+			json: Opt.flag({ short: "", long: "json", help: "Emit versioned build provenance as JSON." }),
+			rebuild: Opt.flag({ short: "", long: "rebuild", help: "Rebuild the same locked recipe and fail if its output differs." }),
+			target: Param.str({ name: "name", help: "The artifact to build.", default: NoDefault }),
+		}.Cli,
+		{ name: "build", description: "Build a sandboxed artifact and its dependencies", mapper: |options| Build({ name: options.target, json: options.json, rebuild: options.rebuild }) },
 	)
 	update_cmd = SubCmd.finish(
 		Cli.map(
@@ -105,6 +104,18 @@ cli_for = |loaded| {
 			|names| Update(names),
 		),
 		{ name: "update", description: "Update Blueprint.lock: the latest inputs, and the digests of fetched programs", mapper: |c| c },
+	)
+	lock_cmd = SubCmd.finish(
+		SubCmd.required([
+			SubCmd.finish(
+				{
+					json: Opt.flag({ short: "", long: "json", help: "Print the versioned JSON lock report." }),
+					names: Param.str_list({ name: "names", help: "Locked sources or programs; all when omitted." }),
+				}.Cli,
+				{ name: "show", description: "Inspect committed pins without evaluating Blueprint.roc", mapper: |r| LockShow(r) },
+			),
+		]),
+		{ name: "lock", description: "Read committed pins without evaluating the project", mapper: |c| c },
 	)
 	requirements_cmd = SubCmd.finish(
 		{
@@ -124,18 +135,16 @@ cli_for = |loaded| {
 		Ok(spec) if !spec.builds.is_empty() => SubCmd.finish(
 			SubCmd.required(
 				spec.builds.map(
-					|build| SubCmd.empty({
-						name: build.name,
-						description: "${build.output} [${build.environment}]",
-						value: Build(build.name),
-					}),
+					|build| SubCmd.finish(
+						{
+							json: Opt.flag({ short: "", long: "json", help: "Emit versioned build provenance as JSON." }),
+							rebuild: Opt.flag({ short: "", long: "rebuild", help: "Rebuild the same locked recipe and fail if its output differs." }),
+						}.Cli,
+						{ name: build.name, description: "${build.output} [${build.environment}]", mapper: |options| Build({ name: build.name, json: options.json, rebuild: options.rebuild }) },
+					),
 				),
 			),
-			{
-				name: "build",
-				description: "Build a sandboxed artifact and its dependencies",
-				mapper: |c| c,
-			},
+			{ name: "build", description: "Build a sandboxed artifact and its dependencies", mapper: |c| c },
 		)
 		_ => generic_build_cmd
 	}
@@ -174,6 +183,7 @@ cli_for = |loaded| {
 	Cli.assert_valid(
 		Cli.finish(
 			SubCmd.optional([
+				SubCmd.empty({ name: "compiler-version", description: "Print the bundled Roc compiler release tag", value: CompilerVersion }),
 				SubCmd.empty({
 					name: "gen",
 					description: "Generate the Nix files from the lock (the default)",
@@ -185,6 +195,7 @@ cli_for = |loaded| {
 				workflow_cmd,
 				SubCmd.empty({ name: "tasks", description: "List the tasks", value: Tasks }),
 				update_cmd,
+				lock_cmd,
 				requirements_cmd,
 				SubCmd.empty({ name: "check", description: "Validate Blueprint.roc", value: Check }),
 				SubCmd.empty({ name: "spec", description: "Print the Spec", value: PrintSpec }),
@@ -231,13 +242,13 @@ task_choice = |task|
 
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |raw_args| {
-	# A sandboxed build runs this executable as its builder. There is no
-	# Blueprint.roc or compiler there, so dispatch before loading either.
-	match raw_args {
-		[first, .. as rest] if first.to_bytes() == "__build-runner".to_utf8() => return build_runner!(rest)
-		_ => {}
+	# These inspectors must parse before project paths, configuration, host or
+	# compiler overrides are observed. LockShow selects only its lock path.
+	independent_query = match raw_args {
+		[first, ..] => first.to_bytes() == "compiler-version".to_utf8() or first.to_bytes() == "lock".to_utf8()
+		_ => False
 	}
-	context = context!()
+	context = if (independent_query) Err(NoBlueprint) else context!()
 	loaded = match context {
 		Ok(ctx) => evaluate!(ctx)
 		Err(err) => Err(err)
@@ -261,16 +272,20 @@ main! = |raw_args| {
 }
 
 run! = |command, loaded, context| {
-	ctx = context?
 	match command {
-		Check => check!(loaded, ctx)
+		LockShow({ json, names }) => inspect_lock!(json, names)
+		CompilerVersion => Stdout.line!(compiler_version.trim())
+		Check => check!(loaded, context?)
 		_ => {
+			ctx = context?
 			spec = loaded?
 			match command {
+				LockShow({ json, names }) => inspect_lock!(json, names)
+				CompilerVersion => Stdout.line!(compiler_version.trim())
 				Gen => realise!(spec, Request.Generate, ctx)
 				Shell(name) => realise!(spec, Request.Shell(name), ctx)
 				Run({ task, args }) => realise!(spec, Request.Run(task, args), ctx)
-				Build(name) => realise!(spec, Request.Build(name), ctx)
+				Build(options) => realise!(spec, Request.Build(options.name), { ..ctx, build_json: options.json, rebuild: options.rebuild })
 				Workflow(name) => realise!(spec, Request.Workflow(name), ctx)
 				Tasks => list_tasks!(spec)
 				Update(names) => resolve!(spec, names, ctx)
@@ -281,6 +296,17 @@ run! = |command, loaded, context| {
 			}
 		}
 	}
+}
+
+## This path intentionally avoids Context, host probing and project evaluation.
+inspect_lock! = |json, names| {
+	cwd = Paths.portable(Env.cwd!()?.to_str()?)
+	root = Paths.resolve(cwd, Env.var_str!("BLUEPRINT_ROOT") ?? cwd)
+	file = Paths.resolve(root, Env.var_str!("BLUEPRINT_LOCK") ?? "Blueprint.lock")
+	text = path(file).read_utf8!()?
+	lock = Lock.parse(text).map_err(|_| LockFailed("unsupported or malformed Blueprint.lock"))?
+	report = LockReport.render(lock, names, json, providers).map_err(|message| LockFailed(message))?
+	Stdout.write!(report)
 }
 
 ## Type-check Blueprint.roc (including whole-config validation), then reuse
@@ -428,8 +454,8 @@ print_files! = |spec| {
 ## Probe identity before evaluating config with the selected compiler.
 ## A relative ROC executable belongs to the invocation directory, not root.
 ## An explicit ROC must be the compatible compiler. Otherwise a compatible
-## `roc` on PATH is used, and failing that the release this executable records
-## a download of is kept in the store, by its digest. No provider is asked:
+## `roc` on PATH is used, and failing that the compiler archive embedded in
+## this executable is kept in the store, by its digest. No provider is asked:
 ## reading a Blueprint.roc needs none installed.
 roc! : Context => Try(Str, _)
 roc! = |_ctx| {
@@ -466,13 +492,13 @@ roc! = |_ctx| {
 			system = host_system!()?
 			program = Bootstrap.compiler(tag, system)
 				.map_err(|_| CompilerFailed("this blueprint records no download of Roc ${tag} for ${system}"))?
-			store = Store.root!().map_err(|message| CompilerFailed("could not fetch Roc ${tag}: ${message}"))?
-			Store.program!(store, program, BuiltIn).map_err(|message| CompilerFailed("could not fetch Roc ${tag}: ${message}"))
+			store = Store.root!().map_err(|message| CompilerFailed("could not install embedded Roc ${tag}: ${message}"))?
+			Store.embedded_program!(store, program, compiler_archive).map_err(|message| CompilerFailed("could not install embedded Roc ${tag}: ${message}"))
 		}
 	}
 }
 
-Context : { layout : Layout, target : Str }
+Context : { layout : Layout, target : Str, build_json : Bool, rebuild : Bool, build_sources : List(Lock.Source) }
 
 ## Caller paths are observations, resolved once against the selected root.
 context! : () => Try(Context, _)
@@ -502,6 +528,9 @@ context! = || {
 		),
 	)
 	Ok({
+		build_json: False,
+		rebuild: False,
+		build_sources: [],
 		layout: Layout.{
 			project_root: root,
 			workspace,
@@ -549,8 +578,7 @@ host_target! = || host_system!() ?? "x86_64-linux"
 host_system! : () => Try(Str, [UnsupportedHost])
 host_system! = || supported_host(Env.platform!())
 
-## A build runs this executable as its builder, so it must be built for the
-## System the build runs on.
+## Runtime namespace authorization is local to one kernel and system.
 runner_host : Try(Str, [UnsupportedHost]), Str -> Try({}, _)
 runner_host = |host, system|
 	if host == Ok(system) {
@@ -558,7 +586,7 @@ runner_host = |host, system|
 	} else {
 		Err(
 			Refused(
-				"sandboxed builds run blueprint itself as their builder, so "
+				"sandboxed builds verify isolation on the local kernel, so "
 					.concat("blueprint must run on ${system}; this host is ")
 					.concat(host ?? "unsupported"),
 			),
@@ -570,36 +598,6 @@ expect
 	[Ok("aarch64-linux"), Ok("x86_64-darwin"), Ok("aarch64-darwin"), Err(UnsupportedHost)].all(
 		|host| runner_host(host, "x86_64-linux").is_err(),
 	)
-
-## A path a provider can place in generated text without inspecting it.
-plain_path : Str -> Bool
-plain_path = |value|
-	value.starts_with("/")
-		and Paths.normalize(value) == value
-		and !value.to_utf8().any(
-			|byte| byte < 32 or byte == 127 or byte == '"' or byte == '\\' or byte == '$',
-		)
-
-expect plain_path("/nix/store/abc-blueprint/bin/.blueprint-wrapped")
-expect plain_path("/home/user name/bin/blueprint")
-expect
-	["blueprint", "/a/../b", "/a\"b", "/a\\b", "/a\${b}", "/a\nb", ""].all(
-		|value| !plain_path(value),
-	)
-
-## This executable's own path, for a build that runs on `system`.
-runner_executable! : Str => Try(Str, _)
-runner_executable! = |system| {
-	runner_host(host_system!(), system)?
-	executable = Env.exe_path!()
-		.map_err(|_| Refused("cannot locate the blueprint executable to run builds"))?
-	text = executable.to_str()
-		.map_err(|_| Refused("blueprint cannot run builds from ${executable.display()}"))?
-	if !plain_path(text) {
-		return Err(Refused("blueprint cannot run builds from ${text}"))
-	}
-	Ok(text)
-}
 
 ## Refuse destination/source aliases before touching caller-owned files.
 safe_path! : Str => Try({}, _)
@@ -734,289 +732,10 @@ namespace! = |name| {
 	Ok(identity)
 }
 
-## What the provider's build derivation passes to `blueprint __build-runner`.
-## `readlink`, `chmod` and `ln` are absolute programs: a build has no implicit
-## PATH. Only a build whose environment has Roc packages names them and `ln`.
-BuildSpec : {
-	project : Str,
-	argv : List(Str),
-	output : Str,
-	path : Str,
-	inputs : Str,
-	artifacts : Str,
-	readlink : Str,
-	chmod : Str,
-	roc_packages : Try(List(RocPackage), [Missing]),
-	ln : Try(Str, [Missing]),
-}
-
-## A released Roc bundle: the content hash Roc looks for in its package cache
-## and the directory holding the unpacked bundle.
-RocPackage : { name : Str, path : Str }
-
-## The builder of a sandboxed build: exact argv and one contained,
-## symlink-free output. The specification is the given file, or the one the
-## derivation passes as `blueprintSpecPath`.
-build_runner! : List(OsStr) => Try({}, [Exit(I32)])
-build_runner! = |args| {
-	result = match args {
-		[] =>
-			match Env.var!(OsStr.from_str("blueprintSpecPath")) {
-				Ok(file) => run_build!(Path.from_os_str(file))
-				Err(_) => Err(Invalid("missing build specification"))
-			}
-
-		[file] => run_build!(Path.from_os_str(file))
-		_ => Err(Invalid("expected one build specification"))
-	}
-	match result {
-		Ok({}) => Ok({})
-		Err(Exited(code)) => Err(Exit(code))
-		Err(Invalid(message)) => {
-			_ = Stderr.line!("blueprint build: ${message}")
-			Err(Exit(1))
-		}
-		Err(other) => {
-			_ = Stderr.line!("blueprint build: ${Str.inspect(other)}")
-			Err(Exit(1))
-		}
-	}
-}
-
-run_build! : Path => Try({}, _)
-run_build! = |file| {
-	text = file.read_utf8!()?
-	# Nothing else, not even reading the rest of the specification, precedes
-	# the isolation check.
-	require_isolation!(text)?
-	parsed : Try(BuildSpec, _)
-	parsed = Json.parse(text)
-	spec = parsed.map_err(|_| Invalid("invalid build specification"))?
-	source = path(spec.project)
-	safe_tree!(source)?
-	check_inputs!(spec.readlink, path(spec.inputs))?
-	top = Env.cwd!()?
-	work = top.join("blueprint-work")
-	work.create_dir!()?
-	copy_tree!(source, work)?
-	# Store files are read-only; the project copy is the build's to change.
-	native_command!(OsStr.from_str(spec.chmod)).args(["-R", "u+w", "--"].map(OsStr.from_str)).arg(work.to_os_str()).exec!()?
-	home = top.join("blueprint-home")
-	home.create_dir!()?
-	cache = roc_build_cache!(spec.roc_packages, spec.ln, top)?
-	match spec.argv {
-		[] => return Err(Invalid("empty build command"))
-		[program, .. as rest] => {
-			# A bare program name resolves against the PATH given here.
-			base = native_command!(OsStr.from_str(program)).args(rest.map(OsStr.from_str)).cwd(work)
-				.env(OsStr.from_str("PATH"), OsStr.from_str(spec.path))
-				.env(OsStr.from_str("HOME"), home.to_os_str())
-				.env(OsStr.from_str("BLUEPRINT_INPUTS"), OsStr.from_str(spec.inputs))
-				.env(OsStr.from_str("BLUEPRINT_ARTIFACTS"), OsStr.from_str(spec.artifacts))
-			# Only the user command sees the cache, and only when there is one.
-			command = match cache {
-				Private(directory) => base.env(OsStr.from_str("XDG_CACHE_HOME"), directory.to_os_str())
-				NoCache => base
-			}
-			ran = command.stdout(Inherit).stderr(Inherit).run!()
-			match ran {
-				Ok(Cmd.Output.{ status: Exited(0), .. }) => {}
-				Ok(Cmd.Output.{ status: Exited(code), .. }) => return Err(Exited(code))
-				Ok(Cmd.Output.{ status: Signaled(signal), .. }) => return Err(Exited(128 + signal))
-				Err(CmdErr(StartFailed(NotFound, _))) => return Err(Invalid("build command not found: ${program}"))
-				Err(CmdErr(StartFailed(err, _))) => return Err(Invalid("cannot run ${program}: ${Str.inspect(err)}"))
-				Err(_) => return Err(Invalid("cannot run ${program}"))
-			}
-		}
-	}
-	parts = output_parts(spec.output)?
-	if (work.is_sym_link!() ?? False) or !(work.is_dir!() ?? False) {
-		return Err(Invalid("build replaced the project workspace"))
-	}
-	# basic-cli has no no-follow open, so a build still running in the
-	# background could swap an entry between these checks and the copy.
-	var $depth = parts.len()
-	while $depth > 0 {
-		ancestor = work.join(Str.join_with(parts.take_first($depth), "/"))
-		if ancestor.is_sym_link!() ?? False {
-			return Err(Invalid("symlink in declared output path: ${ancestor.display()}"))
-		}
-		$depth = $depth - 1
-	}
-	output = work.join(spec.output)
-	if !(output.exists!() ?? False) {
-		return Err(Invalid("declared output is missing: ${spec.output}"))
-	}
-	if !within(
-		output.canonicalize!()?.to_os_str().to_bytes(),
-		work.canonicalize!()?.to_os_str().to_bytes(),
-	) {
-		return Err(Invalid("declared output escapes the project workspace"))
-	}
-	safe_tree!(output)?
-	destination = Path.from_os_str(
-		Env.var!(OsStr.from_str("out")).map_err(|_| Invalid("the build has no $out"))?,
-	)
-	if (destination.is_sym_link!() ?? False) or (destination.exists!() ?? False) {
-		return Err(Invalid("build wrote directly to $out instead of declared Output"))
-	}
-	if output.is_dir!()? {
-		destination.create_dir!()?
-		copy_tree!(output, destination)
-	} else {
-		output.copy!(destination)?
-		Ok({})
-	}
-}
-
-## A build has no network, so Roc cannot download a package there. Give the
-## build a cache of its own holding its environment's locked bundles: Roc reads
-## `$XDG_CACHE_HOME/roc/packages/<hash>/main.roc` and does not download what it
-## finds. Links suffice, because the cache is discarded with the build
-## directory and the store cannot be collected while the build runs. basic-cli
-## cannot create a link itself.
-roc_build_cache! : Try(List(RocPackage), [Missing]), Try(Str, [Missing]), Path => Try([Private(Path), NoCache], _)
-roc_build_cache! = |declared, ln, top| {
-	bundles = declared ?? []
-	if bundles.is_empty() {
-		return Ok(NoCache)
-	}
-	program = ln.map_err(|_| Invalid("the build has Roc packages but no ln program"))?
-	cache = top.join("blueprint-cache")
-	directory = cache.join("roc").join("packages")
-	directory.create_all!()?
-	for bundle in bundles {
-		if !Project.valid_name(bundle.name) {
-			return Err(Invalid("invalid Roc package name: ${bundle.name}"))
-		}
-		if !(path(bundle.path).join("main.roc").is_file!() ?? False) {
-			return Err(Invalid("Roc package ${bundle.name} has no main.roc"))
-		}
-		native_command!(OsStr.from_str(program)).args(["-s", "--", bundle.path].map(OsStr.from_str))
-			.arg(directory.join(bundle.name).to_os_str())
-			.exec!()
-			.map_err(|_| Invalid("cannot link Roc package ${bundle.name}"))?
-	}
-	Ok(Private(cache))
-}
-
-## Reject Run even when the daemon ignores client sandbox flags: the build's
-## namespaces must both differ from those the caller observed for itself.
-require_isolation! : Str => Try({}, _)
-require_isolation! = |text| {
-	witness : Try({ isolation : { mnt : Str, net : Str } }, _)
-	witness = Json.parse(text)
-	caller = witness.map_err(|_| Invalid("${isolation_remedy} Missing caller namespace observations."))?.isolation
-	tools : Try({ readlink : Str }, _)
-	tools = Json.parse(text)
-	readlink = tools.map_ok(|parsed| parsed.readlink)
-	# Two calls, not a loop: this Roc nightly miscounts references when a loop
-	# body matches on a value from outside it.
-	require_namespace!(readlink, "mnt", caller.mnt)?
-	require_namespace!(readlink, "net", caller.net)
-}
-
-isolation_remedy : Str
-isolation_remedy =
-	"cannot verify build isolation; user Run was not executed. "
-		.concat("Enable sandbox = true and sandbox-fallback = false in the Nix ")
-		.concat("daemon configuration and use a local Linux sandbox with /proc.")
-
-require_namespace! : Try(Str, _), Str, Str => Try({}, _)
-require_namespace! = |readlink, name, observed| {
-	if !valid_namespace(name, observed) {
-		return Err(Invalid("${isolation_remedy} Invalid caller ${name} namespace."))
-	}
-	current = match readlink {
-		Ok(program) => observe_namespace!(program, name)
-		Err(_) => Err("no readlink program")
-	}
-		.map_err(|reason| Invalid("${isolation_remedy} Cannot read build ${name} namespace: ${reason}"))?
-	if !valid_namespace(name, current) {
-		return Err(Invalid("${isolation_remedy} Invalid build ${name} namespace."))
-	}
-	if current == observed {
-		return Err(Invalid("${isolation_remedy} Build shares caller ${name} namespace."))
-	}
-	Ok({})
-}
-
-## A declared output is a relative path of plain names.
-output_parts : Str -> Try(List(Str), _)
-output_parts = |output| {
-	parts = output.split_on("/")
-	if parts.any(|part| part == "" or part == "." or part == "..") {
-		Err(Invalid("invalid declared relative output"))
-	} else {
-		Ok(parts)
-	}
-}
-
-expect output_parts("dist/my artifact") == Ok(["dist", "my artifact"])
-expect
-	["", "/absolute", ".", "..", "./artifact", "dist/../escape", "dist//file", "dist/"].all(
-		|output| output_parts(output) == Err(Invalid("invalid declared relative output")),
-	)
-
-## Reject links and special files anywhere in a tree, by raw entry names.
-safe_tree! : Path => Try({}, _)
-safe_tree! = |entry|
-	match entry.type!()? {
-		IsSymLink => Err(Invalid("symlink is not allowed in build output/source: ${entry.display()}"))
-		IsDir => {
-			for child in entry.list!()? {
-				safe_tree!(child)?
-			}
-			Ok({})
-		}
-		IsFile => Ok({})
-		IsOther => Err(Invalid("special file is not allowed in build output/source: ${entry.display()}"))
-	}
-
-## Allow generated farm links, not symlinks within fetched source trees.
-check_inputs! : Str, Path => Try({}, _)
-check_inputs! = |readlink, farm| {
-	for entry in farm.list!()? {
-		if !(entry.is_sym_link!()?) {
-			return Err(Invalid("expected generated source link: ${entry.display()}"))
-		}
-		target = native_command!(OsStr.from_str(readlink)).args(["-n", "--"].map(OsStr.from_str)).arg(entry.to_os_str())
-			.run!().map_err(|err| Invalid(Str.inspect(err)))?.require_success()
-			.map_err(|_| Invalid("cannot read generated source link: ${entry.display()}"))?
-			.stdout_bytes
-		# Follow exactly the planner's farm link. safe_tree! rejects a symlink
-		# at the fetched root or anywhere beneath it, including remote inputs.
-		resolved = if target.first() == Ok('/') {
-			target
-		} else {
-			farm.to_os_str().to_bytes().append('/').concat(target)
-		}
-		safe_tree!(Path.unix_bytes(resolved))?
-	}
-	Ok({})
-}
-
 basename : List(U8) -> List(U8)
 basename = |bytes| bytes.fold([], |acc, byte| if (byte == '/') [] else acc.append(byte))
 
 expect basename("/project/src/main.roc".to_utf8()) == "main.roc".to_utf8()
-
-## Copy the directories and regular files of a tree safe_tree! accepted into
-## an existing directory, by raw entry names. Files keep their permissions.
-copy_tree! : Path, Path => Try({}, _)
-copy_tree! = |source, target| {
-	for entry in source.list!()? {
-		name = basename(entry.to_os_str().to_bytes())
-		copy = Path.unix_bytes(target.to_os_str().to_bytes().append('/').concat(name))
-		if entry.is_dir!()? {
-			copy.create_dir!()?
-			copy_tree!(entry, copy)?
-		} else {
-			entry.copy!(copy)?
-		}
-	}
-	Ok({})
-}
 
 ## The pure planner validates the entire request before any staging effects.
 realise! : Spec, Request, Context => Try({}, _)
@@ -1046,7 +765,7 @@ realise! = |spec, request, ctx| {
 	for step in steps.steps {
 		for operation in step.operations {
 			match operation {
-				Runner({ system, .. }) => runner_host(host_system!(), system)?
+				LocalSystem(system) => runner_host(host_system!(), system)?
 				_ => {}
 			}
 		}
@@ -1054,7 +773,15 @@ realise! = |spec, request, ctx| {
 	present!(steps.steps, request)?
 	fetched = fetch_programs!(steps.steps)?
 	for step in steps.steps {
-		execute_step!(step, fetched, ctx)?
+		used = match step.action {
+			Build(name) => {
+				artifact = step.artifacts.find_first(|item| item.name == name).map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
+				adapter = providers.find_first(|candidate| candidate.name == artifact.provider).map_err(|_| RenderFailed("unknown build provider: ${artifact.provider}"))?
+				(adapter.build_sources)(spec, name).map_err(|message| RenderFailed(message))?
+			}
+			_ => []
+		}
+		execute_step!(step, fetched, { ..ctx, build_sources: lock.sources.keep_if(|source| used.contains(source.name)) })?
 	}
 	Ok({})
 }
@@ -1135,18 +862,71 @@ fetch_programs! = |steps| {
 	Ok($fetched)
 }
 
+## Immutable provider bootstrap inputs can reuse the exact archive already
+## carried by this executable. A name, version label or URL alone never matches.
+source_is_embedded_compiler : Str, Str -> Bool
+source_is_embedded_compiler = |sha256, system| Bootstrap.compiler(compiler_version.trim(), system).map_ok(|program| program.sha256 == sha256) ?? False
+
+expect source_is_embedded_compiler("0821ea1a9772f921f0b4eb1cd400238abb59b0247db2810f0ea865426f782e9d", "x86_64-linux")
+expect !source_is_embedded_compiler("0821ea1a9772f921f0b4eb1cd400238abb59b0247db2810f0ea865426f782e9d", "aarch64-darwin")
+expect !source_is_embedded_compiler("different bytes", "x86_64-linux")
+
 ## One consumer-owned executor for standalone requests and workflow steps.
 ## All planning has succeeded, every expected program has been found and
 ## every fetched one is in the store before the first materialization or task
 ## effect.
 execute_step! : Steps.Step, List(Fetched), Context => Try({}, _)
 execute_step! = |step, fetched, ctx| {
+	# Refuse stale local trees before creating any caller-generated state.
+	for operation in step.operations {
+		match operation {
+			VerifyTree({ path: local, digest }) => {
+				safe_source!(local)?
+				if tree_digest!(local)? != digest {
+					return Err(LockFailed("local source ${local} changed; run `blueprint update`"))
+				}
+			}
+			_ => {}
+		}
+	}
+	isolation = step.operations.find_first(
+		|operation| match operation {
+			Isolation(_) => True
+			_ => False
+		},
+	)
+	match isolation {
+		Ok(Isolation({ directory, .. })) => {
+			safe_path!(directory)?
+			path(directory).create_all!()?
+			created = Env.create_temp_dir_in!(path(directory), "blueprint-isolation-")?
+			result = execute_prepared!(step, fetched, ctx, Paths.portable(created.to_str()?))
+			_ = created.delete_all!()
+			result
+		}
+		_ => execute_prepared!(step, fetched, ctx, "")
+	}
+}
+
+execute_prepared! : Steps.Step, List(Fetched), Context, Str => Try({}, _)
+execute_prepared! = |step, fetched, ctx, witness_directory| {
 	layout = ctx.layout
 	var $files = step.files
+	var $argv = step.argv
 	var $roc_bundles = []
 	var $programs = []
 	for operation in step.operations {
 		match operation {
+			SourceFile(source) => {
+				store = Store.root!().map_err(|message| FetchFailed(message))?
+				file = if source_is_embedded_compiler(source.sha256, host_system!() ?? "") {
+					Store.embedded_source_file!(store, source, compiler_archive).map_err(|message| FetchFailed(message))?
+				} else {
+					Store.source_file!(store, source).map_err(|message| FetchFailed(message))?
+				}
+				marker = "@blueprint-source-file-${source.sha256}@"
+				$files = $files.map(|entry| { ..entry, contents: entry.contents.replace_each(marker, Json.to_str(file)) })
+			}
 			VerifyTree({ path: local, digest }) => {
 				safe_source!(local)?
 				if tree_digest!(local)? != digest {
@@ -1157,23 +937,21 @@ execute_step! = |step, fetched, ctx| {
 					)
 				}
 			}
-			Isolation(placeholder) => {
+			Isolation({ placeholder, .. }) => {
 				mnt = namespace!("mnt")?
 				net = namespace!("net")?
-				$files = $files.map(
-					|file| {
-						..file,
-						contents: file.contents.replace_each(placeholder.mnt, mnt)
-							.replace_each(placeholder.net, net),
-					},
-				)
+				atomic_write!("${witness_directory}/witness", "${mnt}\n${net}\n")?
+				# Nix checks the source as its build user before mounting it. The
+				# owned parent permits traversal but no listing or other-user writes;
+				# the witness is readable even with a restrictive caller umask.
+				Cmd.new("chmod").args(["0444", "--", "${witness_directory}/witness"].map(OsStr.from_str)).exec!()?
+				Cmd.new("chmod").args(["0711", "--", witness_directory].map(OsStr.from_str)).exec!()?
+				$argv = $argv.map(|arg| arg.replace_each(placeholder, witness_directory))
 			}
-			Runner({ executable, system }) => {
-				own = runner_executable!(system)?
-				$files = $files.map(
-					|file| { ..file, contents: file.contents.replace_each(executable, own) },
-				)
+			LocalSystem(system) => {
+				runner_host(host_system!(), system)?
 			}
+
 			RocBundles(bundles) => {
 				$roc_bundles = $roc_bundles.concat(bundles)
 			}
@@ -1191,7 +969,7 @@ execute_step! = |step, fetched, ctx| {
 	stage!($files, layout)?
 	publish_roc_bundles!($roc_bundles, ctx)?
 	if $programs.is_empty() {
-		start!(step, [], "", layout)
+		start!({ ..step, argv: $argv }, [], "", ctx)
 	} else {
 		# The step's own directory of links, first on its PATH and gone when
 		# it ends, however it ends.
@@ -1206,7 +984,7 @@ execute_step! = |step, fetched, ctx| {
 			for program in $programs {
 				Store.expose!(bin, program.name, program.file).map_err(|message| FetchFailed(message))?
 			}
-			start!(step, $programs.map(|program| program.name), bin, layout)
+			start!({ ..step, argv: $argv }, $programs.map(|program| program.name), bin, ctx)
 		}
 		result = linked!()
 		_ = run.delete_all!()
@@ -1219,11 +997,12 @@ execute_step! = |step, fetched, ctx| {
 ## that is one of them is started from `bin` itself, whatever the caller's
 ## PATH would have found. A shell with no argv is the caller's own: `SHELL`,
 ## or `/bin/sh`.
-start! : Steps.Step, List(Str), Str, Layout => Try({}, _)
-start! = |step, names, bin, layout| {
+start! : Steps.Step, List(Str), Str, Context => Try({}, _)
+start! = |step, names, bin, ctx| {
+	layout = ctx.layout
 	directories = if (bin.is_empty()) [] else [bin]
 	match step.action {
-		Build(name) => report_build!(step, name, layout.project_root)
+		Build(name) => report_build!(step, name, ctx)
 		Shell(_) if step.argv.is_empty() => {
 			shell = match Env.var_str!("SHELL") {
 				Ok(value) if !value.is_empty() => value
@@ -1473,8 +1252,9 @@ copy_roc_package! = |source, target| {
 
 ## Resolve the selected installable with the exact planned build command.
 ## Dependency metadata stays descriptive; no store paths are guessed for it.
-report_build! : Steps.Step, Str, Str => Try({}, _)
-report_build! = |plan, name, root| {
+report_build! : Steps.Step, Str, Context => Try({}, _)
+report_build! = |plan, name, ctx| {
+	root = ctx.layout.project_root
 	for artifact in plan.artifacts {
 		Stderr.line!(
 			"building ${artifact.name}: ${artifact.installable} "
@@ -1483,11 +1263,19 @@ report_build! = |plan, name, root| {
 	}
 	artifact = plan.artifacts.find_first(|item| item.name == name)
 		.map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
-	match plan.argv {
+	adapter = providers.find_first(|candidate| candidate.name == artifact.provider).map_err(|_| RenderFailed("unknown build provider: ${artifact.provider}"))?
+	argv = (adapter.build_argv)(plan, { json: ctx.build_json, rebuild: ctx.rebuild }).map_err(|message| RenderFailed(message))?
+	match argv {
 		[program, .. as args] => {
 			result = native_command!(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(root))
 				.stderr(Inherit).capture!()?
-			Stdout.write!(result)?
+			reported = if ctx.build_json {
+				built = (adapter.build_result)(result).map_err(|message| RenderFailed(message))?
+				BuildReport.render(name, ctx.target, adapter.name, built, ctx.build_sources).map_err(|message| RenderFailed(message))?
+			} else {
+				result
+			}
+			Stdout.write!(reported)?
 			Stderr.line!(
 				"built ${artifact.name}: ${artifact.installable} -> "
 					.concat(result.trim()),
@@ -1640,7 +1428,7 @@ resolve! = |spec, names, ctx| {
 	safe_path!(layout.lock_path)?
 	prior = authority_token!(layout.lock_path)?
 	before = held!(layout)?
-	declared = Project.unique(spec.programs.map(|program| program.name))
+	declared = Project.unique(spec.programs.map(|program| program.name).concat(spec.source_files.map(|source| source.name)))
 	wanted = names.keep_if(|name| declared.contains(name))
 	others = names.keep_if(|name| !declared.contains(name))
 	several = Refused("several providers have pins to resolve for this project, and one lock holds those of one")
@@ -1677,7 +1465,15 @@ resolve! = |spec, names, ctx| {
 		_ => []
 	}
 	fetched = obtained!(Lock.refresh(spec.programs, known, if (names.is_empty()) All else Named(wanted)))?
-	lock = { ..pins, intent: Lock.intent_of(spec), fetched }
+	# A published flat hash is verified before authority is published. A source
+	# selected later uses the same pinned digest even with a fresh cache.
+	for source in spec.source_files {
+		if names.is_empty() or names.contains(source.name) {
+			_ = Store.source_file!(Store.root!().map_err(|message| FetchFailed(message))?, source).map_err(|message| FetchFailed(message))?
+		}
+	}
+	sources = pins.sources.keep_if(|source| source.provider != "file").concat(spec.source_files.map(Lock.file_pin))
+	lock = { ..pins, intent: Lock.intent_of(spec), fetched, sources }
 	path(Paths.parent(layout.lock_path)).create_all!()?
 	publish_authority!(layout.lock_path, prior, lock.to_str())?
 	# A new place downloads come from is what a reviewer of the lock should
@@ -1938,8 +1734,8 @@ describe = |err, provider|
 				.concat("not compiler host support")
 		CompilerFailed(message) =>
 			"could not execute the configuration compiler; "
-				.concat("Roc ${compiler_version.trim()} is fetched automatically, ")
-				.concat("or set ROC to its executable:\n${message}")
+				.concat("blueprint includes Roc ${compiler_version.trim()}; ")
+				.concat("set ROC to use another compatible executable:\n${message}")
 		# A message that already names the command is not told it twice.
 		LockFailed(message) => if (message.contains("blueprint update")) message else "${message}; use `blueprint update` to initialize or deliberately refresh pins"
 		OldLock => "Blueprint.lock was written by blueprint 0.5 or older, which gave every project a package source it did not declare; run `blueprint update` to resolve it again with this blueprint, and review what changes"
@@ -1965,3 +1761,78 @@ describe = |err, provider|
 		CommandFailed(argv, code) => "`${Str.join_with(argv, " ")}` exited with code ${code.to_str()}"
 		other => Str.inspect(other)
 	}
+
+import "../fixtures/consumer/authority.lock" as lock_report_authority : Str
+
+# The supported projection exposes exact locked Nix attributes, without
+# registry resolution, while narrowing output to the names requested.
+expect match Lock.parse(lock_report_authority) {
+	Ok(lock) => match LockReport.render(lock, ["nixpkgs"], True, providers) {
+		Ok(text) => {
+			decoded : Try({ format : U64, sources : { nixpkgs : { identity : Str, metadata : { nix : { fetchTree : { rev : Str, narHash : Str, lastModified : U64, owner : Str } } } } }, fetched : List(Str) }, _)
+			decoded = Json.parse(text)
+			match decoded {
+				Ok(read) => read.format == 1 and read.sources.nixpkgs.metadata.nix.fetchTree == { rev: "4975466d324710c576dc11ad614684e6bd8cad8e", narHash: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=", lastModified: 1790185690, owner: "NixOS" } and read.sources.nixpkgs.identity == "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5" and read.fetched.is_empty() and !text.contains("roc-overlay")
+				Err(_) => False
+			}
+		}
+		Err(_) => False
+	}
+	Err(_) => False
+}
+
+# Updating another program, adding/removing tasks, and a future minor lock
+# encoding leave a selected source and its content identity unchanged.
+expect match Lock.parse(lock_report_authority) {
+	Ok(lock) => {
+		before = LockReport.render(lock, ["nixpkgs"], True, providers)
+		future = match Lock.parse(lock.to_str().replace_each("(minor 1)", "(minor 9)")) {
+			Ok(parsed) => LockReport.render(parsed, ["nixpkgs"], True, providers)
+			Err(_) => Err("future minor did not parse")
+		}
+		program = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc"], sha256: "1111", size: 4, obtained: Computed }
+		spec = Spec.empty("test")
+		with_task = { ..spec, tasks: [{ name: "check", environment: "dev", run: ["check"] }] }
+		Lock.intent_of(spec) == Lock.intent_of(with_task)
+			and before.is_ok()
+			and before == LockReport.render({ ..lock, fetched: [program] }, ["nixpkgs"], True, providers)
+			and before == LockReport.render({ ..lock, fetched: [{ ..program, sha256: "2222" }] }, ["nixpkgs"], True, providers)
+			and before == LockReport.render({ ..lock, intent: Lock.intent_of(with_task) }, ["nixpkgs"], True, providers)
+			and before == LockReport.render({ ..lock, intent: Lock.intent_of(spec) }, ["nixpkgs"], True, providers)
+			and before == future
+	}
+	Err(_) => False
+}
+
+expect match Lock.parse(lock_report_authority) {
+	Ok(lock) => LockReport.render(lock, ["missing"], True, providers) == Err("unknown locked entry: missing")
+		and LockReport.render(lock, ["nixpkgs"], False, providers).map_ok(|text| text.starts_with("source nixpkgs [nix]")) == Ok(True)
+	Err(_) => False
+}
+
+# Updating a different remote source preserves the selected identity; changing
+# that source's own NAR content changes it, with no graph-layout fingerprint.
+expect {
+	changed = |sri, hex| {
+		text = lock_report_authority.replace_each(sri, "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").replace_each(hex, "sha256:0000000000000000000000000000000000000000000000000000000000000000")
+		match Lock.parse(text) {
+			Ok(lock) => lock_pin_identity(lock)
+			Err(_) => Err("invalid fixture")
+		}
+	}
+	before = match Lock.parse(lock_report_authority) {
+		Ok(lock) => lock_pin_identity(lock)
+		Err(_) => Err("invalid fixture")
+	}
+	before.is_ok()
+		and before == changed("sha256-fhatlsqelliHOfoT723TYQb8DzxSn698DpobgiARHIM=", "sha256:7e16ad96ca9e96588739fa13ef6dd36106fc0f3c529faf7c0e9a1b8220111c83")
+		and before != changed("sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=", "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5")
+}
+
+lock_pin_identity : Lock -> Try(Str, Str)
+lock_pin_identity = |lock| {
+	text = LockReport.render(lock, ["nixpkgs"], True, providers)?
+	decoded : Try({ sources : { nixpkgs : { identity : Str } } }, _)
+	decoded = Json.parse(text)
+	decoded.map_ok(|read| read.sources.nixpkgs.identity).map_err(|_| "invalid inspector JSON")
+}

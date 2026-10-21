@@ -1,6 +1,6 @@
 = What Blueprint is
 
-image::blueprint-gemini-gen.jpeg[Blueprint illustration of robotic arms,560,align=center]
+image::images/blueprint-illustration.png[Blueprint illustration of robotic arms,560,align=center]
 
 A project's `Blueprint.roc` is a Roc program that describes:
 
@@ -14,23 +14,19 @@ A project's `Blueprint.roc` is a Roc program that describes:
 The `blueprint` command reads that file and carries it out. Everything an
 environment has comes from a place the file names:
 
-[cols="2,3,3",options="header"]
+[cols="2,3",options="header"]
 |===
 | Written as
-| Where it comes from
-| What fixes it
+| Source and version pin
 
 | `Programs([Fetch(name, recipe)])`
-| A download, from the URL the recipe gives for each system.
-| The SHA-256 of the download, in `Blueprint.lock`.
+| A download, from the URL the recipe gives for each system. Its SHA-256 is recorded in `Blueprint.lock`.
 
 | `Expect([name])`
-| The machine. `blueprint` checks that it is on `PATH` and installs nothing.
-| Nothing: its version is the machine's.
+| The machine. `blueprint` checks that it is on `PATH` and installs nothing. Its version is the machine's; Blueprint does not pin it.
 
 | `Tools(["<source>#<name>"])`
-| A Nix package source the project declares with `Packages`.
-| The source's revision and digest, in `Blueprint.lock`.
+| A Nix package source the project declares with `Packages`. The source's revision and digest are recorded in `Blueprint.lock`.
 |===
 
 The project commits `Blueprint.lock`, so a contributor's machine and a CI
@@ -58,7 +54,7 @@ by Nix, and whether a URL serves anything by `blueprint update`, not by Roc.
 == How it works
 
 The platform lowers and validates the whole configuration, then prints it as
-a *Spec*, a provider-neutral S-expression (format 2.7). The `blueprint`
+a *Spec*, a provider-neutral S-expression (format 2.8). The `blueprint`
 command runs Roc to get that Spec, validates it again through the same shared
 rules, plans the request, and owns every download, file write, the lock and
 execution. It fetches programs into a per-user store itself, and asks the Nix
@@ -93,7 +89,7 @@ and the rules that keep it independent of any one package ecosystem.
 | No
 
 | x86_64 Windows
-| No binary is released
+| Tasks only
 | No
 | No
 
@@ -103,15 +99,19 @@ and the rules that keep it independent of any one package ecosystem.
 | Not supported
 |===
 
-A `blueprint` binary is released for x86_64 Linux, arm64 Linux and Apple
-Silicon macOS. It needs no Roc and no Python: it downloads the Roc compiler
-that reads `Blueprint.roc`. It needs https://nixos.org/download[Nix] with
-flakes enabled where the table's last two columns apply, and `tar`, `ln` and
-`chmod` to unpack and link what it fetches.
+A `blueprint` binary is released for x86_64 Linux, arm64 Linux, Apple
+Silicon macOS and x86_64 Windows. It needs no Roc and no Python: it embeds the Roc compiler
+that reads `Blueprint.roc` and installs it into its cache on first use. It needs https://nixos.org/download[Nix] with
+flakes enabled where the table's last two columns apply. Linux and macOS
+use `tar`, `ln` and `chmod` to unpack and link fetched programs. Windows
+uses its `tar` and exposes programs with hard links or copies.
 
 On Intel macOS `blueprint` stops with a message naming the supported systems.
-On Windows the code that runs a task without Nix is present, and nothing of
-it can be used; see xref:without-nix.adoc#windows[Windows].
+On Windows, tasks can use fetched programs and expected tools without Nix.
+Scripts must name their interpreter explicitly. The smoke-test job targets
+Windows Server; Windows 10 and 11 desktop installations have not been
+verified here. See xref:without-nix.adoc#windows[Windows] for setup and the
+pinned Roc compiler's cache workaround.
 
 `Systems` in a configuration declares the systems a project is for: a
 fetched program gets a digest for each, and the generated Nix outputs have

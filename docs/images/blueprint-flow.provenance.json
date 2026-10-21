@@ -1,0 +1,8 @@
+{
+  "source": "architecture.adoc",
+  "source_sha256": "8a03df0d2d56c69be76c939b432ab526ad6ba3e4219a751a3a7f39404eb256b1",
+  "svg_source": "https://lukewilliamboswell.github.io/roc-blueprint/diag-mermaid-md5-7b07336434a51cf51fbe6c540a508b72.svg",
+  "svg_sha256": "602fdfd657c67e9674d8ffcb0949b440dd1e6a75e72ffcd1318cfbbc24e64c01",
+  "preparation": "Headless Chrome 155; standalone published SVG; 2126x559 viewport; device scale factor 2",
+  "png_sha256": "76e1e25cc293ac7f71c539c37c177f978ac99c555c233db4887c244f39312712"
+}

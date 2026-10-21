@@ -4,10 +4,10 @@ name: Release
 # runs the same build and tests as a dry run, under a version that is never
 # published.
 #
-# One release holds the roc-blueprint platform bundle, the roc-blueprint-core
-# bundle it depends on, the `blueprint` binaries for x86_64 Linux, arm64 Linux
-# and Apple Silicon macOS with their checksums, the examples, the
-# documentation and the manual. Everything is built once, tested as those
+# One release holds the platform, core and standalone SBOM app bundles; the
+# `blueprint` binaries for x86_64 Linux, arm64 Linux, Apple Silicon macOS and
+# x86_64 Windows with checksums; artifact-bound SPDX sidecars; the examples,
+# documentation and manual. Everything is built once, tested as those
 # exact files on each kind of machine, and only then published, in one step.
 on:
   workflow_dispatch:
@@ -113,16 +113,22 @@ jobs:
       - name: Write the part of the manual that names the release
         run: nix develop -c scripts/docs_snippet.roc "$VERSION"
 
-      # build-docs runs outside the development shell and needs the compiler's path.
+      # Supply the shared native renderer and the compiler used for API docs.
       - id: roc
-        name: Find the product compiler
-        run: echo "command=$(nix develop -c sh -c 'command -v roc')" >> "$GITHUB_OUTPUT"
+        name: Locate the compiler and native documentation renderer
+        run: |
+          echo "command=$(nix develop -c sh -c 'command -v roc')" >> "$GITHUB_OUTPUT"
+          renderer=$(nix build .#roc-docs --no-link --print-out-paths)
+          echo "renderer=$renderer/bin/roc-docs" >> "$GITHUB_OUTPUT"
 
       - id: docs
         name: Render the manual as a site and a PDF
-        uses: lukewilliamboswell/roc-automation/actions/build-docs@7fdb8be46b12da9b119023c3a5aac28a9fdaa72b
+        uses: lukewilliamboswell/roc-automation/actions/build-docs@dec2d52a5cb6cd251fd188ad1d797f400ee1bb6e # tools-0.1.0-rc.1
         with:
+          backend: roc
+          renderer-binary: ${{ steps.roc.outputs.renderer }}
           pdf-filename: roc-blueprint.pdf
+          pdf-image-dpi: "300"
           docs-version: ${{ needs.validate.outputs.version }}
           api-entrypoint: blueprint-platform/main.roc
           roc-command: ${{ steps.roc.outputs.command }}
@@ -134,6 +140,16 @@ jobs:
 
       - name: Render the release notes
         run: nix develop -c scripts/release_notes.roc "$VERSION" dist/notes.md
+
+      # Generate in the read-only build job from final bytes: SPDX 3.0.1, and
+      # SPDX 2.3 and CycloneDX 1.7 of the same inventory. The separate offline check holds each
+      # to its version and the declared inventory; shared publication policy
+      # belongs to roc-automation.
+      - name: Describe the final binaries and source bundles with SPDX
+        run: nix develop -c scripts/release_sbom.roc "$VERSION"
+
+      - name: Independently check SBOM conformance, subjects and known inputs
+        run: nix develop -c scripts/check_sbom.roc --release-root . --artifacts dist dist/*.spdx.json dist/*.spdx-2.3.json dist/*.cdx.json
 
       # Fails unless the binaries and blueprint.sha256 carry the names
       # roc-automation's setup-blueprint action downloads.
@@ -232,7 +248,7 @@ jobs:
           for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-windows.exe blueprint.sha256; do
             test -f "$name"
           done
-          test "$(find . -type f -name 'blueprint*' | wc -l)" = 5
+          test "$(find . -type f -name 'blueprint*' ! -name '*.spdx.json' ! -name '*.spdx-2.3.json' ! -name '*.cdx.json' | wc -l)" = 5
           sha256sum -c blueprint.sha256
           test "$(LC_ALL=C ls)" = "$(cat ../release-assets.txt)"
 

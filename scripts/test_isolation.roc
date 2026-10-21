@@ -12,8 +12,8 @@ import cli.Stderr
 import src/CliIsolationTest
 
 ## Check what the real `./blueprint build` stages about its caller, against a
-## stubbed compiler and Nix: the namespace identities, its own path as the
-## build runner, and the refusals when either cannot be used. Run from the
+## stubbed compiler and Nix: private runtime namespace witnesses, stable recipe
+## bytes and fail-closed refusals when namespaces cannot be observed. Run from the
 ## repository root, with `./blueprint` built. `ROC` names the compiler
 ## (default `roc`). It needs Linux, and no network and no Nix.
 ##

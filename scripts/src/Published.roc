@@ -17,7 +17,7 @@ Published := [].{
 	## its hash alone. The core package's carries a prefix.
 	platform_asset : List(Str) -> Try(Str, [NoPlatformBundle])
 	platform_asset = |assets|
-		match assets.keep_if(|name| name.ends_with(".tar.zst") and !name.starts_with(Bundle.core_prefix)) {
+		match assets.keep_if(|name| name.ends_with(".tar.zst") and !name.starts_with(Bundle.core_prefix) and !name.starts_with(Bundle.sbom_prefix)) {
 			[one] => Ok(one)
 			_ => Err(NoPlatformBundle)
 		}
@@ -138,3 +138,5 @@ expect Published.snippet("u").ends_with("]\n----\n")
 
 expect Published.core_asset(["3Cev8eY9.tar.zst", "roc-blueprint-core-DL8qEfet.tar.zst", "blueprint.sha256"]) == Ok("roc-blueprint-core-DL8qEfet.tar.zst")
 expect Published.core_asset(["3Cev8eY9.tar.zst", "blueprint.sha256"]) == Err(NoCoreBundle)
+
+expect Published.platform_asset(["3Cev8eY9.tar.zst", "roc-blueprint-sbom-ABC.tar.zst", "roc-blueprint-core-DEF.tar.zst"]) == Ok("3Cev8eY9.tar.zst")

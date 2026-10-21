@@ -28,3 +28,7 @@ __pycache__/
 /docs/generated/
 
 blueprint-platform/targets/*/*.lib
+
+# Target-specific compiler archive embedded by Roc at build time.
+/blueprint-cli/compiler-archive
+/blueprint-cli/.compiler-archive.*

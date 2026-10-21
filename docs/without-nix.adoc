@@ -113,7 +113,7 @@ blueprint: this machine lacks what the task needs, and blueprint installs none o
 
 A task still needs a `Blueprint.lock` that matches `Blueprint.roc`: the
 digests are in it. Evaluating `Blueprint.roc` needs the Roc compiler
-`blueprint` was built for, which it downloads into the same store when
+`blueprint` was built for, which it embeds and installs into the same store when
 `ROC` is unset and no matching `roc` is on `PATH`.
 
 == The store of downloads
@@ -229,7 +229,7 @@ whatever the project expects:
 == Windows
 
 The release includes `blueprint-x86_64-windows.exe` and the platform's
-`x64win` target. The `no-nix` CI job checks fetching the compiler, writing a
+`x64win` target. The `no-nix` CI job checks installing the embedded compiler, writing a
 lock, reporting requirements, and building and running a basic-cli program.
 
 The store uses `LOCALAPPDATA` when `XDG_CACHE_HOME` is unset.

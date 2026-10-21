@@ -34,7 +34,7 @@
           lib = pkgs.lib;
 
           # The compiler the product is built with and that a released
-          # `blueprint` fetches: the nightly in blueprint-cli/compiler-version,
+          # `blueprint` embeds: the nightly in blueprint-cli/compiler-version,
           # from roc-overlay.
           rocTag = lib.trim (builtins.readFile ./blueprint-cli/compiler-version);
           roc = roc-overlay.packages.${system}.${rocTag};
@@ -70,6 +70,25 @@
             tar -xzf ${rocArchive "x86_64-linux"} -C "$out" --strip-components=1
             tar -xzf ${rocArchive "aarch64-darwin"} -C sysroot --strip-components=1
             cp -r sysroot/darwin "$out/darwin"
+          '';
+
+          # Released native documentation renderer, paired with the shared
+          # build-docs action at the tools-0.1.0-rc.1 release commit. Never
+          # patch its bytes: these hashes identify the published executables.
+          rocDocsVersion = "0.1.0-rc.1";
+          rocDocsHashes = {
+            "x86_64-linux" = "sha256-lpuU3rMVjp3yMbmJmF6HIlV4h56bb3+59KtGsor01YY=";
+            "aarch64-linux" = "sha256-AIQ4qz/ON3zXw7Vy2nLQKz9y/nk0W8Fx0iG8DwVKcLI=";
+            "aarch64-darwin" = "sha256-gGiXT38sIgM/EspTfiv1ZYr7RVTuL1G3XS4OQ3ZJWho=";
+          };
+          rocDocsArchive = pkgs.fetchurl {
+            url = "https://github.com/lukewilliamboswell/roc-automation/releases/download/tools-${rocDocsVersion}/roc-docs-${system}";
+            hash = rocDocsHashes.${system};
+          };
+          rocDocs = pkgs.runCommand "roc-docs-${rocDocsVersion}" {
+            meta.mainProgram = "roc-docs";
+          } ''
+            install -Dm755 ${rocDocsArchive} "$out/bin/roc-docs"
           '';
 
           # The specification `roc glue` writes the platform host's Zig
@@ -131,12 +150,15 @@
 
           blueprint = pkgs.stdenv.mkDerivation {
             pname = "blueprint";
-            version = "0.6.0";
+            version = "0.7.0";
             src = lib.fileset.toSource {
               root = ./.;
               fileset = lib.fileset.unions [
                 ./blueprint-cli
                 ./blueprint-nix
+                ./fixtures/consumer/authority.lock
+                ./blueprint-core/JsonData.roc
+                ./blueprint-core/LockSnapshot.roc
                 ./blueprint-core/main.roc
                 ./blueprint-core/Spec.roc
                 ./blueprint-core/Project.roc
@@ -149,6 +171,13 @@
                 ./blueprint-core/Realise.roc
                 ./blueprint-core/Lock.roc
                 ./blueprint-core/Tree.roc
+                ./blueprint-core/Sbom.roc
+                ./blueprint-core/SbomLicenses.roc
+                ./blueprint-core/Sidecar.roc
+                ./blueprint-core/CycloneDx.roc
+                ./blueprint-core/Lookup.roc
+                ./blueprint-core/Spdx2.roc
+                ./blueprint-core/Spdx3.roc
               ];
             };
             nativeBuildInputs = [
@@ -163,17 +192,22 @@
               runHook preBuild
               export HOME="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache"
               ${lib.concatMapStrings unpackRocPackage rocPackages}
+              cp ${rocArchive system} blueprint-cli/compiler-archive
               roc build blueprint-cli/main.roc --output=blueprint
               runHook postBuild
             '';
             installPhase = ''
               runHook preInstall
               install -Dm755 blueprint "$out/bin/blueprint"
-              # Default to the pinned Roc; ROC in the environment still wins.
-              # Builds run readlink; the host's own comes first.
+              # Bootstrap unpacks the embedded compiler with tar/gzip; builds
+              # observe namespaces with readlink and publish readable witnesses
+              # with chmod. Host tools still come first.
               wrapProgram "$out/bin/blueprint" \
-                --set-default ROC ${lib.getExe roc} \
-                --suffix PATH : ${lib.makeBinPath [ pkgs.coreutils ]}
+                --suffix PATH : ${lib.makeBinPath [
+                  pkgs.coreutils
+                  pkgs.gnutar
+                  pkgs.gzip
+                ]}
               runHook postInstall
             '';
             meta = {
@@ -188,6 +222,7 @@
             inherit blueprint roc;
             default = blueprint;
             roc-glue-spec = rocGlueSpec;
+            roc-docs = rocDocs;
           }
           # Not in the development shell: only a release build needs it, and
           # with it the macOS archive.
@@ -205,6 +240,12 @@
           # start. `blueprint` itself is not here, so entering the
           # shell never compiles the CLI; `nix run` and `nix build` provide it.
           devShells.default = pkgs.mkShellNoCC {
+            # Ignored build input: every local CLI build embeds this host's archive.
+            shellHook = ''
+              cp ${rocArchive system} blueprint-cli/.compiler-archive.$$
+              chmod u+w blueprint-cli/.compiler-archive.$$
+              mv blueprint-cli/.compiler-archive.$$ blueprint-cli/compiler-archive
+            '';
             packages = [
               roc
               rocStable
@@ -219,7 +260,7 @@
               pkgs.zip
               pkgs.unzip
               pkgs.gh
-            ];
+            ] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.bubblewrap pkgs.util-linux pkgs.python3 ];
           };
         };
       outputs = nixpkgs.lib.genAttrs systems forSystem;

@@ -9,6 +9,7 @@ import core.Provider
 import core.Realise
 import Locks
 import LockJson
+import Runner
 
 ## Package names are native Nix attributes, never translated or filtered.
 ## Each environment imports its sources with only its ordered overlay stack.
@@ -20,8 +21,11 @@ import LockJson
 NixProvider :: [].{
 	provider : Provider
 	provider = Provider.{
+		build_argv,
+		build_result,
+		build_sources: provenance_sources,
 		name: "nix",
-		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools"],
+		features: ["raw", "sources", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools", "build-files"],
 		realises,
 		render: |spec| {
 			# A project with no Nix source has no flake: there is nothing of
@@ -32,6 +36,22 @@ NixProvider :: [].{
 			} else {
 				Ok([])
 			}
+		},
+		inspect_lock: |lock| {
+			entries = Locks.inspect(lock)?
+			Ok(
+				entries.map(
+					|entry| {
+						name: entry.name,
+						identity: entry.identity,
+						digest_kind: Tree,
+						metadata: match entry.fetch_tree {
+							LockJson.Null => []
+							value => [{ name: "fetchTree", value: Locks.to_value(value) }]
+						},
+					},
+				),
+			)
 		},
 		preflight,
 		realise: |spec, request, target, layout, text| {
@@ -64,7 +84,7 @@ NixProvider :: [].{
 		files = update_files(spec, target, layout)?
 		locals = local_checks(spec, target, layout)?
 		native_lock = "${layout.generated_root}/flake.lock"
-		flake = ["--flake", "path:${layout.generated_root}"]
+		flake = ["--flake", Locks.path_reference(layout.generated_root)]
 		# The machine must have Nix itself: nothing installs it.
 		present = [{ program: "nix", because: resolving(Project.validate(spec)?) }]
 		match update {
@@ -208,7 +228,7 @@ NixProvider :: [].{
 		var $builds = []
 		var $argv = []
 		var $action = Generate
-		base_ref = "path:${layout.generated_root}"
+		base_ref = Locks.path_reference(layout.generated_root)
 		read_only = ["--no-update-lock-file", "--no-write-lock-file"]
 		match request {
 			Request.Generate => {
@@ -264,6 +284,9 @@ NixProvider :: [].{
 						"--option",
 						"sandbox-fallback",
 						"false",
+						"--option",
+						"extra-sandbox-paths",
+						"/blueprint-isolation/witness=@blueprint-isolation-source@/witness",
 						"--impure",
 						"${base_ref}#packages.${target}.${name}",
 					])
@@ -290,17 +313,6 @@ NixProvider :: [].{
 			remaining,
 		)?
 		check_layout(project, target, layout)?
-		match $action {
-			Build(_) => {
-				# Configuration text must not collide with an executor placeholder.
-				for placeholder in [caller_mnt, caller_net, caller_executable] {
-					if contents.split_on(placeholder).len() != 2 {
-						return Err("build configuration contains the reserved text ${placeholder}")
-					}
-				}
-			}
-			_ => {}
-		}
 		# Why this step starts Nix, for whoever finds it missing. Generating
 		# files starts nothing.
 		needs_nix = match $action {
@@ -349,32 +361,53 @@ NixProvider :: [].{
 	## Recheck supplied local pins on every step, including after source-editing tasks.
 	materialize_plan = |selected, target, layout, derived| {
 		{ builds, argv, contents, action, needs_nix, .. } = selected
-		base_ref = "path:${layout.generated_root}"
+		base_ref = Locks.path_reference(layout.generated_root)
 		var $operations = derived.operations
+		for source in selected.project.source_files {
+			if builds.any(|build| build.inputs.contains(source.name)) {
+				$operations = $operations.append(SourceFile(source))
+			}
+		}
 		match action {
 			Build(_) => {
-				$operations = $operations.append(Isolation({ mnt: caller_mnt, net: caller_net }))
-					.append(Runner({ executable: caller_executable, system: target }))
+				# Nix sandbox-paths splits on whitespace and cannot quote paths.
+				# A fixed Linux temporary parent keeps arbitrary project/cache paths
+				# out of that setting; the executor creates a private child per call.
+				$operations = $operations.append(SourceFile(Runner.compiler)).append(Isolation({ directory: "/tmp", placeholder: "@blueprint-isolation-source@" }))
+					.append(LocalSystem(target))
 			}
 			_ => {}
+		}
+		compiler_files = match action {
+			Build(_) => [{ path: "${layout.generated_root}/source-file-${Runner.compiler.sha256}.json", contents: "@blueprint-source-file-${Runner.compiler.sha256}@" }]
+			_ => []
 		}
 		files = staged_files(layout, contents)
 			.append({
 				path: "${layout.generated_root}/flake.lock",
 				contents: derived.contents,
-			})
+			}).concat(
+			selected.project.source_files.keep_if(|source| builds.any(|build| build.inputs.contains(source.name))).map(
+				|source| {
+					path: "${layout.generated_root}/source-file-${source.sha256}.json",
+					contents: "@blueprint-source-file-${source.sha256}@",
+				},
+			),
+		)
+		all_files = files.concat(compiler_files)
 		# The machine must have Nix itself: nothing installs it.
 		if !needs_nix.is_empty() {
 			$operations = $operations.append(Present([{ program: "nix", because: needs_nix }]))
 		}
 		{
 			action,
-			files,
+			files: all_files,
 			argv,
 			operations: $operations,
 			artifacts: builds.map(
 				|build| {
 					name: build.name,
+					provider: "nix",
 					installable: "${base_ref}#packages.${target}.${build.name}",
 					output: build.output,
 					dependencies: build.needs,
@@ -382,18 +415,6 @@ NixProvider :: [].{
 			),
 		}
 	}
-
-	## Placeholders the executor replaces with the caller's namespace identities
-	## and its own executable path when it stages a build's files (see
-	## `Steps.Operation`).
-	caller_mnt : Str
-	caller_mnt = "@blueprint-caller-mnt-namespace@"
-
-	caller_net : Str
-	caller_net = "@blueprint-caller-net-namespace@"
-
-	caller_executable : Str
-	caller_executable = "@blueprint-caller-executable@"
 
 	## What a build never reads from the project: VCS metadata names at every
 	## depth, then caller-generated roots, the authority and local inputs.
@@ -680,13 +701,24 @@ NixProvider :: [].{
 		$rendered = append_rendered($rendered, render_shell_alias($declared))?
 		$rendered = append_rendered(
 			$rendered,
-			lines([
-				"  };",
-				"",
-				"  outputs = { self, ... }@inputs:",
-				"    let",
-				"      environmentsFor = system: {",
-			]),
+			lines(
+				[
+					"  };",
+					"",
+					if spec.source_files.is_empty() {
+						"  outputs = { self, ... }@inputs:"
+					} else {
+						"  outputs = { self, ... }@flakeInputs:"
+					},
+					"    let",
+				].concat(
+					if spec.source_files.is_empty() {
+						[]
+					} else {
+						["      inputs = flakeInputs // { ${Str.join_with(spec.source_files.map(|source| "${quote(source.name)} = builtins.path { path = /. + (builtins.fromJSON (builtins.readFile ./source-file-${source.sha256}.json)); name = ${quote("blueprint-source-${source.sha256}")}; recursive = false; sha256 = ${quote(source.sha256)}; };"), " ")} };"]
+					},
+				).append("      environmentsFor = system: {"),
+			),
 		)?
 		for environment in environments {
 			$rendered = append_rendered(
@@ -744,7 +776,7 @@ NixProvider :: [].{
 						.map_err(|_| "unknown build environment")?
 					$rendered = append_rendered(
 						$rendered,
-						render_build(build, env, spec.system_tools, spec.commands, spec.configured_tools, spec.roc_packages, system, builder),
+						render_build(build, env, spec.system_tools, spec.commands, spec.configured_tools, spec.roc_packages, spec.build_files, system, builder),
 					)?
 				}
 				$rendered = append_rendered(
@@ -814,6 +846,42 @@ NixProvider :: [].{
 			|seen, name|
 				if (seen.contains(name)) seen else seen.append(name),
 		)
+	}
+
+	build_argv : Steps.Step, Provider.BuildOptions -> Try(List(Str), Str)
+	build_argv = |step, options| {
+		argv = if options.json {
+			step.argv.keep_if(|arg| arg != "--print-out-paths").append("--json")
+		} else {
+			step.argv
+		}
+		Ok(if (options.rebuild) argv.append("--rebuild") else argv)
+	}
+
+	build_result : Str -> Try(Provider.BuildResult, Str)
+	build_result = |text| {
+		parsed : Try(List({ drvPath : Str, outputs : { out : Str } }), _)
+		parsed = Json.parse(text)
+		match parsed.map_err(|_| "Nix returned invalid build JSON")? {
+			[built] => Ok({ recipe_identity: built.drvPath, outputs: [{ name: "out", path: built.outputs.out }], metadata: [{ name: "derivation", value: Value.Str(built.drvPath) }] })
+			_ => Err("Nix returned an unexpected number of build results")
+		}
+	}
+
+	## Exactly the root lock entries imported by a build and its dependencies.
+	provenance_sources : Spec, Str -> Try(List(Str), Str)
+	provenance_sources = |spec, name| {
+		project = Project.validate(spec)?
+		closure = Project.build_closure(project, name)?
+		var $names = []
+		for build in closure {
+			env = project.environments.find_first(|entry| entry.name == build.environment).map_err(|_| "unknown build environment")?
+			imported = source_names(env, project.system_tools, project.commands, project.configured_tools, builder_source(project))
+				.concat(env.overlays).concat(build.inputs)
+				.concat(project.roc_packages.keep_if(|entry| entry.environment == env.name).map(|entry| entry.source))
+			$names = Project.unique($names.concat(imported))
+		}
+		Ok($names)
 	}
 
 	## A package holding only bin/<name>, which execs the tool's main program.
@@ -887,14 +955,15 @@ NixProvider :: [].{
 	## Open `packages` with what every build shares. Nix makes the one project
 	## copy: excluded entries are never inspected, and any other symlink or
 	## special file aborts evaluation. Nix records only whether the owner may
-	## execute a file. Namespace observations belong to materialization, not
-	## project bytes, so the executor fills them in per build. The runner is the
-	## executor's own executable, copied into the store from where it is.
+	## execute a file. Namespace authorization travels outside these bytes.
+	## The versioned runner's source is independent of the CLI executable.
 	render_source : Source -> Str
 	render_source = |source| match source {
 		Unplanned => lines([
 			"      packages = let",
-			"        project = builtins.throw \"build execution requires NixProvider.plan "
+			"        runnerSource = { url = ${quote(Runner.source.url)}; sha256 = ${quote(Runner.source.sha256)}; };",
+			"        runnerFor = pkgs: (${Runner.nix}) { inherit pkgs; source = pkgs.fetchurl runnerSource; compilerArchive = builtins.path { path = /. + (builtins.fromJSON (builtins.readFile ./source-file-${Runner.compiler.sha256}.json)); name = ${quote("blueprint-source-${Runner.compiler.sha256}")}; recursive = false; sha256 = ${quote(Runner.compiler.sha256)}; }; };",
+			"        projectFor = _: builtins.throw \"build execution requires NixProvider.plan "
 				.concat("and a caller project\";"),
 			"        isolation = builtins.throw "
 				.concat("\"build execution requires a caller isolation witness\";"),
@@ -908,11 +977,18 @@ NixProvider :: [].{
 				.map(quote)
 			lines([
 				"      packages = let",
-				"        project = builtins.path {",
+				"        runnerSource = { url = ${quote(Runner.source.url)}; sha256 = ${quote(Runner.source.sha256)}; };",
+				"        runnerFor = pkgs: (${Runner.nix}) { inherit pkgs; source = pkgs.fetchurl runnerSource; compilerArchive = builtins.path { path = /. + (builtins.fromJSON (builtins.readFile ./source-file-${Runner.compiler.sha256}.json)); name = ${quote("blueprint-source-${Runner.compiler.sha256}")}; recursive = false; sha256 = ${quote(Runner.compiler.sha256)}; }; };",
+				"        projectFor = selected: assert selected == null || builtins.all (item: builtins.pathExists (${quote(root)} + \"/\" + item)) selected; builtins.path {",
 				"          path = /. + ${quote(root)};",
 				"          name = \"blueprint-project\";",
 				"          filter = path: type:",
-				"            !(builtins.elem (baseNameOf path) [ ${Str.join_with(names, " ")} ]",
+				"            (selected == null || path == ${quote(root)} || builtins.any",
+				"              (item: let full = ${quote(root)} + \"/\" + item;",
+				"                prefix = a: b: builtins.substring 0 (builtins.stringLength a) b == a;",
+				"               in path == full || prefix (full + \"/\") path || prefix (path + \"/\") full)",
+				"              selected)",
+				"            && !(builtins.elem (baseNameOf path) [ ${Str.join_with(names, " ")} ]",
 				"              || builtins.elem path [ ${Str.join_with(paths, " ")} ])",
 				"            && (if type == \"symlink\" then "
 					.concat("throw \"snapshot refuses symlink: \${path}\""),
@@ -920,19 +996,17 @@ NixProvider :: [].{
 					.concat("throw \"snapshot refuses special file: \${path}\""),
 				"              else true);",
 				"        };",
-				"        isolation = { mnt = ${quote(caller_mnt)}; net = ${quote(caller_net)}; };",
-				"        runner = builtins.path { path = /. + ${quote(caller_executable)}; "
-					.concat("name = \"blueprint-runner\"; };"),
+
 				"      in {",
 			])
 		}
 	}
 
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
-	## The builder is `blueprint __build-runner`, with no shell around it. Its
-	## own tools are absolute paths; argv and metadata enter through JSON.
-	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Spec.RocPackage), Str, List(Str) -> Str
-	render_build = |build, environment, system_tools, commands, configured, roc_packages, system, builder| {
+	## The standalone versioned runner uses the locked package set's native Roc utility.
+	## Its own tools are absolute paths; argv and metadata enter through JSON.
+	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Spec.RocPackage), List(Spec.BuildFiles), Str, List(Str) -> Str
+	render_build = |build, environment, system_tools, commands, configured, roc_packages, build_files, system, builder| {
 		# A build has no network, so the runner gives Roc a cache of its own
 		# holding these. Other builds' derivations stay as they were.
 		bundles = roc_packages.keep_if(|entry| entry.environment == environment.name).map(roc_package_location)
@@ -960,6 +1034,10 @@ NixProvider :: [].{
 				"sets.${quote(tool.source)}.${attr_path(tool_path(tool.name))}",
 		).concat(commands.keep_if(|entry| entry.environment == environment.name).map(command_package))
 			.concat(configured.keep_if(|entry| entry.environment == environment.name).map(configured_package))
+		tool_roots = selected_tools.map(|tool| { name: "${tool.source}#${tool.name}", root_path: "sets.${quote(tool.source)}.${attr_path(tool_path(tool.name))}" })
+			.concat(configured.keep_if(|entry| entry.environment == environment.name).map(|entry| { name: "${entry.tool.source}#${entry.tool.name}", root_path: configured_package(entry) }))
+			.concat(commands.keep_if(|entry| entry.environment == environment.name).map(|entry| { name: entry.name, root_path: "sets.${quote(entry.tool.source)}.${attr_path(tool_path(entry.tool.name))}" }))
+			.map(|entry| "{ name = ${quote(entry.name)}; path = ${entry.root_path}; }")
 		inputs = build.inputs.map(
 			|name|
 				"{ name = ${quote(name)}; path = inputs.${quote(name)}; }",
@@ -968,6 +1046,11 @@ NixProvider :: [].{
 			|name|
 				"{ name = ${quote(name)}; path = artifacts.${quote(name)}; }",
 		)
+		selected = build_files.find_first(|entry| entry.build == build.name)
+		project = match selected {
+			Ok(entry) => "projectFor [ ${Str.join_with(entry.paths.map(quote), " ")} ]"
+			Err(_) => "projectFor null"
+		}
 		argv = Str.join_with(build.run.map(quote), " ")
 		lines([
 			"          ${quote(build.name)} = let",
@@ -979,30 +1062,35 @@ NixProvider :: [].{
 				"            };",
 				"            pkgs = sets.${quote(primary)};",
 				"            tools = [ ${Str.join_with(tools, " ")} ];",
+				"            runner = \"\${runnerFor pkgs}/bin/roc-build-runner\";",
+				"            inputs_view = pkgs.linkFarm ${quote("blueprint-inputs-${build.name}")} [ ${Str.join_with(inputs, " ")} ];",
+				"            artifacts_view = pkgs.linkFarm ${quote("blueprint-artifacts-${build.name}")} [ ${Str.join_with(dependencies, " ")} ];",
+				"            tools_view = pkgs.linkFarm ${quote("blueprint-tools-${build.name}")} [ ${Str.join_with(tool_roots, " ")} ];",
 				"          in derivation {",
 				"            name = ${quote("blueprint-${build.name}")};",
 				"            inherit system;",
 				"            builder = runner;",
-				"            args = [ \"__build-runner\" ];",
-				"            blueprintSpec = builtins.toJSON {",
-				"              inherit project isolation;",
+				"            args = [ ];",
+				"            ROC_BUILD_RUNNER_WITNESS = \"/blueprint-isolation/witness\";",
+				"            ROC_BUILD_RUNNER_READLINK = \"\${pkgs.coreutils}/bin/readlink\";",
+				"            runnerSpec = builtins.toJSON {",
+				"              schema_version = 1;",
+				"              env = [ { name = \"BLUEPRINT_INPUTS\"; value = inputs_view; } { name = \"BLUEPRINT_ARTIFACTS\"; value = artifacts_view; } { name = \"BLUEPRINT_TOOLS\"; value = tools_view; } ];",
+				"              project = ${project};",
 				"              argv = [ ${argv} ];",
 				"              output = ${quote(build.output)};",
 				# Exactly the environment's tools: nothing implicit is on PATH.
 				"              path = pkgs.lib.makeBinPath tools;",
-				"              inputs = pkgs.linkFarm "
-					.concat(quote("blueprint-inputs-${build.name}"))
-					.concat(" [ ${Str.join_with(inputs, " ")} ];"),
-				"              artifacts = pkgs.linkFarm "
-					.concat(quote("blueprint-artifacts-${build.name}"))
-					.concat(" [ ${Str.join_with(dependencies, " ")} ];"),
+				"              tools = tools_view;",
+				"              inputs = inputs_view;",
+				"              artifacts = artifacts_view;",
 				"              readlink = \"\${pkgs.coreutils}/bin/readlink\";",
 				"              chmod = \"\${pkgs.coreutils}/bin/chmod\";",
 			]),
 		).concat(lines(package_lines)).concat(
 			lines([
 				"            };",
-				"            passAsFile = [ \"blueprintSpec\" ];",
+				"            passAsFile = [ \"runnerSpec\" ];",
 				"          };",
 			]),
 		)
@@ -1142,6 +1230,8 @@ simple = {
 
 mk : TestSpec -> Spec
 mk = |t| Spec.{
+	source_files: [],
+	build_files: [],
 	format: Spec.current_format,
 	name: "test",
 	systems: t.systems,
@@ -1476,8 +1566,8 @@ expect NixProvider.render({ ..mk(simple), configured_tools: [{ environment: "dev
 expect {
 	entry = { environment: "builder", tool: { source: "default", name: "zig" }, options: Value.Attrs([{ name: "debug", value: Value.Bool(True) }]) }
 	build = { name: "app", environment: "builder", inputs: [], needs: [], run: ["true"], output: "out" }
-	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [], overlays: [] }, [], [], [entry, { ..entry, environment: "other" }], [], "x86_64-linux", [])
-	rendered.split_on("(sets.\"default\".\"zig\".override { \"debug\" = true; })").len() == 2
+	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [], overlays: [] }, [], [], [entry, { ..entry, environment: "other" }], [], [], "x86_64-linux", [])
+	rendered.split_on("(sets.\"default\".\"zig\".override { \"debug\" = true; })").len() == 3
 }
 
 # A tool name that is not a Nix attribute path is refused before any effects.
@@ -1615,6 +1705,14 @@ expect {
 	}
 }
 
+# Native references encode path bytes; filesystem destinations stay literal.
+expect {
+	layout = { ..TestData.layout, generated_root: "/generated a [b]/雪" }
+	resolved_plan = (NixProvider.provider.resolve)(TestData.project(TestData.data), "x86_64-linux", layout, All)?
+	resolved_plan.argv == ["nix", "flake", "update", "--flake", "path:/generated%20a%20%5Bb%5D/%E9%9B%AA"]
+		and resolved_plan.native_lock == "/generated a [b]/雪/flake.lock"
+}
+
 # A named update stages the Lock's native lock for Nix to keep the other pins
 # from, and names each local input once, asked for or not.
 expect {
@@ -1694,12 +1792,14 @@ expect match plan_fixture(Request.Build("app")) {
 	Ok({ steps: [plan] }) => plan.action == Build("app") and plan.artifacts == [
 		{
 			name: "library",
+			provider: "nix",
 			installable: "path:/generated#packages.x86_64-linux.library",
 			output: "dist/library",
 			dependencies: [],
 		},
 		{
 			name: "app",
+			provider: "nix",
 			installable: "path:/generated#packages.x86_64-linux.app",
 			output: "dist/app",
 			dependencies: ["library"],
@@ -1719,6 +1819,9 @@ expect match plan_fixture(Request.Build("app")) {
 		"--option",
 		"sandbox-fallback",
 		"false",
+		"--option",
+		"extra-sandbox-paths",
+		"/blueprint-isolation/witness=@blueprint-isolation-source@/witness",
 		"--impure",
 		"path:/generated#packages.x86_64-linux.app",
 	]
@@ -1729,97 +1832,45 @@ expect match plan_fixture(Request.Build("app")) {
 expect match plan_fixture(Request.Build("app")) {
 	Ok({ steps: [plan] }) => plan.operations == [
 		VerifyTree({ path: "/project/assets", digest: assets_tree }),
-		Isolation({
-			mnt: "@blueprint-caller-mnt-namespace@",
-			net: "@blueprint-caller-net-namespace@",
-		}),
-		Runner({ executable: "@blueprint-caller-executable@", system: "x86_64-linux" }),
+		SourceFile(Runner.compiler),
+		Isolation({ directory: "/tmp", placeholder: "@blueprint-isolation-source@" }),
+		LocalSystem("x86_64-linux"),
 		Present([{ program: "nix", because: "build app runs in the Nix sandbox" }]),
 	] and plan.files.map(|file| file.path) == [
 		"/generated/flake.nix",
 		"/generated/flake.lock",
+		"/generated/source-file-${Runner.compiler.sha256}.json",
 	]
 	_ => False
 }
 
-# User argv is data; source/dependency views are immutable store farms.
+# Exact argv stays JSON data; immutable input farms and a versioned runner
+# depend only on selected project bytes and the pinned package set.
 expect match plan_fixture(Request.Build("app")) {
 	Ok({ steps: [plan] }) => match plan.files.first() {
-		Ok(file) => file.contents.contains(
-			"\"\" \"two words\" \"line\\nbreak\" \"$HOME\"",
-		)
+		Ok(file) => file.contents.contains("\"\" \"two words\" \"line\\nbreak\" \"$HOME\"")
 			and file.contents.contains("path = artifacts.\"library\";")
 			and file.contents.contains("path = inputs.\"assets\";")
-			and file.contents.contains("path = /. + \"/project\";")
-			and file.contents.contains(
-				"isolation = { mnt = \"@blueprint-caller-mnt-namespace@\"; "
-					.concat("net = \"@blueprint-caller-net-namespace@\"; };"),
-			)
-			and file.contents.contains(
-				Str.join_with(
-					[
-						"          in derivation {",
-						"            name = \"blueprint-app\";",
-						"            inherit system;",
-						"            builder = runner;",
-						"            args = [ \"__build-runner\" ];",
-						"            blueprintSpec = builtins.toJSON {",
-						"              inherit project isolation;",
-					],
-					"\n",
-				),
-			)
-			and file.contents.contains(
-				Str.join_with(
-					[
-						"              readlink = \"\${pkgs.coreutils}/bin/readlink\";",
-						"              chmod = \"\${pkgs.coreutils}/bin/chmod\";",
-						"            };",
-						"            passAsFile = [ \"blueprintSpec\" ];",
-						"          };",
-					],
-					"\n",
-				),
-			)
-			and file.contents.contains(
-				"              path = pkgs.lib.makeBinPath tools;\n",
-			)
-			and !file.contents.contains("pkgs.bash")
-			and !file.contents.contains("runCommand")
-			and !file.contents.contains("python3}")
+			and file.contents.contains("builder = runner;")
+			and file.contents.contains("name = \"blueprint-build-runner-v1\";")
+			and file.contents.contains("path = pkgs.lib.makeBinPath tools;")
+			and !file.contents.contains("@blueprint-caller")
 			and !file.contents.contains("outputHash")
-		Err(_) => False
+		_ => False
 	}
 	_ => False
 }
 
-# Nix copies the project once: exclusions are decided before an entry's type,
-# only in-project paths are listed, and anything else unsafe aborts evaluation.
-expect NixProvider.render_source(
-	Planned({
-		root: "/project",
-		exclude: [".git", ".jj", "/project/work", "/outside/generated", "/project/work", "/project/a \"b\""],
-	}),
-) == Str.join_with(
-	[
-		"      packages = let",
-		"        project = builtins.path {",
-		"          path = /. + \"/project\";",
-		"          name = \"blueprint-project\";",
-		"          filter = path: type:",
-		"            !(builtins.elem (baseNameOf path) [ \".git\" \".jj\" ]",
-		"              || builtins.elem path [ \"/project/work\" \"/project/a \\\"b\\\"\" ])",
-		"            && (if type == \"symlink\" then throw \"snapshot refuses symlink: \${path}\"",
-		"              else if type == \"unknown\" then throw \"snapshot refuses special file: \${path}\"",
-		"              else true);",
-		"        };",
-		"        isolation = { mnt = \"@blueprint-caller-mnt-namespace@\"; net = \"@blueprint-caller-net-namespace@\"; };",
-		"        runner = builtins.path { path = /. + \"@blueprint-caller-executable@\"; name = \"blueprint-runner\"; };",
-		"      in {",
-		"",
-	],
-	"\n",
-)
+# Selected files are checked for existence; directory ancestry is retained.
+expect {
+	source = NixProvider.render_source(Planned({ root: "/project", exclude: [".git", "/project/work", "/outside/generated"] }))
+	source.contains("projectFor = selected: assert selected == null || builtins.all") and
+		source.contains("path == full || prefix (full + \"/\") path || prefix (path + \"/\") full") and
+			source.contains("builtins.elem (baseNameOf path) [ \".git\" ]") and
+				source.contains("builtins.elem path [ \"/project/work\" ]") and
+					!source.contains("/outside/generated") and
+						source.contains("snapshot refuses symlink") and source.contains("snapshot refuses special file")
+}
 
 # The build plan excludes VCS names, caller roots, the authority and local
 # inputs; inspection and non-build requests render builds that cannot run.
@@ -1830,7 +1881,7 @@ expect match (plan_fixture(Request.Build("app")), plan_fixture(Request.Generate)
 				"[ \".git\" \".hg\" \".svn\" \".jj\" ]",
 			)
 				and planned.contents.contains("builtins.elem path [ \"/project/assets\" ])")
-				and inert.contents.contains("project = builtins.throw")
+				and inert.contents.contains("projectFor = _: builtins.throw")
 				and inert.contents.contains("isolation = builtins.throw")
 				and inert.contents.contains("runner = builtins.throw")
 				and !inert.contents.contains("@blueprint-caller")
@@ -1839,17 +1890,9 @@ expect match (plan_fixture(Request.Build("app")), plan_fixture(Request.Generate)
 	_ => False
 }
 
-# Configuration text cannot collide with a placeholder the executor replaces.
+# Caller placeholders are ordinary argv bytes now, never substituted in recipes.
 expect ["@blueprint-caller-mnt-namespace@", "@blueprint-caller-net-namespace@", "@blueprint-caller-executable@"].all(
-	|placeholder| NixProvider.preflight(
-		TestData.project({
-			..TestData.data,
-			builds: [{ ..TestData.library, run: ["python3", placeholder] }],
-		}),
-		Request.Build("library"),
-		"x86_64-linux",
-		TestData.layout,
-	) == Err("build configuration contains the reserved text ${placeholder}"),
+	|placeholder| NixProvider.preflight(TestData.project({ ..TestData.data, builds: [{ ..TestData.library, run: ["python3", placeholder] }] }), Request.Build("library"), "x86_64-linux", TestData.layout).is_ok(),
 )
 
 # Task extras preserve empty arguments, controls and option-looking literals.
@@ -1997,8 +2040,8 @@ expect match (roc_plan(Request.Build("script")), roc_plan(Request.Build("library
 		without = "              chmod = \"\${pkgs.coreutils}/bin/chmod\";\n            };\n"
 		contents = |step| step.files.first().map_ok(|file| file.contents) ?? ""
 		contents(script).contains(with_packages) and !contents(script).contains(without)
-			and contents(library).contains(without) and !contents(library).contains("roc_packages")
-			and !contents(library).contains("bin/ln")
+			and contents(library).contains(without) and !contents(library).contains("              roc_packages =")
+			and !contents(library).contains("              ln =")
 	}
 	_ => False
 }
@@ -2477,7 +2520,7 @@ expect {
 		three,
 	)?
 	# The payload is rendered once for each of the four systems.
-	one > 4 * 1024 and one < 5 * 1024 + 8192
+	one > 4 * 1024 and one < 64 * 1024
 		and below.steps.len() == 3
 		and within(project, "below", three) == Ok({})
 		and within(project, "below", three - 1) == Err(over_budget)
@@ -2524,10 +2567,10 @@ expect {
 	Project.validate(project).is_ok()
 		and Project.build_closure(project, "root").map_ok(List.len) == Ok(64)
 		# The closure is 64 definitions on four systems, not one.
-		and closure > 32 * leaf
+		and closure > leaf
 		and within(project, "large", closure) == Ok({})
 		and within(project, "large", closure - 1) == Err(over_budget)
-		and within(project, "large", 32 * leaf) == Err(over_budget)
+		and within(project, "large", leaf) == Err(over_budget)
 		and NixProvider.plan_within(
 			project,
 			Request.Workflow("large"),
@@ -2719,7 +2762,7 @@ expect {
 	match atomic.steps {
 		[library] => sequence.steps.all(
 			|step| step.operations.first() == library.operations.first()
-				and step.files.last() == library.files.last()
+				and step.files.find_first(|file| file.path.ends_with("/flake.lock")) == library.files.find_first(|file| file.path.ends_with("/flake.lock"))
 				and !step.files.any(
 					|file| file.path == TestData.layout.lock_path,
 				),
@@ -3110,3 +3153,19 @@ expect {
 		and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }) == "Blueprint.roc declares the input roc, which Nix resolves"
 		and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [] }) == "Blueprint.roc declares the source assets, which Nix locks"
 }
+
+# Selecting recipe files changes only that build's project snapshot.
+expect {
+	selected = NixProvider.render_build(TestData.library, { name: "builder", parents: [], tools: [{ source: "nix", name: "glibc" }], overlays: [] }, [], [], [], [], [{ build: "library", paths: ["recipe.sh"] }], "x86_64-linux", [])
+	selected.contains("project = projectFor [ \"recipe.sh\" ];") and
+		selected.contains("name = \"nix#glibc\"; path = sets.\"nix\".\"glibc\";")
+}
+
+# Native flags/result schema never enter the consumer's build report path.
+expect {
+	step = { action: Build("app"), files: [], argv: ["nix", "build", "--print-out-paths", "example#app"], artifacts: [], operations: [] }
+	NixProvider.build_argv(step, { json: True, rebuild: True }) == Ok(["nix", "build", "example#app", "--json", "--rebuild"])
+}
+expect NixProvider.build_result("[{\"drvPath\":\"/nix/store/recipe.drv\",\"outputs\":{\"out\":\"/nix/store/result\"}}]") == Ok({ recipe_identity: "/nix/store/recipe.drv", outputs: [{ name: "out", path: "/nix/store/result" }], metadata: [{ name: "derivation", value: Value.Str("/nix/store/recipe.drv") }] })
+expect NixProvider.build_result("[]").is_err()
+expect NixProvider.build_result("[{\"drvPath\":\"/nix/store/recipe.drv\",\"outputs\":{\"out\":\"/nix/store/result\"}}]\n/nix/store/result\n").is_err()

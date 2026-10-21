@@ -90,7 +90,13 @@ build! = |root, roc| {
 	Process.passthrough!(Process.command("zig", ["build"], "${root}/blueprint-platform"))?
 	dist = "${root}/dist"
 	Path.create_all!(Path.utf8(dist))?
-	compile_together!(roc, root, Release.files("blueprint", dist))?
+	# A shared import path holds one target's payload at a time. Compile CLI
+	# targets sequentially, and restore the developer's archive even on failure.
+	archive = Path.utf8("${root}/blueprint-cli/compiler-archive")
+	local_archive = Path.read_bytes!(archive)?
+	compiled = compile_blueprints!(roc, root, dist)
+	Path.write_bytes!(archive, local_archive)?
+	compiled?
 	compile_together!(roc, root, Release.files("smoke", dist))?
 
 	var $sums = ""
@@ -102,9 +108,21 @@ build! = |root, roc| {
 	Stdout.write!($sums)
 }
 
-## Build these files at the same time. A compilation of the CLI is
-## single-threaded for most of its run and peaks at about 2.3 GB, so four fit
-## a 4-core, 16 GB machine.
+## Stage only the compiler for the binary about to be built. The bootstrap
+## table is the authority for its URL, size and digest on every target.
+compile_blueprints! : Str, Str, Str => Try({}, _)
+compile_blueprints! = |roc, root, dist| {
+	for released in Release.systems {
+		Process.passthrough!(Process.command("roc-stable", ["scripts/embed_compiler.roc", released.system], root))?
+		files = Release.files("blueprint", dist).keep_if(|file| file.target == released.target)
+		compile_together!(roc, root, files)?
+	}
+	Ok({})
+}
+
+## Compile independent files together. CLI callers pass one target at a time
+## because their embedded archive shares one staging path; smoke programs
+## can compile for every target together.
 ##
 ## The compiler occasionally fails with an unexplained internal error and
 ## succeeds unchanged when run again, so each failure is retried once, alone.

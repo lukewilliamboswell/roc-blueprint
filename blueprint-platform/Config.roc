@@ -29,6 +29,7 @@ Config :: [].{
 		Shell(EnvName, List(ShellSetting)),
 		Task(TaskName, List(TaskSetting)),
 		Source(InputName, FlakeRef),
+		SourceFile(InputName, Url, Str),
 		Build(InputName, List(BuildSetting)),
 		Workflow(WorkflowName, List(WorkflowStep)),
 		Custom(Str, Str, Val),
@@ -110,5 +111,5 @@ Config :: [].{
 	## Builds require Use, Run and one relative Output. Optional Inputs select
 	## locked non-flake Sources; Needs selects build artifacts, not task names.
 	## Sources and artifacts remain separate read-only inputs, never merged.
-	BuildSetting : [Use(EnvName), Inputs(List(InputName)), Needs(List(InputName)), Run(List(Str)), Output(Str)]
+	BuildSetting : [Files(List(Str)), Use(EnvName), Inputs(List(InputName)), Needs(List(InputName)), Run(List(Str)), Output(Str)]
 }

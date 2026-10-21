@@ -26,7 +26,9 @@ Lower :: [].{
 		expects : List(Spec.Expects),
 		shells : List(Spec.Shell),
 		tasks : List(Spec.Task),
+		source_files : List(Spec.SourceFile),
 		build_sources : List(Spec.BuildSource),
+		build_files : List(Spec.BuildFiles),
 		builds : List(Spec.Build),
 		workflows : List(Spec.Workflow),
 		extensions : List(Spec.Extension),
@@ -44,7 +46,7 @@ Lower :: [].{
 	lower : List(Config.Setting) -> Try(Spec, Str)
 	lower = |settings| {
 		initial : Acc
-		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], configured_tools: [], roc_packages: [], recipes: [], environment_programs: [], expects: [], shells: [], tasks: [], build_sources: [], builds: [], workflows: [], extensions: [], raw: [] }
+		initial = { source_files: [], names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], configured_tools: [], roc_packages: [], recipes: [], environment_programs: [], expects: [], shells: [], tasks: [], build_sources: [], builds: [], build_files: [], workflows: [], extensions: [], raw: [] }
 		acc = settings.fold(Ok(initial), |result, setting| add(result?, setting))?
 		name = match acc.names {
 			[] => return Err("MissingName: declare Name once")
@@ -65,7 +67,9 @@ Lower :: [].{
 				.concat(if (acc.extensions.is_empty()) [] else ["extensions"])
 				.concat(if (acc.raw.is_empty()) [] else ["raw"])
 				.concat(if (acc.build_sources.is_empty()) [] else ["sources"])
+				.concat(if (acc.source_files.is_empty()) [] else ["source-files"])
 				.concat(if (acc.builds.is_empty()) [] else ["builds"])
+				.concat(if (acc.build_files.is_empty()) [] else ["build-files"])
 				.concat(if (acc.workflows.is_empty()) [] else ["workflows"])
 				.concat(if (acc.system_tools.is_empty()) [] else ["system-tools"])
 				.concat(if (acc.commands.is_empty()) [] else ["commands"])
@@ -75,6 +79,7 @@ Lower :: [].{
 				.concat(if (acc.expects.is_empty()) [] else ["expects"])
 		Project.validate(
 			Spec.{
+				source_files: acc.source_files,
 				format: Spec.current_format,
 				name,
 				requires_,
@@ -92,6 +97,7 @@ Lower :: [].{
 				shells: acc.shells,
 				tasks: acc.tasks,
 				build_sources: acc.build_sources,
+				build_files: acc.build_files,
 				builds: acc.builds,
 				workflows: acc.workflows,
 				extensions: acc.extensions,
@@ -116,8 +122,24 @@ Lower :: [].{
 			}
 			Shell(name, inner) => { ..acc, shells: acc.shells.append(shell(name.to_str(), inner)?) }
 			Task(name, inner) => { ..acc, tasks: acc.tasks.append(task(name.to_str(), inner)?) }
+			SourceFile(name, url, sha256) => { ..acc, source_files: acc.source_files.append({ name: name.to_str(), url: url.to_str(), sha256 }) }
 			Source(name, ref) => { ..acc, build_sources: acc.build_sources.append({ name: name.to_str(), ref: ref.to_str() }) }
-			Build(name, inner) => { ..acc, builds: acc.builds.append(build(name.to_str(), inner)?) }
+			Build(name, inner) => {
+				var $selected = []
+				for build_setting in inner {
+					match build_setting {
+						Files(paths) => {
+							$selected = $selected.append(paths)
+						}
+						_ => {}
+					}
+				}
+				if $selected.len() > 1 {
+					return Err("DuplicateFiles: build ${name.to_str()}")
+				}
+				files = $selected.map(|paths| { build: name.to_str(), paths })
+				{ ..acc, builds: acc.builds.append(build(name.to_str(), inner)?), build_files: acc.build_files.concat(files) }
+			}
 			Workflow(name, steps) => {
 				..acc,
 				workflows: acc.workflows.append({
@@ -333,6 +355,7 @@ Lower :: [].{
 			{ environments: [], inputs: [], needs: [], runs: [], outputs: [] },
 			|acc, setting|
 				match setting {
+					Files(_) => acc
 					Use(env) => { ..acc, environments: acc.environments.append(env.to_str()) }
 					Inputs(inputs) => { ..acc, inputs: acc.inputs.append(inputs.map(|input| input.to_str())) }
 					Needs(needs) => { ..acc, needs: acc.needs.append(needs.map(|need| need.to_str())) }
@@ -569,3 +592,9 @@ expect Lower.lower([
 expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://mirror.example.test/tool", Url.assembled("http://mirror.example.test/tool")]))])])]) == Err("program tool on x86_64-linux has a URL that is not a download URL; expected https://<host>/<path> with no credentials, query or fragment:\n    http://mirror.example.test/tool")
 expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://example.test/tool"]))])])]) == Err("program tool on x86_64-linux names a URL twice:\n    https://example.test/tool")
 expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(Archive("https://example.test/tool.zip", Zip, "tool.exe"), ["https://mirror.example.test/tool.zip", "https://mirror.example.test/tool.zip"]))])])]) == Err("program tool on x86_64-linux names a URL twice:\n    https://mirror.example.test/tool.zip")
+
+# File selection is optional; an explicit empty selection is distinct from omitted.
+expect Lower.lower([Name("selected"), Environment("build", []), Build("app", [Use("build"), Files(["scripts", "recipe.txt"]), Run(["build"]), Output("out")])]).map_ok(|spec| { files: spec.build_files, feature: spec.requires_.contains("build-files") }) == Ok({ files: [{ build: "app", paths: ["scripts", "recipe.txt"] }], feature: True })
+expect Lower.lower([Name("empty"), Environment("build", []), Build("app", [Use("build"), Files([]), Run(["build"]), Output("out")])]).map_ok(|spec| spec.build_files) == Ok([{ build: "app", paths: [] }])
+expect Lower.lower([Name("duplicate"), Environment("build", []), Build("app", [Use("build"), Files([]), Files([]), Run(["build"]), Output("out")])]) == Err("DuplicateFiles: build app")
+expect Lower.lower([Name("escape"), Environment("build", []), Build("app", [Use("build"), Files(["../outside"]), Run(["build"]), Output("out")])]) == Err("invalid selected build path: ../outside")

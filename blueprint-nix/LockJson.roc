@@ -1,6 +1,7 @@
 # Bounded JSON data codec for native Nix lock graphs and authority envelopes.
 # Duplicate keys, malformed Unicode and trailing input fail before planning.
 import core.Project
+import core.JsonData
 
 LockJson := [
 	Object(List({ name : Str, value : LockJson })),
@@ -13,15 +14,21 @@ LockJson := [
 	is_eq : _
 
 	decode : Str -> Try(LockJson, Str)
-	decode = |text| {
-		if text.to_utf8().len() > 8388608 {
-			return Err("lock JSON exceeds 8 MiB")
-		}
-		parsed = parse(text.to_utf8(), 0, 0)?
-		if whitespace(text.to_utf8(), parsed.next) != text.to_utf8().len() {
-			return Err("trailing data in lock JSON")
-		}
-		Ok(parsed.value)
+	decode = |text| JsonData.decode(text).map_ok(from_data).map_err(
+		|error| match error {
+			InvalidJson(message) => message.replace_each("in JSON", "in lock JSON").replace_each("duplicate JSON key:", "duplicate lock JSON key:")
+			LimitExceeded(message) => message.replace_each("JSON", "lock JSON")
+		},
+	)
+
+	from_data : JsonData -> LockJson
+	from_data = |value| match value {
+		Object(fields) => Object(fields.map(|field| { name: field.name, value: from_data(field.value) }))
+		Array(items) => Array(items.map(from_data))
+		String(text) => String(text)
+		Number(text) => Number(text)
+		Boolean(boolean) => Boolean(boolean)
+		Null => Null
 	}
 
 	encode : LockJson -> Str
@@ -111,250 +118,6 @@ LockJson := [
 			_ => value
 		}
 
-	Parsed : { value : LockJson, next : U64 }
-	parse : List(U8), U64, U64 -> Try(Parsed, Str)
-	parse = |bytes, offset, depth| {
-		if depth > 128 {
-			return Err("lock JSON exceeds 128 levels")
-		}
-		i = whitespace(bytes, offset)
-		match bytes.get(i) {
-			Ok('"') => {
-				parsed = read_string(bytes, i + 1)?
-				Ok({ value: String(parsed.text), next: parsed.next })
-			}
-			Ok('{') => {
-				var $fields = []
-				var $next = whitespace(bytes, i + 1)
-				if bytes.get($next) == Ok('}') {
-					return Ok({ value: Object([]), next: $next + 1 })
-				}
-				while True {
-					if $fields.len() >= 4096 {
-						return Err("lock JSON object exceeds 4096 fields")
-					}
-					if bytes.get($next) != Ok('"') {
-						return Err("expected JSON object key")
-					}
-					key = read_string(bytes, $next + 1)?
-					if $fields.any(|f| f.name == key.text) {
-						return Err("duplicate lock JSON key: ${key.text}")
-					}
-					colon = whitespace(bytes, key.next)
-					if bytes.get(colon) != Ok(':') {
-						return Err("expected colon in lock JSON")
-					}
-					item = parse(bytes, colon + 1, depth + 1)?
-					$fields = $fields.append({ name: key.text, value: item.value })
-					$next = whitespace(bytes, item.next)
-					if bytes.get($next) == Ok('}') {
-						return Ok({ value: Object($fields), next: $next + 1 })
-					}
-					if bytes.get($next) != Ok(',') {
-						return Err("expected comma in lock JSON object")
-					}
-					$next = whitespace(bytes, $next + 1)
-				}
-			}
-			Ok('[') => {
-				var $items = []
-				var $next = whitespace(bytes, i + 1)
-				if bytes.get($next) == Ok(']') {
-					return Ok({ value: Array([]), next: $next + 1 })
-				}
-				while True {
-					if $items.len() >= 4096 {
-						return Err("lock JSON array exceeds 4096 items")
-					}
-					item = parse(bytes, $next, depth + 1)?
-					$items = $items.append(item.value)
-					$next = whitespace(bytes, item.next)
-					if bytes.get($next) == Ok(']') {
-						return Ok({ value: Array($items), next: $next + 1 })
-					}
-					if bytes.get($next) != Ok(',') {
-						return Err("expected comma in lock JSON array")
-					}
-					$next = whitespace(bytes, $next + 1)
-				}
-			}
-			Ok('t') => literal(bytes, i, "true", Boolean(True))
-			Ok('f') => literal(bytes, i, "false", Boolean(False))
-			Ok('n') => literal(bytes, i, "null", Null)
-			Ok(_) => number(bytes, i)
-			Err(_) => Err("unexpected end of lock JSON")
-		}
-	}
-
-	literal : List(U8), U64, Str, LockJson -> Try(Parsed, Str)
-	literal = |bytes, i, text, value| {
-		if bytes.drop_first(i).take_first(text.to_utf8().len()) == text.to_utf8() {
-			Ok({ value, next: i + text.to_utf8().len() })
-		} else Err("invalid JSON literal")
-	}
-
-	whitespace : List(U8), U64 -> U64
-	whitespace = |bytes, offset| {
-		var $i = offset
-		while match bytes.get($i) {
-			Ok(byte) => [' ', '\n', '\r', '\t'].contains(byte)
-			Err(_) => False
-		} {
-			$i = $i + 1
-		}
-		$i
-	}
-
-	digit : U8 -> Bool
-	digit = |byte| byte >= '0' and byte <= '9'
-
-	number : List(U8), U64 -> Try(Parsed, Str)
-	number = |bytes, start| {
-		var $i = start
-		if bytes.get($i) == Ok('-') {
-			$i = $i + 1
-		}
-		if bytes.get($i) == Ok('0') {
-			$i = $i + 1
-		} else {
-			if !digit(bytes.get($i) ?? 0) {
-				return Err("invalid JSON number")
-			}
-			while digit(bytes.get($i) ?? 0) {
-				$i = $i + 1
-			}
-		}
-		if bytes.get($i) == Ok('.') {
-			$i = $i + 1
-			if !digit(bytes.get($i) ?? 0) {
-				return Err("invalid JSON fraction")
-			}
-			while digit(bytes.get($i) ?? 0) {
-				$i = $i + 1
-			}
-		}
-		if ['e', 'E'].contains(bytes.get($i) ?? 0) {
-			$i = $i + 1
-			if ['+', '-'].contains(bytes.get($i) ?? 0) {
-				$i = $i + 1
-			}
-			if !digit(bytes.get($i) ?? 0) {
-				return Err("invalid JSON exponent")
-			}
-			while digit(bytes.get($i) ?? 0) {
-				$i = $i + 1
-			}
-		}
-		text = Str.from_utf8(bytes.drop_first(start).take_first($i - start))
-			.map_err(|_| "invalid UTF-8 number")?
-		Ok({ value: Number(text), next: $i })
-	}
-
-	read_string : List(U8), U64 -> Try({ text : Str, next : U64 }, Str)
-	read_string = |bytes, offset| {
-		var $i = offset
-		var $out = []
-		while $i < bytes.len() {
-			byte = bytes.get($i) ?? 0
-			$i = $i + 1
-			if byte == '"' {
-				text = Str.from_utf8($out).map_err(|_| "invalid UTF-8 JSON string")?
-				return Ok({ text, next: $i })
-			} else if byte == '\\' {
-				escaped = bytes.get($i).map_err(|_| "unfinished JSON escape")?
-				$i = $i + 1
-				match escaped {
-					'"' => {
-						$out = $out.append('"')
-					}
-					'\\' => {
-						$out = $out.append('\\')
-					}
-					'/' => {
-						$out = $out.append('/')
-					}
-					'b' => {
-						$out = $out.append(8)
-					}
-					'f' => {
-						$out = $out.append(12)
-					}
-					'n' => {
-						$out = $out.append('\n')
-					}
-					'r' => {
-						$out = $out.append('\r')
-					}
-					't' => {
-						$out = $out.append('\t')
-					}
-					'u' => {
-						var $point = hex4(bytes, $i)?
-						$i = $i + 4
-						if $point >= 0xD800 and $point <= 0xDBFF {
-							if bytes.get($i) != Ok('\\') or bytes.get($i + 1) != Ok('u') {
-								return Err("unpaired JSON Unicode surrogate")
-							}
-							low = hex4(bytes, $i + 2)?
-							if low < 0xDC00 or low > 0xDFFF {
-								return Err("invalid JSON Unicode surrogate pair")
-							}
-							$point = 0x10000 + ($point - 0xD800) * 1024 + low - 0xDC00
-							$i = $i + 6
-						} else if $point >= 0xDC00 and $point <= 0xDFFF {
-							return Err("unpaired JSON Unicode surrogate")
-						}
-						$out = $out.concat(utf8($point))
-					}
-					_ => return Err("invalid JSON string escape")
-				}
-			} else if byte < 32 {
-				return Err("unescaped control byte in JSON string")
-			} else {
-				$out = $out.append(byte)
-			}
-		}
-		Err("unterminated JSON string")
-	}
-
-	hex4 : List(U8), U64 -> Try(U32, Str)
-	hex4 = |bytes, offset| {
-		var $value = 0.U32
-		var $i = offset
-		while $i < offset + 4 {
-			byte = bytes.get($i).map_err(|_| "short JSON Unicode escape")?
-			digit_ = if (byte >= '0' and byte <= '9') byte - '0'
-			else if (byte >= 'a' and byte <= 'f') byte - 'a' + 10
-			else if (byte >= 'A' and byte <= 'F') byte - 'A' + 10
-			else return Err("invalid JSON Unicode escape")
-			$value = $value * 16 + digit_.to_u32()
-			$i = $i + 1
-		}
-		Ok($value)
-	}
-
-	utf8 : U32 -> List(U8)
-	utf8 = |point| {
-		if point < 128 {
-			[point.to_u8_wrap()]
-		}
-		else if point < 2048 {
-			[(192 + point // 64).to_u8_wrap(), (128 + point % 64).to_u8_wrap()]
-		} else if point < 65536 {
-			[
-				(224 + point // 4096).to_u8_wrap(),
-				(128 + point // 64 % 64).to_u8_wrap(),
-				(128 + point % 64).to_u8_wrap(),
-			]
-		} else {
-			[
-				(240 + point // 262144).to_u8_wrap(),
-				(128 + point // 4096 % 64).to_u8_wrap(),
-				(128 + point // 64 % 64).to_u8_wrap(),
-				(128 + point % 64).to_u8_wrap(),
-			]
-		}
-	}
 }
 
 # Unicode surrogate pairs and escaped controls survive exact JSON round trips.
@@ -403,3 +166,8 @@ expect {
 }
 
 expect LockJson.decode("{\"b\":[{\"z\":1,\"a\":2}],\"a\":{\"d\":\"x\",\"c\":true}}").map_ok(|value| LockJson.encode(LockJson.sorted(value))) == Ok("{\"a\":{\"c\":true,\"d\":\"x\"},\"b\":[{\"a\":2,\"z\":1}]}")
+
+# Compatibility facade retains the old data constructors, errors and bytes.
+expect LockJson.decode("true false") == Err("trailing data in lock JSON")
+expect LockJson.decode("{\"a\":1 \"b\":2}") == Err("expected comma in lock JSON object")
+expect LockJson.decode("{\"a\":1,\"a\":2}") == Err("duplicate lock JSON key: a")

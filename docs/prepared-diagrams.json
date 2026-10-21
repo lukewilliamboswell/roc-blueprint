@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "diagrams": [
+    {
+      "source_sha256": "8a03df0d2d56c69be76c939b432ab526ad6ba3e4219a751a3a7f39404eb256b1",
+      "href": "images/blueprint-flow.png",
+      "png": "images/blueprint-flow.png",
+      "png_sha256": "76e1e25cc293ac7f71c539c37c177f978ac99c555c233db4887c244f39312712"
+    }
+  ]
+}

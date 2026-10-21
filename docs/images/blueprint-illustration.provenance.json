@@ -1,0 +1,6 @@
+{
+  "source": "../blueprint-gemini-gen.jpeg",
+  "source_sha256": "1b9533c26cdbf9baa2fa53bf2c8145e387c30c1ce1ab4076fe0ab70ea9519c0d",
+  "preparation": "magick docs/blueprint-gemini-gen.jpeg -depth 8 -interlace none PNG24:docs/images/blueprint-illustration.png",
+  "png_sha256": "ee85578a64efbbbc0d8824cd65957f69d1612d07390f0fe8eb190bbe896c04ad"
+}

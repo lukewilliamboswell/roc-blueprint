@@ -51,11 +51,49 @@ more than the build was given: the Roc compiler's package puts coreutils and
 a C compiler on the `PATH` of a script it runs. An environment with fetched
 programs or expected tools cannot be a build's: a sandbox holds only what its
 package sources supply, and the build is refused when it is planned.
-The `blueprint` executable is itself each build's builder inside the sandbox,
-so `blueprint build` refuses to run unless that executable is an x86_64 Linux
-one.
+A versioned standalone runner executes builds using only the locked package
+set. Its bytes are independent of the Blueprint CLI executable. Caller namespace
+identities are mounted as an authorization witness at execution time, outside
+the derivation; they do not change the derivation identity. Both mount and
+network namespaces must differ from the caller before the runner creates a
+workspace or starts the command. A missing mount, disabled sandbox, invalid
+witness or shared namespace fails closed. Builds run locally on x86_64 Linux;
+remote Nix builders are disabled for this isolation contract.
 See the https://github.com/lukewilliamboswell/roc-blueprint/blob/main/examples/artifacts/README.md[complete runnable example],
 https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/builds/README.md[real build fixture].
+
+== Original files with published hashes
+
+`SourceFile(name, url, sha256)` declares an original upstream file, such as a
+release archive whose publisher supplies a flat SHA-256. The hash is exactly
+64 lowercase hexadecimal characters. The URL follows the same public HTTPS
+rules as fetched programs. Use `Inputs([name])` on a build: the unchanged file
+is available at `$BLUEPRINT_INPUTS/<name>`. An archive is never unpacked
+implicitly; name the unpacker in the environment's `Tools` and run it in the
+recipe when needed. `Source(name, ref)` continues to supply a locked source
+tree, including archives that Nix unpacks and pins by their NAR hash.
+
+`blueprint update` fetches and verifies the original bytes against the declared
+published hash before committing a pin. `blueprint update NAME` can select the
+file alone. The authority is a `sources` entry in `Blueprint.lock` with
+`provider = "file"`, the original URL in `ref`, and its flat
+`sha256:<hex>` in `digest`. There is no additional source lock. URL, name,
+hash, addition or removal changes require explicit update.
+
+Ordinary builds and generation use the committed digest. They hash cached
+bytes on every use, fetch a missing file from its locked URL, and repair a
+corrupt cache by fetching and verifying it again. Wrong upstream bytes fail;
+ordinary fetches never change the lock. A verified cached file works offline.
+The source enters Nix as a fixed, non-recursive file snapshot whose hash is
+checked again by Nix. Its store identity is independent of the caller's cache
+location, and the recipe sees the original archive bytes. Unrelated files
+that no selected build uses are not fetched.
+
+`blueprint lock show --json NAME` reports `digestKind: "file"` and the original
+`flatSha256` separately from tree identities, with empty `metadata: {}`. A NAR
+hash is not a publisher's hash of an archive; do not compare them as if they
+were the same digest. Build provenance includes the selected file source's
+name, original URL and flat digest alongside the other locked sources used.
 
 == Order tasks and builds in a workflow
 
@@ -75,3 +113,85 @@ unchanged inputs, but Blueprint never caches artifact results across tasks.
 Locked sources are verified again; task edits to them require explicit update.
 Cycles and excessive depth/expansion fail during configuration validation.
 See the https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/workflows/README.md[real workflow fixture].
+
+== Select a recipe's project files
+
+`Files(["scripts/producer.sh", "dependencies/shared"])` on a `Build` selects
+only those project files and directory trees for that build. Paths are relative
+to the project root; absolute paths, `.` and `..` components are refused.
+A selected path must exist. The usual generated-root, authority, VCS and locked
+local-source exclusions still apply. Omit `Files` to retain the whole-project
+snapshot; `Files([])` gives the command an empty writable workspace.
+
+Give each component its own single-output build with its own `Files` list.
+The builds share their locked package sets and any identical selected trees in
+the Nix store; an unrelated application edit does not change their snapshots.
+
+== Reach a tool's libraries
+
+`BLUEPRINT_TOOLS` is a read-only directory of complete package roots. A plain
+or configured tool `nix#glibc` is at `$BLUEPRINT_TOOLS/nix#glibc`, so a producer
+can use `$BLUEPRINT_TOOLS/nix#glibc/lib/ld-linux-x86-64.so.2` without guessing a
+store path. A `Command("cc", "nix#clang")` exposes its underlying package root
+at `$BLUEPRINT_TOOLS/cc`. These paths do not add tools to `PATH`, enable
+network access or opt into `stdenv` setup. Quote paths as usual in a shell.
+
+== Check reproducibility and record provenance
+
+`blueprint build NAME --rebuild` asks Nix to rebuild the existing derivation
+and compare its output. Nix fails when the output differs. Build it once
+before asking for this check; a missing prior output is not a reproducibility
+comparison. Run this for each component in CI.
+
+`blueprint build NAME --json` prints one JSON object and keeps build progress
+on stderr. Both flags may be combined. Version 1 has these fields:
+
+* `schema_version`: `1`.
+* `name` and `system`: the requested build and target system.
+* `provider`: the provider that executed the build, currently `"nix"`.
+* `recipe_identity`: the provider's opaque locked recipe identity. Compare it
+  only together with `provider`; it is not necessarily a path or a SHA-256.
+* `metadata`: typed native details namespaced by provider. Nix supplies
+  `metadata.nix.derivation`, the actual builder derivation path reported by Nix,
+  which is also its `recipe_identity`. Other providers need no Nix fields.
+* `outputs`: a list of `{ "name": "out", "path": "..." }` records.
+* `sources`: the root lock entries used by this build and its dependencies,
+  each with `name`, `provider`, `ref`, `rev` and `digest`. Sources without a
+  revision have an empty `rev`; these digests retain the lock's representation.
+
+Consumers should reject unsupported schema versions and tolerate additional
+fields. Recipe and output identities come from the selected provider; Blueprint does
+not infer them from the declared output name.
+
+== Override packages in a producer
+
+`Overlay("producer-overrides", "path:./producer-overrides")` may name a local
+flake with an `overlays.default` output. Select it with
+`Overlays(["producer-overrides"])` in the producer's environment. For example,
+that flake can define:
+
+[source,nix]
+----
+{
+  outputs = { self }: {
+    overlays.default = final: prev: {
+      meson = prev.meson.overrideAttrs (old: {
+        version = "1.12.0";
+        src = prev.fetchurl {
+          url = "https://github.com/mesonbuild/meson/releases/download/1.12.0/meson-1.12.0.tar.gz";
+          # Replace with the checksum published for this exact upstream archive.
+          hash = "sha256-<published-base64-sha256>";
+        };
+        # Apply a specific patch here when the upstream test change needs one.
+      });
+    };
+  };
+}
+----
+
+The checksum is an intentional placeholder; fill it before building. Blueprint
+locks the local flake's tree and refuses edits until `blueprint update`.
+The override applies to builds whose environment selects that overlay. The
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/examples/artifacts/Blueprint.roc[artifact example]
+declares two single-output builds selecting their recipe directory and sharing
+the same pinned package environment.

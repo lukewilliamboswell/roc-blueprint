@@ -73,7 +73,12 @@ Fuzz := [].{
 			Replay => if has_corpus ["-runs=0"] else ["-runs=${generated_runs.to_str()}", "-seed=1"]
 			Timed(seconds) => ["-max_total_time=${seconds.to_str()}"]
 		}
-		length.concat(["-print_final_stats=1", "-artifact_prefix=${artifact_prefix}"]).concat(dictionaries.map(|dictionary| "-dict=${dictionary}"))
+		# A generator decodes its value's choices from the input's bytes. libFuzzer
+		# starts from inputs of a few bytes and lengthens them slowly, so without
+		# this nearly every choice decodes from exhausted input, as its first
+		# option; a corpus of real documents needs no such help.
+		generated = if has_corpus [] else ["-len_control=0"]
+		length.concat(generated).concat(["-print_final_stats=1", "-artifact_prefix=${artifact_prefix}"]).concat(dictionaries.map(|dictionary| "-dict=${dictionary}"))
 	}
 
 	describe : Mode -> Str
@@ -226,8 +231,8 @@ expect Fuzz.corpus(Timed(30), "", "spec-parse") == Scratch
 expect Fuzz.corpus(Replay, "/kept", "spec-parse") == Scratch
 
 expect Fuzz.flags(Replay, True, "/a/spec-parse-", ["/t/sexpr.dict"]) == ["-runs=0", "-print_final_stats=1", "-artifact_prefix=/a/spec-parse-", "-dict=/t/sexpr.dict"]
-expect Fuzz.flags(Replay, False, "/a/t-", []) == ["-runs=20000", "-seed=1", "-print_final_stats=1", "-artifact_prefix=/a/t-"]
+expect Fuzz.flags(Replay, False, "/a/t-", []) == ["-runs=20000", "-seed=1", "-len_control=0", "-print_final_stats=1", "-artifact_prefix=/a/t-"]
 expect Fuzz.flags(Timed(30), True, "/a/t-", []) == ["-max_total_time=30", "-print_final_stats=1", "-artifact_prefix=/a/t-"]
-expect Fuzz.flags(Timed(30), False, "/a/t-", []) == Fuzz.flags(Timed(30), True, "/a/t-", [])
+expect Fuzz.flags(Timed(30), False, "/a/t-", []) == ["-max_total_time=30", "-len_control=0", "-print_final_stats=1", "-artifact_prefix=/a/t-"]
 
 expect Fuzz.tail("a\nb\nc", 2) == "b\nc" and Fuzz.tail("a\nb", 5) == "a\nb"

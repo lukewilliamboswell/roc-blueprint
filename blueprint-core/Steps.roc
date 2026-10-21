@@ -16,20 +16,23 @@ Steps := { steps : List(Step) }.{
 
 	## Installables are resolved by the provider, never guessed store paths.
 	Artifact : {
+		provider : Str,
 		name : Str,
 		installable : Str,
 		output : Str,
 		dependencies : List(Str),
 	}
 
+	## SourceFile fetches and verifies original bytes by their flat SHA-256,
+	## then substitutes @blueprint-source-file-<sha256>@ in staged files with
+	## their JSON-encoded artifact path. Providers stage this marker as a whole
+	## JSON value, not inside executable syntax. It never unpacks the file or adds a command to PATH.
 	## Verify all locked local trees before staging files.
-	## Isolation names two placeholder texts in this step's files. Before
-	## staging, replace each with the caller's /proc/self/ns/{mnt,net} readlink
-	## identity (`mnt:[digits]`, `net:[digits]`), observed for this step.
-	## Runner: the step's command runs the executor's own executable on
-	## `system`. Refuse every step before the first unless the executor runs on
-	## that System; then replace the `executable` placeholder text with its
-	## absolute path, refusing one holding `"`, `\`, `$` or a control character.
+	## Isolation writes the current mount/network namespace identities as two
+	## lines to `directory/witness`, and replaces `placeholder` in the step's
+	## argv with that directory. Authorization is runtime data, never staged
+	## recipe data. The provider owns how its sandbox mounts the witness.
+	## LocalSystem requires a local executor on that system before any effects.
 	## RocBundles: the step's command runs Roc programs that depend on these
 	## released bundles, each named by the hash of its bytes. Before the
 	## step's argv, for each bundle whose `<name>/main.roc` is missing from
@@ -54,9 +57,10 @@ Steps := { steps : List(Step) }.{
 	## before the first step's command.
 	## Serialize workspace use; stop on any failed materialization operation.
 	Operation : [
+		SourceFile({ name : Str, url : Str, sha256 : Str }),
 		VerifyTree({ path : Str, digest : Str }),
-		Isolation({ mnt : Str, net : Str }),
-		Runner({ executable : Str, system : Str }),
+		Isolation({ directory : Str, placeholder : Str }),
+		LocalSystem(Str),
 		RocBundles(List({ name : Str, url : Str })),
 		Present(List({ program : Str, because : Str })),
 		Programs(List(Program)),

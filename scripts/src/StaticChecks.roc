@@ -39,6 +39,25 @@ StaticChecks := [].{
 		}
 	}
 
+	## Report projections and their JSON helper share the pure provider boundary.
+	## None may import a platform through which it could evaluate or mutate.
+	lock_inspector_contract_problem : Str -> Str
+	lock_inspector_contract_problem = |source| {
+		import_lines = source.split_on("\n").keep_if(|line| line.starts_with("import "))
+		if import_lines.any(|line| !line.starts_with("import core.") and line != "import ReportJson") or !provider_references(source).is_empty() {
+			"report modules must use only pure Core and ReportJson interfaces"
+		} else ""
+	}
+
+	## Exported report codecs stay in the pure core package; no adapter or IO.
+	core_report_contract_problem : Str -> Str
+	core_report_contract_problem = |source| {
+		allowed = ["import Lock", "import Provider", "import Value", "import JsonData", "import Project"]
+		if source.split_on("\n").any(|line| line.starts_with("import ") and !allowed.contains(line)) {
+			"core report modules must use only pure protocol modules"
+		} else ""
+	}
+
 	## Every use of a member of a provider module: the identifier `Locks`, or
 	## one starting `Nix` and made of letters, followed by a dot.
 	provider_references : Str -> List(Str)
@@ -290,3 +309,14 @@ expect StaticChecks.core_modules_problem(["main.roc", "Spec.roc", "New.roc"], ["
 expect StaticChecks.version_problem("  version = \"0.4.0\";\n", "version = \"0.4.0\"\n") == ""
 expect StaticChecks.version_problem("  version = \"0.4.0\";\n", "version = \"0.4.1\"\n") == "flake.nix packages version 0.4.0, but blueprint-cli/main.roc reports 0.4.1"
 expect StaticChecks.version_problem("", "version = \"0.4.1\"\n") != ""
+
+expect StaticChecks.lock_inspector_contract_problem("import core.Lock\nimport core.Provider\n") == ""
+expect !StaticChecks.lock_inspector_contract_problem("import nix.Locks\n").is_empty()
+expect !StaticChecks.lock_inspector_contract_problem("import pf.Path\n").is_empty()
+
+expect StaticChecks.lock_inspector_contract_problem("import core.Value\nimport ReportJson\n") == ""
+expect !StaticChecks.lock_inspector_contract_problem("import Store\n").is_empty()
+
+expect StaticChecks.core_report_contract_problem("import Lock\nimport JsonData\n") == ""
+expect !StaticChecks.core_report_contract_problem("import nix.NixProvider\n").is_empty()
+expect !StaticChecks.core_report_contract_problem("import pf.Path\n").is_empty()

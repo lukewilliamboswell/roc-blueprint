@@ -15,15 +15,20 @@ blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
 blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
   Project.roc            pure normalization, references and provider capability checks
   Realise.roc            pure planning of a request: what the Core supplies, and what it asks of a provider
-  fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip, lock-parse
+  Sbom.roc               pure SBOM inventory; writes SPDX 3.0.1, SPDX 2.3 and CycloneDX 1.7, reads SPDX 3.0.1, 2.3 and 2.2 and its own CycloneDX
+  Spdx3.roc, Spdx2.roc   the SPDX 3.0.1 and 2.x rules, held to the schemas pinned in tests/sbom/schema/
+  CycloneDx.roc          the CycloneDX 1.7 rules, held to the schema pinned in tests/sbom/schema/
+  fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip, lock-parse,
+                         lock-snapshot-parse, lock-snapshot-round-trip, lock-snapshot-project,
+                         sbom-render, sbom-read
 blueprint-nix/           importable pure Nix provider (depends only on blueprint-core)
   NixProvider.roc        shared pure request planning and flake rendering
   Locks.roc              Nix pins <-> the Lock: Sources plus a "nix" hint
   tests/                 Spec fixtures and golden flakes
-blueprint-cli/           the blueprint CLI (basic-cli + weaver); as `blueprint __build-runner`
-                         it is also each build's in-derivation argv/output/isolation check
+blueprint-cli/           the blueprint CLI (basic-cli + weaver), which executes provider plans
   Store.roc, Download.roc  the per-user store of downloads and the HTTPS client that fills it
-  Bootstrap.roc          the recorded download of the compiler that reads a Blueprint.roc
+  Bootstrap.roc          identity of the compiler archive embedded in each CLI
+  compilers.roc          the same metadata as a package for build tooling
   Published.roc          what a release publishes as the digest of an asset, asked by update
 fixtures/consumer/       independent consumer of the Spec and Nix packages
 fixtures/overlays/       overlay flakes for scripts/test_scenarios.roc
@@ -32,9 +37,11 @@ examples/composition/    imported pure modules: reusable task settings and a pro
 examples/artifacts/      runnable source/dependency/workflow example and its Roc scripts
 examples/extensions/     Custom blocks; CI checks blueprint refuses them clearly
 scripts/                 Roc scripts, run from the repository root; their modules are in scripts/src/
-  test.roc               everything CI checks, in groups; runs the test_*.roc suites
+  test.roc               local CI test groups; runs the test_*.roc suites
   link_inputs.roc        fetch or check the platform's linker inputs
-  bundle.roc             bundle core and the platform into dist/ and smoke-test the pair
+  bundle.roc             bundle core, the platform and the reporting app into dist/ and smoke-test them
+  embed_compiler.roc     stage and verify one target's compiler archive for embedding
+  test_bootstrap.roc     test embedded compiler installation, repair and concurrency
   build_release.roc      cross-build the CLI and its smoke-test program for each released system
   smoke_binary.roc       run a built CLI with no Roc and no Python of its own; with --no-nix, with no Nix either
   fuzz.roc               replay or fuzz the roc-fuzz targets
@@ -45,7 +52,9 @@ scripts/                 Roc scripts, run from the repository root; their module
   check_version.roc      check a release's version before building and against the public API after
   package_docs.roc       archive the rendered site
   release_assets.roc     gather a release's assets and check the names other repositories depend on
+  test_lock_snapshot.roc  check the official lock snapshot consumer against the vendored schema and profile
   test_builds.roc, test_workflows.roc   real-Nix build and workflow suites on scripts/src/BuildHarness.roc
+  reproducible_probe.roc  compare a producer on independent CI hosts and synthetic CLI patch builds
 docs/                    the manual: index.adoc includes one chapter per top-level .adoc file
   releases/              each release's notes, included by releases.adoc
 link-inputs.lock.json    the linker-input release the platform links, pinned by content
@@ -53,10 +62,37 @@ flake.nix                builds blueprint with the pinned Roc; the development s
 ----
 
 The local platform and CLI share `blueprint-core`, including
-`Project.validate`. The Spec wire format is major 2 (currently 2.7); published
+`Project.validate`. The Spec wire format is major 2 (currently 2.8); published
 major-1 bundles are not compatible. The architecture, terminology (Spec,
 Provider, Lock, stages) and invariants are defined in
 xref:architecture.adoc#purpose[the architecture chapter]; keep it in sync with changes.
+
+[[review-provider-neutrality]]
+== Keep capabilities provider neutral
+
+xref:architecture.adoc#provider-neutrality[Provider neutrality] is a lasting
+design constraint, including for a future executor developed within
+Blueprint. Review shared-contract changes against it:
+
+* Describe the capability and guarantee independently of the current Nix
+  implementation. Keep native syntax, command lines and metadata in the
+  provider; keep identity semantics explicit and provider-qualified.
+* Show how another deterministic system could fulfil the contract. A
+  provider that cannot fulfil it must fail before effects, rather than
+  silently weaken isolation or reproducibility.
+* Preserve the boundary between committed intent and pins, pure inspection,
+  disposable materialisation and the Core's constrained effect execution.
+* Exercise changed provider boundaries with an independent contract fixture
+  using its own arguments, identities and metadata. Renaming a Nix fixture
+  is not evidence of another implementation.
+* Document unsupported capabilities and remaining routing or registration
+  constraints. Distinguish a reusable contract from an implemented backend.
+
+Protocol changes need a shared semantic reason and the existing versioning
+rules. They must not make every provider adopt one ecosystem's native format.
+The existing source-registration, resolver-ownership and execution-selection
+work is tracked in
+https://github.com/lukewilliamboswell/roc-blueprint/issues/56[the additional-provider follow-up].
 
 == Set up
 
@@ -69,10 +105,13 @@ nix develop
 
 gives two Roc compilers from
 https://github.com/roc-lang/roc-overlay[roc-overlay], Zig 0.16 and the
-programs the scripts start: coreutils, git, curl, tar, gzip, zip, unzip and gh. It has no
-Python. `roc` is the product compiler, the nightly in
+programs the scripts start: coreutils, git, curl, tar, gzip, zip, unzip and gh.
+On Linux it also supplies Bubblewrap, util-linux and Python for isolated
+runner tests and a restrictive-umask launcher. Nothing else uses Python: the
+product, the reporting app and every conformance check run in Roc.
+`roc` is the product compiler, the nightly in
 `blueprint-cli/compiler-version`: it builds and tests the CLI, the packages and
-the platform, and a released `blueprint` fetches it. `roc-stable` is the
+the platform, and a released `blueprint` embeds it. `roc-stable` is the
 nightly `rocStableTag` names in `flake.nix`: the scripts in `scripts/` start
 with `#!/usr/bin/env roc-stable` and run on it, so they keep working while the
 product moves to a newer nightly. The scripts reach the product compiler
@@ -80,6 +119,13 @@ through `ROC`, or `roc` on `PATH`. This shell is the one definition of the toolc
 every CI job runs its scripts through `nix develop -c`, so what passes in the
 shell is what CI runs. `blueprint` is not in the shell, so entering it never
 compiles the CLI; build it as below, or use `nix run .`.
+
+The shell stages this host's pinned compiler archive as the ignored file
+`blueprint-cli/compiler-archive`. Roc imports its bytes into the CLI at build
+time. Outside the shell, stage an archive first with
+`scripts/embed_compiler.roc <system>`; the script checks its size and digest
+against `Bootstrap.roc`. Keep the complete archive: macOS Roc needs the
+`darwin/` sysroot beside its executable.
 
 `blueprint-cli/main.roc` uses the released basic-cli platform by URL. Roc
 downloads it on first use outside Nix; the Nix blueprint package fetches the same
@@ -93,14 +139,18 @@ archive by hash, so its sandboxed build needs no network.
 scripts/link_inputs.roc fetch             # the musl runtime files the platform links
 (cd blueprint-platform && zig build)      # libhost.a or host.lib for all five hosts
 roc test blueprint-core/main.roc      # Spec round trips and format tests
-roc test blueprint-cli/main.roc             # the CLI's, the Nix provider's and every core expect
+roc test --opt=interpreter blueprint-cli/main.roc # CLI, provider and core expects
 roc build blueprint-cli/main.roc --output=./blueprint
 (cd examples/all-settings && ../../blueprint run --help) # try the CLI
-scripts/test.roc                            # everything CI runs
+scripts/test.roc                            # all local CI test groups
 scripts/test.roc unit cli                   # or only some groups: static, unit,
                                             # cli, scenarios, builds, package, glue, fuzz
 scripts/fuzz.roc 300                        # fuzz each target for 5 minutes
 ----
+
+The CLI unit tests use interpreter mode because the pinned compiler's
+native test backend crashes on the large embedded byte constant. Integration
+tests run the compiled executable.
 
 The `.roc` files in `scripts/` are Roc programs; they start other programs by
 argument list, not through a shell. Run one from the repository root with the
@@ -114,7 +164,7 @@ verifies it and installs the files beside `libhost.a`; nothing that evaluates a
 See
 https://github.com/lukewilliamboswell/roc-blueprint/blob/main/blueprint-platform/targets/README.md[blueprint-platform/targets/README.md].
 
-`scripts/test.roc` is the full CI entry point. Its groups are `static`
+`scripts/test.roc` runs the repository's CI test groups. Its groups are `static`
 (formatting; no tracked object file, archive or import library; the CLI's use of
 the Provider contract; the compiler downloads `Bootstrap.roc` records, one
 for each system the CLI runs on; each workflow's
@@ -137,6 +187,11 @@ every week, starting from the inputs earlier runs found, which it keeps in the
 Actions cache through `FUZZ_CORPUS`, and uploads any crashing input). `scenarios` and `builds` are the
 real-Nix suites, split into two groups of about the same length so that CI runs
 them as two jobs at the same time.
+Two additional CI jobs run `scripts/reproducible_probe.roc` on independent
+Ubuntu 24.04 and 22.04 hosts. One uses the release binary; the other compiles
+a synthetic next-patch CLI with the same runner pins. Each builds and
+rebuilds the same selected-input producer. A dependent job compares their
+actual derivation, outputs and locked-source provenance.
 `scripts/test_config.roc` runs the compiler on generated `Blueprint.roc`
 fixtures: the platform's own rules, which only a compiler run can show (a
 setting given twice or not at all, in `Lower.roc`, and each checked name's
@@ -177,14 +232,45 @@ revisions in `fixtures/consumer/inputs.lock` and `flake.lock`, and its
 `fixtures/consumer/main.roc` holds the staged bytes and supplied-lock
 preservation as `expect`s. Parse fuzzing also checks successful semantic
 normalization for idempotence.
+SBOMs are SPDX 3.0.1 JSON-LD, with SPDX 2.3 and CycloneDX 1.7 renderings of
+the same inventory for consumers that read only those, and conformance is
+checked in Roc, with no other validator. `blueprint-core/Spdx3.roc`,
+`Spdx2.roc` and `CycloneDx.roc` hold the classes or objects, members,
+enumerations and prose rules of each format, and `scripts/src/SbomTest.roc`
+holds them to the digest-pinned schemas in `tests/sbom/schema/` (the published
+SPDX 3.0.1 JSON schema, the SPDX 2.3 schema and the CycloneDX 1.7 schema):
+every class, member and enumeration the validators accept is the schema's own.
+The same expects require that each committed fixture in `tests/sbom/fixtures/`
+is what the renderers write now (regenerate them with
+`scripts/test_sbom.roc fixtures tests/sbom/fixtures`) and that all three
+renderings of a fixture read back to one package graph. `scripts/test_sbom.roc binding`
+then runs the built `scripts/sbom.roc` against read-only inputs. The
+`sbom-render` fuzz target generates inventories with arbitrary text and
+graphs: each must render to valid, canonical SPDX 3.0.1, SPDX 2.3 and
+CycloneDX 1.7, read back from each to exactly its own packages and
+relationships, with CycloneDX's standard fields (dependencies, scopes, hashes,
+purls, licenses, suppliers) derived from the inventory, and the validators
+must reject a rendering once one of a list of SPDX 3.0.1 or CycloneDX rule
+violations is injected into it. It also strips Blueprint's properties from
+the CycloneDX rendering, which must then import as plain CycloneDX to a
+projection of the inventory, and adds files to the SPDX renderings, which
+must read to the same package graph with the files counted as gaps.
+`sbom-read` mutates the fixtures of every format, including what Syft and
+Trivy write (`tests/sbom/fixtures/upstream/`): reading must never crash, what
+it accepts must be a sound package graph, and it must import as an upstream
+SBOM unless the import is refused for a developer path, a credential, its
+size or a subject digest that is not a SHA-256.
 `scripts/test_builds.roc` runs real sandboxed builds of artifacts,
 dependencies and sources, including host-file and TCP isolation with positive
 host controls, fail-closed runner checks, exact argv, immutable locks,
 freshness and relocation. It also checks what Nix copies from the project
 (bytes, the owner's execute bit, raw names, exclusions, refused symlinks and
-special files) and that an undeclared tool is not found. It runs
-`blueprint __build-runner` directly on the host for the checks that need no
-sandbox, with a hand-written witness naming namespaces the host does not have.
+special files) and that an undeclared tool is not found. The exact standalone
+runner's argv, input and output checks run in an isolated Linux test harness;
+an unisolated invocation must refuse execution before user code runs. Runtime
+namespace witnesses are private to each invocation and do not enter the
+derivation. Stubbed CLI tests verify their contents, cleanup and separation
+from stable recipe bytes.
 `scripts/test_workflows.roc` runs real ordered task/build workflows, nested
 repetitions, failure stops, snapshot/dependency freshness, repeated
 locked-source verification, whole-closure preflight and immutable authority,
@@ -269,10 +355,12 @@ the `build` job produced and no step that installs anything. It runs
   in `blueprint-cli/compiler-version`, with `Expect(["git"])` and the Roc
   packages of a basic-cli script, against this checkout's platform;
 * gives the binary a store and a Roc package cache of its own, empty;
-* runs `blueprint update` and requires that the compiler was fetched exactly
-  once, for reading `Blueprint.roc` and as `roc-stable` together;
+* runs `blueprint update` and requires that the embedded compiler was
+  installed exactly once, for reading `Blueprint.roc` and as `roc-stable` together;
+* runs the shared compiler as `roc-stable version` and requires its actual
+  response to match `blueprint compiler-version`;
 * requires that `blueprint requirements --json` names no provider;
-* runs the script as a task, which the fetched compiler builds, links and
+* runs the script as a task, which the embedded compiler builds, links and
   runs. On macOS that is the test that `roc` finds the `darwin` directory of
   its archive through the link it is started by;
 * runs the task again and requires that nothing is downloaded, and that no
@@ -294,34 +382,68 @@ The manual is the AsciiDoc in `docs/`. `index.adoc` is a book that includes
 one chapter per top-level `.adoc` file; `.github/workflows/docs.yml` renders
 it as a site and a PDF with the shared
 https://lukewilliamboswell.github.io/roc-automation/actions.html#build-docs[`build-docs`]
-action, on every pull request, and deploys the site from `main`. Every
-Asciidoctor warning fails the build.
+action, on every pull request, and deploys the site from `main`. The action
+and renderer are paired at `tools-0.1.0-rc.1`; `flake.nix` checks the released
+renderer binary's SHA-256 for each supported host. Rendering uses the native
+Roc utility. API generation uses this repository's pinned Roc compiler.
 
-To render it as CI does, with Docker and a checkout of
-https://github.com/lukewilliamboswell/roc-automation[roc-automation] beside
-this one:
+To render the same outputs locally, inside `nix develop`:
 
 [source,sh]
 ----
 scripts/docs_snippet.roc    # docs/generated/, from the latest release; needs a logged-in gh
-python3 ../roc-automation/actions/build-docs/build_docs.py --workspace . --pdf-filename roc-blueprint.pdf
+renderer=$(nix build .#roc-docs --no-link --print-out-paths)/bin/roc-docs
+"$renderer" build --workspace "$PWD" --pdf-filename roc-blueprint.pdf \
+  --pdf-image-dpi 300 \
+  --docs-version main --api-entrypoint blueprint-platform/main.roc \
+  --roc-command "$(command -v roc)"
 ----
 
 The site is `.docs-out/site/` and the PDF `.docs-out/roc-blueprint.pdf`;
-neither is committed.
+neither is committed. Both workflows use 300 DPI for PDF image preparation
+so the architecture diagram retains detail when zoomed. Publication links use explicit URLs; this action and
+renderer pair does not need a `site-url` option.
+
+Keep PSV table cells on complete physical lines. HTML honours the declared
+column proportions; this renderer release's PDF sizes earlier columns to
+their content and gives the last column the remaining space. Keep long
+explanations together: the overview combines each source and its version pin,
+and the configuration checks use labelled paragraphs. Stage responsibilities
+use separate input/output, execution and invariant tables. Review both
+outputs after changing a table; column proportions alone do not establish
+that its PDF is readable.
+
+Stable explicit anchors preserve links when a heading's wording changes.
+Invariant headings use words before their numbers because numeric-leading
+headings exceed this release's native inline profile. The historical
+`use-this-release-2` release anchor remains explicit. Prepared figures replace
+render-time Mermaid and JPEG conversion, with their source and asset digests
+recorded below. These are authoring changes, rather than renderer patches.
+
+Native images are non-interlaced RGB/RGBA PNGs. The manual's illustration is
+converted from the original JPEG; its source hash and conversion command are
+in `docs/images/blueprint-illustration.provenance.json`. The architecture flow
+uses the checked-in published SVG and its prepared PNG, with provenance in
+`docs/images/blueprint-flow.provenance.json`. Its Mermaid source stays in
+`architecture.adoc`; `docs/prepared-diagrams.json` binds its exact source and
+PNG hashes. Update the figure and registration together when editing the
+Mermaid block. These prepared assets let ordinary documentation builds run
+without a browser, image converter or diagram tool.
 
 The manual describes the tool as it is: one recommended way to do each thing,
 in the present tense. What changed between versions belongs in the release
 notes, and what is unfinished in an issue.
 
 The Roc in the manual is compiled by `scripts/test.roc unit`, so a block must
-be one of four things:
+be one of five things:
 
 * a whole `Blueprint.roc`, starting `app [`, whose platform is written as a
   placeholder;
 * settings as they stand inside `config`, complete enough to check by
   themselves: an environment a task uses is in the block. A tool of the
   source `nix` may be written without the `Packages("nix", ...)` line;
+* `[source,roc,snippet=core-module]`, pure imports and declarations checked
+  inside a package against the repository's core modules;
 * `[source,roc,snippet=refused]`, settings the compiler must refuse, for a
   mistake the text explains;
 * `[source,roc,snippet=unchecked]`, which is not compiled: use it only for a

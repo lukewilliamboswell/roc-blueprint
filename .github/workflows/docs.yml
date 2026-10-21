@@ -38,16 +38,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: nix develop -c scripts/docs_snippet.roc
 
-      # build-docs runs outside the development shell and needs the compiler's path.
+      # Supply the shared native renderer and the compiler used for API docs.
       - id: roc
-        name: Find the product compiler
-        run: echo "command=$(nix develop -c sh -c 'command -v roc')" >> "$GITHUB_OUTPUT"
+        name: Locate the compiler and native documentation renderer
+        run: |
+          echo "command=$(nix develop -c sh -c 'command -v roc')" >> "$GITHUB_OUTPUT"
+          renderer=$(nix build .#roc-docs --no-link --print-out-paths)
+          echo "renderer=$renderer/bin/roc-docs" >> "$GITHUB_OUTPUT"
 
       - id: docs
         name: Render the manual as a site and a PDF
-        uses: lukewilliamboswell/roc-automation/actions/build-docs@7fdb8be46b12da9b119023c3a5aac28a9fdaa72b
+        uses: lukewilliamboswell/roc-automation/actions/build-docs@dec2d52a5cb6cd251fd188ad1d797f400ee1bb6e # tools-0.1.0-rc.1
         with:
+          backend: roc
+          renderer-binary: ${{ steps.roc.outputs.renderer }}
           pdf-filename: roc-blueprint.pdf
+          pdf-image-dpi: "300"
           docs-version: ${{ github.event_name == 'pull_request' && format('main (pull request {0})', github.event.number) || 'main' }}
           api-entrypoint: blueprint-platform/main.roc
           roc-command: ${{ steps.roc.outputs.command }}

@@ -211,6 +211,15 @@ static! = |context| {
 	step!("The CLI reaches providers only through the Provider contract")?
 	cli_source = read!(context, "blueprint-cli/main.roc")?
 	problem!(StaticChecks.provider_contract_problem(cli_source))?
+	lock_inspector = read!(context, "blueprint-cli/LockReport.roc")?
+	problem!(StaticChecks.lock_inspector_contract_problem(lock_inspector))?
+	for report in ["blueprint-cli/BuildReport.roc", "blueprint-cli/ReportJson.roc"] {
+		problem!(StaticChecks.lock_inspector_contract_problem(read!(context, report)?))?
+	}
+
+	for report in ["blueprint-core/LockSnapshot.roc", "blueprint-core/JsonData.roc"] {
+		problem!(StaticChecks.core_report_contract_problem(read!(context, report)?))?
+	}
 
 	step!("The CLI records a download of its compiler for every system it runs on")?
 	problem!(StaticChecks.bootstrap_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-cli/Bootstrap.roc")?))?
@@ -262,12 +271,31 @@ unit! = |context| {
 	tested = Process.together!(scripts.map(|name| Process.command(stable, ["test", "scripts/${name}"], context.root)))?
 	report_tests!(scripts, tested)?
 
+	# SPDX 3.0.1 and 2.3 conformance runs in pure Roc with the script tests
+	# above (scripts/src/SbomTest.roc); this checks the built tool itself.
+	step!("Read-only SPDX binding with the native SBOM tool")?
+	Path.create_all!(Path.utf8("${context.root}/.cache/sbom-validation"))?
+	Process.passthrough!(Process.command(stable, ["build", "scripts/sbom.roc", "--output=.cache/sbom-validation/sbom"], context.root))?
+	Process.passthrough!(Process.command(stable, ["scripts/test_sbom.roc", "binding", "${context.root}/.cache/sbom-validation/sbom", "tests/sbom/fixtures/input"], context.root))?
+
+	# The schema and profile are evaluated in Roc (scripts/src/LockSnapshotTest.roc),
+	# independently of core.LockSnapshot, which the consumer uses.
+	step!("Official lock snapshot consumer against the vendored schema and profile")?
+	Path.create_all!(Path.utf8("${context.root}/.cache/lock-snapshot"))?
+	compiler!(context, ["build", "fixtures/lock-snapshot/main.roc", "--output=.cache/lock-snapshot/consumer"])?
+	Process.passthrough!(Process.command(stable, ["scripts/test_lock_snapshot.roc", "${context.root}/.cache/lock-snapshot/consumer"], context.root))?
+	compiler!(context, ["test", "fixtures/lock-snapshot/main.roc"])?
+	Process.passthrough!(Process.command(stable, ["test", "fixtures/lock-snapshot/main.roc"], context.root))?
+
 	step!("Compile-time configuration validation")?
 	script!(context, "test_config", [])?
 
 	# Every core and Nix provider expect runs here too: the CLI imports both.
 	step!("CLI, provider and core tests")?
-	compiler!(context, ["test", "blueprint-cli/main.roc"])?
+	# The pinned compiler's native test backend crashes on the embedded
+	# archive's large byte constant. The interpreter runs the same expects;
+	# CLI integration tests exercise the actual native executable.
+	compiler!(context, ["test", "--opt=interpreter", "blueprint-cli/main.roc"])?
 
 	step!("Independent library consumer")?
 	compiler!(context, ["check", "fixtures/consumer/main.roc"])?
@@ -290,6 +318,15 @@ report_tests! = |scripts, outcomes|
 
 cli! : Context => Try({}, _)
 cli! = |context| {
+	step!("Embedded compiler bootstrap and cache repair")?
+	script!(context, "test_bootstrap", [])?
+
+	step!("Published flat-digest original-file sources")?
+	script!(context, "test_source_files", [])?
+
+	step!("Offline committed lock inspector")?
+	script!(context, "test_lock", [])?
+
 	step!("CLI argument and validation regressions")?
 	script!(context, "test_cli", [])?
 
@@ -331,6 +368,9 @@ builds! = |context| {
 	step!("Sandboxed artifacts, isolation, sources and immutable locks")?
 	script!(context, "test_builds", [])?
 
+	step!("Flat source files in real sandboxed producers")?
+	script!(context, "test_source_files", ["--build"])?
+
 	step!("Ordered workflows, failure propagation and fresh build operations")?
 	script!(context, "test_workflows", [])
 }
@@ -368,9 +408,9 @@ packaged! = |context| {
 	script!(context, "test_release", [Bundle.dry_run_version, "${package_path}/bin/blueprint"])
 }
 
-## A build observes its namespaces with `readlink`. The Nix package appends
-## coreutils to PATH for that, so the packaged CLI must build where PATH holds
-## only `nix`, and the same binary without its wrapper must not.
+## The package supplies tar/gzip for embedded compiler bootstrap and readlink
+## for namespace observations. Check with a fresh cache and only nix on PATH,
+## so an already installed compiler cannot hide a missing runtime dependency.
 packaged_build! : Context, Str, Str => Try({}, _)
 packaged_build! = |context, package_path, work| {
 	project = "${work}/project"
@@ -391,10 +431,10 @@ packaged_build! = |context, package_path, work| {
 	Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), TestSuite.packaged_project(platform_path, packages_ref))?
 	Path.write_utf8!(Path.utf8("${project}/message.txt"), "built by the packaged blueprint\n")?
 
-	inherited = Env.dict!().map(|(name, value)| (OsStr.display(name), OsStr.display(value))).keep_if(|(name, _)| name != "ROC" and name != "PATH")
+	inherited = Env.dict!().map(|(name, value)| (OsStr.display(name), OsStr.display(value))).keep_if(|(name, _)| name != "ROC" and name != "PATH" and name != "XDG_CACHE_HOME")
 	confined = |program, args, extra| {
 		job = Process.command(program, args, project)
-		{ ..job, cmd: job.cmd.clear_envs().envs(inherited.concat([("PATH", only_nix)]).concat(extra).map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) }
+		{ ..job, cmd: job.cmd.clear_envs().envs(inherited.concat([("PATH", only_nix), ("XDG_CACHE_HOME", "${work}/cache")]).concat(extra).map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) }
 	}
 	wrapped = "${package_path}/bin/blueprint"
 	_ = Process.succeed!(confined(wrapped, ["update"], []))?
@@ -402,7 +442,7 @@ packaged_build! = |context, package_path, work| {
 	artifact = Path.read_utf8!(Path.utf8(built.stdout.trim()))?
 	Process.check!(artifact == "built by the packaged blueprint\n", "the packaged blueprint built: ${artifact}")?
 
-	# The wrapper also supplies the compiler; give the bare binary that one.
+	# Give the bare binary a compiler explicitly to isolate missing readlink.
 	bare = "${package_path}/bin/.blueprint-wrapped"
 	compiler = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#packages.x86_64-linux.roc.outPath"], context.root))?.stdout.trim()
 	unwrapped = Process.traced!(confined(bare, ["build", "copy"], [("ROC", "${compiler}/bin/roc")]))?

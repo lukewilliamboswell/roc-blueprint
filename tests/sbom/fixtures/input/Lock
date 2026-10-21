@@ -1,0 +1,12 @@
+(
+	(fetched ())
+	(format (
+		(major 1)
+		(minor 1)))
+	(hints ())
+	(intent (
+		(build_sources ())
+		(inputs ())
+		(overlays ())
+		(sources ())))
+	(sources ()))

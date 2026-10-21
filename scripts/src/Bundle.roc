@@ -43,6 +43,7 @@ Bundle := [].{
 
 	## What marks the core archive among a release's assets.
 	core_prefix = "roc-blueprint-core-"
+	sbom_prefix = "roc-blueprint-sbom-"
 
 	## Where a release serves one of its assets, below the host.
 	release_path : Str, Str, Str -> Str
@@ -128,6 +129,24 @@ Bundle := [].{
 		result?
 		written!(paths)
 	}
+
+	## Focused release-bundle consumer test, without building platform hosts.
+	check_snapshot_bundle! : Str, Str => Try({}, _)
+	check_snapshot_bundle! = |root, version| {
+		paths = prepare!(root)?
+		idle = Serve.open!()?
+		result! = || {
+			core = bundle_core!(root, paths)?
+			route = release_path(repository!(), version, core)
+			server = idle.with_route(route, Path.read_bytes!(Path.utf8("${paths.dist}/${core}"))?)
+			snapshot_consumer!(root, paths, server, release_url(repository!(), version, core), route, core)
+		}
+		checked = result!()
+		_ = idle.shut!()
+		_ = Path.delete_all!(Path.utf8(paths.stage))
+		checked
+	}
+
 }
 
 Paths : { dist : Str, stage : Str, list : Str }
@@ -211,7 +230,7 @@ bundle_core! : Str, Paths => Try(Str, _)
 bundle_core! = |root, paths| {
 	Script.info!("==>", "Bundling roc-blueprint-core")?
 	directory = "${root}/${Bundle.core_dir}"
-	hashed = bundle!(directory, Bundle.modules(file_names!(directory)?), paths, [])?
+	hashed = bundle!(directory, Bundle.modules(file_names!(directory)?).concat(["lock-snapshot-v1.schema.json"]), paths, [])?
 	name = "${Bundle.core_prefix}${hashed}"
 	Path.rename!(Path.utf8("${paths.dist}/${hashed}"), Path.utf8("${paths.dist}/${name}"))?
 	Script.info!("   ", name)?
@@ -254,6 +273,9 @@ staged_platform! = |root, paths, idle, release| {
 	core_url = Bundle.release_url(release.repository, release.version, core)
 	core_route = Bundle.release_path(release.repository, release.version, core)
 	server = idle.with_route(core_route, Path.read_bytes!(Path.utf8("${paths.dist}/${core}"))?)
+	_ = snapshot_consumer!(root, paths, server, core_url, core_route, core)?
+	core_cache = seeded_cache!(paths, core)?
+	_ = bundle_sbom!(root, paths, server, release, core, core_cache)?
 
 	Script.info!("==>", "Building libhost.a")?
 	Process.passthrough!(Process.command("zig", ["build"], "${root}/${Bundle.platform_dir}"))?
@@ -281,7 +303,7 @@ staged_platform! = |root, paths, idle, release| {
 	# `roc bundle` resolves the platform's dependencies, and the core URL does
 	# not exist yet. The compiler looks in its package cache before it
 	# downloads, so it gets a cache that already holds the core bundle.
-	platform_bundle = bundle!(staged, files, paths, [("XDG_CACHE_HOME", seeded_cache!(paths, core)?)])?
+	platform_bundle = bundle!(staged, files, paths, [("XDG_CACHE_HOME", core_cache)])?
 	Script.info!("   ", platform_bundle)?
 	record!(paths, "roc-blueprint", platform_bundle)?
 
@@ -375,3 +397,72 @@ expect Bundle.replacing("https://a", "http://127.0.0.1:1/a") == ["--replace-dep"
 expect Bundle.archive("roc-blueprint-core roc-blueprint-core-AAA.tar.zst\nroc-blueprint BBB.tar.zst\n", "roc-blueprint") == Ok("BBB.tar.zst")
 expect Bundle.archive("roc-blueprint-core roc-blueprint-core-AAA.tar.zst\n", "roc-blueprint-core") == Ok("roc-blueprint-core-AAA.tar.zst")
 expect Bundle.archive("roc-blueprint-core AAA.tar.zst\n", "roc-blueprint") == Err(NotBundled("roc-blueprint"))
+
+# Publish exactly the repository wrapper and I/O module, with its core URL
+# and compiler pin staged for the selected release. No second implementation.
+bundle_sbom! : Str, Paths, Serve, Release, Str, Str => Try(Str, _)
+bundle_sbom! = |root, paths, core_server, release, core, cache| {
+	Script.info!("==>", "Bundling the standalone SBOM app")?
+	staged = "${paths.stage}/sbom-tool"
+	copy!("${root}/scripts", staged, ["sbom.roc", "src/SbomFiles.roc"])?
+	Path.rename!(Path.utf8("${staged}/sbom.roc"), Path.utf8("${staged}/main.roc"))?
+	core_url = Bundle.release_url(release.repository, release.version, core)
+	entry_path = Path.utf8("${staged}/main.roc")
+	entry = Path.read_utf8!(entry_path)?
+	old_tag = entry.split_on("roc: \"").get(1).map_ok(|tail| tail.split_on("\"").first() ?? "") ?? ""
+	product_tag = Path.read_utf8!(Path.utf8("${root}/blueprint-cli/compiler-version"))?.trim()
+	Process.check!(!old_tag.is_empty() and !product_tag.is_empty(), "SBOM app needs explicit development/release compiler pins")?
+	staged_entry = entry.replace_each("\"../blueprint-core/main.roc\"", "\"${core_url}\"").replace_each("roc: \"${old_tag}\"", "roc: \"${product_tag}\"")
+	Path.write_utf8!(entry_path, staged_entry)?
+	hashed = bundle!(staged, ["main.roc", "src/SbomFiles.roc"], paths, [("XDG_CACHE_HOME", cache)])?
+	name = "${Bundle.sbom_prefix}${hashed}"
+	Path.rename!(Path.utf8("${paths.dist}/${hashed}"), Path.utf8("${paths.dist}/${name}"))?
+	record!(paths, "roc-blueprint-sbom", name)?
+
+	# Compile/run the actual app archive through localhost, not a checkout.
+	# It receives evaluated inputs in a directory with a poisoned Blueprint.roc.
+	route = Bundle.release_path(release.repository, release.version, name)
+	server = core_server.with_route(route, Path.read_bytes!(Path.utf8("${paths.dist}/${name}"))?)
+	workspace = "${paths.stage}/sbom-workspace"
+	copy!("${root}/tests/sbom/fixtures/input", workspace, ["Spec", "Lock", "composition.json", "subject.json", "context.json", "sample-artifact"])?
+	Path.write_utf8!(Path.utf8("${workspace}/Blueprint.roc"), "INVALID PROJECT MUST NOT BE EVALUATED\n")?
+	base = ["run"].concat(Bundle.replacing(core_url, server.url(Bundle.release_path(release.repository, release.version, core)))).concat([server.url(route), "--"])
+	roc = Process.roc!()
+	invoke = |args| Process.with_env(Process.command(roc, base.concat(args), workspace), [("XDG_CACHE_HOME", cache)])
+	for args in [["inspect", "Spec", "Lock", "composition.json", "x86_64-linux", "inventory.json"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact", "sample-artifact.spdx-2.3.json", "--spdx-2.3"]] {
+		outcomes = server.drive!([invoke(args)])?
+		match outcomes {
+			[outcome] => Process.check!(outcome.code == 0, "SBOM app bundle smoke failed: ${outcome.stdout}${outcome.stderr}")?
+			_ => return Script.fail!("SBOM app bundle did not report an outcome")
+		}
+	}
+	# The released app checks its own sidecars, with nothing from this checkout.
+	checked = server.drive!([invoke(["check", "--inventory", "inventory.json", "--artifacts", ".", "sample-artifact.spdx.json", "sample-artifact.spdx-2.3.json", "sample-artifact.cdx.json"])])?
+	match checked {
+		[outcome] => Process.check!(outcome.code == 0, "SBOM app check failed: ${outcome.stdout}${outcome.stderr}")?
+		_ => return Script.fail!("SBOM app check did not report an outcome")
+	}
+	Script.pass!("released SBOM app inspected/bound inputs without project evaluation; SPDX 3.0.1, SPDX 2.3 and CycloneDX sidecars and exact artifact verified")?
+	Ok(name)
+}
+
+## Both compilers fetch the exact candidate core bundle in isolated empty caches.
+snapshot_consumer! = |root, paths, server, core_url, route, core| {
+	workspace = "${paths.stage}/snapshot-consumer"
+	copy!("${root}/fixtures/lock-snapshot", workspace, ["pure.roc", "Checks.roc"])?
+	Path.rename!(Path.utf8("${workspace}/pure.roc"), Path.utf8("${workspace}/main.roc"))?
+	Path.replace_utf8!(Path.utf8("${workspace}/main.roc"), "\"../../blueprint-core/main.roc\"", "\"${core_url}\"")?
+	var $index = 0.U64
+	for compiler in [Process.roc!(), "roc-stable"] {
+		$index = $index + 1
+		cache = "${paths.stage}/snapshot-cache-${$index.to_str()}"
+		job = Process.with_env(Process.command(compiler, ["test"].concat(Bundle.replacing(core_url, server.url(route))).concat(["main.roc"]), workspace), [("XDG_CACHE_HOME", cache)])
+		match server.drive!([job])? {
+			[outcome] => Process.check!(outcome.code == 0, "official core bundle consumer failed with ${compiler}: ${outcome.stdout}${outcome.stderr}")?
+			_ => return Script.fail!("core bundle consumer returned no result")
+		}
+		resource = "${cache}/roc/packages/${core.drop_prefix(Bundle.core_prefix).drop_suffix(".tar.zst")}/lock-snapshot-v1.schema.json"
+		Process.check!(Path.read_bytes!(Path.utf8(resource))? == Path.read_bytes!(Path.utf8("${root}/blueprint-core/lock-snapshot-v1.schema.json"))?, "core bundle schema differs or was not downloaded")?
+	}
+	Script.pass!("official core bundle consumed purely by product and script compilers from independent empty caches; packaged schema verified")
+}

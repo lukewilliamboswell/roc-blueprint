@@ -61,3 +61,17 @@ project that needs none.
 
 In a checkout of the repository the examples need the platform host built
 first; see xref:contributing.adoc#build-and-test[Build and test].
+
+== Consume a lock report in pure Roc
+
+The official checked consumer in
+https://github.com/lukewilliamboswell/roc-blueprint/tree/main/fixtures/lock-snapshot[`fixtures/lock-snapshot/`]
+shows how downstream tools import `core.LockSnapshot` from the existing core
+package. It includes pure fetched-program pin checks, provider-qualified source
+identity comparisons and inert Nix metadata extraction, plus a small executable
+that reads and round-trips a saved JSON report. Its README gives checkout and
+pinned-release commands. This consumer is tested against the actual release
+core bundle with both supported compiler pins; it is separate from the four
+configuration projects in the examples archive. Start with
+xref:lock-snapshot.adoc#consume-lock-inspection-in-roc[Consume lock inspection in pure Roc]
+for the end-to-end invocation and API contract.

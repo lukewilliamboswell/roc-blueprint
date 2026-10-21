@@ -60,9 +60,9 @@ asset's `digest` and `size`. The entries are data and nothing else: no rule
 derives a URL. `scripts/test.roc static` fails until every system `blueprint`
 runs on has an entry of the nightly in `compiler-version`.
 
-With `ROC` unset and no matching `roc` on `PATH`, `blueprint` downloads its
-system's archive into the per-user store and checks it against the entry
-before using it; it starts no provider to read a `Blueprint.roc`. The entry
+With `ROC` unset and no matching `roc` on `PATH`, `blueprint` installs its
+system's embedded archive into the per-user store and checks it against the
+entry before using it; it starts no provider to read a `Blueprint.roc`. The entry
 names the same download as `Recipes.roc_nightly` of that tag, so a project
 that fetches that nightly as `roc-stable` holds it once, and
 `blueprint update` records its digest from the store without a second
@@ -96,8 +96,11 @@ the evaluation of a `Blueprint.roc` work too. Sandboxed builds, and so the
 == Release
 
 One release holds the platform bundle, the roc-blueprint-core bundle it
-depends on, the `blueprint` binaries with their checksums, the examples
-archive, the documentation archive and the manual. It is made by
+depends on, the standalone Roc SBOM reporting app, the `blueprint` binaries
+with their checksums, the examples archive, the documentation archive and
+the manual. Each executable and Roc source bundle has artifact-bound SBOM
+sidecars: SPDX 3.0.1 (`.spdx.json`), SPDX 2.3 (`.spdx-2.3.json`) and
+CycloneDX 1.7 (`.cdx.json`). It is made by
 `.github/workflows/release.yml`, run by hand from `main` with a version. Every
 pull request runs the same workflow as a dry run, under the version
 `0.0.1-dry-run`, which is never published.
@@ -127,13 +130,15 @@ product compiler pin names the latest official nightly.
 
 build::
 Cross-builds the binaries (`scripts/build_release.roc`), runs the whole test
-suite on them, bundles both packages for the version
+suite on them, bundles the core, platform and reporting app for the version
 (`scripts/bundle.roc`), checks the version against the public API
 (`scripts/check_version.roc bump`), archives the examples
 (`scripts/package_examples.roc`), renders the manual with the release's
 platform URL and archives the site (`scripts/docs_snippet.roc`,
 `scripts/package_docs.roc`), renders the notes
-(`scripts/release_notes.roc`) and gathers the assets
+(`scripts/release_notes.roc`), generates artifact-bound SPDX and CycloneDX
+sidecars (`scripts/release_sbom.roc`), independently validates their schemas,
+subjects, known inputs and agreement on one package graph, and gathers the assets
 (`scripts/release_assets.roc`). On a pull request the test suite is left to
 `ci.yml`.
 
@@ -179,12 +184,20 @@ is the x86_64 Linux compiler archive of the nightly in
 `blueprint-cli/compiler-version` with the
 `darwin/` sysroot of the Apple Silicon archive beside it, which Roc needs to
 link macOS programs. Both are fetched by the URL and hash the locked
-roc-overlay records. The package is not in the development shell, so only a
-release build downloads the macOS archive. The four CLI binaries are compiled
-at the same time, each about 2.3 GB at its peak.
+roc-overlay records. The cross compiler is not in the development shell.
 
-A binary downloads the compiler named in `blueprint-cli/compiler-version`
-by the digest it records; see <<the-bootstrap-table>>.
+The CLI binaries are compiled sequentially. Before each compilation,
+`scripts/embed_compiler.roc <system>` stages that target's complete archive as
+`blueprint-cli/compiler-archive`, after checking its size and digest against
+`Bootstrap.roc`. Downloads are cached in `.cache/compilers/`; the staged
+archive is ignored by Git. The local host's archive is restored afterwards,
+including when compilation fails. Smoke programs still compile in parallel.
+
+Each binary embeds only its own system's archive. On first use it installs
+that archive into the existing per-user store and verifies its recorded
+digest before extraction; see <<the-bootstrap-table>>. This removes the
+compiler download at runtime. Project packages and tools can still require
+the network. Release binaries grow by roughly 69–73 MB.
 
 === Write the release notes
 
@@ -240,6 +253,17 @@ inventory go into the bundle under `linker-inputs/`.
 `scripts/test.roc package` runs the dry run on every commit, with the examples
 archive and its test. A change that adds a Spec field needs nothing more: the
 core bundle carrying the field is released with the platform that uses it.
+
+=== The reporting app bundle
+
+The same bundling command stages `scripts/sbom.roc` and its filesystem helper
+as a standalone app, using the released core URL and the product compiler pin.
+Its archive is named `roc-blueprint-sbom-<hash>.tar.zst`, so it has a distinct
+package identity. A separate smoke test downloads that app and exercises
+`inspect` and `bind` in a directory with an invalid `Blueprint.roc`; neither
+operation may evaluate the project. The release notes include its immutable
+URL. See xref:sbom.adoc#artifact-bound-software-bills-of-materials[Artifact-bound software bills of materials]
+for its supported inputs and coverage contract.
 
 === The version check
 
@@ -378,8 +402,9 @@ already loaded for CLI parsing, rather than running the configuration again.
 The loaded Spec is still needed for shared semantic validation and provider
 compatibility checks. Runtime validation also protects consumers from external
 Spec; it does not make major-1 platforms compatible with the current CLI. Loading the
-Spec still executes Roc, so retain compiler provisioning in the Nix wrapper and
-support for the `ROC` override.
+Spec still executes Roc, so retain embedded compiler bootstrap and support
+for the `ROC` override. The Nix wrapper supplies the archive tools bootstrap
+needs, including on a machine whose `PATH` holds only Nix.
 
 These remaining dependencies and workarounds still apply:
 

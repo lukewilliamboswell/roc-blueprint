@@ -244,7 +244,7 @@ Project :: [].{
 			}
 		}
 		declared_systems = unique(spec.systems)
-		if spec.builds.len() > 1024 or spec.build_sources.len() > 1024 {
+		if spec.builds.len() > 1024 or spec.build_sources.len() + spec.source_files.len() > 1024 {
 			return Err("builds or build sources exceed 1024 declarations")
 		}
 		if spec.builds.fold(0, |count, build| count + build.needs.len() + build.inputs.len()) > 8192 {
@@ -257,7 +257,7 @@ Project :: [].{
 			return Err("workflow graph exceeds 8192 steps")
 		}
 		check_names(spec.workflows.map(|w| w.name), "Workflow")?
-		check_names(spec.build_sources.map(|s| s.name), "BuildSource")?
+		check_names(spec.build_sources.map(|s| s.name).concat(spec.source_files.map(|s| s.name)), "BuildSource")?
 		check_names(spec.builds.map(|b| b.name), "Build")?
 		check_names(spec.sources.map(|s| s.name), "Source")?
 		check_names(spec.inputs.map(|i| i.name), "Input")?
@@ -281,6 +281,18 @@ Project :: [].{
 				}
 			}
 		}
+		for source in spec.source_files {
+			if sources.any(|s| s.name == source.name) or spec.inputs.any(|i| i.name == source.name) {
+				return Err("DuplicateInput: ${source.name}")
+			}
+			if !valid_download_url(source.url) or source.sha256.to_utf8().len() != 64 or !source.sha256.to_utf8().all(|b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f')) {
+				return Err("invalid file source URL or SHA-256: ${source.name}")
+			}
+		}
+		if !spec.source_files.is_empty() and !spec.requires_.contains("source-files") {
+			return Err("file sources require feature: source-files")
+		}
+
 		for source in spec.build_sources {
 			if sources.any(|s| s.name == source.name) or spec.inputs.any(|i| i.name == source.name) {
 				return Err("DuplicateInput: ${source.name}")
@@ -291,6 +303,22 @@ Project :: [].{
 		}
 		if !spec.build_sources.is_empty() and !spec.requires_.contains("sources") {
 			return Err("build sources require feature: sources")
+		}
+		if !spec.build_files.is_empty() and !spec.requires_.contains("build-files") {
+			return Err("build files require feature: build-files")
+		}
+		for selected in spec.build_files {
+			if !spec.builds.any(|build| build.name == selected.build) {
+				return Err("unknown build for Files: ${selected.build}")
+			}
+			if spec.build_files.keep_if(|other| other.build == selected.build).len() > 1 {
+				return Err("DuplicateFiles: build ${selected.build}")
+			}
+			for file in selected.paths {
+				if !valid_output(file) {
+					return Err("invalid selected build path: ${file}")
+				}
+			}
 		}
 		if !spec.builds.is_empty() and !spec.requires_.contains("builds") {
 			return Err("builds require feature: builds")
@@ -380,7 +408,7 @@ Project :: [].{
 			}
 			$programs = $programs.append(key)
 			# `blueprint update <name>` names an input or a program, never both.
-			if sources.any(|s| s.name == program.name) or spec.inputs.any(|i| i.name == program.name) or spec.build_sources.any(|s| s.name == program.name) {
+			if sources.any(|s| s.name == program.name) or spec.inputs.any(|i| i.name == program.name) or spec.build_sources.any(|s| s.name == program.name) or spec.source_files.any(|s| s.name == program.name) {
 				return Err("program ${program.name} has the name of a source or input")
 			}
 			if program.urls.is_empty() {
@@ -509,7 +537,7 @@ Project :: [].{
 			check_names(build.inputs, "BuildInput")?
 			check_names(build.needs, "BuildDependency")?
 			for input in build.inputs {
-				if !spec.build_sources.any(|s| s.name == input) {
+				if !spec.build_sources.any(|s| s.name == input) and !spec.source_files.any(|s| s.name == input) {
 					return Err("unknown build source: ${input}")
 				}
 			}
@@ -535,7 +563,7 @@ Project :: [].{
 				return Err("empty Raw provider or target")
 			}
 		}
-		Ok(Spec.{ format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: $environment_programs, expects: $expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
+		Ok(Spec.{ source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: $environment_programs, expects: $expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
 	}
 
 	## A tool names a source the project does not declare. The sources it
@@ -1045,6 +1073,8 @@ expect Project.check_tool(Guix, "g++@12.3:lib").is_ok()
 # These fixtures use the public Spec and validation boundary, not resolve internals.
 fixture : List(Spec.Environment) -> Spec
 fixture = |environments| Spec.{
+	source_files: [],
+	build_files: [],
 	format: Spec.current_format,
 	name: "semantic tests",
 	requires_: [],
@@ -1187,6 +1217,8 @@ expect Project.valid_task_name("check.fmt") and !Project.valid_task_name("check.
 
 build_fixture : List(Spec.Build) -> Spec
 build_fixture = |builds| Spec.{
+	source_files: [],
+	build_files: [],
 	format: Spec.current_format,
 	name: "build tests",
 	requires_: ["sources", "builds"],
@@ -1325,7 +1357,7 @@ expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../esc
 build_source_fixture : List(Spec.BuildSource), List(Str) -> Spec
 build_source_fixture = |build_sources, requires_| {
 	spec = build_fixture([library])
-	Spec.{ format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
+	Spec.{ source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
 }
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["builds"])) == Err("build sources require feature: sources")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["sources"])) == Err("builds require feature: builds")
@@ -1380,6 +1412,8 @@ workflow_fixture = |workflows| workflow_features(workflows, ["workflows"])
 
 workflow_features : List(Spec.Workflow), List(Str) -> Spec
 workflow_features = |workflows, features| Spec.{
+	source_files: [],
+	build_files: [],
 	format: Spec.current_format,
 	name: "workflow tests",
 	requires_: ["sources", "builds"].concat(features),
@@ -1984,4 +2018,17 @@ expect {
 		and names({ ..spec, builds: [{ name: "app", environment: "plain", inputs: [], needs: [], run: ["true"], output: "out" }] }) == ["assets", "roc-notes"]
 		# unless it lists the bundle's source among its inputs.
 		and names({ ..spec, builds: [{ name: "app", environment: "plain", inputs: ["roc-tasks"], needs: [], run: ["true"], output: "out" }] }) == ["roc-tasks", "assets", "roc-notes"]
+}
+
+file_source_fixture : Spec
+file_source_fixture = { ..Spec.empty("file-sources"), systems: ["x86_64-linux"], requires_: ["source-files"], source_files: [{ name: "upstream", url: "https://example.test/release.tar.gz", sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }] }
+
+expect Project.validate(file_source_fixture).map_ok(|spec| spec.source_files) == Ok(file_source_fixture.source_files)
+expect Project.validate({ ..file_source_fixture, requires_: [] }) == Err("file sources require feature: source-files")
+expect {
+	file = file_source_fixture.source_files.first()?
+	["", "ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd", "not a hash"].all(|sha256| Project.validate({ ..file_source_fixture, source_files: [{ ..file, sha256 }] }).is_err())
+		and Project.validate({ ..file_source_fixture, source_files: [{ ..file, url: "http://example.test/release" }] }).is_err()
+		and Project.validate({ ..file_source_fixture, source_files: [file, file] }) == Err("DuplicateBuildSource: upstream")
+		and Project.validate({ ..file_source_fixture, requires_: ["source-files", "sources"], build_sources: [{ name: file.name, ref: "path:./assets" }] }) == Err("DuplicateBuildSource: upstream")
 }

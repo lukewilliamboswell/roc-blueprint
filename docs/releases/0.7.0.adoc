@@ -1,0 +1,177 @@
+= roc-blueprint 0.7.0
+
+Blueprint now carries the Roc compiler it needs inside each released binary.
+The first command that reads `Blueprint.roc` installs that compiler from the
+binary into Blueprint's store, instead of downloading it from GitHub. A fresh
+machine can bootstrap the compiler even when GitHub is unavailable.
+
+The new `blueprint compiler-version` command exposes the exact bundled Roc
+release tag, so downstream projects can check that their automation compiler
+pin matches Blueprint's.
+
+== Use 0.7.0
+
+[source,roc,snippet=unchecked]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+Binaries are attached for x86_64 Linux, arm64 Linux, Apple Silicon macOS and
+x86_64 Windows, with SHA-256 sums in `blueprint.sha256`. Use this release's
+binary with its platform URL. The importable core package is `{core-url}`.
+Existing 0.6 configurations and lock files remain supported.
+
+== Compiler available on first use
+
+Each binary embeds only its own system's complete compiler archive, including
+the supporting files Roc needs to link programs. The archive adds roughly
+69–73 MB to the binary. It is installed into the existing content-addressed
+store, checked against its recorded SHA-256 before extraction, and reused on
+later runs. A damaged cached archive is restored from the embedded copy.
+
+An explicit compatible `ROC` override still takes precedence, followed by a
+compatible `roc` on `PATH`. Project packages and tools can still require
+network downloads. Nix is required for tools from Nix package sources and
+for sandboxed builds.
+
+== Check an automation compiler pin
+
+[source,sh]
+----
+blueprint compiler-version
+----
+
+This release reports `nightly-2026-10-18-1df370f`, followed by a newline. The
+output has no label or colour and always describes the bundled compiler,
+regardless of `ROC` or `PATH`. The command works in any directory, offline,
+without evaluating a project, installing Roc or writing a cache. Native smoke
+tests check the reported tag against the actual bundled `roc version` on
+each released system.
+
+A CI check or commit hook can compare the installed automation compiler:
+
+[source,sh]
+----
+test "$(roc-stable version)" = \
+  "Roc compiler version $(blueprint compiler-version)"
+----
+
+Consumers can also compare a committed compiler pin against that tag before
+installing tools. Keep pin updates explicit so automation scripts can be
+tested before adopting a new Roc release.
+
+A project that declares the matching nightly through `Recipes.roc_nightly`
+can reuse the archive Blueprint installed in its store for `roc-stable`.
+An independently installed compiler, including one supplied by Nix, uses its
+own installation; matching the version alone does not share that executable.
+
+== Read committed pins from external tools
+
+`blueprint lock show --json [NAME...]` exposes the entries in `Blueprint.lock`
+without evaluating `Blueprint.roc`, starting a provider, accessing the network
+or creating cache state. Its documented JSON format 1 includes exact remote
+Nix `fetchTree` attributes and per-entry content identities, so external
+scripts can use the locked revision and `narHash` without parsing the lock's
+internal representation or maintaining a second pin.
+Provider-specific details are namespaced, such as
+`metadata.nix.fetchTree`; the common report does not require every provider
+to use Nix retrieval recipes or tree identities.
+
+Pure Roc consumers can import `LockSnapshot` from the existing core bundle:
+its bounded typed decoder, pure projection and encoder share the CLI's report
+model. It preserves unknown provider metadata, null and exact numeric lexemes.
+The bundle includes the versioned JSON Schema; the published consumer example
+is tested with both this release's compiler and the script compiler. See
+xref:lock-snapshot.adoc#consume-lock-inspection-in-roc[the library contract].
+
+An entry's identity stays the same when an unrelated source, fetched program
+or task changes. Relative local sources retain their tree identity and have
+no portable `fetchTree` recipe. Fetched-program identities remain distinct
+from unpacked-tree identities. See
+xref:commands.adoc#inspect-committed-pins[Inspect committed pins]
+for the output schema and compatibility rule.
+
+== Reproducible build recipes
+
+Sandboxed builds compile a standalone runner from pinned shared Roc source
+and a fixed compiler. The derivation no longer includes the Blueprint executable or caller
+namespace identities. Runtime namespace observations are passed separately
+and still refuse execution when isolation cannot be verified.
+
+`Files([...])` selects a build's project files and directory trees; unrelated
+application edits do not change that recipe's input tree. Omit it for the
+existing whole-project snapshot. `Files([])` selects an empty project tree.
+Separate builds can share a recipe while declaring their own single output.
+
+`SourceFile(name, url, sha256)` declares an unchanged upstream file using its
+published SHA-256. A recipe receives that file through `Inputs`, without
+unpacking an archive or translating its digest into a tree hash. Its pin
+lives in `Blueprint.lock`, and its verified bytes are reused from the store.
+See xref:builds.adoc#original-files-with-published-hashes[Original file sources].
+
+`blueprint build NAME --rebuild` checks an existing output by rebuilding the
+same derivation and failing when the bytes differ. `--json` reports versioned
+provenance with the provider, opaque `recipe_identity`, outputs and locked
+sources used by the build. Nix uses the actual derivation path as its recipe
+identity and exposes it in `metadata.nix.derivation` too. Other providers can
+describe their own recipe identities and native metadata without imitating
+Nix. `BLUEPRINT_TOOLS` exposes full roots of declared packages, so recipes
+can reach libraries and loaders as well as executables. See
+xref:builds.adoc#check-reproducibility-and-record-provenance[Build checks and provenance].
+
+The platform writes Spec format 2.8. Configurations that do not select new
+features retain their existing meaning; older consumers reject unsupported
+required features explicitly.
+
+== Describe your software's supply chain with SBOMs
+
+The new public `core.Sbom` API turns resolved Lock identities and a reviewed
+composition into a software bill of materials for each delivered file. One
+inventory renders as SPDX 3.0.1 JSON-LD, CycloneDX 1.7 and SPDX 2.3, for tools
+that read only SPDX 2. Binding a final file writes its SPDX 3.0.1 and
+CycloneDX sidecars beside it in one step. An SBOM distinguishes build tools
+from contained code and records incomplete or unknown coverage explicitly.
+Inspection runs offline without evaluating a project or starting a provider,
+and binding the inventory to the final file's SHA-256 is a separate step.
+Conformance is checked in Roc against the published SPDX 3.0.1, SPDX 2.3 and
+CycloneDX 1.7 schemas, vendored and pinned by SHA-256.
+
+A standalone Roc app bundle provides `inspect`, `bind` and `check` without a
+Blueprint project. `check` confirms that sidecars are valid, describe the
+actual file, match their inventory and state one package graph. The
+published release notes link the bundle's immutable URL; it uses the same
+pinned compiler as Blueprint.
+
+SBOMs chain across dependencies. Import a supplier's SBOM, in SPDX 3.0.1, 2.3
+or 2.2 or in CycloneDX 1.4 to 1.7, after verifying its document digest and
+identity, and bind it to the dependency file you locked by its SHA-256, such
+as a `SourceFile` or a fetched program. Your SBOM then includes the supplier's
+components and relationships. What Syft and Trivy publish imports as it is:
+files, vulnerabilities and other parts the package graph cannot carry are
+counted in the import's coverage rather than refused or dropped. Every locked
+dependency needs a bound supplier SBOM, or an `unavailable_sboms` entry that
+states why there is none; each such entry becomes a visible coverage gap.
+
+Release executables and Roc source bundles have their own `.spdx.json`
+(SPDX 3.0.1), `.cdx.json` (CycloneDX 1.7) and `.spdx-2.3.json` sidecars, each
+checked against its version of the specification and the actual artifact
+bytes, all stating one package graph, and covered by the release attestation.
+They include reviewed native and transitive inputs and explicit coverage
+gaps. These documents describe composition; they do not establish build
+provenance or a vulnerability verdict. See
+xref:sbom.adoc#artifact-bound-software-bills-of-materials[Describe a delivered artifact with an SBOM]
+for what an SBOM is, which format to send, the quality checklist, chaining
+across dependencies, and the API and tool reference.
+
+== Native documentation builds
+
+The website and PDF manual now use the shared native `roc-docs` renderer
+from roc-automation `tools-0.1.0-rc.1`, with reviewed executable checksums.
+Documentation and release jobs use the matching shared action revision and
+retain the generated API reference, PDF download and documentation archive.
+Rendering no longer starts a Docker container.
+
+The illustration and architecture diagram have prepared PNG assets. The
+manual keeps its explicit section anchors and uses narrower responsibility
+tables so their full contents fit the PDF. The API reference link uses its
+published absolute URL; publication does not depend on `--site-url` support.

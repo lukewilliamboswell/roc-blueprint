@@ -6,6 +6,8 @@ import cli.Path
 import cli.Stdout
 import Script
 import FlakeLock
+import StandaloneRunner
+import BuildHarness
 import "../../blueprint-cli/compiler-version" as compiler_version : Str
 
 ## An end-to-end test of the `RocPackages` setting against the real
@@ -230,52 +232,19 @@ published_among! = |package_dir, names| {
 	$found
 }
 
-## Run `blueprint __build-runner` directly, as a build's derivation would,
-## with nothing in its environment but `PATH`. The build command records the
-## `XDG_CACHE_HOME` it was given. `extra` is appended to the specification.
-## The namespaces named are not this process's, so the runner accepts them.
+## The exact standalone runner receives a private namespace and supplied spec.
 runner! : Context, Str, Str => Try({ outcome : Outcome, top : Str, recorded : Str }, _)
 runner! = |context, directory, extra| {
-	top = "${directory}/top"
-	Path.create_all!(Path.utf8(top))?
 	Path.create_all!(Path.utf8("${directory}/project"))?
 	Path.create_all!(Path.utf8("${directory}/empty"))?
 	Path.write_utf8!(Path.utf8("${directory}/project/file"), "file")?
-	search = Env.var_str!(OsStr.from_str("PATH")) ?? ""
-	record = "printf %s \\\"\${XDG_CACHE_HOME-unset}\\\" > recorded.txt"
-	spec = Str.join_with(
-		[
-			"{\"project\":\"${directory}/project\"",
-			"\"isolation\":{\"mnt\":\"mnt:[1]\",\"net\":\"net:[1]\"}",
-			"\"argv\":[\"sh\",\"-c\",\"${record}\"]",
-			"\"output\":\"recorded.txt\"",
-			"\"path\":\"${search}\"",
-			"\"inputs\":\"${directory}/empty\"",
-			"\"artifacts\":\"${directory}/empty\"",
-			"\"readlink\":\"readlink\"",
-			"\"chmod\":\"chmod\"${extra}}",
-		],
-		",",
-	)
-	Path.write_utf8!(Path.utf8("${directory}/spec.json"), spec)?
-	Stdout.line!("RUN  blueprint __build-runner ${directory}/spec.json")?
-	ran = Cmd.new(Path.to_os_str(context.blueprint)).args(["__build-runner", "${directory}/spec.json"].map(OsStr.from_str))
-		.cwd(Path.utf8(top))
-		.clear_envs()
-		.env(OsStr.from_str("PATH"), OsStr.from_str(search))
-		.env(OsStr.from_str("out"), OsStr.from_str("${directory}/out"))
-		.run!()
-	match ran {
-		Ok(output) => {
-			code = match output.status {
-				Exited(exit_code) => exit_code
-				Signaled(signal) => 128 + signal
-			}
-			recorded = Path.read_utf8!(Path.utf8("${directory}/out")) ?? ""
-			Ok({ outcome: { code, stdout: Str.from_utf8_lossy(output.stdout_bytes), stderr: Str.from_utf8_lossy(output.stderr_bytes) }, top, recorded })
-		}
-		Err(_) => Script.fail!("could not run ./blueprint __build-runner")
-	}
+	# Cache behavior does not depend on a shell or inherited host PATH.
+	payload = StandaloneRunner.payload!({ root: context.root, work: context.work })?
+	base = Json.to_str({ schema_version: 1.U64, env: [{ name: "TEST_RUNNER", value: "yes" }], project: "${directory}/project", argv: [payload, "cache"], output: "recorded.txt", readlink: BuildHarness.which!("readlink")?, chmod: BuildHarness.which!("chmod")?, path: "", inputs: "${directory}/empty", artifacts: "${directory}/empty", tools: "${directory}/empty" })
+	spec = base.drop_suffix("}").concat(extra).concat("}")
+	result = StandaloneRunner.run!({ root: context.root, work: context.work }, spec, Observed)?
+	recorded = Path.read_utf8!(Path.utf8("${result.top}/out")) ?? ""
+	Ok({ outcome: { code: result.code, stdout: result.stdout, stderr: result.stderr }, top: "${result.top}/build", recorded })
 }
 
 scenarios! : Context => Try({}, _)
@@ -415,30 +384,6 @@ scenarios! = |context| {
 	check!(plain.stdout.trim() == "Hello, world!" and plain_names.is_empty(), "an environment without Roc packages published: ${Str.join_with(plain_names, " ")}")?
 	Script.pass!("   environment without Roc packages: no package cache created")?
 
-	# The build runner sets XDG_CACHE_HOME for a build with Roc packages, to a
-	# cache inside the build directory holding exactly those, and leaves it
-	# unset for any other build.
-	bare = runner!(context, "${context.work}/runner-without", "")?
-	check!(
-		bare.outcome.code == 0 and bare.recorded == "unset" and !(Path.exists!(Path.utf8("${bare.top}/blueprint-cache")) ?? True),
-		"a build without Roc packages was given a cache (code ${bare.outcome.code.to_str()}, XDG_CACHE_HOME ${bare.recorded}):\n${bare.outcome.stderr}",
-	)?
-	bundle = "{\"name\":\"${cli}\",\"path\":\"${package_dir}/${cli}\"}"
-	given = runner!(context, "${context.work}/runner-with", ",\"roc_packages\":[${bundle}],\"ln\":\"ln\"")?
-	linked = "${given.top}/blueprint-cache/roc/packages"
-	check!(
-		given.outcome.code == 0 and given.recorded == "${given.top}/blueprint-cache" and same_names(names!(linked)?, [cli])
-			and Path.type!(Path.utf8("${linked}/${cli}"))? == IsSymLink
-				and (Path.is_file!(Path.utf8("${linked}/${cli}/main.roc")) ?? False),
-		"a build with Roc packages did not get its own cache (code ${given.outcome.code.to_str()}, XDG_CACHE_HOME ${given.recorded}):\n${given.outcome.stderr}",
-	)?
-	escaping = runner!(context, "${context.work}/runner-escaping", ",\"roc_packages\":[{\"name\":\"../escape\",\"path\":\"${package_dir}/${cli}\"}],\"ln\":\"ln\"")?
-	check!(
-		escaping.outcome.code != 0 and escaping.outcome.stderr.contains("invalid Roc package name") and escaping.recorded == "",
-		"the runner accepted a Roc package name that is not a plain name:\n${escaping.outcome.stderr}",
-	)?
-	Script.pass!("   build runner: XDG_CACHE_HOME ${bare.recorded} without Roc packages; <build>/blueprint-cache with them, holding a link to ${cli}")?
-
 	# 6. A sandboxed build has no network, yet the app resolves both bundles
 	# from the build's own cache and writes the artifact.
 	host_before = (stamp!(package_dir, cli)?, stamp!(package_dir, http)?)
@@ -484,6 +429,32 @@ scenarios! = |context| {
 	unlocked = succeed!(context, tasks_cache, tasks_only, ["run", "hello"])?
 	check!(unlocked.stdout.trim() == RocPackagesTest.greeting and !unlocked.stderr.contains("fetching Roc package"), "with no bundle locked the app printed: ${unlocked.stdout}${unlocked.stderr}")?
 	Script.pass!("   no build: Blueprint.lock names no bundle; the task downloaded both itself and the app printed \"${unlocked.stdout.trim()}\"")?
+
+	Path.write_utf8!(Path.utf8("${context.work}/standalone-runner-path"), StandaloneRunner.locate!("${project}/.blueprint", "offline")?)?
+	# The build runner sets XDG_CACHE_HOME for a build with Roc packages, to a
+	# cache inside the build directory holding exactly those, and leaves it
+	# unset for any other build.
+	bare = runner!(context, "${context.work}/runner-without", "")?
+	check!(
+		bare.outcome.code == 0 and bare.recorded == "unset" and !(Path.exists!(Path.utf8("${bare.top}/runner-cache")) ?? True),
+		"a build without Roc packages was given a cache (code ${bare.outcome.code.to_str()}, XDG_CACHE_HOME ${bare.recorded}):\n${bare.outcome.stderr}",
+	)?
+	linker = Json.to_str(BuildHarness.which!("ln")?)
+	bundle = "{\"name\":\"${cli}\",\"path\":\"${package_dir}/${cli}\"}"
+	given = runner!(context, "${context.work}/runner-with", ",\"roc_packages\":[${bundle}],\"ln\":${linker}")?
+	linked = "${given.top}/runner-cache/roc/packages"
+	check!(
+		given.outcome.code == 0 and given.recorded == "${given.top}/runner-cache" and same_names(names!(linked)?, [cli])
+			and Path.type!(Path.utf8("${linked}/${cli}"))? == IsSymLink
+				and (Path.is_file!(Path.utf8("${linked}/${cli}/main.roc")) ?? False),
+		"a build with Roc packages did not get its own cache (code ${given.outcome.code.to_str()}, XDG_CACHE_HOME ${given.recorded}):\n${given.outcome.stderr}",
+	)?
+	escaping = runner!(context, "${context.work}/runner-escaping", ",\"roc_packages\":[{\"name\":\"../escape\",\"path\":\"${package_dir}/${cli}\"}],\"ln\":${linker}")?
+	check!(
+		escaping.outcome.code != 0 and escaping.outcome.stderr.contains("invalid or duplicate Roc package") and escaping.recorded == "",
+		"the runner accepted a Roc package name that is not a plain name:\n${escaping.outcome.stderr}",
+	)?
+	Script.pass!("   build runner: XDG_CACHE_HOME ${bare.recorded} without Roc packages; <build>/runner-cache with them, holding a link to ${cli}")?
 
 	# 7. Nothing was published into the user's own cache.
 	ours_after = published_among!(real_packages, hashes)
