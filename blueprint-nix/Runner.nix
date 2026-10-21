@@ -22,7 +22,9 @@ pkgs.stdenvNoCC.mkDerivation {
   dontUnpack = true;
   dontConfigure = true;
   dontFixup = true;
-  nativeBuildInputs = [ pkgs.gnutar pkgs.zstd ];
+  # Match Roc's supported Linux linker environment while leaving the recipe
+  # PATH independent of the compiler's build tools.
+  nativeBuildInputs = [ pkgs.gnutar pkgs.zstd pkgs.stdenv.cc ];
   buildPhase = ''
     export HOME="$TMPDIR/home" XDG_CACHE_HOME="$TMPDIR/cache"
     mkdir -p "$HOME" \
