@@ -168,6 +168,8 @@
                 ./blueprint-core/Realise.roc
                 ./blueprint-core/Lock.roc
                 ./blueprint-core/Tree.roc
+                ./blueprint-core/Sbom.roc
+                ./blueprint-core/SbomLicenses.roc
               ];
             };
             nativeBuildInputs = [
@@ -212,6 +214,13 @@
             default = blueprint;
             roc-glue-spec = rocGlueSpec;
             roc-docs = rocDocs;
+            sbom-validator = pkgs.writeShellApplication {
+              name = "validate-blueprint-sbom";
+              runtimeInputs = [ (pkgs.python3.withPackages (ps: [ ps.jsonschema ])) ];
+              text = ''
+                exec python3 ${./scripts/validate_sbom.py} --schema ${./tests/sbom/schema/spdx-2.3.schema.json} "$@"
+              '';
+            };
           }
           # Not in the development shell: only a release build needs it, and
           # with it the macOS archive.
