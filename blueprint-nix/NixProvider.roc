@@ -280,6 +280,16 @@ NixProvider :: [].{
 				if $builds.any(|build| build.inputs.contains("blueprint-input-evidence")) {
 					return Err("build input name blueprint-input-evidence is reserved for selected reproduction evidence")
 				}
+				for selected in $builds {
+					executor = Project.build_executor(project, selected.name)?
+					if executor.provider != "nix" or executor.source.is_empty() {
+						return Err("Nix build ${selected.name} requires an explicit Nix executor bootstrap source")
+					}
+					use = Project.environment_use(project, selected.environment, target)?
+					if !(use.programs.is_empty() and use.unavailable.is_empty() and use.expects.is_empty()) {
+						return Err("Nix build ${selected.name} does not support downloaded or expected tools")
+					}
+				}
 				$names = $builds.map(|b| b.environment)
 				# Namespace witnesses compare caller/build on the same kernel.
 				# Never dispatch this local isolation contract to a remote builder.
@@ -663,7 +673,7 @@ NixProvider :: [].{
 		match staging {
 			None => {
 				for source in spec.sources.keep_if(
-					|s| environments.any(|e| source_names(e, spec.system_tools, spec.commands, spec.configured_tools, builder).contains(s.name)),
+					|s| environments.any(|e| (if (builds.is_empty()) source_names(e, spec.system_tools, spec.commands, spec.configured_tools, builder) else Project.unique(builder.concat(source_names(e, spec.system_tools, spec.commands, spec.configured_tools, builder)))).contains(s.name)),
 				) {
 					if !realises(source.provider) {
 						return Err("Nix cannot use ${source.provider.name} source ${source.name}")
@@ -785,7 +795,7 @@ NixProvider :: [].{
 						.map_err(|_| "unknown build environment")?
 					$rendered = append_rendered(
 						$rendered,
-						render_build(build, env, spec.system_tools, spec.commands, spec.configured_tools, spec.roc_packages, spec.build_files, spec.source_files, system, builder),
+						render_build(build, env, spec.system_tools, spec.commands, spec.configured_tools, spec.roc_packages, spec.build_files, spec.source_files, system, [Project.build_executor(spec, build.name)?.source]),
 					)?
 				}
 				$rendered = append_rendered(
@@ -839,7 +849,16 @@ NixProvider :: [].{
 	## of Blueprint.roc, whatever it is called. Empty when there is none, and
 	## then such an environment cannot be rendered.
 	builder_source : Spec -> List(Str)
-	builder_source = |spec| spec.sources.keep_if(|source| realises(source.provider)).take_first(1).map(|source| source.name)
+	builder_source = |spec| {
+		selected = spec.build_executors.map(|entry| entry.executor)
+		explicit = spec.executors.keep_if(|executor| selected.contains(executor.name) and executor.provider == "nix" and !executor.source.is_empty()).map(|executor| executor.source)
+		if explicit.is_empty() {
+			# Environment rendering only; Builds never reach this fallback.
+			spec.sources.keep_if(|source| realises(source.provider)).take_first(1).map(|source| source.name)
+		} else {
+			Project.unique(explicit).sort_with(Project.bytewise)
+		}
+	}
 
 	## The sources an environment imports. mkShell, and a build's sandbox
 	## tools, come from the first: the source of the environment's first
@@ -885,7 +904,8 @@ NixProvider :: [].{
 		var $names = []
 		for build in closure {
 			env = project.environments.find_first(|entry| entry.name == build.environment).map_err(|_| "unknown build environment")?
-			imported = source_names(env, project.system_tools, project.commands, project.configured_tools, builder_source(project))
+			executor = Project.build_executor(project, build.name)?
+			imported = Project.unique([executor.source].concat(source_names(env, project.system_tools, project.commands, project.configured_tools, [executor.source])))
 				.concat(env.overlays).concat(build.inputs)
 				.concat(project.roc_packages.keep_if(|entry| entry.environment == env.name).map(|entry| entry.source))
 			$names = Project.unique($names.concat(imported))
@@ -1027,7 +1047,7 @@ NixProvider :: [].{
 				"              ln = \"\${pkgs.coreutils}/bin/ln\";",
 			]
 		}
-		sources = source_names(environment, system_tools, commands, configured, builder)
+		sources = Project.unique(builder.concat(source_names(environment, system_tools, commands, configured, builder)))
 		primary = sources.first() ?? ""
 		overlays = environment.overlays.map(
 			|name| "inputs.${quote(name)}.overlays.default",
@@ -1250,7 +1270,7 @@ simple = {
 }
 
 mk : TestSpec -> Spec
-mk = |t| Spec.{ resolvers: [], executors: [], build_executors: [], 
+mk = |t| Spec.{ resolvers: [{ provider: "nix", inputs: t.inputs.map(|input| input.name) }], executors: [], build_executors: [], 
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -1320,7 +1340,7 @@ expect NixProvider.render_environment(mk({ ..simple, sources: [{ name: "guix", p
 # is never left out: Nix cannot build it, and that is said.
 expect {
 	locking = mk({ ..simple, sources: [], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }], tasks: [{ name: "check", environment: "dev", run: ["true"] }] })
-	building = { ..locking, requires_: ["builds"], builds: [{ name: "app", environment: "dev", inputs: [], needs: [], run: ["true"], output: "out" }] }
+	building = { ..locking, requires_: ["builds"], executors: [{ name: "native", provider: "nix", source: "" }], build_executors: [{ build: "app", executor: "native" }], builds: [{ name: "app", environment: "dev", inputs: [], needs: [], run: ["true"], output: "out" }] }
 	NixProvider.whole(locking) == [] and NixProvider.whole(mk(simple)) == ["dev"] and NixProvider.whole(building) == ["dev"]
 		and NixProvider.render(locking).map_ok(|text| text.contains("mkShell") or text.contains("\"default\"")) == Ok(False)
 		and NixProvider.update_files(locking, "x86_64-linux", TestData.layout).map_ok(|files| files.map(|file| file.contents.contains("\"roc\" = { url = \"github:roc-lang/roc-overlay\"; flake = true; };"))) == Ok([True])
@@ -2002,6 +2022,7 @@ roc_project = {
 		builds: [TestData.library, { ..TestData.library, name: "script", environment: "scripts" }],
 		requires_: ["sources", "builds", "roc-packages"],
 	}),
+	resolvers: [{ provider: "nix", inputs: ["assets", "roc-abc", "roc-def"] }],
 	roc_packages: [
 		{ environment: "packages", name: "abc", source: "roc-abc" },
 		{ environment: "scripts", name: "def", source: "roc-def" },

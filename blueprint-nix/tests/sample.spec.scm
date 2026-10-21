@@ -1,8 +1,9 @@
-((format ((major 2) (minor 0)))
+((format ((major 3) (minor 0)))
+ (resolvers (((provider "nix") (inputs ("roc")))))
  (name "sample \"quoted\"")
  (systems ("x86_64-linux" "aarch64-darwin"))
  (sources (((name "nixpkgs")
-            (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
+            (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/nixos-unstable"))))))
  (inputs (((name "roc") (url "github:roc-lang/roc-overlay") (kind Overlay))))
  (environments (
    ((name "base") (parents ())

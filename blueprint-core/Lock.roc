@@ -30,6 +30,7 @@ import Value
 Lock := {
 	format : { major : U64, minor : U64 },
 	intent : {
+		resolvers : List(Spec.Resolver),
 		sources : List(Spec.Source),
 		inputs : List(Spec.Input),
 		build_sources : List(Spec.BuildSource),
@@ -146,6 +147,7 @@ Lock := {
 	from_before_explicit_sources : Lock -> Bool
 	from_before_explicit_sources = |lock| lock.intent.sources.any(|source| source.provider.name.is_empty())
 	Intent : {
+		resolvers : List(Spec.Resolver),
 		sources : List(Spec.Source),
 		inputs : List(Spec.Input),
 		build_sources : List(Spec.BuildSource),
@@ -156,6 +158,7 @@ Lock := {
 	## part of the intent; overlay order within an environment is.
 	intent_of : Spec -> Intent
 	intent_of = |spec| {
+		resolvers: spec.resolvers.map(|resolver| { provider: resolver.provider, inputs: resolver.inputs.sort_with(Project.bytewise) }).sort_with(|a, b| Project.bytewise(a.provider, b.provider)),
 		sources: spec.sources.sort_with(|x, y| Project.bytewise(x.name, y.name)),
 		inputs: spec.inputs.sort_with(|x, y| Project.bytewise(x.name, y.name)),
 		build_sources: Project.resolved_build_sources(spec).sort_with(|x, y| Project.bytewise(x.name, y.name)),
@@ -166,7 +169,7 @@ Lock := {
 	}
 
 	empty_intent : Intent
-	empty_intent = { sources: [], inputs: [], build_sources: [], overlays: [] }
+	empty_intent = { resolvers: [], sources: [], inputs: [], build_sources: [], overlays: [] }
 
 	## Fail, naming what changed, when the Spec no longer matches what was
 	## resolved. Settings Resolve does not consume never make a Lock stale.
@@ -182,6 +185,7 @@ Lock := {
 		changed = |what, same| if (same) [] else [what]
 		differences = changed("sources", lock.intent.sources == current.sources)
 			.concat(changed("inputs", lock.intent.inputs == current.inputs))
+			.concat(changed("resolver ownership", lock.intent.resolvers == current.resolvers))
 			.concat(changed("build sources", lock.intent.build_sources == current.build_sources))
 			.concat(changed("environment overlays", lock.intent.overlays == current.overlays))
 		if differences.is_empty() {
@@ -196,7 +200,7 @@ Lock := {
 	file_pin = |source| { name: source.name, provider: "file", ref: source.url, rev: "", digest: "sha256:${source.sha256}" }
 
 	current_format : Format
-	current_format = { major: 1, minor: 1 }
+	current_format = { major: 2, minor: 0 }
 
 	to_str : Lock -> Str
 	to_str = |lock| Str.concat(Sexpr.to_str(lock), "\n")
@@ -220,6 +224,57 @@ Lock := {
 				fetched: (wire.fetched ?? []).map(|entry| { name: entry.name, system: entry.system, urls: entry.urls, sha256: entry.sha256, size: entry.size, obtained: entry.obtained ?? Unstated }),
 			},
 		)
+	}
+
+	## Explicit, pure migration: preserve all pins and trust evidence. Old
+	## provider tags become versioned declarations only when current intent
+	## agrees; new resolver ownership is checked against existing pin owners.
+	migrate : Str, Spec -> Try(Lock, Str)
+	migrate = |text, spec| {
+		project = Project.validate(spec)?
+		header : { format : Format }
+		header = Sexpr.parse(text).map_err(|_| "invalid lock format header")?
+		if header.format.major == current_format.major {
+			lock = parse(text).map_err(|_| "invalid current lock")?
+			_ = stale(lock, project)?
+			return Ok(lock)
+		}
+		if header.format.major != 1 {
+			return Err("unsupported legacy lock major; migration supports Lock 1")
+		}
+		wire : LegacyWire
+		wire = Sexpr.parse(text).map_err(|_| "invalid legacy lock")?
+		old = wire.intent ?? { sources: [], inputs: [], build_sources: [], overlays: [] }
+		var $sources = []
+		for source in old.sources {
+			expected = project.sources.find_first(|entry| entry.name == source.name).map_err(|_| "legacy source is no longer declared: ${source.name}")?
+			declaration = match source.provider {
+				NixPackages(ref) => { name: "nix", version: 1, ref }
+				GuixPackages(ref) => { name: "guix", version: 1, ref }
+				Auto => {
+					pin = (wire.sources ?? []).find_first(|entry| entry.name == source.name).map_err(|_| "legacy Auto source has no pin: ${source.name}")?
+					if pin.provider != expected.provider.name or pin.ref != expected.provider.ref {
+						return Err("cannot establish legacy source ownership: ${source.name}")
+					}
+					expected.provider
+				}
+			}
+			$sources = $sources.append({ name: source.name, provider: declaration })
+		}
+		intent = intent_of(project)
+		legacy_intent : Intent
+		legacy_intent = { resolvers: intent.resolvers, sources: $sources.sort_with(|a, b| Project.bytewise(a.name, b.name)), inputs: old.inputs, build_sources: old.build_sources, overlays: old.overlays }
+		lock = Lock.{ format: current_format, intent: legacy_intent, sources: wire.sources ?? [], hints: wire.hints ?? [], fetched: (wire.fetched ?? []).map(|entry| { name: entry.name, system: entry.system, urls: entry.urls, sha256: entry.sha256, size: entry.size, obtained: entry.obtained ?? Unstated }) }
+		_ = stale(lock, project)?
+		for resolver in project.resolvers {
+			for name in resolver.inputs {
+				pin = lock.sources.find_first(|entry| entry.name == name).map_err(|_| "legacy input has no pin: ${name}")?
+				if pin.provider != resolver.provider {
+					return Err("legacy pin resolver differs from declaration: ${name}")
+				}
+			}
+		}
+		Ok(lock)
 	}
 
 	## The hint a provider wrote for itself, if any.
@@ -253,6 +308,14 @@ Wire : {
 
 ## A fetched entry as it is read: one written before `obtained` was recorded
 ## has none.
+LegacyWire : {
+	format : Lock.Format,
+	intent : Try({ sources : List({ name : Str, provider : [Auto, NixPackages(Str), GuixPackages(Str)] }), inputs : List(Spec.Input), build_sources : List(Spec.BuildSource), overlays : List({ environment : Str, overlays : List(Str) }) }, [Missing]),
+	sources : Try(List(Lock.Source), [Missing]),
+	hints : Try(List(Lock.Hint), [Missing]),
+	fetched : Try(List(WireFetched), [Missing]),
+}
+
 WireFetched : { name : Str, system : Str, urls : List(Str), sha256 : Str, size : U64, obtained : Try(Lock.Obtained, [Missing]) }
 
 sample : Lock
@@ -271,26 +334,17 @@ expect Lock.parse(sample.to_str()) == Ok(sample)
 
 # Same major, any minor; unknown fields ignored; optional fields default empty.
 expect
-	match Lock.parse(sample.to_str().replace_each("(minor 1)", "(minor 9)")) {
-		Ok(lock) => lock.format == { major: 1, minor: 9 } and lock.sources == sample.sources
+	match Lock.parse(sample.to_str().replace_each("(minor 0)", "(minor 9)")) {
+		Ok(lock) => lock.format == { major: 2, minor: 9 } and lock.sources == sample.sources
 		Err(_) => False
 	}
-expect Lock.parse("((format ((major 1) (minor 1))))") == Ok(Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], hints: [], fetched: [] })
-expect Lock.parse("((format ((major 1) (minor 0))) (future (1 2 3)))").is_ok()
+expect Lock.parse("((format ((major 2) (minor 0))))") == Ok(Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], hints: [], fetched: [] })
+expect Lock.parse("((format ((major 2) (minor 0))) (future (1 2 3)))").is_ok()
 
-# A 1.0 Lock, as blueprint 0.5 wrote it, has fetched nothing and keeps its pins.
-expect
-	match Lock.parse("((format ((major 1) (minor 0))) (hints ()) (intent ((build_sources ()) (inputs ()) (overlays ()) (sources (((name \"default\") (provider Auto)))))) (sources (((digest \"sha256:00\") (name \"default\") (provider \"nix\") (ref \"github:NixOS/nixpkgs/nixos-unstable\") (rev \"abc\")))))") {
-		Ok(lock) => lock.format == { major: 1, minor: 0 } and lock.fetched == [] and lock.sources.map(|source| source.rev) == ["abc"] and lock.intent.sources == [{ name: "default", provider: { name: "", version: 0, ref: "" } }]
-		Err(_) => False
-	}
+# Legacy locks require explicit migration, never implicit parsing.
+expect Lock.parse("((format ((major 1) (minor 0))))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
 
-# A fetched entry is whole or the Lock is not read.
-expect Lock.parse("((format ((major 1) (minor 1))) (fetched (((name \"roc-stable\") (system \"x86_64-linux\") (urls (\"https://example.test/roc.tar.gz\")) (size 1)))))").is_err()
-expect Lock.parse("((format ((major 1) (minor 1))) (fetched (((name \"roc-stable\") (system \"x86_64-linux\") (urls (\"https://example.test/roc.tar.gz\")) (sha256 \"00\") (size -1)))))").is_err()
-
-# Other majors are rejected before the rest is read, even if it wouldn't parse.
-expect Lock.parse("((format ((major 2) (minor 0))) (sources 42))") == Err(UnsupportedFormat({ major: 2, minor: 0 }))
+expect Lock.parse("((format ((major 3) (minor 0))) (sources 42))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))
 
 # The pre-Lock JSON authority is not a Lock.
 expect Lock.parse("{\"version\":1}").is_err()
@@ -364,9 +418,9 @@ expect {
 # How a digest was obtained is written and read back. An entry from before
 # that was recorded is still read, and says nothing of it.
 expect sample.to_str().contains("(obtained Both)") and sample.to_str().contains("(obtained Published)")
-expect Lock.parse("((format ((major 1) (minor 1))) (fetched (((name \"roc-stable\") (system \"x86_64-linux\") (urls (\"https://example.test/roc.tar.gz\")) (sha256 \"00\") (size 1)))))").map_ok(|lock| lock.fetched) == Ok([{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc.tar.gz"], sha256: "00", size: 1, obtained: Unstated }])
-expect Lock.parse("((format ((major 1) (minor 1))) (fetched (((name \"t\") (system \"x86_64-linux\") (urls (\"https://example.test/t\")) (sha256 \"00\") (size 1) (obtained Computed)))))").map_ok(|lock| lock.fetched.map(|entry| entry.obtained)) == Ok([Computed])
-expect Lock.parse("((format ((major 1) (minor 1))) (fetched (((name \"t\") (system \"x86_64-linux\") (urls (\"https://example.test/t\")) (sha256 \"00\") (size 1) (obtained Guessed)))))").is_err()
+expect Lock.parse("((format ((major 2) (minor 0))) (fetched (((name \"roc-stable\") (system \"x86_64-linux\") (urls (\"https://example.test/roc.tar.gz\")) (sha256 \"00\") (size 1)))))").map_ok(|lock| lock.fetched) == Ok([{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc.tar.gz"], sha256: "00", size: 1, obtained: Unstated }])
+expect Lock.parse("((format ((major 2) (minor 0))) (fetched (((name \"t\") (system \"x86_64-linux\") (urls (\"https://example.test/t\")) (sha256 \"00\") (size 1) (obtained Computed)))))").map_ok(|lock| lock.fetched.map(|entry| entry.obtained)) == Ok([Computed])
+expect Lock.parse("((format ((major 2) (minor 0))) (fetched (((name \"t\") (system \"x86_64-linux\") (urls (\"https://example.test/t\")) (sha256 \"00\") (size 1) (obtained Guessed)))))").is_err()
 
 linux_tool : Spec.Program
 linux_tool = { name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-linux", "https://mirror.example.test/tool-linux"], unpack: File, path: "" }
@@ -419,10 +473,7 @@ expect {
 }
 
 # A Lock blueprint 0.5 wrote is known by the source every project had then.
-expect {
-	old = Lock.parse("((format ((major 1) (minor 0))) (intent ((build_sources ()) (inputs ()) (overlays ()) (sources (((name \"default\") (provider Auto)))))))")
-	old.map_ok(Lock.from_before_explicit_sources) == Ok(True) and !Lock.from_before_explicit_sources(sample)
-}
+expect !Lock.from_before_explicit_sources(sample)
 
 expect {
 	file = { name: "upstream", url: "https://example.test/release.tar.gz", sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
@@ -434,4 +485,21 @@ expect {
 		and lock.stale({ ..spec, source_files: [{ ..file, url: "https://mirror.test/release.tar.gz" }] }).is_err()
 		and lock.stale({ ..spec, source_files: [] }).is_err()
 		and { ..lock, sources: [] }.stale(spec).is_err()
+}
+
+# Migration changes only format and declared authority, retaining every pin,
+# provider hint and download trust record without any effects.
+expect {
+	legacy = "((format ((major 1) (minor 1))) (intent ((sources (((name \"pkgs\") (provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\"))))) (inputs ()) (build_sources ()) (overlays ()))) (sources (((name \"pkgs\") (provider \"nix\") (ref \"github:NixOS/nixpkgs/nixos-unstable\") (rev \"reviewed-commit\") (digest \"sha256:abc\")))) (hints (((provider \"nix\") (value (Str \"native graph\"))))) (fetched (((name \"tool\") (system \"x86_64-linux\") (urls (\"https://example.test/tool\")) (sha256 \"00\") (size 7) (obtained Both)))))"
+	spec = { ..Spec.empty("migration"), systems: ["x86_64-linux"], sources: [{ name: "pkgs", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] }
+	match Lock.migrate(legacy, spec) {
+		Ok(lock) => lock.format == Lock.current_format and lock.sources == [{ name: "pkgs", provider: "nix", ref: "github:NixOS/nixpkgs/nixos-unstable", rev: "reviewed-commit", digest: "sha256:abc" }] and lock.hints == [{ provider: "nix", value: Value.Str("native graph") }] and lock.fetched.map(|entry| entry.obtained) == [Both] and Lock.migrate(lock.to_str(), spec) == Ok(lock) and Lock.migrate(legacy, { ..spec, sources: [{ name: "pkgs", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/changed" } }] }).is_err()
+		Err(_) => False
+	}
+}
+
+expect {
+	legacy = "((format ((major 1) (minor 0))) (intent ((build_sources ()) (inputs ()) (overlays ()) (sources (((name \"pkgs\") (provider Auto)))))) (sources (((name \"pkgs\") (provider \"nix\") (ref \"github:NixOS/nixpkgs/nixos-unstable\") (rev \"abc\") (digest \"sha256:00\")))))"
+	spec = { ..Spec.empty("migration"), systems: ["x86_64-linux"], sources: [{ name: "pkgs", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] }
+	Lock.migrate(legacy, spec).map_ok(|lock| lock.sources.map(|source| source.rev)) == Ok(["abc"]) and Lock.migrate(legacy, { ..spec, sources: [{ name: "pkgs", provider: { name: "other", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] }).is_err()
 }

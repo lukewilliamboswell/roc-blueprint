@@ -260,7 +260,7 @@ expect {
 }
 
 # A 2.5 record has no configured tools.
-expect Spec.parse("((format ((major 2) (minor 5))) (name \"x\"))").map_ok(|spec| spec.configured_tools) == Ok([])
+expect Spec.parse("((format ((major 3) (minor 5))) (name \"x\"))").map_ok(|spec| spec.configured_tools) == Ok([])
 
 # Fetched programs, one entry per System, with what selects and expects them.
 expect {
@@ -276,49 +276,49 @@ expect {
 		environment_programs: [{ environment: "dev", programs: ["roc-stable", "tool"] }],
 		expects: [{ environment: "dev", programs: ["gh", "git"] }],
 	}
-	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 8 }
+	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 3, minor: 0 }
 }
 
 # A 2.6 record, as blueprint 0.5 printed it, has none of them.
-expect match Spec.parse("((format ((major 2) (minor 6))) (name \"x\") (requires (\"commands\")) (commands (((environment \"dev\") (name \"roc-stable\") (tool ((source \"default\") (name \"rocpkgs.nightly\")))))))") {
-	Ok(spec) => spec.format == { major: 2, minor: 6 } and spec.programs == [] and spec.environment_programs == [] and spec.expects == [] and spec.commands.len() == 1
+expect match Spec.parse("((format ((major 3) (minor 6))) (name \"x\") (requires (\"commands\")) (commands (((environment \"dev\") (name \"roc-stable\") (tool ((source \"default\") (name \"rocpkgs.nightly\")))))))") {
+	Ok(spec) => spec.format == { major: 3, minor: 6 } and spec.programs == [] and spec.environment_programs == [] and spec.expects == [] and spec.commands.len() == 1
 	Err(_) => False
 }
 
 # A consumer that predates them refuses the Spec by the features' names.
-expect match Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (requires (\"programs\" \"expects\")))") {
+expect match Spec.parse("((format ((major 3) (minor 7))) (name \"x\") (requires (\"programs\" \"expects\")))") {
 	Ok(spec) => Spec.unsupported_features(spec, ["raw", "sources", "commands"]) == ["programs", "expects"]
 	Err(_) => False
 }
 
 # An unpacking the consumer does not know is not dropped as optional data.
-expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a.7z\")) (unpack SevenZip) (path \"a\")))))").is_err()
-expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (unpack File) (path \"\")))))").is_err()
+expect Spec.parse("((format ((major 3) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a.7z\")) (unpack SevenZip) (path \"a\")))))").is_err()
+expect Spec.parse("((format ((major 3) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (unpack File) (path \"\")))))").is_err()
 expect Spec.parse("((format ((major 1) (minor 0))) (shells 42))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
-expect Spec.parse("((format ((major 3) (minor 0))))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))
+expect Spec.parse("((format ((major 4) (minor 0))))") == Err(UnsupportedFormat({ major: 4, minor: 0 }))
 # Earlier minor records omit newer optional build and workflow fields.
-expect match Spec.parse("((format ((major 2) (minor 0))) (name \"x\"))") {
-	Ok(spec) => spec.format == { major: 2, minor: 0 } and
+expect match Spec.parse("((format ((major 3) (minor 0))) (name \"x\"))") {
+	Ok(spec) => spec.format == { major: 3, minor: 0 } and
 		spec.build_sources.is_empty() and spec.builds.is_empty() and
 			spec.workflows.is_empty()
 	Err(_) => False
 }
-expect Spec.parse("((format ((major 2) (minor 0))))").is_err()
+expect Spec.parse("((format ((major 3) (minor 0))))").is_err()
 expect Spec.parse("((name \"x\"))").is_err()
-expect Spec.parse("((format ((major 2) (minor 1))) (name \"x\") (build_sources (((name \"assets\")))))").is_err()
-expect Spec.parse("((format ((major 2) (minor 1))) (name \"x\") (builds (((name \"app\") (environment \"dev\") (inputs ()) (needs ()) (run (\"true\"))))))").is_err()
-expect match Spec.parse("((format ((major 2) (minor 99))) (name \"x\") (requires (\"sources\" \"builds\" \"future\")))") {
+expect Spec.parse("((format ((major 3) (minor 1))) (name \"x\") (build_sources (((name \"assets\")))))").is_err()
+expect Spec.parse("((format ((major 3) (minor 1))) (name \"x\") (builds (((name \"app\") (environment \"dev\") (inputs ()) (needs ()) (run (\"true\"))))))").is_err()
+expect match Spec.parse("((format ((major 3) (minor 99))) (name \"x\") (requires (\"sources\" \"builds\" \"future\")))") {
 	Ok(spec) => Spec.unsupported_features(spec, ["sources", "builds"]) == ["future"] and Spec.unsupported_features(spec, []) == ["sources", "builds", "future"]
 	Err(_) => False
 }
-expect match Spec.parse("((future (Tag 1)) (format ((major 2) (minor 99))) (name \"x\") (shells (((name \"s\") (environment \"dev\") (future 1)))))") {
+expect match Spec.parse("((future (Tag 1)) (format ((major 3) (minor 99))) (name \"x\") (shells (((name \"s\") (environment \"dev\") (future 1)))))") {
 	Ok(spec) => spec.format.minor == 99 and spec.shells == [{ name: "s", environment: "dev" }]
 	Err(_) => False
 }
 
 # An older consumer must reject workflows via the required-feature marker.
 expect match Spec.parse(
-	\\((format ((major 2) (minor 2))) (name "x")
+	\\((format ((major 3) (minor 2))) (name "x")
 	\\ (requires ("workflows")) (workflows (((name "ci") (steps ())))))
 ) {
 	Ok(spec) => spec.workflows == [{ name: "ci", steps: [] }] and
@@ -329,7 +329,7 @@ expect match Spec.parse(
 # Omitted workflow fields remain compatible with both earlier minor versions.
 expect ["0", "1"].all(
 	|minor|
-		match Spec.parse("((format ((major 2) (minor ${minor}))) (name \"x\"))") {
+		match Spec.parse("((format ((major 3) (minor ${minor}))) (name \"x\"))") {
 			Ok(spec) => spec.workflows == []
 			Err(_) => False
 		},
@@ -337,25 +337,25 @@ expect ["0", "1"].all(
 
 # Unknown step tags cannot be silently dropped as optional top-level data.
 expect Spec.parse(
-	\\((format ((major 2) (minor 2))) (name "x")
+	\\((format ((major 3) (minor 2))) (name "x")
 	\\ (workflows (((name "ci") (steps ((FutureStep "check")))))))
 ).is_err()
 
 # Task extra argv is required in every RunTask record on the wire.
 expect Spec.parse(
-	\\((format ((major 2) (minor 2))) (name "x")
+	\\((format ((major 3) (minor 2))) (name "x")
 	\\ (workflows (((name "ci") (steps ((RunTask "check")))))))
 ).is_err()
 
 # A workflow must contain a typed steps list, even when intentionally empty.
 expect Spec.parse(
-	\\((format ((major 2) (minor 2))) (name "x")
+	\\((format ((major 3) (minor 2))) (name "x")
 	\\ (workflows (((name "ci")))))
 ).is_err()
 
 # A 2.7 program entry names its URLs as a list; one bare `url` is not it.
-expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (url \"https://example.test/a\") (unpack File) (path \"\")))))").is_err()
-expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a\" \"https://mirror.example.test/a\")) (unpack File) (path \"\")))))").map_ok(|spec| spec.programs.map(|program| program.urls)) == Ok([["https://example.test/a", "https://mirror.example.test/a"]])
+expect Spec.parse("((format ((major 3) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (url \"https://example.test/a\") (unpack File) (path \"\")))))").is_err()
+expect Spec.parse("((format ((major 3) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a\" \"https://mirror.example.test/a\")) (unpack File) (path \"\")))))").map_ok(|spec| spec.programs.map(|program| program.urls)) == Ok([["https://example.test/a", "https://mirror.example.test/a"]])
 
 expect {
 	spec = { ..Spec.empty("selected"), requires_: ["build-files"], build_files: [{ build: "app", paths: [] }] }

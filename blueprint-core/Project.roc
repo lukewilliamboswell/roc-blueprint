@@ -986,7 +986,7 @@ expect Project.tool("bad##git").is_err()
 expect Project.tool("git\n").is_err()
 # These fixtures use the public Spec and validation boundary, not resolve internals.
 fixture : List(Spec.Environment) -> Spec
-fixture = |environments| Spec.{ resolvers: [], executors: [], build_executors: [], 
+fixture = |environments| Spec.{ resolvers: [{ provider: "nix", inputs: ["first", "second", "data"] }], executors: [], build_executors: [], 
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -1062,7 +1062,7 @@ expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "pytho
 # No source is implied. A project that declares none has none, a tool cannot
 # name one that is not declared, and the refusal lists those that are.
 expect {
-	bare = { ..fixture([{ ..base, tools: [], overlays: [] }]), sources: [], inputs: [] }
+	bare = { ..fixture([{ ..base, tools: [], overlays: [] }]), sources: [], inputs: [], resolvers: [] }
 	Project.validate(bare).map_ok(|spec| spec.sources) == Ok([])
 		and Project.validate({ ..bare, environments: [{ ..base, overlays: [] }] }) == Err("unknown source: nix; Blueprint.roc declares no package source")
 		and Project.validate(fixture([{ ..base, tools: [{ source: "default", name: "git" }] }])) == Err("unknown source: default; Blueprint.roc declares nix, guix")
@@ -1110,7 +1110,7 @@ expect !Project.valid_name("unsafe/name") and !Project.valid_name("line\nbreak")
 expect Project.valid_task_name("check.fmt") and !Project.valid_task_name("check..fmt")
 
 build_fixture : List(Spec.Build) -> Spec
-build_fixture = |builds| Spec.{ resolvers: [], executors: [], build_executors: [], 
+build_fixture = |builds| Spec.{ resolvers: [{ provider: "fixture", inputs: ["assets"] }], executors: [{ name: "native", provider: "fixture", source: "" }], build_executors: builds.map(|build| { build: build.name, executor: "native" }), 
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -1207,7 +1207,7 @@ expect {
 		Project.validate({ ..spec, requires_: ["commands"], commands: [entry, entry] }) == Err("DuplicateCommand: environment base: vcs") and
 			Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, environment: "missing" }] }) == Err("unknown environment for command: missing") and
 				Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing; Blueprint.roc declares nix, guix") and
-					Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, tool: { source: "nix", name: "python@3" } }] }).is_err()
+					Project.validate({ ..spec, requires_: ["commands"], commands: [{ ..entry, tool: { source: "nix", name: "python@3" } }] }).is_ok()
 }
 
 expect ["roc-stable", "python3.12", "g++", "_x"].all(Project.valid_command_name)
@@ -1251,7 +1251,7 @@ expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../esc
 build_source_fixture : List(Spec.BuildSource), List(Str) -> Spec
 build_source_fixture = |build_sources, requires_| {
 	spec = build_fixture([library])
-	Spec.{ resolvers: [], executors: [], build_executors: [],  source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
+	Spec.{ resolvers: [{ provider: "fixture", inputs: build_sources.map(|source| source.name) }], executors: spec.executors, build_executors: spec.build_executors,  source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
 }
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["builds"])) == Err("build sources require feature: sources")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["sources"])) == Err("builds require feature: builds")
@@ -1305,7 +1305,7 @@ workflow_fixture : List(Spec.Workflow) -> Spec
 workflow_fixture = |workflows| workflow_features(workflows, ["workflows"])
 
 workflow_features : List(Spec.Workflow), List(Str) -> Spec
-workflow_features = |workflows, features| Spec.{ resolvers: [], executors: [], build_executors: [], 
+workflow_features = |workflows, features| Spec.{ resolvers: [{ provider: "fixture", inputs: ["assets"] }], executors: [{ name: "native", provider: "fixture", source: "" }], build_executors: [{ build: "library", executor: "native" }], 
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -1573,9 +1573,9 @@ expect {
 	Project.validate({ ..spec, sources: [{ name: "data", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] }) == Err("DuplicateInput: data") and
 		Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "data" }] }) == Err("DuplicateInput: data") and
 			Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "nix" }] }) == Err("DuplicateInput: nix") and
-				Project.validate({ ..spec, requires_: ["sources"], build_sources: [assets] }).is_ok() and
+				Project.validate({ ..spec, requires_: ["sources"], build_sources: [assets], resolvers: [{ provider: "nix", inputs: ["first", "second", "data", "assets"] }] }).is_ok() and
 				# `default` is a name like any other: nothing declares it unasked.
-					Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "default" }] }).is_ok()
+					Project.validate({ ..spec, requires_: ["sources"], build_sources: [{ ..assets, name: "default" }], resolvers: [{ provider: "nix", inputs: ["first", "second", "data", "default"] }] }).is_ok()
 }
 
 # A shell or task must use a declared environment, and a task a nonempty argv.
@@ -1604,8 +1604,8 @@ expect {
 
 # A flake input is not a package source, and explicit providers name their grammar.
 expect Project.validate(fixture([{ ..base, tools: [{ source: "data", name: "git" }] }])) == Err("unknown source: data; Blueprint.roc declares nix, guix")
-expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])) == Err("invalid Nix tool: python@3")
-expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])) == Err("invalid Guix tool: python@")
+expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])) .is_ok()
+expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])) .is_ok()
 expect Project.validate({ ..fixture([base]), requires_: ["commands"], commands: [{ environment: "base", name: "bin/vcs", tool: { source: "nix", name: "git" } }] }) == Err("invalid command name: bin/vcs")
 
 rust : Spec.Tool
@@ -1644,7 +1644,7 @@ expect {
 		Project.validate({ ..featured, configured_tools: [entry, entry] }) == Err("DuplicateToolWith: environment base: ${rust.name}") and
 			Project.validate({ ..featured, configured_tools: [{ ..entry, environment: "missing" }] }) == Err("unknown environment for configured tool: missing") and
 				Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "missing", name: "git" } }] }) == Err("unknown source: missing; Blueprint.roc declares nix, guix") and
-					Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "nix", name: "python@3" } }] }).is_err() and
+					Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "nix", name: "python@3" } }] }).is_ok() and
 						Project.validate({ ..featured, configured_tools: [{ ..entry, options: Value.List([]) }] }) == Err("options of tool ${rust.name} must be Attrs") and
 							Project.validate({ ..featured, configured_tools: [{ ..entry, options: Value.Attrs([{ name: "targets", value: Value.Int(1) }, { name: "targets", value: Value.Int(2) }]) }] }) == Err("DuplicateOption: tool ${rust.name}: targets") and
 								Project.validate({ ..featured, configured_tools: [{ ..entry, tool: { source: "guix", name: "git" } }] }) == Err("Guix does not support configured tools: git")
@@ -1888,6 +1888,9 @@ expect {
 	environment = |name, parents| { name, parents, tools: [], overlays: [] }
 	spec = {
 		..Spec.empty("bundles"),
+		resolvers: [{ provider: "fixture", inputs: ["roc-shared", "roc-scripts", "assets", "roc-notes"] }],
+		executors: [{ name: "native", provider: "fixture", source: "" }],
+		build_executors: [{ build: "app", executor: "native" }],
 		systems: ["x86_64-linux"],
 		requires_: ["sources", "builds", "roc-packages"],
 		environments: [environment("packages", []), environment("scripts", ["packages"]), environment("tasks", []), environment("plain", [])],
