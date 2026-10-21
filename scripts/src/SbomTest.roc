@@ -45,6 +45,7 @@ SbomTest := [].{
 	composition = {
 		profile: Sbom.profile,
 		imported_documents: [],
+		unavailable_sboms: [],
 		components: [
 			component("platform", "platform", "1.0.0"),
 			{ ..component("native", "native-library", "2.0.0"), identity: "pkg:cargo/native-library@2.0.0", sha256: digest },
@@ -227,9 +228,26 @@ source_component = { ..component("source", "upstream", "111111111111111111111111
 
 program_component = { ..component("program", "roc", "3.0.0"), download: "https://example.org/roc/3.0.0.tar.gz", identity: "", sha256: digest, origin: "program:roc:x86_64-linux" }
 
-locked_composition = { ..SbomTest.composition, components: [source_component, program_component], relationships: [edge("Subject", source_component.id, "dependsOn"), { ..edge("Subject", program_component.id, "dependsOn"), scope: "build" }], inputs: [{ input: "source:upstream", component: source_component.id, reason: "Resolved source tree identity; no archive digest inferred" }, { input: "program:roc:x86_64-linux", component: program_component.id, reason: "Authoritative locked download archive" }] }
+locked_composition = { ..SbomTest.composition, components: [source_component, program_component], relationships: [edge("Subject", source_component.id, "dependsOn"), { ..edge("Subject", program_component.id, "dependsOn"), scope: "build" }], inputs: [{ input: "source:upstream", component: source_component.id, reason: "Resolved source tree identity; no archive digest inferred" }, { input: "program:roc:x86_64-linux", component: program_component.id, reason: "Authoritative locked download archive" }], unavailable_sboms: [no_sbom("source"), no_sbom("program")] }
+
+no_sbom = |id| { component: id, reason: "The supplier publishes no SBOM for this release", contact: "https://example.org/support" }
 
 inspect_locked = |composition| Sbom.inspect(locked_spec, locked_lock, "x86_64-linux", composition)
+
+# A locked dependency needs its supplier's SBOM, or a stated reason it has none.
+expect inspect_locked({ ..locked_composition, unavailable_sboms: [] }).is_err()
+expect inspect_locked({ ..locked_composition, unavailable_sboms: [no_sbom("source")] }).is_err()
+expect inspect_locked({ ..locked_composition, unavailable_sboms: [no_sbom("source"), { ..no_sbom("program"), reason: "" }] }).is_err()
+expect inspect_locked({ ..locked_composition, unavailable_sboms: [no_sbom("source"), no_sbom("program"), no_sbom("Subject")] }).is_err()
+expect {
+	inventory = inspect_locked(locked_composition) ?? crash "invalid locked fixture"
+	inventory.coverage.any(|scope| scope.scope == "sbom:program" and scope.status == "incomplete" and scope.reason == "No supplier SBOM: The supplier publishes no SBOM for this release")
+}
+expect
+	match inspect_locked({ ..locked_composition, unavailable_sboms: [no_sbom("program")] }) {
+		Err(problem) => problem.contains("dependency source (source:upstream) has no supplier SBOM") and problem.contains("pin the file by its published SHA-256")
+		Ok(_) => False
+	}
 expect inspect_locked(locked_composition).is_ok()
 expect inspect_locked({ ..locked_composition, inputs: [] }).is_err()
 expect inspect_locked({ ..locked_composition, components: [{ ..source_component, version: "different-revision" }, program_component] }).is_err()
@@ -278,13 +296,25 @@ expect {
 program_document = (SbomTest.output ?? "").replace_each("\"sample-artifact\"", "\"3.0.0.tar.gz\"").replace_each("\"software_packageVersion\":\"1.0.0\"", "\"software_packageVersion\":\"3.0.0\"").replace_each(SbomTest.subject.sha256, digest)
 
 bound_import = { ..imported_document, document: program_document, sha256: Crypto.SHA256.hash(program_document.to_utf8()).to_hex(), subject: { component: program_component.id, filename: "3.0.0.tar.gz", version: "3.0.0", sha256: digest } }
-expect inspect_locked({ ..locked_composition, imported_documents: [bound_import] }).is_ok()
-expect inspect_locked({ ..locked_composition, imported_documents: [{ ..bound_import, subject: { ..bound_import.subject, sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }] }).is_err()
+expect inspect_locked({ ..locked_composition, imported_documents: [bound_import], unavailable_sboms: [no_sbom("source")] }).is_ok()
+expect inspect_locked({ ..locked_composition, imported_documents: [bound_import] }).is_err()
+expect
+	match inspect_locked({ ..locked_composition, imported_documents: [{ ..bound_import, subject: { ..bound_import.subject, sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }], unavailable_sboms: [no_sbom("source")] }) {
+		Err(problem) => problem == "import subject filename/version/SHA256 mismatch"
+		Ok(_) => False
+	}
 expect {
 	changed_lock = { ..locked_lock, fetched: locked_lock.fetched.map(|entry| { ..entry, sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }) }
-	Sbom.inspect(locked_spec, changed_lock, "x86_64-linux", { ..unpinned_composition, imported_documents: [bound_import] }).is_err()
+	match Sbom.inspect(locked_spec, changed_lock, "x86_64-linux", { ..unpinned_composition, imported_documents: [bound_import], unavailable_sboms: [no_sbom("source")] }) {
+		Err(problem) => problem == "imported subject conflicts with authoritative component artifact"
+		Ok(_) => False
+	}
 }
-expect inspect_locked({ ..locked_composition, imported_documents: [{ ..bound_import, target: "aarch64-linux" }] }).is_err()
+expect
+	match inspect_locked({ ..locked_composition, imported_documents: [{ ..bound_import, target: "aarch64-linux" }], unavailable_sboms: [no_sbom("source")] }) {
+		Err(problem) => problem == "import target differs from subject"
+		Ok(_) => False
+	}
 
 # The same inventory reads back to the same package graph from either version,
 # and from SPDX 2.2, whose JSON differs only in its version string here.
@@ -497,3 +527,34 @@ expect {
 	crates(upstream_syft_cdx) == crates(upstream_syft_spdx) and crates(upstream_trivy_cdx) == crates(upstream_trivy_spdx)
 }
 expect upstream_import(upstream_syft_cdx.replace_each("/src/Cargo.lock", "/home/someone/src/Cargo.lock")).is_err()
+
+# A dependency consumed as a file whose supplier publishes an SBOM, such as a
+# Roc package bundle: pin the file by its published SHA-256, declare the
+# component from that pin, and bind the supplier's SBOM to it. Nothing here is
+# specific to Roc.
+bundle_bytes = "dependency bundle bytes\n"
+
+bundle_digest = Crypto.SHA256.hash(bundle_bytes.to_utf8()).to_hex()
+
+bundle_url = "https://example.org/releases/1.2.0/dep-abc.tar.zst"
+
+supplier_sbom = Sbom.render(SbomTest.inventory ?? crash "fixture", { ..SbomTest.subject, filename: "dep-abc.tar.zst", version: "1.2.0", sha256: bundle_digest, url: bundle_url }, { ..SbomTest.context, namespace: "https://example.org/sbom/dep/revision-1" }) ?? crash "supplier SBOM"
+
+consumer_spec = { ..SbomTest.spec, requires_: ["source-files"], source_files: [{ name: "dep", url: bundle_url, sha256: bundle_digest }] }
+
+consumer_lock = Lock.{ format: Lock.current_format, intent: Lock.intent_of(consumer_spec), sources: [{ name: "dep", provider: "file", ref: bundle_url, rev: "", digest: "sha256:${bundle_digest}" }], fetched: [], hints: [] }
+
+dependency = { ..component("dep", "dep-abc.tar.zst", "1.2.0"), identity: "", download: "", sha256: "", origin: "source:dep" }
+
+supplier_import = { ..imported_document, id: "dep-sbom", url: "https://example.org/releases/1.2.0/dep-abc.tar.zst.spdx.json", namespace: "https://example.org/sbom/dep/revision-1", document: supplier_sbom, sha256: Crypto.SHA256.hash(supplier_sbom.to_utf8()).to_hex(), subject: { component: "dep", filename: "dep-abc.tar.zst", version: "1.2.0", sha256: bundle_digest } }
+
+consumer = { ..SbomTest.composition, components: [dependency], relationships: [edge("Subject", "dep", "dependsOn")], imported_documents: [supplier_import], inputs: [{ input: "source:dep", component: "dep", reason: "Dependency bundle pinned by its published SHA-256" }] }
+expect {
+	match Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", consumer) {
+		Ok(inventory) => inventory.relationships.any(|relation| relation.to == "dep" and relation.relation == "copiedTo") and inventory.coverage.any(|scope| scope.scope == "import:dep-sbom" and scope.reason.starts_with("Document digest and upstream subject artifact identity match"))
+		Err(_) => False
+	}
+}
+# The pin stays the authority: a supplier SBOM for other bytes does not bind.
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..consumer, imported_documents: [{ ..supplier_import, subject: { ..supplier_import.subject, sha256: digest } }] }).is_err()
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..consumer, components: [{ ..dependency, sha256: digest }] }).is_err()

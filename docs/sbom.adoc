@@ -242,7 +242,8 @@ cp Blueprint.lock sbom/Lock
      "contact": "https://example.org/security"}
   ],
   "inputs": [],
-  "imported_documents": []
+  "imported_documents": [],
+  "unavailable_sboms": []
 }
 ----
 +
@@ -330,6 +331,11 @@ An SBOM is only useful if it is accurate. Before you publish, check:
   terms, use a `LicenseRef-` name with a `license_url`.
 * *Package URLs are present where they exist.* Scanners match
   vulnerabilities by purl. Use the component's real purl as its `identity`.
+* *Your dependencies bring their suppliers' SBOMs.* Pin each dependency
+  file by its SHA-256 and import its supplier's SBOM, bound to it. Where a
+  supplier publishes none, list it in `unavailable_sboms` with the reason;
+  `inspect` refuses an inventory that does neither. See
+  <<chain-sboms-across-dependencies>>.
 * *Build tools are build dependencies, not shipped code.* A compiler is
   `dependsOn` with scope `build`. It is never `contains`.
 * *Gaps are stated, not hidden.* If you do not know part of the
@@ -452,6 +458,10 @@ composition contains these fields:
 * `inputs`: one reviewed disposition for every known input, with `input`,
   `component` and `reason`. An empty component means an explained exclusion.
 * `imported_documents`: verified upstream graphs, or an empty list.
+* `unavailable_sboms`: one record for each locked dependency whose supplier
+  publishes no SBOM, with `component`, `reason` and `contact`. Every other
+  locked dependency needs a supplier SBOM in `imported_documents`, bound to it:
+  see <<chain-sboms-across-dependencies>>.
 
 A component's `origin` is `reviewed`, `source:<locked-name>`, or
 `program:<locked-name>:<system>`. Locked origins populate `version`,
@@ -598,6 +608,94 @@ that every document Blueprint can read also imports.
 Inputs are limited to 1 MiB, JSON nesting to 64 levels, imports to 16,
 components to 4,096 and relationships to 16,384. Licenses and exceptions are
 checked against the pinned SPDX License List 3.26.0 and expression grammar.
+
+[#chain-sboms-across-dependencies]
+== Chain SBOMs across your dependencies
+
+When every project publishes an SBOM beside each release file and every
+consumer imports the SBOMs of what it consumes, the SBOMs chain. A
+platform's SBOM includes the SBOMs of the packages it uses, and an app's
+includes the platform's. Every link is checked by digest, so the SBOM you
+publish covers your whole supply chain, and what nobody published is stated
+as a gap rather than missing. Nothing in this is specific to one kind of
+dependency: a Roc package bundle, a C library tarball and a downloaded tool
+work the same way.
+
+*Publish beside the file.* Publish `FILE.spdx.json` and `FILE.cdx.json` next
+to each release file at the same URL, as `bind` writes them by default. A
+consumer can then find a dependency's SBOM from the dependency's own URL.
+
+*Pin the file you consume by its SHA-256.* A supplier's SBOM describes a file
+by its SHA-256, so bind it to a dependency pinned the same way: a
+`SourceFile(name, url, sha256)` (see
+xref:builds.adoc#original-files-with-published-hashes[Original files with published hashes])
+or a fetched program. A source pinned by a tree or NAR digest cannot be bound,
+because that digest is not the file's SHA-256.
+
+*Declare it from the pin, and import its SBOM bound to it.* For example, a
+platform that uses a package published as
+`https://example.org/releases/1.2.0/dep-abc.tar.zst`:
+
+[source,json]
+----
+{
+  "components": [
+    {"id": "dep", "name": "dep-abc.tar.zst", "version": "1.2.0",
+     "producer": "Organization: Example", "license": "MIT", "license_url": "",
+     "identity": "", "download": "", "sha256": "", "modified": "",
+     "target": "", "origin": "source:dep"}
+  ],
+  "relationships": [
+    {"from": "Subject", "to": "dep", "relation": "dependsOn", "scope": "",
+     "basis": "Imported by the platform's Roc modules"}
+  ],
+  "imported_documents": [
+    {"id": "dep-sbom", "url": "https://example.org/releases/1.2.0/dep-abc.tar.zst.spdx.json",
+     "sha256": "<SHA-256 of that SBOM file>", "namespace": "<its namespace>",
+     "target": "x86_64-linux", "document": "<the SBOM file's contents>",
+     "relation": "dependsOn", "basis": "Supplier's published SBOM",
+     "contact": "https://example.org/security",
+     "subject": {"component": "dep", "filename": "dep-abc.tar.zst",
+                 "version": "1.2.0", "sha256": "<the bundle's SHA-256>"}}
+  ],
+  "unavailable_sboms": []
+}
+----
+
+The `source:dep` origin takes the download location and SHA-256 from the
+Lock, so the composition never repeats a pin. The reviewed `version` is the
+release the supplier's SBOM names. `inspect` then requires the SBOM's
+described file to have exactly the locked SHA-256 and that version, and
+records a `copiedTo` relationship from the supplier's subject to your
+component. The supplier's components and relationships join your inventory
+under the `dep-sbom-` prefix, so your SBOM states what the package contains
+without you inventorying it again. Because the supplier's SBOM already holds
+whatever it imported, the chain is transitive.
+
+*Requiring SBOMs is the default.* `inspect` refuses an inventory in which a
+locked dependency, a component with a `source:` or `program:` origin, has
+neither a bound supplier SBOM nor an `unavailable_sboms` entry. The message
+names the dependency and what to add. When a supplier publishes no SBOM,
+say so:
+
+[source,json]
+----
+"unavailable_sboms": [
+  {"component": "dep", "reason": "The supplier publishes no SBOM for 1.2.0",
+   "contact": "https://example.org/security"}
+]
+----
+
+Each entry becomes an `incomplete` coverage scope, `sbom:dep`, in every
+rendering, so a recipient can see which dependencies were not covered by
+their supplier and whom to ask. An unbound import does not count: its claims
+are unverified, so the dependency still needs a bound SBOM or an entry.
+
+*Fetch outside Blueprint.* Blueprint never downloads while it reports. Fetch
+each dependency's SBOM in your build or release automation, and put its bytes
+and SHA-256 in the import entry; `inspect` verifies them. Shared CI, such as
+roc-automation's workflows, can find a dependency's SBOM from its URL by the
+naming convention above.
 
 [#bind-the-final-bytes-separately]
 == Bind the final bytes separately

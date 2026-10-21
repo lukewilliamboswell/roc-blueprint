@@ -390,6 +390,7 @@ composition_of = |input| {
 	{
 		profile: Sbom.profile,
 		imported_documents: [],
+		unavailable_sboms: [],
 		components: $components,
 		relationships: $edges,
 		coverage: [{ scope: "all", status: if (count == 0) "verified-empty" else "incomplete", reason: filled(input.reason, "Generated coverage"), contact: "https://example.org/support" }],

@@ -133,7 +133,7 @@ importable = |document, text|
 				_ => "x86_64-linux"
 			}
 			imported = { subject: { component: "", filename: root.name, version: root.version, sha256: root.sha256 }, id: "upstream", url: "https://example.org/upstream/sbom.json", sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), namespace: document.namespace, target, document: text, relation: "dependsOn", basis: "Fuzzed upstream SBOM", contact: "https://example.org/support" }
-			composition = { profile: Sbom.profile, imported_documents: [imported], components: [], relationships: [], coverage: [{ scope: "all", status: "incomplete", reason: "Fuzzed", contact: "https://example.org/support" }], inputs: [] }
+			composition = { profile: Sbom.profile, imported_documents: [imported], unavailable_sboms: [], components: [], relationships: [], coverage: [{ scope: "all", status: "incomplete", reason: "Fuzzed", contact: "https://example.org/support" }], inputs: [] }
 			spec = { ..Spec.empty("fuzz"), systems: if (target == "source") [] else [target] }
 			lock = Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], fetched: [], hints: [] }
 			match Sbom.inspect(spec, lock, target, composition) {

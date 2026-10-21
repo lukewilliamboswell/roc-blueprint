@@ -26,7 +26,11 @@ Sbom := [].{
 	Coverage : { scope : Str, status : Str, reason : Str, contact : Str }
 	Disposition : { input : Str, component : Str, reason : Str }
 	Imported : { subject : { component : Str, filename : Str, version : Str, sha256 : Str }, id : Str, url : Str, sha256 : Str, namespace : Str, target : Str, document : Str, relation : Str, basis : Str, contact : Str }
-	Composition : { profile : Str, imported_documents : List(Imported), components : List(Component), relationships : List(Edge), coverage : List(Coverage), inputs : List(Disposition) }
+
+	## A locked dependency whose supplier publishes no SBOM, and why. Every
+	## other locked dependency needs one, imported and bound to it.
+	Unavailable : { component : Str, reason : Str, contact : Str }
+	Composition : { profile : Str, imported_documents : List(Imported), unavailable_sboms : List(Unavailable), components : List(Component), relationships : List(Edge), coverage : List(Coverage), inputs : List(Disposition) }
 	Context : { namespace : Str, revision : Str, created : Str, author : Str, generator : Str }
 	Subject : { filename : Str, version : Str, target : Str, sha256 : Str, url : Str }
 	Inventory : { target : Str, components : List(Component), relationships : List(Edge), coverage : List(Coverage), inputs : List(Disposition), inspected : List(Str) }
@@ -146,7 +150,37 @@ Sbom := [].{
 		if composition.imported_documents.len() > 16 {
 			return Err("too many imported SBOMs")
 		}
-		var $combined = { ..composition, imported_documents: [] }
+		# A dependency you consume from someone else comes with their SBOM,
+		# bound to the bytes you locked, unless the composition says why not.
+		consumed = composition.components.keep_if(|entry| entry.origin.starts_with("source:") or entry.origin.starts_with("program:"))
+		bound = composition.imported_documents.map(|imported| imported.subject.component).keep_if(|id| !id.is_empty())
+		exempt = composition.unavailable_sboms.map(|entry| entry.component)
+		for entry in composition.unavailable_sboms {
+			if !consumed.any(|component| component.id == entry.component) {
+				return Err("unavailable_sboms names ${entry.component}, which is not a locked dependency")
+			}
+			if entry.reason.is_empty() or entry.contact.is_empty() {
+				return Err("unavailable_sboms entry for ${entry.component} needs a reason and a contact")
+			}
+			if bound.contains(entry.component) {
+				return Err("${entry.component} has a bound supplier SBOM and an unavailable_sboms entry")
+			}
+		}
+		if unique(exempt).len() != exempt.len() {
+			return Err("unavailable_sboms names a dependency twice")
+		}
+		for entry in consumed {
+			if !bound.contains(entry.id) and !exempt.contains(entry.id) {
+				tree = match entry.origin.split_on(":") {
+					["source", name] => lock.sources.any(|source| source.name == name and source.provider != "file")
+					_ => False
+				}
+				hint = if (tree) " Its Lock pin is a tree digest, which no supplier SBOM can bind to; pin the file by its published SHA-256 to bind one." else ""
+				return Err("dependency ${entry.id} (${entry.origin}) has no supplier SBOM. Import one in imported_documents with subject.component ${Json.to_str(entry.id)}, or list it in unavailable_sboms with the reason none is available.${hint}")
+			}
+		}
+		gaps = composition.unavailable_sboms.map(|entry| { scope: "sbom:${entry.component}", status: "incomplete", reason: "No supplier SBOM: ${entry.reason}", contact: entry.contact })
+		var $combined = { ..composition, imported_documents: [], unavailable_sboms: [], coverage: composition.coverage.concat(gaps) }
 		for imported in composition.imported_documents {
 			binding = if imported.subject.component.is_empty() {
 				Err(Unbound)
@@ -392,7 +426,7 @@ bindable = |inventory, subject, context| {
 	if inventory.target != subject.target {
 		return Err("subject target differs from inspected target")
 	}
-	_ = Sbom.inspect_declared(subject.target, { profile: Sbom.profile, imported_documents: [], components: inventory.components.map(|entry| { ..entry, origin: "reviewed" }), relationships: inventory.relationships, coverage: inventory.coverage, inputs: inventory.inputs }, inventory.inspected)?
+	_ = Sbom.inspect_declared(subject.target, { profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components: inventory.components.map(|entry| { ..entry, origin: "reviewed" }), relationships: inventory.relationships, coverage: inventory.coverage, inputs: inventory.inputs }, inventory.inspected)?
 	if unique(inventory.inspected).len() != inventory.inspected.len() or inventory.inspected.sort_with(Project.bytewise) != inventory.inputs.map(|entry| entry.input).sort_with(Project.bytewise) {
 		return Err("inventory evidence does not account for inspected inputs")
 	}
@@ -798,9 +832,14 @@ resolve = |component, lock| {
 	if component.origin.starts_with("source:") {
 		name = component.origin.drop_prefix("source:")
 		source = lock.sources.find_first(|candidate| candidate.name == name).map_err(|_| "unresolved locked source")?
-		version = if (source.rev.is_empty()) source.digest else source.rev
+		locked_version = if (source.rev.is_empty()) source.digest else source.rev
+		# A flat file's pin is its digest alone, so the release version a
+		# reviewer states is supplemental, as it is for a fetched program; a
+		# revision or tree pin states its own version.
+		file = source.provider == "file"
+		version = if (file and !component.version.is_empty()) component.version else locked_version
 		stable_identity = "urn:blueprint:source:${source.name}:${source.rev}:${source.digest}"
-		if (!component.version.is_empty() and component.version != version) or (!component.download.is_empty() and component.download != source.ref) or (!component.identity.is_empty() and component.identity != stable_identity and component.identity != "${source.ref}@${source.rev}#${source.digest}") {
+		if (!file and !component.version.is_empty() and component.version != locked_version) or (!component.download.is_empty() and component.download != source.ref) or (!component.identity.is_empty() and component.identity != stable_identity and component.identity != "${source.ref}@${source.rev}#${source.digest}") {
 			return Err("supplemental metadata conflicts with locked source")
 		}
 		var $digest = ""
