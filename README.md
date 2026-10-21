@@ -48,7 +48,7 @@ release's notes give its own.
 Tasks run your scripts in declared environments. Optional Builds add explicit
 inputs, dependencies, an executor and a declared artifact output; compilation
 and packaging stay in your scripts. Providers own native execution and caching.
-See the [architecture](docs/architecture.adoc) and [0.7.0 migration guide](docs/migrating-0.7.adoc).
+See the [architecture](docs/architecture.adoc) and [0.7.0 adoption guide](docs/migrating-0.7.adoc).
 
 ## Install
 
