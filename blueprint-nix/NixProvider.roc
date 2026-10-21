@@ -924,9 +924,29 @@ NixProvider :: [].{
 	build_prepared : Str -> Try(Provider.PreparedBuild, Str)
 	build_prepared = |text| {
 		parsed = JsonData.decode(text).map_err(|_| "Nix returned invalid derivation JSON")?
-		match parsed {
-			Object([entry]) => {
-				if !entry.name.starts_with("/nix/store/") or !entry.name.ends_with(".drv") {
+		# Nix 2.34 uses schema 4: a versioned envelope and store basenames.
+		(entries, basenames) = match parsed {
+			Object(fields) => {
+				if fields.any(|field| field.name == "version" or field.name == "derivations") {
+					version = fields.find_first(|field| field.name == "version").map_err(|_| "Nix derivation envelope has no version")?
+					if version.value != Number("4") {
+						return Err("unsupported Nix derivation JSON version")
+					}
+					derivations = fields.find_first(|field| field.name == "derivations").map_err(|_| "Nix derivation envelope has no derivations")?
+					match derivations.value {
+						Object(values) => (values, True)
+						_ => return Err("Nix derivation envelope is invalid")
+					}
+				} else {
+					(fields, False)
+				}
+			}
+			_ => return Err("Nix returned invalid derivation JSON")
+		}
+		match entries {
+			[entry] => {
+				identity = prepared_store_path(entry.name, basenames)?
+				if !identity.ends_with(".drv") {
 					return Err("Nix returned an invalid derivation identity")
 				}
 				fields = match entry.value {
@@ -949,18 +969,33 @@ NixProvider :: [].{
 						String(path) => path
 						_ => return Err("Nix output path is invalid")
 					}
-					if !value.starts_with("/nix/store/") {
-						return Err("Nix output is not a store path")
-					}
-					$paths = $paths.append({ name: output.name, path: value })
+					output_path = prepared_store_path(value, basenames)?
+					$paths = $paths.append({ name: output.name, path: output_path })
 				}
 				if $paths.is_empty() {
 					return Err("Nix derivation has no outputs")
 				}
-				Ok({ build_identity: entry.name, outputs: $paths })
+				Ok({ build_identity: identity, outputs: $paths })
 			}
 			_ => Err("Nix returned an unexpected number of derivations")
 		}
+	}
+
+	prepared_store_path : Str, Bool -> Try(Str, Str)
+	prepared_store_path = |value, basenames| {
+		full = if basenames and !value.starts_with("/") {
+			"/nix/store/${value}"
+		} else {
+			value
+		}
+		if !full.starts_with("/nix/store/") {
+			return Err("Nix returned a non-store build path")
+		}
+		name = full.drop_prefix("/nix/store/")
+		if name.is_empty() or name == "." or name == ".." or name.contains("/") or name.contains("\\") or name.to_utf8().any(|byte| byte < 32 or byte == 127) {
+			return Err("Nix returned an invalid store path")
+		}
+		Ok(full)
 	}
 
 	## Execute the captured recipe, never evaluate the mutable installable again.
@@ -3373,4 +3408,16 @@ expect {
 	rendered.contains("pkgs = sets.\"bootstrap\";")
 		and rendered.contains("sets.\"tools\".\"coreutils\"")
 		and rendered.contains("inputs.\"bootstrap\".narHash")
+}
+
+# Actual Nix 2.34 schema: one recipe inside a versioned envelope, with
+# basename paths. Never choose arbitrarily among multiple requested recipes.
+expect {
+	prepared = { build_identity: "/nix/store/captured.drv", outputs: [{ name: "out", path: "/nix/store/result" }] }
+	NixProvider.build_prepared("{\"version\":4,\"derivations\":{\"captured.drv\":{\"outputs\":{\"out\":{\"path\":\"result\"}}}}}") == Ok(prepared)
+		and NixProvider.build_prepared("{\"version\":5,\"derivations\":{}}").is_err()
+		and NixProvider.build_prepared("{\"version\":4,\"derivations\":{}}").is_err()
+		and NixProvider.build_prepared("{\"version\":4,\"derivations\":{\"one.drv\":{},\"two.drv\":{}}}").is_err()
+		and NixProvider.build_prepared("{\"version\":4,\"derivations\":{\"../captured.drv\":{\"outputs\":{\"out\":{\"path\":\"result\"}}}}}").is_err()
+		and NixProvider.build_prepared("{\"version\":4,\"derivations\":{\"captured.drv\":{\"outputs\":{\"out\":{\"path\":\"../result\"}}}}}").is_err()
 }
