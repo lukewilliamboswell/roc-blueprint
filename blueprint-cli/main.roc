@@ -341,8 +341,20 @@ migrate_lock! = |input_spec, ctx| {
 	safe_path!(file)?
 	prior = authority_token!(file)?
 	text = path(file).read_utf8!()?
-	migrated = Lock.migrate(text, spec).map_err(|message| LockFailed(message))?
-	publish_authority!(file, prior, migrated.to_str())?
+	var $migrated = Lock.migrate(text, spec).map_err(|message| LockFailed(message))?
+	for resolver in spec.resolvers {
+		if !providers.any(|adapter| adapter.name == resolver.provider) {
+			return Err(LockFailed("no adapter for resolver ${resolver.provider}"))
+		}
+	}
+	selected = Realise.resolvers(spec, providers)
+	if selected.len() > 1 {
+		return Err(LockFailed("mixed resolver ownership is not supported"))
+	}
+	for adapter in selected {
+		$migrated = (adapter.migrate_lock)($migrated).map_err(|message| LockFailed(message))?
+	}
+	publish_authority!(file, prior, $migrated.to_str())?
 	Stderr.line!("migrated Blueprint.lock without resolving dependency pins")
 }
 
@@ -1339,11 +1351,12 @@ report_build! = |plan, name, ctx| {
 			if built.build_identity != prepared.build_identity or built.outputs != prepared.outputs {
 				return Err(RenderFailed("provider result does not match the prepared build"))
 			}
-			# Validate and publish evidence before announcing success.
+			# Validate the public result consistently before advancing the baseline.
+			json_report = BuildReport.render_evidence(name, ctx.target, adapter.name, built, ctx.build_sources, snapshot).map_err(|message| RenderFailed(message))?
 			record = { schema_version: 1, snapshot, build_identity: built.build_identity, outputs: built.outputs }
 			save_build_record!(record, ctx)?
 			reported = if ctx.build_json {
-				BuildReport.render_evidence(name, ctx.target, adapter.name, built, ctx.build_sources, snapshot).map_err(|message| RenderFailed(message))?
+				json_report
 			} else {
 				Str.join_with(built.outputs.map(|output| output.path), "\n").concat("\n")
 			}

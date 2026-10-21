@@ -241,3 +241,11 @@ expect {
 		and BuildModel.validate({ ..record, snapshot: { ..base, nodes: base.nodes.concat(base.nodes) } }).is_err()
 		and BuildModel.validate({ ..record, outputs: [{ name: "out", path: "" }] }).is_err()
 }
+
+# A selected compiler pin reaches a consumer through its declared dependency;
+# output-byte equality is deliberately absent from this comparison.
+expect {
+	changed = { ..base, nodes: base.nodes.map(|node| if (node.name == "lib") { ..node, inputs: [{ name: "compiler", provider: "example", content_identity: "v2" }] } else node) }
+	BuildModel.compare(base, changed) == Ok([{ build: "lib", dependency_path: ["app", "lib"], kind: "input-changed", name: "compiler" }])
+		and BuildModel.compare(base, { ..base, provider: "another" }).is_err()
+}
