@@ -83,7 +83,10 @@ Lower :: [].{
 				.concat(if (programs.is_empty() and acc.environment_programs.is_empty()) [] else ["programs"])
 				.concat(if (acc.expects.is_empty()) [] else ["expects"])
 		project = Project.validate(
-			Spec.{ resolvers: acc.resolvers, executors: acc.executors, build_executors: acc.build_executors, 
+			Spec.{
+				resolvers: acc.resolvers,
+				executors: acc.executors,
+				build_executors: acc.build_executors,
 				source_files: acc.source_files,
 				format: Spec.current_format,
 				name,

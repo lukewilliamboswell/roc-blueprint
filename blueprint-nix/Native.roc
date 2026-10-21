@@ -7,6 +7,7 @@ Native :: [].{
 	ProviderName : [Nix, Guix]
 	letter = Project.letter
 	valid_name = Project.valid_name
+
 	## The attributes a Nix tool name selects, in order. Segments are separated
 	## by dots; a segment in double quotes is one attribute whose name may
 	## itself contain dots, as in `zigpkgs."0.16.0"`.
@@ -132,4 +133,3 @@ expect Native.check_tool(Nix, "").is_err()
 expect Native.check_tool(Guix, "python@3.12:out").is_ok()
 expect Native.check_tool(Guix, "git::out").is_err()
 expect Native.check_tool(Guix, "g++@12.3:lib").is_ok()
-

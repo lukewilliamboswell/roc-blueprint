@@ -65,7 +65,6 @@ Project :: [].{
 		Ok({ source, name })
 	}
 
-
 	check_names : List(Str), Str -> Try({}, Str)
 	check_names = |names, kind| {
 		var $seen = []
@@ -379,7 +378,6 @@ Project :: [].{
 			for t in all_tools {
 				parsed = tool("${t.source}#${t.name}")?
 				_source = sources.find_first(|s| s.name == parsed.source).map_err(|_| unknown_source(sources, t.source))?
-
 			}
 			# One package cannot be on PATH both as it is and with options.
 			for entry in env_configured {
@@ -472,7 +470,7 @@ Project :: [].{
 			}
 		}
 		check_ownership(spec)?
-		Ok(Spec.{ resolvers: spec.resolvers, executors: spec.executors, build_executors: spec.build_executors,  source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: $environment_programs, expects: $expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
+		Ok(Spec.{ resolvers: spec.resolvers, executors: spec.executors, build_executors: spec.build_executors, source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_: spec.requires_, systems: declared_systems, sources, inputs: spec.inputs, environments: $environments, system_tools: $system_tools, commands: $commands, configured_tools: $configured_tools, roc_packages: $roc_packages, programs: spec.programs, environment_programs: $environment_programs, expects: $expects, shells: spec.shells, tasks: spec.tasks, build_sources: spec.build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw })
 	}
 
 	## A tool names a source the project does not declare. The sources it
@@ -919,7 +917,6 @@ Project :: [].{
 		)
 	}
 
-
 	## Explicit ownership is independent of registration and declaration order.
 	check_ownership : Spec -> Try({}, Str)
 	check_ownership = |spec| {
@@ -986,7 +983,10 @@ expect Project.tool("bad##git").is_err()
 expect Project.tool("git\n").is_err()
 # These fixtures use the public Spec and validation boundary, not resolve internals.
 fixture : List(Spec.Environment) -> Spec
-fixture = |environments| Spec.{ resolvers: [{ provider: "nix", inputs: ["first", "second", "data"] }], executors: [], build_executors: [], 
+fixture = |environments| Spec.{
+	resolvers: [{ provider: "nix", inputs: ["first", "second", "data"] }],
+	executors: [],
+	build_executors: [],
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -1066,14 +1066,12 @@ expect {
 	Project.validate(bare).map_ok(|spec| spec.sources) == Ok([])
 		and Project.validate({ ..bare, environments: [{ ..base, overlays: [] }] }) == Err("unknown source: nix; Blueprint.roc declares no package source")
 		and Project.validate(fixture([{ ..base, tools: [{ source: "default", name: "git" }] }])) == Err("unknown source: default; Blueprint.roc declares nix, guix")
-		# An environment with no tool asks nothing of any provider.
+	# An environment with no tool asks nothing of any provider.
 }
 
 # A source that leaves its package set to the consumer is refused: the tag is
 # read, so that a Spec from before sources were explicit says so.
 expect Project.validate({ ..fixture([]), sources: [{ name: "default", provider: { name: "", version: 0, ref: "" } }] }) == Err("invalid versioned source declaration: default")
-
-
 
 # System-specific tools inherit parent first and remain explicit intent.
 expect {
@@ -1110,7 +1108,10 @@ expect !Project.valid_name("unsafe/name") and !Project.valid_name("line\nbreak")
 expect Project.valid_task_name("check.fmt") and !Project.valid_task_name("check..fmt")
 
 build_fixture : List(Spec.Build) -> Spec
-build_fixture = |builds| Spec.{ resolvers: [{ provider: "fixture", inputs: ["assets"] }], executors: [{ name: "native", provider: "fixture", source: "" }], build_executors: builds.map(|build| { build: build.name, executor: "native" }), 
+build_fixture = |builds| Spec.{
+	resolvers: [{ provider: "fixture", inputs: ["assets"] }],
+	executors: [{ name: "native", provider: "fixture", source: "" }],
+	build_executors: builds.map(|build| { build: build.name, executor: "native" }),
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -1251,7 +1252,7 @@ expect ["", "flake:nixpkgs", "path:.", "path:./", "path:/absolute", "path:../esc
 build_source_fixture : List(Spec.BuildSource), List(Str) -> Spec
 build_source_fixture = |build_sources, requires_| {
 	spec = build_fixture([library])
-	Spec.{ resolvers: [{ provider: "fixture", inputs: build_sources.map(|source| source.name) }], executors: spec.executors, build_executors: spec.build_executors,  source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
+	Spec.{ resolvers: [{ provider: "fixture", inputs: build_sources.map(|source| source.name) }], executors: spec.executors, build_executors: spec.build_executors, source_files: spec.source_files, build_files: spec.build_files, format: spec.format, name: spec.name, requires_, systems: spec.systems, sources: spec.sources, inputs: spec.inputs, environments: spec.environments, system_tools: spec.system_tools, commands: spec.commands, configured_tools: spec.configured_tools, roc_packages: spec.roc_packages, programs: spec.programs, environment_programs: spec.environment_programs, expects: spec.expects, shells: spec.shells, tasks: spec.tasks, build_sources, builds: spec.builds, workflows: spec.workflows, extensions: spec.extensions, raw: spec.raw }
 }
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["builds"])) == Err("build sources require feature: sources")
 expect Project.validate(build_source_fixture([{ name: "assets", ref: "path:./assets" }], ["sources"])) == Err("builds require feature: builds")
@@ -1305,7 +1306,10 @@ workflow_fixture : List(Spec.Workflow) -> Spec
 workflow_fixture = |workflows| workflow_features(workflows, ["workflows"])
 
 workflow_features : List(Spec.Workflow), List(Str) -> Spec
-workflow_features = |workflows, features| Spec.{ resolvers: [{ provider: "fixture", inputs: ["assets"] }], executors: [{ name: "native", provider: "fixture", source: "" }], build_executors: [{ build: "library", executor: "native" }], 
+workflow_features = |workflows, features| Spec.{
+	resolvers: [{ provider: "fixture", inputs: ["assets"] }],
+	executors: [{ name: "native", provider: "fixture", source: "" }],
+	build_executors: [{ build: "library", executor: "native" }],
 	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
@@ -1604,8 +1608,8 @@ expect {
 
 # A flake input is not a package source, and explicit providers name their grammar.
 expect Project.validate(fixture([{ ..base, tools: [{ source: "data", name: "git" }] }])) == Err("unknown source: data; Blueprint.roc declares nix, guix")
-expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])) .is_ok()
-expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])) .is_ok()
+expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "python@3" }] }])).is_ok()
+expect Project.validate(fixture([{ ..base, overlays: [], tools: [{ source: "guix", name: "python@" }] }])).is_ok()
 expect Project.validate({ ..fixture([base]), requires_: ["commands"], commands: [{ environment: "base", name: "bin/vcs", tool: { source: "nix", name: "git" } }] }) == Err("invalid command name: bin/vcs")
 
 rust : Spec.Tool
