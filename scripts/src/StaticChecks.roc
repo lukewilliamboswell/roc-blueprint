@@ -49,6 +49,15 @@ StaticChecks := [].{
 		} else ""
 	}
 
+	## Exported report codecs stay in the pure core package; no adapter or IO.
+	core_report_contract_problem : Str -> Str
+	core_report_contract_problem = |source| {
+		allowed = ["import Lock", "import Provider", "import Value", "import JsonData", "import Project"]
+		if source.split_on("\n").any(|line| line.starts_with("import ") and !allowed.contains(line)) {
+			"core report modules must use only pure protocol modules"
+		} else ""
+	}
+
 	## Every use of a member of a provider module: the identifier `Locks`, or
 	## one starting `Nix` and made of letters, followed by a dot.
 	provider_references : Str -> List(Str)
@@ -307,3 +316,7 @@ expect !StaticChecks.lock_inspector_contract_problem("import pf.Path\n").is_empt
 
 expect StaticChecks.lock_inspector_contract_problem("import core.Value\nimport ReportJson\n") == ""
 expect !StaticChecks.lock_inspector_contract_problem("import Store\n").is_empty()
+
+expect StaticChecks.core_report_contract_problem("import Lock\nimport JsonData\n") == ""
+expect !StaticChecks.core_report_contract_problem("import nix.NixProvider\n").is_empty()
+expect !StaticChecks.core_report_contract_problem("import pf.Path\n").is_empty()

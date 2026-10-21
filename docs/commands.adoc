@@ -305,6 +305,11 @@ invalidate the producer's artifacts.
 `blueprint update` is the one command that decides what a project uses. It
 writes the whole lock or nothing.
 
+Pure Roc consumers can import the official `core.LockSnapshot` module from
+this release's existing core bundle. See
+xref:lock-snapshot.adoc#consume-lock-inspection-in-roc[Consume lock inspection in pure Roc]
+for typed parsing, lookups, metadata and the offline schema/profile.
+
 === Without Nix, and with it
 
 `blueprint update` starts Nix only when `Blueprint.roc` declares something Nix
