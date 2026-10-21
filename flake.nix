@@ -156,6 +156,7 @@
               fileset = lib.fileset.unions [
                 ./blueprint-cli
                 ./blueprint-nix
+                ./fixtures/consumer/authority.lock
                 ./blueprint-core/main.roc
                 ./blueprint-core/Spec.roc
                 ./blueprint-core/Project.roc
