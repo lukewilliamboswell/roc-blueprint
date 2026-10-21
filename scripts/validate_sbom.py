@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import sys
 
 import jsonschema
@@ -154,6 +155,11 @@ def release_evidence(document, root):
         assert entries['SPDXRef-roc-embedded']['versionInfo'] == tag
         cargo = load(root / 'sbom/basic-cli-cargo.json')
         assert {entry['id'] for entry in cargo['components']} <= entries.keys(), 'known upstream resolution component omitted'
+        upstream = tomllib.loads((root / 'sbom/upstream/basic-cli-Cargo.lock').read_text())['package']
+        expected = {(entry['name'], entry['version'], entry['checksum']) for entry in upstream if entry['name'] != 'roc_host'}
+        declared = {(entry['name'], entry['version'], entry['sha256']) for entry in cargo['components']}
+        assert expected == declared, 'supplemental Cargo graph omits/conflicts with original upstream lock'
+
     if 'SPDXRef-core' in entries:
         source = (root / 'blueprint-platform/main.roc').read_text()
         for target, names in re.findall(r'(\w+): \{ inputs: \[([^\]]+)\]', source):

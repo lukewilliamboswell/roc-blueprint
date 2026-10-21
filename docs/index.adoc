@@ -30,6 +30,7 @@ Using it for the first time:: Follow <<get-started>>.
 Writing a configuration:: <<write-blueprint-roc>> describes every setting, and
 <<build-artifacts-and-run-workflows>> the sandboxed builds.
 Looking up a command or variable:: See <<run-blueprint>>.
+Describing release composition:: See <<artifact-bound-software-bills-of-materials>>.
 Running a project where Nix is not installed:: Read <<work-without-nix>>.
 Looking for a project to adapt:: Browse <<learn-from-the-examples>>.
 Writing a provider or judging a design change:: Read
@@ -48,6 +49,8 @@ include::configuration.adoc[leveloffset=+1]
 include::builds.adoc[leveloffset=+1]
 
 include::commands.adoc[leveloffset=+1]
+
+include::sbom.adoc[leveloffset=+1]
 
 include::without-nix.adoc[leveloffset=+1]
 

@@ -13,7 +13,7 @@ Sbom := [].{
 	Disposition : { input : Str, component : Str, reason : Str }
 	Imported : { subject : { component : Str, filename : Str, version : Str, sha256 : Str }, id : Str, url : Str, sha256 : Str, namespace : Str, target : Str, document : Str, relation : Str, basis : Str, contact : Str }
 	ImportedPackage : { externalRefs : Try(List({ referenceCategory : Str, referenceType : Str, referenceLocator : Str }), [Missing]), spdxid : Str, name : Str, versionInfo : Str, supplier : Str, downloadLocation : Str, licenseDeclared : Str, checksums : List({ algorithm : Str, checksumValue : Str }), comment : Try(Str, [Missing]) }
-	ImportedDocument : { spdxVersion : Str, spdxid : Str, documentNamespace : Str, entries : List(ImportedPackage), hasExtractedLicensingInfos : Try(List({ licenseId : Str, seeAlsos : List(Str) }), [Missing]), relationships : List({ spdxElementId : Str, relatedSpdxElement : Str, relationshipType : Str, comment : Try(Str, [Missing]) }) }
+	ImportedDocument : { dataLicense : Str, creationInfo : { created : Str, creators : List(Str) }, spdxVersion : Str, spdxid : Str, documentNamespace : Str, entries : List(ImportedPackage), hasExtractedLicensingInfos : Try(List({ licenseId : Str, seeAlsos : List(Str) }), [Missing]), relationships : List({ spdxElementId : Str, relatedSpdxElement : Str, relationshipType : Str, comment : Try(Str, [Missing]) }) }
 	Composition : { profile : Str, imported_documents : List(Imported), components : List(Component), relationships : List(Edge), coverage : List(Coverage), inputs : List(Disposition) }
 	Context : { namespace : Str, revision : Str, created : Str, author : Str, generator : Str }
 	Subject : { filename : Str, version : Str, target : Str, sha256 : Str, url : Str }
@@ -255,7 +255,7 @@ Sbom := [].{
 		if subject.filename.is_empty() or subject.filename.contains("/") or subject.filename.contains("\\") or subject.filename == "." or subject.filename == ".." or subject.version.is_empty() or subject.target.is_empty() or !hex(subject.sha256) {
 			return Err("invalid subject filename/version/target/SHA-256")
 		}
-		if !context.namespace.starts_with("https://") or !context.namespace.ends_with("revision-${context.revision}") or context.revision.is_empty() or !valid_date(context.created) or (!context.author.starts_with("Organization: ") and !context.author.starts_with("Person: ")) or !context.generator.starts_with("Tool: ") {
+		if !context.namespace.starts_with("https://") or !context.namespace.ends_with("revision-${context.revision}") or context.namespace.contains("#") or context.revision.is_empty() or !valid_date(context.created) or (!supplier(context.author) or context.author == "NOASSERTION") or !context.generator.starts_with("Tool: ") {
 			return Err("explicit namespace/revision/time/author/generator required")
 		}
 		if inventory.components.any(|component| subject.target != "source" and !component.target.is_empty() and component.target != subject.target) {
@@ -471,7 +471,7 @@ expand_import = |imported, target, binding| {
 	}
 	decoded : Sbom.ImportedDocument
 	decoded = Json.parse(import_keys(imported.document)).map_err(|_| "imported SBOM outside supported SPDX package profile")?
-	if decoded.spdxVersion != "SPDX-2.3" or decoded.documentNamespace != imported.namespace or decoded.spdxid != "SPDXRef-DOCUMENT" or decoded.entries.is_empty() or decoded.entries.len() > 4096 or decoded.relationships.len() > 16384 {
+	if decoded.dataLicense != "CC0-1.0" or !valid_date(decoded.creationInfo.created) or decoded.creationInfo.creators.is_empty() or decoded.creationInfo.creators.any(|creator| !supplier(creator) and !creator.starts_with("Tool: ")) or decoded.spdxVersion != "SPDX-2.3" or decoded.documentNamespace != imported.namespace or decoded.spdxid != "SPDXRef-DOCUMENT" or decoded.entries.is_empty() or decoded.entries.len() > 4096 or decoded.relationships.len() > 16384 {
 		return Err("invalid imported document identity or bounds")
 	}
 	ids = decoded.entries.map(|entry| entry.spdxid)

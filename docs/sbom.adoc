@@ -1,0 +1,214 @@
+[#artifact-bound-software-bills-of-materials]
+= Describe a delivered artifact with SPDX
+
+An SBOM describes the composition of one delivered file. Blueprint's first
+adapter emits SPDX 2.3 JSON under the `blueprint-spdx-2.3-v1` profile, checked
+against the complete vendored SPDX 2.3.1 schema. Generate a separate sidecar
+for every target binary or source bundle: `<asset-name>.spdx.json`.
+The sidecar identifies the final filename, version, target and SHA-256; a
+`DESCRIBES` relationship connects its SPDX document to that subject.
+
+== Assign the knowledge to its owner
+
+Blueprint collects resolved identities and build relationships and emits the
+standard document. A repository reviews which components its recipes ship,
+their licenses, vendored changes and native dependencies. Installed tools
+and `Needs` describe availability and build order; neither proves that code
+is contained in a deliverable.
+
+roc-automation orchestrates the release build and owns independent release
+policy validation, attestation, publication, retention and later advisory
+correlation. Blueprint's offline conformance tests validate its own adapter
+and declared coverage. They do not replace the shared release-policy validator.
+An SBOM is a composition statement; provenance and vulnerability verdicts are
+separate records.
+
+== Inspect without executing a provider
+
+The pure `core.Sbom.inspect(spec, lock, target, composition)` function consumes
+an already evaluated Spec and committed Lock. It never evaluates a project,
+opens a Store, runs Nix, downloads a package, updates a pin or builds a file.
+The existing optional extension seam accepts
+`Custom("sbom-v1", subjectName, Str(compositionJson))`;
+`Sbom.from_spec(spec, subjectName)` reads that declaration. A separate reviewed
+JSON file can supply the same `Sbom.Composition` value.
+
+The native repository command consumes those evaluated inputs:
+
+[source,console]
+----
+nix develop -c scripts/sbom.roc inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
+----
+
+`Spec` is the evaluated S-expression, rather than `Blueprint.roc`. The JSON
+composition contains these fields:
+
+* `profile`: `blueprint-spdx-2.3-v1`.
+* `components`: reviewed component records with unique `SPDXRef-` identifiers,
+  canonical `name`, SPDX `producer` (`Organization: ...`, `Person: ...`, or
+  `NOASSERTION`), `license`, `license_url`, `modified`, `target` and `origin`.
+* `relationships`: records with `from`, `to`, SPDX `relation` and reviewed
+  `basis`. `SPDXRef-Subject` names the final deliverable.
+* `coverage`: records with `scope`, `status`, `reason` and `contact`.
+* `inputs`: one reviewed disposition for every known input, with `input`,
+  `component` and `reason`. An empty component means an explained exclusion.
+* `imported_documents`: verified upstream graphs, or an empty list.
+
+A component's `origin` is `reviewed`, `source:<locked-name>`, or
+`program:<locked-name>:<system>`. Locked origins populate `version`,
+`identity`, `download`, `sha256` and, for a program, `target` from the Lock when
+the corresponding field is empty. Supplied pin-derived values must agree.
+A source revision is the version where available; otherwise its documented
+content identity is used. A fetched program with no reviewed upstream version
+uses `sha256-<digest>` as a byte identity, without inventing a release version.
+Changing a Lock pin updates the inventory without duplicating that pin in the
+composition. Tree/NAR identities never become archive checksums. A `file`
+source's `sha256:<hex>` pin is the flat digest of its original file bytes.
+
+For a `reviewed` origin, supply exact `version`, stable `identity`, immutable
+`download` and available `sha256`; unavailable license data is `NOASSERTION`.
+Actual Package URLs become SPDX package-manager external references. Other
+identities use documented source/revision URLs or organization-owned URNs.
+Keep upstream correlation in `modified` when a vendor revision or patch changes
+its own identity. Custom/proprietary terms use a `LicenseRef-...` expression
+and an accessible `license_url`; they remain in the inventory.
+
+SPDX `CONTAINS` records shipped code, `DEPENDS_ON` external dependencies,
+and `BUILD_DEPENDENCY_OF`/`TEST_DEPENDENCY_OF` distinguish tooling roles.
+A known resolution candidate whose target/features or role remain unresolved
+uses `OTHER` with an explicit basis, rather than asserting a runtime edge.
+All components must connect to the subject. Duplicate identities, disconnected
+or dangling graphs, conflicting pins and unexplained known-input omissions
+are rejected.
+
+Every known locked source, selected target's fetched program, tool, Roc
+package, build source, task and build needs a disposition. Sources and tools
+unrelated to this particular artifact can be excluded with a reason. Opaque
+argv cannot establish composition. Use `incomplete` coverage for an undisclosed
+native/provider/task closure and name its scope, reason and contact.
+`verified-empty` explicitly records reviewed absence; an unknown closure is
+never represented as verified absence. `complete` and `excluded` are also
+available for individually justified scopes. Schema validity alone says
+nothing about the completeness of the underlying software inventory.
+
+== Import inert, verified upstream graphs
+
+An `imported_documents` entry supplies `id`, `url`, `sha256`, `namespace`,
+`target`, `document`, `relation`, `basis`, `contact` and `subject`. `document` contains the
+local SPDX JSON bytes as a string. Its checksum and namespace must agree with
+the reviewed reference. Reporting never fetches the URL or executes content.
+Use an immutable release/revision URL and retain those exact verified bytes
+for recipients.
+
+The first import profile supports package-only SPDX 2.3 graphs with explicit
+`DESCRIBES`, package version/supplier/download/license/checksum fields, and
+supported package relationships. It prefixes imported identifiers to avoid
+collisions and preserves source namespace and verified-document SHA-256 in
+each imported component. Restricted license terms must include `seeAlsos`.
+`subject` contains `component`, `filename`, `version` and `sha256`.
+Map `component` to the declaration for the consumed archive/program. Its
+resolved Lock digest, version and target must match the upstream `DESCRIBES`
+subject, in addition to verifying the upstream document's own digest and
+namespace. A `COPY_OF` relationship preserves the bound upstream subject
+identity; imported component/edge identities retain their namespace and
+provenance. This lets a reviewed upstream graph replace duplicated dependency
+inventories while the Lock remains the authority for consumed artifact bytes.
+An empty component mapping imports only an integrity-checked upstream
+statement: coverage explicitly says the subject is unbound and its composition
+claims remain unverified. It cannot establish verified artifact composition.
+
+Dangling external-document references require the referenced graph explicitly;
+they are rejected rather than silently discarded. Imported coverage remains
+incomplete unless the repository separately establishes the relevant closure.
+
+Inputs are limited to 1 MiB, JSON nesting to 64 levels, imports to 16,
+components to 4,096 and relationships to 16,384. Metadata URIs use HTTPS
+without userinfo, query credentials or local filesystem paths. Explicit
+unknown download locations use `NOASSERTION`. SPDX licenses and exceptions
+are validated against the pinned SPDX 3.26.0 identifiers and expression grammar.
+
+== Bind the final bytes separately
+
+`Sbom.render(inventory, subject, context)` is pure. A separate native command
+reads and hashes a regular final file in 64 KiB chunks:
+
+[source,console]
+----
+nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx.json
+----
+
+`subject.json` contains `filename`, `version`, `target`, `sha256` and `url`.
+An empty SHA-256 asks the binder to compute it; a supplied digest must match.
+`context.json` contains `namespace`, `revision`, `created`, `author` and
+`generator`. Use a UTC ISO 8601 timestamp, an SPDX person/organization author,
+a `Tool: name-version` generator, and a unique HTTPS namespace ending in
+`revision-<revision>`. Identical context and inputs produce identical bytes
+with stable ordering. A correction changes the document revision and namespace,
+while retaining the unchanged software digest at a new immutable location.
+
+Metadata inputs and final subjects must be regular files. Sidecars use
+exclusive creation: an existing file, symlink, hardlink or `../` alias is
+rejected, preserving all inputs. Generate into a fresh staging directory.
+Metadata reads are bounded before parsing; credentials and absolute developer
+paths are rejected. Generation needs no publication credentials or advisory
+service. Ordinary task outputs and sandboxed build outputs use this same
+binding operation.
+
+== Blueprint's own release evidence
+
+The read-only release build runs `scripts/release_sbom.roc VERSION` after the
+four target executables and both Roc source bundles exist. Its generation
+time comes from the selected source commit, not the wall clock. The extended
+command `VERSION CREATED SOURCE_COMMIT DOCUMENT_REVISION` supplies an explicit
+context for reproducible local checks or corrections.
+
+The recipe observes actual CLI imports, the embedded compiler table,
+`compiler-version`, `link-inputs.lock.json` and the build environment's
+`flake.lock`. Changed imports/compiler/native producer require a reviewed
+composition update. Every observed input receives an exported disposition;
+no empty project Lock substitutes for release-input knowledge.
+
+The compiler used to build Blueprint is a build input. The target compiler
+archive imported into its executable is a separate contained component with
+its own archive SHA-256. A source bundle does not contain that compiler.
+The platform source bundle records each declared target linker member with its
+own SHA-256, separately from the original input archive, and includes known
+musl/Zig and Windows startup inputs
+and depends on the sibling core bundle fetched later by Roc.
+
+The native CLI inventory preserves the pinned basic-cli Cargo graph and a
+known SQLite native relationship; reviewed provenance lives in `sbom/upstream/`.
+Unclassified Cargo feature/target/build candidates are explicit `OTHER` edges;
+they do not claim all resolved crates ship in every target. Unknown license
+and optimized native/compiler closure scopes retain explicit gaps.
+
+The Nix-locked `.#sbom-validator` package uses established Python `jsonschema`
+to validate the complete vendored standard schema, subjects, target identities,
+relationships and exported observed-input evidence offline. Python is a test
+validator dependency; generation and the product remain native Roc. The release
+job validates before gathering sidecars into the same tested asset set. It
+adds no publication permission. Examples/documentation archives are not
+covered by the first own-release recipe; consumers must not infer their
+composition from a sibling executable's SBOM.
+
+== Exercise the stable consumer contract
+
+`tests/sbom/fixtures/` contains native Linux and ARM64 instances, a source
+bundle, a verified imported graph, and distinct empty/unknown coverage records.
+The matching evaluated Spec/Lock, composition, inventory, subject and context
+are under `fixtures/input/`. They let roc-automation test an independent
+consumer without depending on Blueprint's implementation.
+
+[source,console]
+----
+nix develop -c roc-stable test scripts/test_sbom.roc
+nix run .#sbom-validator -- --self-test tests/sbom/fixtures/native-linux.spdx.json tests/sbom/fixtures/*.spdx.json
+----
+
+The conformance suite checks a transitive native component's origin and affected
+subject, distinguishes the build compiler from contained code, retains patched
+restricted code, separates archive/tree/binary digests, rejects malformed
+references and omissions, checks repeatability, and exercises read-only
+binding with symlink/hardlink aliases and special files. These checks establish
+consistency with declared inputs, not proof that an opaque tool disclosed all
+shipped code.
