@@ -33,8 +33,10 @@ Sbom := [].{
 	Package : { id : Str, name : Str, version : Str, supplier : Str, download : Str, license : Str, license_url : Str, sha256 : Str, identity : Str, comment : Str }
 
 	## The package graph of an SPDX document. `roots` are the packages it
-	## describes. Identifiers are local, as in a Composition.
-	Document : { version : Str, namespace : Str, roots : List(Str), packages_ : List(Package), relationships : List(Edge) }
+	## describes. Identifiers are local, as in a Composition. `evidence` holds
+	## the text of each `other` annotation on the document itself, where
+	## `render` records the profile's coverage and input dispositions.
+	Document : { version : Str, namespace : Str, name : Str, roots : List(Str), packages_ : List(Package), relationships : List(Edge), evidence : List(Str) }
 
 	## Existing optional Spec extension seam: Custom("sbom-v1", SUBJECT, Str(JSON)).
 	## No resolver pins live in this metadata; `origin` references the Lock.
@@ -566,7 +568,8 @@ read_spdx3 = |nodes| {
 		}
 		$root_ids = $root_ids.append(local(root)?)
 	}
-	Ok({ version: "SPDX-${Spdx3.version}", namespace, roots: $root_ids, packages_: $found, relationships: $edges })
+	statements = nodes.keep_if(|node| node.type == "Annotation" and field_text(node.tree, "annotationType") == "other" and field_text(node.tree, "subject") == document.id).map(|node| field_text(node.tree, "statement"))
+	Ok({ version: "SPDX-${Spdx3.version}", namespace, name: field_text(document.tree, "name"), roots: $root_ids, packages_: $found, relationships: $edges, evidence: statements })
 }
 
 ## SPDX 2.3
@@ -698,7 +701,8 @@ read_spdx2 = |tree| {
 			}
 		}
 	}
-	Ok({ version: field_text(tree, "spdxVersion"), namespace: field_text(tree, "documentNamespace"), roots: unique($roots), packages_: listed_packages, relationships: $edges })
+	statements = listed(tree, "annotations").keep_if(|annotation| field_text(annotation, "annotationType") == "OTHER").map(|annotation| field_text(annotation, "comment"))
+	Ok({ version: field_text(tree, "spdxVersion"), namespace: field_text(tree, "documentNamespace"), name: field_text(tree, "name"), roots: unique($roots), packages_: listed_packages, relationships: $edges, evidence: statements })
 }
 
 resolve : Sbom.Component, Lock -> Try(Sbom.Component, Str)

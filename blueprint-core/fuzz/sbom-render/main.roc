@@ -83,7 +83,8 @@ expected = |inventory, subject| {
 			comment: Json.to_str({ identity: component.identity, origin: component.origin, target: component.target, modifications: component.modified }),
 		},
 	)
-	{ version: "SPDX-${Spdx3.version}", namespace: context.namespace, roots: ["Subject"], packages_: components.prepend(subject_package), relationships: inventory.relationships }
+	evidence = Json.to_str({ profile: Sbom.profile, revision: context.revision, target: subject.target, coverage: inventory.coverage, inspected: inventory.inspected, dispositions: inventory.inputs })
+	{ version: "SPDX-${Spdx3.version}", namespace: context.namespace, name: subject.filename, roots: ["Subject"], packages_: components.prepend(subject_package), relationships: inventory.relationships, evidence: [evidence] }
 }
 
 context : Sbom.Context

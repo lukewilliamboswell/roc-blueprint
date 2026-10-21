@@ -35,10 +35,7 @@ Assets := [].{
 	inventory : { version : Str, platform_bundle : Str, core_bundle : Str, tool_bundle : Str } -> List(Str)
 	inventory = |release|
 		Process.sorted(
-			binaries.concat(binaries.map(|name| "${name}.spdx.json")).concat([
-				"${release.platform_bundle}.spdx.json",
-				"${release.core_bundle}.spdx.json",
-				"${release.tool_bundle}.spdx.json",
+			binaries.concat(sidecars_of(binaries)).concat(sidecars_of([release.platform_bundle, release.core_bundle, release.tool_bundle])).concat([
 				checksums,
 				release.platform_bundle,
 				release.core_bundle,
@@ -54,7 +51,7 @@ Assets := [].{
 	contract_problem : List(Str), Str -> Str
 	contract_problem = |names, sums| {
 		missing = binaries.concat([checksums]).keep_if(|name| !names.contains(name))
-		others = names.keep_if(|name| name.starts_with("blueprint") and !binaries.contains(name) and name != checksums and !binaries.map(|binary| "${binary}.spdx.json").contains(name))
+		others = names.keep_if(|name| name.starts_with("blueprint") and !binaries.contains(name) and name != checksums and !sidecars_of(binaries).contains(name))
 		summed = Process.lines(sums).map(|line| line.split_on("  ").last() ?? "")
 		malformed = Process.lines(sums).keep_if(|line| !checksum_line(line))
 		if !missing.is_empty() {
@@ -119,6 +116,10 @@ Assets := [].{
 	}
 }
 
+## Each subject's SBOM sidecars: SPDX 3.0.1, and SPDX 2.3 of the same inventory.
+sidecars_of : List(Str) -> List(Str)
+sidecars_of = |subjects| subjects.fold([], |all, name| all.concat(["${name}.spdx.json", "${name}.spdx-2.3.json"]))
+
 ## `<64 lowercase hex digits>  <name>`, as `sha256sum -c` reads it.
 checksum_line : Str -> Bool
 checksum_line = |line|
@@ -131,7 +132,7 @@ sums_sample = Str.join_with(Assets.binaries.map(|name| Release.checksum_line(nam
 
 names_sample = Assets.inventory({ version: "0.5.0", platform_bundle: "Abc.tar.zst", core_bundle: "roc-blueprint-core-Def.tar.zst", tool_bundle: "roc-blueprint-sbom-Tool.tar.zst" })
 
-expect names_sample == ["Abc.tar.zst", "Abc.tar.zst.spdx.json", "blueprint-aarch64-darwin", "blueprint-aarch64-darwin.spdx.json", "blueprint-aarch64-linux", "blueprint-aarch64-linux.spdx.json", "blueprint-x86_64-linux", "blueprint-x86_64-linux.spdx.json", "blueprint-x86_64-windows.exe", "blueprint-x86_64-windows.exe.spdx.json", "blueprint.sha256", "roc-blueprint-0.5.0.pdf", "roc-blueprint-core-Def.tar.zst", "roc-blueprint-core-Def.tar.zst.spdx.json", "roc-blueprint-docs-0.5.0.zip", "roc-blueprint-examples-0.5.0.zip", "roc-blueprint-sbom-Tool.tar.zst", "roc-blueprint-sbom-Tool.tar.zst.spdx.json"]
+expect names_sample == ["Abc.tar.zst", "Abc.tar.zst.spdx-2.3.json", "Abc.tar.zst.spdx.json", "blueprint-aarch64-darwin", "blueprint-aarch64-darwin.spdx-2.3.json", "blueprint-aarch64-darwin.spdx.json", "blueprint-aarch64-linux", "blueprint-aarch64-linux.spdx-2.3.json", "blueprint-aarch64-linux.spdx.json", "blueprint-x86_64-linux", "blueprint-x86_64-linux.spdx-2.3.json", "blueprint-x86_64-linux.spdx.json", "blueprint-x86_64-windows.exe", "blueprint-x86_64-windows.exe.spdx-2.3.json", "blueprint-x86_64-windows.exe.spdx.json", "blueprint.sha256", "roc-blueprint-0.5.0.pdf", "roc-blueprint-core-Def.tar.zst", "roc-blueprint-core-Def.tar.zst.spdx-2.3.json", "roc-blueprint-core-Def.tar.zst.spdx.json", "roc-blueprint-docs-0.5.0.zip", "roc-blueprint-examples-0.5.0.zip", "roc-blueprint-sbom-Tool.tar.zst", "roc-blueprint-sbom-Tool.tar.zst.spdx-2.3.json", "roc-blueprint-sbom-Tool.tar.zst.spdx.json"]
 
 # The contract is these names, whatever systems the build script lists.
 expect Assets.binaries == Release.systems.map(|released| Release.binary_name("blueprint", released.system))

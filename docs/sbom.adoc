@@ -1,12 +1,15 @@
 [#artifact-bound-software-bills-of-materials]
 = Describe a delivered artifact with SPDX
 
-An SBOM describes the composition of one delivered file. Blueprint's first
-adapter emits SPDX 2.3 JSON under the `blueprint-spdx-2.3-v1` profile, checked
-against the complete vendored SPDX 2.3.1 schema. Generate a separate sidecar
-for every target binary or source bundle: `<asset-name>.spdx.json`.
-The sidecar identifies the final filename, version, target and SHA-256; a
-`DESCRIBES` relationship connects its SPDX document to that subject.
+An SBOM describes the composition of one delivered file. Blueprint emits
+SPDX 3.0.1 JSON-LD under the `blueprint-spdx-3.0-v1` profile, and the same
+inventory as SPDX 2.3 JSON for consumers that read only SPDX 2. Generate a
+separate sidecar for every target binary or source bundle:
+`<asset-name>.spdx.json` in SPDX 3.0.1, and `<asset-name>.spdx-2.3.json` where
+SPDX 2 readers need one. The sidecar identifies the final filename, version,
+target and SHA-256. In SPDX 3.0.1 the document's root `software_Sbom` names
+that subject package as its root element; in SPDX 2.3 a `DESCRIBES`
+relationship does.
 
 == Assign the knowledge to its owner
 
@@ -35,6 +38,7 @@ The compiler pin matches `blueprint compiler-version` for that release.
 ----
 roc run <immutable-tool-bundle-url> -- inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
 roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx.json
+roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx-2.3.json --spdx-2.3
 ----
 
 No Blueprint project is required; even an unrelated invalid `Blueprint.roc`
@@ -67,12 +71,15 @@ nix develop -c scripts/sbom.roc inspect Spec Blueprint.lock composition.json x86
 `Spec` is the evaluated S-expression, rather than `Blueprint.roc`. The JSON
 composition contains these fields:
 
-* `profile`: `blueprint-spdx-2.3-v1`.
-* `components`: reviewed component records with unique `SPDXRef-` identifiers,
-  canonical `name`, SPDX `producer` (`Organization: ...`, `Person: ...`, or
-  `NOASSERTION`), `license`, `license_url`, `modified`, `target` and `origin`.
-* `relationships`: records with `from`, `to`, SPDX `relation` and reviewed
-  `basis`. `SPDXRef-Subject` names the final deliverable.
+* `profile`: `blueprint-spdx-3.0-v1`.
+* `components`: reviewed component records with unique local identifiers
+  (letters, digits, `-` and `.`), canonical `name`, SPDX `producer`
+  (`Organization: ...`, `Person: ...`, or `NOASSERTION`), `license`,
+  `license_url`, `modified`, `target` and `origin`. An identifier `name`
+  becomes `NAMESPACE#name` in SPDX 3.0.1 and `SPDXRef-name` in SPDX 2.3.
+* `relationships`: records with `from`, `to`, an SPDX 3.0.1 `relation`, a
+  lifecycle `scope` (`""` for none) and reviewed `basis`. `Subject` names the
+  final deliverable.
 * `coverage`: records with `scope`, `status`, `reason` and `contact`.
 * `inputs`: one reviewed disposition for every known input, with `input`,
   `component` and `reason`. An empty component means an explained exclusion.
@@ -97,10 +104,30 @@ Keep upstream correlation in `modified` when a vendor revision or patch changes
 its own identity. Custom/proprietary terms use a `LicenseRef-...` expression
 and an accessible `license_url`; they remain in the inventory.
 
-SPDX `CONTAINS` records shipped code, `DEPENDS_ON` external dependencies,
-and `BUILD_DEPENDENCY_OF`/`TEST_DEPENDENCY_OF` distinguish tooling roles.
-A known resolution candidate whose target/features or role remain unresolved
-uses `OTHER` with an explicit basis, rather than asserting a runtime edge.
+`contains` records shipped code and `dependsOn` external dependencies. A
+lifecycle `scope` of `build`, `test`, `development` or `runtime` on
+`dependsOn` distinguishes tooling roles: the subject `dependsOn` its compiler
+with scope `build`. `generates`, `patchedBy`, `hasVariant` and `copiedTo` are
+also available. A known resolution candidate whose target/features or role
+remain unresolved uses `other` with an explicit basis, rather than asserting a
+runtime edge. Each relationship has one SPDX 2.3 spelling, so both renderings
+state the same graph:
+
+[cols="2,3"]
+|===
+|SPDX 3.0.1 composition |SPDX 2.3
+
+|`A contains B` |`A CONTAINS B`
+|`A dependsOn B` |`A DEPENDS_ON B`
+|`A dependsOn B`, scope `build` |`B BUILD_DEPENDENCY_OF A`
+|`A dependsOn B`, scope `test`, `development`, `runtime` |`B TEST_DEPENDENCY_OF A`, `DEV_DEPENDENCY_OF`, `RUNTIME_DEPENDENCY_OF`
+|`A generates B` |`A GENERATES B`
+|`A patchedBy B` |`B PATCH_FOR A`
+|`A hasVariant B` |`B VARIANT_OF A`
+|`A copiedTo B` |`B COPY_OF A`
+|`A other B` |`A OTHER B`
+|===
+
 All components must connect to the subject. Duplicate identities, disconnected
 or dangling graphs, conflicting pins and unexplained known-input omissions
 are rejected.
@@ -119,21 +146,32 @@ nothing about the completeness of the underlying software inventory.
 
 An `imported_documents` entry supplies `id`, `url`, `sha256`, `namespace`,
 `target`, `document`, `relation`, `basis`, `contact` and `subject`. `document` contains the
-local SPDX JSON bytes as a string. Its checksum and namespace must agree with
+local SPDX JSON bytes as a string, and `relation` is an SPDX 3.0.1 composition
+relationship. Its checksum and namespace must agree with
 the reviewed reference. Reporting never fetches the URL or executes content.
 Use an immutable release/revision URL and retain those exact verified bytes
 for recipients.
 
-The first import profile supports package-only SPDX 2.3 graphs with explicit
-`DESCRIBES`, package version/supplier/download/license/checksum fields, and
-supported package relationships. It prefixes imported identifiers to avoid
+The import profile reads package-only graphs in SPDX 3.0.1 JSON-LD, SPDX 2.3
+JSON and SPDX 2.2 JSON, after checking each against its version of the
+specification. An SPDX 3.0.1 document holds one `SpdxDocument` whose `spdxId`
+is `NAMESPACE#fragment`; its packages are `NAMESPACE#name`, and its root
+element, or a `software_Sbom` root's, or a `describes` relationship names the
+subject. A reference into another document needs an `import` external map,
+which the profile does not read, so it is rejected. An SPDX 2 document names
+its subject with `DESCRIBES` or `documentDescribes`. Packages carry version,
+supplier, download location, declared license and SHA-256, and relationships
+must have a composition spelling (the table above, plus SPDX 2's
+`CONTAINED_BY`, `DEPENDENCY_OF` and `GENERATED_FROM`). Files, snippets and
+other element kinds are outside the profile and rejected. It prefixes imported identifiers to avoid
 collisions and preserves source namespace and verified-document SHA-256 in
-each imported component. Restricted license terms must include `seeAlsos`.
+each imported component. Restricted license terms must name their location:
+`simplelicensing_customIdToUri` in SPDX 3.0.1, `seeAlsos` in SPDX 2.
 `subject` contains `component`, `filename`, `version` and `sha256`.
 Map `component` to the declaration for the consumed archive/program. Its
-resolved Lock digest, version and target must match the upstream `DESCRIBES`
+resolved Lock digest, version and target must match the upstream described
 subject, in addition to verifying the upstream document's own digest and
-namespace. A `COPY_OF` relationship preserves the bound upstream subject
+namespace. A `copiedTo` relationship preserves the bound upstream subject
 identity; imported component/edge identities retain their namespace and
 provenance. This lets a reviewed upstream graph replace duplicated dependency
 inventories while the Lock remains the authority for consumed artifact bytes.
@@ -159,6 +197,7 @@ reads and hashes a regular final file in 64 KiB chunks:
 [source,console]
 ----
 nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx.json
+nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx-2.3.json --spdx-2.3
 ----
 
 `subject.json` contains `filename`, `version`, `target`, `sha256` and `url`.
@@ -203,15 +242,19 @@ and depends on the sibling core bundle fetched later by Roc.
 
 The native CLI inventory preserves the pinned basic-cli Cargo graph and a
 known SQLite native relationship; reviewed provenance lives in `sbom/upstream/`.
-Unclassified Cargo feature/target/build candidates are explicit `OTHER` edges;
+Unclassified Cargo feature/target/build candidates are explicit `other` edges;
 they do not claim all resolved crates ship in every target. Unknown license
 and optimized native/compiler closure scopes retain explicit gaps.
 
-The Nix-locked `.#sbom-validator` package uses established Python `jsonschema`
-to validate the complete vendored standard schema, subjects, target identities,
-relationships and exported observed-input evidence offline. Python is a test
-validator dependency; generation and the product remain native Roc. The release
-job validates before gathering sidecars into the same tested asset set. It
+Every release subject has both sidecars. `scripts/check_sbom.roc` checks them
+offline before the release job gathers them into the same tested asset set:
+each must be valid SPDX of its version, meet the profile, describe the actual
+artifact bytes, account for the release's observed inputs, and state the same
+package graph as its other rendering. Conformance is Roc throughout:
+`core.Spdx3` and `core.Spdx2` hold the classes, properties, cardinalities,
+enumerations and references of each version, and the test suite holds them to
+the published SPDX 3.0.1 JSON schema and the SPDX 2.3.1 schema, vendored in
+`tests/sbom/schema/` and pinned by SHA-256. It
 adds no publication permission. Examples/documentation archives are not
 covered by the first own-release recipe; consumers must not infer their
 composition from a sibling executable's SBOM.
@@ -219,7 +262,8 @@ composition from a sibling executable's SBOM.
 == Exercise the stable consumer contract
 
 `tests/sbom/fixtures/` contains native Linux and ARM64 instances, a source
-bundle, a verified imported graph, and distinct empty/unknown coverage records.
+bundle, a verified imported graph, and distinct empty/unknown coverage records,
+each as SPDX 3.0.1 (`.spdx.json`) and SPDX 2.3 (`.spdx-2.3.json`).
 The matching evaluated Spec/Lock, composition, inventory, subject and context
 are under `fixtures/input/`. They let roc-automation test an independent
 consumer without depending on Blueprint's implementation.
@@ -227,13 +271,16 @@ consumer without depending on Blueprint's implementation.
 [source,console]
 ----
 nix develop -c roc-stable test scripts/test_sbom.roc
-nix run .#sbom-validator -- --self-test tests/sbom/fixtures/native-linux.spdx.json tests/sbom/fixtures/*.spdx.json
+nix develop -c scripts/check_sbom.roc tests/sbom/fixtures/*.spdx.json tests/sbom/fixtures/*.spdx-2.3.json
 ----
 
 The conformance suite checks a transitive native component's origin and affected
 subject, distinguishes the build compiler from contained code, retains patched
 restricted code, separates archive/tree/binary digests, rejects malformed
-references and omissions, checks repeatability, and exercises read-only
-binding with symlink/hardlink aliases and special files. These checks establish
+references and omissions, checks repeatability, reads both versions of every
+fixture back to one package graph, and exercises read-only binding with
+symlink/hardlink aliases and special files. The `sbom-render` and `sbom-read`
+fuzz targets check rendering and reading against the specification with
+generated inventories and mutated documents. These checks establish
 consistency with declared inputs, not proof that an opaque tool disclosed all
 shipped code.

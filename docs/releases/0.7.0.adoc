@@ -113,7 +113,8 @@ required features explicitly.
 == Describe and reuse artifact composition
 
 The public `core.Sbom` API combines resolved Lock identities with reviewed
-artifact composition and emits SPDX 2.3 JSON. It distinguishes build tools
+artifact composition and emits SPDX 3.0.1 JSON-LD, with an SPDX 2.3 rendering
+of the same inventory for tools that read only SPDX 2. It distinguishes build tools
 from contained code and records incomplete or unknown coverage explicitly.
 Inspection runs offline without evaluating a project or starting a provider;
 binding the inventory to the final file's SHA-256 is a separate operation.
@@ -121,14 +122,14 @@ A standalone Roc app bundle provides the same `inspect` and `bind` operations
 without a Blueprint project. The published release notes link its immutable
 bundle URL; it uses the same pinned compiler as Blueprint.
 
-Consumers can import an upstream SPDX graph after verifying its document
-digest and namespace, and bind its described subject to the resolved
+Consumers can import an upstream SPDX 3.0.1, 2.3 or 2.2 graph after verifying
+its document digest and namespace, and bind its described subject to the resolved
 artifact's digest, version and target. Imported identities and dependency
 relationships remain available for downstream analysis.
 
 Release executables and Roc source bundles have their own `.spdx.json`
-sidecars, checked against the complete pinned SPDX schema and the actual
-artifact bytes. They include reviewed native and transitive inputs and
+(SPDX 3.0.1) and `.spdx-2.3.json` sidecars, each checked against its version
+of the specification and the actual artifact bytes. They include reviewed native and transitive inputs and
 explicit coverage gaps. These documents describe composition; they do not
 establish build provenance or a vulnerability verdict. See
 xref:sbom.adoc#artifact-bound-software-bills-of-materials[Artifact-bound software bills of materials]
