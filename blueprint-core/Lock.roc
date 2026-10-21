@@ -172,6 +172,12 @@ Lock := {
 	## resolved. Settings Resolve does not consume never make a Lock stale.
 	stale : Lock, Spec -> Try({}, Str)
 	stale = |lock, spec| {
+		file_pins = spec.source_files.map(file_pin).sort_with(|a, b| Project.bytewise(a.name, b.name))
+		locked_files = lock.sources.keep_if(|source| source.provider == "file").sort_with(|a, b| Project.bytewise(a.name, b.name))
+		if file_pins != locked_files {
+			return Err("Blueprint.roc changed its file sources since the lock was resolved; run blueprint update")
+		}
+
 		current = intent_of(spec)
 		changed = |what, same| if (same) [] else [what]
 		differences = changed("sources", lock.intent.sources == current.sources)
@@ -184,6 +190,10 @@ Lock := {
 			Err("Blueprint.roc changed its ${Str.join_with(differences, ", ")} since the lock was resolved; run blueprint update")
 		}
 	}
+
+	## Flat-file sources are Core-owned authority, not NAR tree identities.
+	file_pin : Spec.SourceFile -> Source
+	file_pin = |source| { name: source.name, provider: "file", ref: source.url, rev: "", digest: "sha256:${source.sha256}" }
 
 	current_format : Format
 	current_format = { major: 1, minor: 1 }
@@ -412,4 +422,16 @@ expect {
 expect {
 	old = Lock.parse("((format ((major 1) (minor 0))) (intent ((build_sources ()) (inputs ()) (overlays ()) (sources (((name \"default\") (provider Auto)))))))")
 	old.map_ok(Lock.from_before_explicit_sources) == Ok(True) and !Lock.from_before_explicit_sources(sample)
+}
+
+expect {
+	file = { name: "upstream", url: "https://example.test/release.tar.gz", sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+	spec = { ..Spec.empty("file-sources"), source_files: [file] }
+	lock = { ..sample, intent: Lock.intent_of(spec), sources: [Lock.file_pin(file)], hints: [], fetched: [] }
+	Lock.parse(lock.to_str()) == Ok(lock) and lock.stale(spec) == Ok({})
+		and lock.stale({ ..spec, tasks: [{ name: "check", environment: "dev", run: ["check"] }] }) == Ok({})
+		and lock.stale({ ..spec, source_files: [{ ..file, sha256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" }] }).is_err()
+		and lock.stale({ ..spec, source_files: [{ ..file, url: "https://mirror.test/release.tar.gz" }] }).is_err()
+		and lock.stale({ ..spec, source_files: [] }).is_err()
+		and { ..lock, sources: [] }.stale(spec).is_err()
 }

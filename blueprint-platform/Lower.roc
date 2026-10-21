@@ -26,6 +26,7 @@ Lower :: [].{
 		expects : List(Spec.Expects),
 		shells : List(Spec.Shell),
 		tasks : List(Spec.Task),
+		source_files : List(Spec.SourceFile),
 		build_sources : List(Spec.BuildSource),
 		build_files : List(Spec.BuildFiles),
 		builds : List(Spec.Build),
@@ -45,7 +46,7 @@ Lower :: [].{
 	lower : List(Config.Setting) -> Try(Spec, Str)
 	lower = |settings| {
 		initial : Acc
-		initial = { names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], configured_tools: [], roc_packages: [], recipes: [], environment_programs: [], expects: [], shells: [], tasks: [], build_sources: [], builds: [], build_files: [], workflows: [], extensions: [], raw: [] }
+		initial = { source_files: [], names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], configured_tools: [], roc_packages: [], recipes: [], environment_programs: [], expects: [], shells: [], tasks: [], build_sources: [], builds: [], build_files: [], workflows: [], extensions: [], raw: [] }
 		acc = settings.fold(Ok(initial), |result, setting| add(result?, setting))?
 		name = match acc.names {
 			[] => return Err("MissingName: declare Name once")
@@ -66,6 +67,7 @@ Lower :: [].{
 				.concat(if (acc.extensions.is_empty()) [] else ["extensions"])
 				.concat(if (acc.raw.is_empty()) [] else ["raw"])
 				.concat(if (acc.build_sources.is_empty()) [] else ["sources"])
+				.concat(if (acc.source_files.is_empty()) [] else ["source-files"])
 				.concat(if (acc.builds.is_empty()) [] else ["builds"])
 				.concat(if (acc.build_files.is_empty()) [] else ["build-files"])
 				.concat(if (acc.workflows.is_empty()) [] else ["workflows"])
@@ -77,6 +79,7 @@ Lower :: [].{
 				.concat(if (acc.expects.is_empty()) [] else ["expects"])
 		Project.validate(
 			Spec.{
+				source_files: acc.source_files,
 				format: Spec.current_format,
 				name,
 				requires_,
@@ -119,6 +122,7 @@ Lower :: [].{
 			}
 			Shell(name, inner) => { ..acc, shells: acc.shells.append(shell(name.to_str(), inner)?) }
 			Task(name, inner) => { ..acc, tasks: acc.tasks.append(task(name.to_str(), inner)?) }
+			SourceFile(name, url, sha256) => { ..acc, source_files: acc.source_files.append({ name: name.to_str(), url: url.to_str(), sha256 }) }
 			Source(name, ref) => { ..acc, build_sources: acc.build_sources.append({ name: name.to_str(), ref: ref.to_str() }) }
 			Build(name, inner) => {
 				var $selected = []

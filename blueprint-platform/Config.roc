@@ -29,6 +29,7 @@ Config :: [].{
 		Shell(EnvName, List(ShellSetting)),
 		Task(TaskName, List(TaskSetting)),
 		Source(InputName, FlakeRef),
+		SourceFile(InputName, Url, Str),
 		Build(InputName, List(BuildSetting)),
 		Workflow(WorkflowName, List(WorkflowStep)),
 		Custom(Str, Str, Val),

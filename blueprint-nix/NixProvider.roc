@@ -362,6 +362,11 @@ NixProvider :: [].{
 		{ builds, argv, contents, action, needs_nix, .. } = selected
 		base_ref = "path:${layout.generated_root}"
 		var $operations = derived.operations
+		for source in selected.project.source_files {
+			if builds.any(|build| build.inputs.contains(source.name)) {
+				$operations = $operations.append(SourceFile(source))
+			}
+		}
 		match action {
 			Build(_) => {
 				$operations = $operations.append(Isolation({ directory: "${layout.generated_root}/isolation", placeholder: "@blueprint-isolation-source@" }))
@@ -373,7 +378,14 @@ NixProvider :: [].{
 			.append({
 				path: "${layout.generated_root}/flake.lock",
 				contents: derived.contents,
-			})
+			}).concat(
+			selected.project.source_files.keep_if(|source| builds.any(|build| build.inputs.contains(source.name))).map(
+				|source| {
+					path: "${layout.generated_root}/source-file-${source.sha256}.json",
+					contents: "@blueprint-source-file-${source.sha256}@",
+				},
+			),
+		)
 		# The machine must have Nix itself: nothing installs it.
 		if !needs_nix.is_empty() {
 			$operations = $operations.append(Present([{ program: "nix", because: needs_nix }]))
@@ -680,13 +692,24 @@ NixProvider :: [].{
 		$rendered = append_rendered($rendered, render_shell_alias($declared))?
 		$rendered = append_rendered(
 			$rendered,
-			lines([
-				"  };",
-				"",
-				"  outputs = { self, ... }@inputs:",
-				"    let",
-				"      environmentsFor = system: {",
-			]),
+			lines(
+				[
+					"  };",
+					"",
+					if spec.source_files.is_empty() {
+						"  outputs = { self, ... }@inputs:"
+					} else {
+						"  outputs = { self, ... }@flakeInputs:"
+					},
+					"    let",
+				].concat(
+					if spec.source_files.is_empty() {
+						[]
+					} else {
+						["      inputs = flakeInputs // { ${Str.join_with(spec.source_files.map(|source| "${quote(source.name)} = builtins.path { path = /. + (builtins.fromJSON (builtins.readFile ./source-file-${source.sha256}.json)); name = ${quote("blueprint-source-${source.sha256}")}; recursive = false; sha256 = ${quote(source.sha256)}; };"), " ")} };"]
+					},
+				).append("      environmentsFor = system: {"),
+			),
 		)?
 		for environment in environments {
 			$rendered = append_rendered(
@@ -1195,6 +1218,7 @@ simple = {
 
 mk : TestSpec -> Spec
 mk = |t| Spec.{
+	source_files: [],
 	build_files: [],
 	format: Spec.current_format,
 	name: "test",

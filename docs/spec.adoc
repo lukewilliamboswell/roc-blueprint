@@ -105,8 +105,9 @@ per-environment overlay order), which
 the CLI records on `update` and compares before every other command, failing
 with what changed; `sources` (one provider-neutral `{ name, provider, ref,
 rev, digest }` per declared input; `digest` is `sha256:<hex>`: the Nix
-provider converts its NAR hashes for remote inputs, and local inputs carry
-Blueprint's own tree digest from core `Tree`), provider-namespaced
+provider converts its NAR hashes for remote inputs, local inputs carry
+Blueprint's own tree digest from core `Tree`, and `SourceFile` entries use
+`provider = "file"` with the flat original-file digest), provider-namespaced
 `hints`, and `fetched` (one `{ name, system, urls, sha256, size, obtained }`
 per declared program and System: the SHA-256, in hex, and the length of the
 download when it was resolved, the URLs it was declared with, and whether the
@@ -114,7 +115,8 @@ digest was `Computed` from the bytes, `Published` by the release that serves
 them, or `Both`; an entry with no `obtained` is read as `Unstated`. Programs
 are not part of `intent`; each entry carries its URLs, so a program whose URLs
 changed is stale alone). A project that asks no provider for anything has a
-Lock with no `sources` and no `hints`. The Nix provider's hint carries its declared input identity and the
+Lock with no `hints`; it may still hold Core-owned original-file sources.
+File declarations are compared directly with those locked pins for freshness. The Nix provider's hint carries its declared input identity and the
 complete native lock graph; decoding rejects a lock whose Sources disagree with
 those pins, so hand edits to either side fail. The graph's root holds one edge
 that is no declared input: `nixpkgs`, following the package source

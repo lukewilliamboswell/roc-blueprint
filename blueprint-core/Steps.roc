@@ -23,6 +23,10 @@ Steps := { steps : List(Step) }.{
 		dependencies : List(Str),
 	}
 
+	## SourceFile fetches and verifies original bytes by their flat SHA-256,
+	## then substitutes @blueprint-source-file-<sha256>@ in staged files with
+	## their JSON-encoded artifact path. Providers stage this marker as a whole
+	## JSON value, not inside executable syntax. It never unpacks the file or adds a command to PATH.
 	## Verify all locked local trees before staging files.
 	## Isolation writes the current mount/network namespace identities as two
 	## lines to `directory/witness`, and replaces `placeholder` in the step's
@@ -53,6 +57,7 @@ Steps := { steps : List(Step) }.{
 	## before the first step's command.
 	## Serialize workspace use; stop on any failed materialization operation.
 	Operation : [
+		SourceFile({ name : Str, url : Str, sha256 : Str }),
 		VerifyTree({ path : Str, digest : Str }),
 		Isolation({ directory : Str, placeholder : Str }),
 		LocalSystem(Str),

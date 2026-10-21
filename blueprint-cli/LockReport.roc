@@ -47,6 +47,24 @@ LockReport := [].{
 					("ref", Json.to_str(source.ref)),
 					("rev", Json.to_str(source.rev)),
 					("digest", Json.to_str(source.digest)),
+					(
+						"digestKind",
+						Json.to_str(
+							if source.provider == "file" {
+								"file"
+							} else {
+								"tree"
+							},
+						),
+					),
+					(
+						"flatSha256",
+						if source.provider == "file" {
+							Json.to_str(source.digest.drop_prefix("sha256:"))
+						} else {
+							"null"
+						},
+					),
 					("identity", Json.to_str(identity)),
 					("fetchTree", fetch),
 				]

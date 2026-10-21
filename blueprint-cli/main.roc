@@ -905,12 +905,17 @@ execute_step! = |step, fetched, ctx| {
 execute_prepared! : Steps.Step, List(Fetched), Context, Str => Try({}, _)
 execute_prepared! = |step, fetched, ctx, witness_directory| {
 	layout = ctx.layout
-	files = step.files
+	var $files = step.files
 	var $argv = step.argv
 	var $roc_bundles = []
 	var $programs = []
 	for operation in step.operations {
 		match operation {
+			SourceFile(source) => {
+				file = Store.source_file!(Store.root!().map_err(|message| FetchFailed(message))?, source).map_err(|message| FetchFailed(message))?
+				marker = "@blueprint-source-file-${source.sha256}@"
+				$files = $files.map(|entry| { ..entry, contents: entry.contents.replace_each(marker, Json.to_str(file)) })
+			}
 			VerifyTree({ path: local, digest }) => {
 				safe_source!(local)?
 				if tree_digest!(local)? != digest {
@@ -945,7 +950,7 @@ execute_prepared! = |step, fetched, ctx, witness_directory| {
 			}
 		}
 	}
-	stage!(files, layout)?
+	stage!($files, layout)?
 	publish_roc_bundles!($roc_bundles, ctx)?
 	if $programs.is_empty() {
 		start!({ ..step, argv: $argv }, [], "", ctx)
@@ -1407,7 +1412,7 @@ resolve! = |spec, names, ctx| {
 	safe_path!(layout.lock_path)?
 	prior = authority_token!(layout.lock_path)?
 	before = held!(layout)?
-	declared = Project.unique(spec.programs.map(|program| program.name))
+	declared = Project.unique(spec.programs.map(|program| program.name).concat(spec.source_files.map(|source| source.name)))
 	wanted = names.keep_if(|name| declared.contains(name))
 	others = names.keep_if(|name| !declared.contains(name))
 	several = Refused("several providers have pins to resolve for this project, and one lock holds those of one")
@@ -1444,7 +1449,15 @@ resolve! = |spec, names, ctx| {
 		_ => []
 	}
 	fetched = obtained!(Lock.refresh(spec.programs, known, if (names.is_empty()) All else Named(wanted)))?
-	lock = { ..pins, intent: Lock.intent_of(spec), fetched }
+	# A published flat hash is verified before authority is published. A source
+	# selected later uses the same pinned digest even with a fresh cache.
+	for source in spec.source_files {
+		if names.is_empty() or names.contains(source.name) {
+			_ = Store.source_file!(Store.root!().map_err(|message| FetchFailed(message))?, source).map_err(|message| FetchFailed(message))?
+		}
+	}
+	sources = pins.sources.keep_if(|source| source.provider != "file").concat(spec.source_files.map(Lock.file_pin))
+	lock = { ..pins, intent: Lock.intent_of(spec), fetched, sources }
 	path(Paths.parent(layout.lock_path)).create_all!()?
 	publish_authority!(layout.lock_path, prior, lock.to_str())?
 	# A new place downloads come from is what a reviewer of the lock should

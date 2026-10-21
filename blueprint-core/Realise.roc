@@ -21,7 +21,7 @@ Realise :: [].{
 	## `explicit-sources` is the Core's own: a Spec that requires it declares
 	## every source its tools name, and none is added to it.
 	features : List(Str)
-	features = ["explicit-sources", "programs", "expects"]
+	features = ["explicit-sources", "source-files", "programs", "expects"]
 
 	## The ordered steps of one request on a System, or everything that
 	## stops it. Every task and build of a workflow is planned before a
@@ -860,7 +860,7 @@ expect Realise.requirements(sample, "x86_64-linux", ["absent", "hello", "gone"],
 expect Realise.requirements(sample, "riscv64-linux", [], [stub]) == Err(["target riscv64-linux is not declared by the project"])
 expect Realise.requirements(sample, "x86_64-linux", ["unpinned"], [stub]).map_ok(|needs| needs.tasks.map(|entry| entry.tools)) == Ok([["nix#coreutils"]])
 
-expect Realise.features == ["explicit-sources", "programs", "expects"]
+expect Realise.features == ["explicit-sources", "source-files", "programs", "expects"]
 
 # Before a Lock is read, a request is refused for whatever the Spec alone
 # shows, the provider's own refusal included, and for nothing the Lock says.

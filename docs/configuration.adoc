@@ -62,6 +62,9 @@ complete file with the current URL.
 | `Source(InputName, FlakeRef)`
 | Locked non-flake input, e.g. `Source("assets", "path:./assets")`.
 
+| `SourceFile(InputName, Url, Str)`
+| Original file pinned by its published SHA-256 (64 lowercase hexadecimal characters). `Inputs` exposes the unchanged file. See xref:builds.adoc#original-files-with-published-hashes[original file sources].
+
 | `Build(InputName, List(BuildSetting))`
 | Sandboxed artifact with required `Use`, exact argv `Run`, relative `Output`; optional `Inputs` and `Needs`.
 

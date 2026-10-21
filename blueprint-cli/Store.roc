@@ -31,7 +31,7 @@ import Paths
 Store := [].{
 
 	## Where the digest of a download is recorded, for a message.
-	Origin : [Lock, BuiltIn]
+	Origin : [Lock, BuiltIn, Declared]
 
 	## The store's directory from the caller's environment: `blueprint` under
 	## `XDG_CACHE_HOME`, else under `.cache` in `HOME`; on Windows under
@@ -190,6 +190,35 @@ Store := [].{
 	program! : Str, Steps.Program, Origin => Try(Str, Str)
 	program! = |store, program, origin| program_with!(store, program, origin, Err(NotEmbedded))
 
+	## An original source file, hashed before every use. This uses the same
+	## artifact store and fixed digest as programs, without extraction or chmod.
+	source_file! : Str, { name : Str, url : Str, sha256 : Str } => Try(Str, Str)
+	source_file! = |store, source| source_file_with!(store, source, Err(NotEmbedded))
+
+	## A provider may need the exact original archive already embedded in the
+	## consumer. Verify and keep it as raw bytes, without extracting a program.
+	embedded_source_file! : Str, { name : Str, url : Str, sha256 : Str }, List(U8) => Try(Str, Str)
+	embedded_source_file! = |store, source, bytes| source_file_with!(store, source, Ok(bytes))
+
+	source_file_with! : Str, { name : Str, url : Str, sha256 : Str }, Try(List(U8), [NotEmbedded]) => Try(Str, Str)
+	source_file_with! = |store, source, embedded| {
+		if !digest(source.sha256) {
+			return Err("invalid source file SHA-256: ${source.name}")
+		}
+		program = { name: source.name, urls: [source.url], sha256: source.sha256, size: 0, unpack: File, path: "" }
+		artifact!(
+			store,
+			program,
+			if embedded.is_ok() {
+				BuiltIn
+			} else {
+				Declared
+			},
+			embedded,
+		)?
+		Ok(artifact_path(store, source.sha256))
+	}
+
 	## Install the compiler bundled with this executable, without a download.
 	## Its archive uses the same digest, tree and cache repair as a fetched one.
 	embedded_program! : Str, Steps.Program, List(U8) => Try(Str, Str)
@@ -291,6 +320,7 @@ digest = |text| text.to_utf8().len() == 64 and text.to_utf8().all(|b| (b >= '0' 
 recorded : Store.Origin -> Str
 recorded = |origin|
 	match origin {
+		Declared => "SourceFile declaration"
 		Lock => "Blueprint.lock"
 		BuiltIn => "this blueprint"
 	}
@@ -299,6 +329,7 @@ recorded = |origin|
 advice : Store.Origin, Str -> Str
 advice = |origin, name|
 	match origin {
+		Declared => "Check the original release and its published SHA-256; to deliberately change this pin, edit SourceFile and run blueprint update ${name}"
 		Lock => "If the publisher replaced the file, run blueprint update ${name} and review the change"
 		BuiltIn => "Set ROC to a compiler you trust, or use a blueprint release that records this one"
 	}

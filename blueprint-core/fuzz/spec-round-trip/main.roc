@@ -168,6 +168,7 @@ spec_generator = Fuzz.map(
 		raw: Fuzz.list(raw, 3),
 	}.Fuzz,
 	|r| Spec.{
+		source_files: [],
 		build_files: [],
 		format: { major: Spec.current_format.major, minor: r.minor },
 		name: r.name,

@@ -298,6 +298,9 @@ cli! = |context| {
 	step!("Embedded compiler bootstrap and cache repair")?
 	script!(context, "test_bootstrap", [])?
 
+	step!("Published flat-digest original-file sources")?
+	script!(context, "test_source_files", [])?
+
 	step!("Offline committed lock inspector")?
 	script!(context, "test_lock", [])?
 
@@ -341,6 +344,9 @@ builds! : Context => Try({}, _)
 builds! = |context| {
 	step!("Sandboxed artifacts, isolation, sources and immutable locks")?
 	script!(context, "test_builds", [])?
+
+	step!("Flat source files in real sandboxed producers")?
+	script!(context, "test_source_files", ["--build"])?
 
 	step!("Ordered workflows, failure propagation and fresh build operations")?
 	script!(context, "test_workflows", [])

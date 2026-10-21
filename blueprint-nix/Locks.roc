@@ -162,7 +162,8 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	)
 
 	from_lock : Lock -> Try(Locks, Str)
-	from_lock = |lock| {
+	from_lock = |authority| {
+		lock = { ..authority, sources: authority.sources.keep_if(|source| source.provider == "nix") }
 		hint = lock.hint("nix")
 			.map_err(|_| "Blueprint lock has no nix pins; run blueprint update")?
 		identity = from_value(attr(hint, "identity")?)?

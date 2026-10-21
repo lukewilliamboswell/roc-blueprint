@@ -62,6 +62,39 @@ remote Nix builders are disabled for this isolation contract.
 See the https://github.com/lukewilliamboswell/roc-blueprint/blob/main/examples/artifacts/README.md[complete runnable example],
 https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/builds/README.md[real build fixture].
 
+== Original files with published hashes
+
+`SourceFile(name, url, sha256)` declares an original upstream file, such as a
+release archive whose publisher supplies a flat SHA-256. The hash is exactly
+64 lowercase hexadecimal characters. The URL follows the same public HTTPS
+rules as fetched programs. Use `Inputs([name])` on a build: the unchanged file
+is available at `$BLUEPRINT_INPUTS/<name>`. An archive is never unpacked
+implicitly; name the unpacker in the environment's `Tools` and run it in the
+recipe when needed. `Source(name, ref)` continues to supply a locked source
+tree, including archives that Nix unpacks and pins by their NAR hash.
+
+`blueprint update` fetches and verifies the original bytes against the declared
+published hash before committing a pin. `blueprint update NAME` can select the
+file alone. The authority is a `sources` entry in `Blueprint.lock` with
+`provider = "file"`, the original URL in `ref`, and its flat
+`sha256:<hex>` in `digest`. There is no additional source lock. URL, name,
+hash, addition or removal changes require explicit update.
+
+Ordinary builds and generation use the committed digest. They hash cached
+bytes on every use, fetch a missing file from its locked URL, and repair a
+corrupt cache by fetching and verifying it again. Wrong upstream bytes fail;
+ordinary fetches never change the lock. A verified cached file works offline.
+The source enters Nix as a fixed, non-recursive file snapshot whose hash is
+checked again by Nix. Its store identity is independent of the caller's cache
+location, and the recipe sees the original archive bytes. Unrelated files
+that no selected build uses are not fetched.
+
+`blueprint lock show --json NAME` reports `digestKind: "file"` and the original
+`flatSha256` separately from tree identities, with `fetchTree: null`. A NAR
+hash is not a publisher's hash of an archive; do not compare them as if they
+were the same digest. Build provenance includes the selected file source's
+name, original URL and flat digest alongside the other locked sources used.
+
 == Order tasks and builds in a workflow
 
 Inside `config`, referring to existing tasks and builds:

@@ -220,7 +220,7 @@ check `format`, accept extra fields and treat ordering as insignificant.
 
 [source,json]
 ----
-{"format":1,"sources":{"nix":{"name":"nix","provider":"nix","ref":"github:NixOS/nixpkgs/nixos-unstable","rev":"4975466d324710c576dc11ad614684e6bd8cad8e","digest":"sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5","identity":"sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5","fetchTree":{"type":"github","owner":"NixOS","repo":"nixpkgs","rev":"4975466d324710c576dc11ad614684e6bd8cad8e","narHash":"sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=","lastModified":1790185690}}},"fetched":[]}
+{"format":1,"sources":{"nix":{"name":"nix","provider":"nix","ref":"github:NixOS/nixpkgs/nixos-unstable","rev":"4975466d324710c576dc11ad614684e6bd8cad8e","digest":"sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5","digestKind":"tree","flatSha256":null,"identity":"sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5","fetchTree":{"type":"github","owner":"NixOS","repo":"nixpkgs","rev":"4975466d324710c576dc11ad614684e6bd8cad8e","narHash":"sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=","lastModified":1790185690}}},"fetched":[]}
 ----
 
 [cols="1,4",options="header"]
@@ -235,10 +235,13 @@ check `format`, accept extra fields and treat ordering as insignificant.
 | The source fields recorded in the lock. `rev` is empty when absent. `digest` is the existing provider content digest; prefer `identity` for fingerprinting because aliases may have an empty recorded digest.
 
 | `sources.NAME.identity`
-| Per-entry pinned tree content identity, `sha256:<hex>`. Nix remote entries use the decoded NAR hash, local entries the recorded Blueprint tree digest, and follows entries their resolved target's identity. It is independent of names, mutable reference spelling, tasks, other entries, provider graph node names, and lock format minor versions. Unrelated updates and adding/removing tasks cannot change it. It identifies the full source tree, including when a flake selects a subdirectory within that tree.
+| Per-entry pinned content identity, `sha256:<hex>`. Nix remote entries use the decoded NAR hash, local entries the recorded Blueprint tree digest, and follows entries their resolved target's identity. It is independent of names, mutable reference spelling, tasks, other entries, provider graph node names, and lock format minor versions. Unrelated updates and adding/removing tasks cannot change it. For trees it identifies the full source tree, including when a flake selects a subdirectory within that tree. For `SourceFile`, it identifies the unchanged original file bytes.
+
+| `sources.NAME.digestKind`, `flatSha256`
+| `digestKind` distinguishes `"file"` (an original flat-file source) from `"tree"` (a provider tree). `flatSha256` is the original file hash as 64 lowercase hexadecimal characters for file sources, and `null` for trees. File sources have `provider: "file"`, their URL in `ref`, an empty `rev`, and `fetchTree: null`; their content identity is the original-file digest.
 
 | `sources.NAME.fetchTree`
-| For a remote Nix source, the exact locked fetch attributes, with string `type`, `owner`/`repo` or `url`, optional `rev` and numeric `lastModified`, `narHash`, and any applicable locked fetch flags or host metadata. No registry resolution or defaults are inserted. The flake-only `dir` selection is omitted because it is not a `builtins.fetchTree` argument. It is `null` for local paths or other providers; local paths require a project location and Blueprint's tree verification.
+| For a remote Nix tree source, the exact locked fetch attributes, with string `type`, `owner`/`repo` or `url`, optional `rev` and numeric `lastModified`, `narHash`, and any applicable locked fetch flags or host metadata. No registry resolution or defaults are inserted. The flake-only `dir` selection is omitted because it is not a `builtins.fetchTree` argument. It is `null` for local paths or other providers; local paths require a project location and Blueprint's tree verification.
 
 | `fetched`
 | Array of program entries. Each has string `name`, `system`, `sha256`, `identity`, array of string `urls`, integer `size` (download bytes), and string `obtained` (`computed`, `published`, `both`, or `unstated`). `identity` is `sha256:` followed by the download hash. URL or provenance changes do not change byte identity.
