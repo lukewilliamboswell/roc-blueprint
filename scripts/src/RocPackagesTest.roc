@@ -238,8 +238,9 @@ runner! = |context, directory, extra| {
 	Path.create_all!(Path.utf8("${directory}/project"))?
 	Path.create_all!(Path.utf8("${directory}/empty"))?
 	Path.write_utf8!(Path.utf8("${directory}/project/file"), "file")?
-	command = "printf %s \"\${XDG_CACHE_HOME-unset}\" > recorded.txt"
-	base = Json.to_str({ schema_version: 1.U64, env: [{ name: "TEST_RUNNER", value: "yes" }], project: "${directory}/project", argv: ["sh", "-c", command], output: "recorded.txt", readlink: BuildHarness.which!("readlink")?, chmod: BuildHarness.which!("chmod")?, path: Env.var_str!("PATH") ?? "", inputs: "${directory}/empty", artifacts: "${directory}/empty", tools: "${directory}/empty" })
+	# Cache behavior does not depend on a shell or inherited host PATH.
+	payload = StandaloneRunner.payload!({ root: context.root, work: context.work })?
+	base = Json.to_str({ schema_version: 1.U64, env: [{ name: "TEST_RUNNER", value: "yes" }], project: "${directory}/project", argv: [payload, "cache"], output: "recorded.txt", readlink: BuildHarness.which!("readlink")?, chmod: BuildHarness.which!("chmod")?, path: "", inputs: "${directory}/empty", artifacts: "${directory}/empty", tools: "${directory}/empty" })
 	spec = base.drop_suffix("}").concat(extra).concat("}")
 	result = StandaloneRunner.run!({ root: context.root, work: context.work }, spec, Observed)?
 	recorded = Path.read_utf8!(Path.utf8("${result.top}/out")) ?? ""

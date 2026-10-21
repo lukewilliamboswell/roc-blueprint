@@ -15,6 +15,7 @@ import cli.Stderr
 ##   runner_payload direct-out         write `$out` as well as the declared output
 ##   runner_payload replace-workspace  move the project copy and leave a link
 ##   runner_payload mark FILE          write FILE, then the declared output
+##   runner_payload cache              record the recipe's XDG_CACHE_HOME
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	result = match args.map(OsStr.display) {
@@ -23,6 +24,7 @@ main! = |args| {
 		["direct-out"] => direct_out!()
 		["replace-workspace"] => replace_workspace!()
 		["mark", file] => mark!(file)
+		["cache"] => Path.write_utf8!("recorded.txt", Env.var_str!("XDG_CACHE_HOME") ?? "unset")
 		_ => Err(Failed("unknown runner payload"))
 	}
 	match result {

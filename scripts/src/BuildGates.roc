@@ -324,26 +324,26 @@ graph! = |suite, state| {
 	Ok(output)
 }
 
-## A specification whose witness names namespaces this host lacks.
-##
-## The runner compares a build's namespaces with the caller's witness. A
-## hand-written witness that differs from this process therefore lets the
-## remaining checks run here without a sandbox; the production witness is the
-## one the CLI observes for itself.
+## A specification for the exact runner inside private test namespaces.
+## Only pinned coreutils are declared: inherited host PATH entries may not
+## be accessible after the harness drops supplementary groups.
 host_specification! : BuildHarness.Suite => Try(List((Str, Str)), _)
 host_specification! = |suite| {
 	empty = "${suite.work}/runner-empty"
 	Path.create_dir!(Path.utf8(empty))?
 	control = "${suite.work}/host-control"
 	Path.write_utf8!(Path.utf8(control), "host control")?
+	helper = Path.to_str(Path.canonicalize!(Path.utf8(BuildHarness.which!("readlink")?))?)?
+	parts = helper.split_on("/")
+	tools_bin = Str.join_with(parts.take_first(parts.len() - 1), "/")
+	BuildHarness.require!(tools_bin.starts_with("/nix/store/"), "runner mechanics require pinned Nix coreutils")?
 	Ok([
 		("project", quote(empty)),
 		("inputs", quote(empty)),
 		("artifacts", quote(empty)),
 		("tools", quote(empty)),
-		("path", quote(Env.var_str!("PATH") ?? "")),
+		("path", quote(tools_bin)),
 		("output", quote("output")),
-		("isolation", "{\"mnt\":\"mnt:[0]\",\"net\":\"net:[0]\"}"),
 		("argv", Json.to_str(["cp", "--", control, "output"])),
 		("readlink", quote(BuildHarness.which!("readlink")?)),
 		("chmod", quote(BuildHarness.which!("chmod")?)),
@@ -380,7 +380,7 @@ runner_mechanics! = |suite, base, payload| {
 			BuildHarness.require!(!BuildHarness.exists!("${failed.top}/out"), "failure published")?
 		}
 	}
-	Script.pass!("runner exit codes, declared PATH and output checks (host, hand-written witness)")
+	Script.pass!("runner exit codes, declared PATH and output checks (private test namespace)")
 }
 
 ## Filesystem unit gate for the runner's local/remote source boundary. The

@@ -25,6 +25,15 @@ StandaloneRunner := [].{
 		Ok(program)
 	}
 
+	payload! : { root : Str, work : Str } => Try(Str, _)
+	payload! = |context| {
+		program = "${context.work}/runner-payload"
+		if !(Path.is_file!(Path.utf8(program)) ?? False) {
+			Cmd.new(OsStr.from_str(Process.roc!())).args(["build", "${context.root}/fixtures/builds/runner_payload.roc", "--output=${program}"].map(OsStr.from_str)).exec!()?
+		}
+		Ok(program)
+	}
+
 	run! : { root : Str, work : Str }, Str, Witness => Try(Outcome, _)
 	run! = |context, specification, witness| {
 		top = Path.to_str(Env.create_temp_dir_in!(Path.utf8(context.work), "standalone-")?)?
