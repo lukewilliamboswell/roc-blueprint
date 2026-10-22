@@ -165,7 +165,7 @@ LockSnapshot := { sources : List(Source), fetched : List(Fetched) }.{
 				pin = $pins.find_first(|entry| entry.name == locked_source.name)
 				content_identity = pin.map_ok(|entry| entry.content_identity) ?? locked_source.digest
 				if content_identity.is_empty() {
-					return Err(InvalidReport("locked source ${locked_source.name} has no content content_identity"))
+					return Err(InvalidReport("locked source ${locked_source.name} has no content identity"))
 				}
 				metadata = match pin {
 					Ok(entry) => JsonData.Object([{ name: locked_source.provider, value: from_value(Value.Attrs(entry.metadata)) }])
@@ -279,7 +279,7 @@ sample = LockSnapshot.{
 			ref: "https://example.test/channel",
 			rev: "abc",
 			digest: "opaque-content",
-			content_identity: "opaque-content_identity",
+			content_identity: "opaque-content-identity",
 			digest_kind: Unknown("graph"),
 			flat_sha256: Absent,
 			metadata: JsonData.Object([
@@ -302,7 +302,7 @@ sample_text : Str
 sample_text = LockSnapshot.to_json(sample) ?? ""
 
 expect LockSnapshot.parse_json(sample_text) == Ok(sample)
-expect LockSnapshot.source(sample, "channel").map_ok(LockSnapshot.source_content_identity) == Ok({ provider: "future", value: "opaque-content_identity" })
+expect LockSnapshot.source(sample, "channel").map_ok(LockSnapshot.source_content_identity) == Ok({ provider: "future", value: "opaque-content-identity" })
 expect LockSnapshot.source(sample, "missing") == Err(MissingSource("missing"))
 expect LockSnapshot.fetched_program(sample, "roc-stable", "x86_64-linux").map_ok(|entry| entry.size) == Ok(18446744073709551615)
 expect LockSnapshot.fetched_program(sample, "roc-stable", "aarch64-darwin") == Err(MissingProgram({ name: "roc-stable", system: "aarch64-darwin" }))

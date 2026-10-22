@@ -39,5 +39,5 @@ expect {
 
 expect {
 	lock = Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [{ name: "missing", provider: "other", ref: "source", rev: "", digest: "" }], hints: [], fetched: [] }
-	LockReport.render(lock, [], True, []) == Err("locked source missing has no content content_identity")
+	LockReport.render(lock, [], True, []) == Err("locked source missing has no content identity")
 }

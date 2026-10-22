@@ -124,7 +124,7 @@ BuildModel := [].{
 			if node.command.is_empty() or node.environment.is_empty() or node.executor.is_empty() or node.output.is_empty() {
 				return Err("incomplete build declaration evidence")
 			}
-			if node.declarations.is_empty() or dependency_path(record.snapshot, node.name, [record.snapshot.name], record.snapshot.nodes.len() + 1).is_empty() {
+			if node.declarations.is_empty() or dependency_path(record.snapshot, node.name, [record.snapshot.name]).is_empty() {
 				return Err("unreachable or incomplete build evidence")
 			}
 			if Project.unique(node.files.map(|entry| entry.path)).len() != node.files.len() or Project.unique(node.inputs.map(|entry| entry.name)).len() != node.inputs.len() {
@@ -146,7 +146,7 @@ BuildModel := [].{
 		var $changes = []
 		for node in after.nodes {
 			previous = before.nodes.find_first(|entry| entry.name == node.name)
-			path = dependency_path(after, node.name, [after.name], after.nodes.len() + 1)
+			path = dependency_path(after, node.name, [after.name])
 			change = |kind, name| { build: node.name, dependency_path: path, kind, name }
 			match previous {
 				Err(_) => {
@@ -184,14 +184,14 @@ BuildModel := [].{
 		}
 		for node in before.nodes {
 			if !after.nodes.any(|entry| entry.name == node.name) {
-				$changes = $changes.append({ build: node.name, dependency_path: dependency_path(before, node.name, [before.name], before.nodes.len() + 1), kind: "dependency-removed", name: node.name })
+				$changes = $changes.append({ build: node.name, dependency_path: dependency_path(before, node.name, [before.name]), kind: "dependency-removed", name: node.name })
 			}
 		}
 		Ok($changes)
 	}
 
-	dependency_path : Snapshot, Str, List(Str), U64 -> List(Str)
-	dependency_path = |snapshot, target, initial, _remaining| {
+	dependency_path : Snapshot, Str, List(Str) -> List(Str)
+	dependency_path = |snapshot, target, initial| {
 		var $frontier = [initial]
 		var $visited = []
 		while !$frontier.is_empty() {

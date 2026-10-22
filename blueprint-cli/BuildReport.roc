@@ -11,10 +11,7 @@ BuildReport := [].{
 		common = fields(name, system, provider, built, sources)?
 		Ok(
 			ReportJson.object(
-				common.concat([
-					("snapshot_digest", Json.to_str(BuildModel.digest(snapshot))),
-					("snapshot", Json.to_str(snapshot)),
-				]),
+				common.append(("snapshot_digest", Json.to_str(BuildModel.digest(snapshot)))),
 			).concat("\n"),
 		)
 	}
