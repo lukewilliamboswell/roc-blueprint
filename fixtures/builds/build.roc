@@ -42,10 +42,36 @@ library! = || {
 	# package adds coreutils and a C compiler to the PATH of what it runs. The
 	# suite checks the build's own PATH with commands that are not Roc.
 	require(!Cmd.check_available!("sh") and !Cmd.check_available!("bash"), "an undeclared shell is on PATH: ${Env.var_str!("PATH") ?? ""}")?
-	require(Path.list!(Path.from_os_str(Env.var!("BLUEPRINT_INPUTS")?))?.is_empty(), "undeclared inputs are present")?
+	input_evidence!(Path.from_os_str(Env.var!("BLUEPRINT_INPUTS")?), [], [])?
 	require(Path.list!(Path.from_os_str(Env.var!("BLUEPRINT_ARTIFACTS")?))?.is_empty(), "undeclared artifacts are present")?
 	Path.create_dir!("dist")?
 	Path.write_bytes!("dist/library", library_payload!()?)?
+	Ok({})
+}
+
+## Blueprint supplies reproduction evidence alongside the declared inputs.
+## Check the exact farm entries and the evidence's selected inputs/dependencies;
+## the required evidence file must not hide an undeclared source.
+Evidence : { format : U64, sources : List({ name : Str }), files : List({ name : Str }), dependencies : List({ name : Str }) }
+
+selected_evidence : Evidence, List(Str), List(Str) -> Bool
+selected_evidence = |evidence, inputs, dependencies| {
+	sorted = |names| names.sort_with(|left, right| order(left.to_utf8(), right.to_utf8()))
+	evidence.format == 1
+		and sorted(evidence.sources.map(|entry| entry.name).concat(evidence.files.map(|entry| entry.name))) == sorted(inputs)
+		and sorted(evidence.dependencies.map(|entry| entry.name)) == sorted(dependencies)
+}
+
+input_evidence! : Path, List(Str), List(Str) => Try({}, _)
+input_evidence! = |directory, inputs, dependencies| {
+	expected = inputs.append("blueprint-input-evidence").sort_with(|left, right| order(left.to_utf8(), right.to_utf8()))
+	require(names!(directory)? == expected, "inputs are not exactly the declared Inputs and reproduction evidence")?
+	file = Path.join(directory, "blueprint-input-evidence")
+	evidence : Evidence
+	evidence = Json.parse(Path.read_utf8!(file)?)?
+	require(selected_evidence(evidence, inputs, dependencies), "reproduction evidence does not match the selected Inputs and Needs")?
+	deny_write!(file)?
+	deny_create!(directory)?
 	Ok({})
 }
 
@@ -65,7 +91,7 @@ shared! = |needed| {
 	sources = Path.canonicalize!(Path.from_os_str(Env.var!("BLUEPRINT_INPUTS")?))?
 	artifacts = Path.canonicalize!(Path.from_os_str(Env.var!("BLUEPRINT_ARTIFACTS")?))?
 	require(!inside(sources, work) and !inside(artifacts, work), "inputs lie inside the writable project copy")?
-	require(names!(sources)? == ["assets"], "sources are not exactly the declared Inputs")?
+	input_evidence!(sources, ["assets"], needed)?
 	require(names!(artifacts)? == needed, "artifacts are not exactly the declared Needs")?
 	asset = Path.join(sources, "assets/message.txt")
 	# Exactly Output, not an enclosing directory. The farm entry is a link.
@@ -187,3 +213,13 @@ expect hex([0, 255, 16, 'a']) == "00ff1061"
 expect basename("/project/nested/file".to_utf8()) == "file".to_utf8()
 expect ["b", "a", "", "aa"].sort_with(|left, right| order(left.to_utf8(), right.to_utf8())) == ["", "a", "aa", "b"]
 expect inside(Path.utf8("/build/work/dist"), Path.utf8("/build/work")) and !inside(Path.utf8("/build/work-2"), Path.utf8("/build/work"))
+
+expect selected_evidence({ format: 1, sources: [], files: [], dependencies: [] }, [], [])
+expect {
+	evidence = { format: 1, sources: [{ name: "assets" }], files: [], dependencies: [{ name: "library" }] }
+	selected_evidence(evidence, ["assets"], ["library"])
+		and !selected_evidence(evidence, [], ["library"])
+		and !selected_evidence({ ..evidence, files: [{ name: "undeclared" }] }, ["assets"], ["library"])
+		and !selected_evidence(evidence, ["assets"], [])
+		and !selected_evidence({ ..evidence, format: 2 }, ["assets"], ["library"])
+}
