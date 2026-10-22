@@ -36,8 +36,11 @@ ReproducibleGates := [].{
 		BuildHarness.require!(!declared.prepared and declared.build_identity.is_empty() and declared.baseline == "unavailable" and BuildHarness.events!(suite)?.len() == before_plan, "structural planning executed provider commands or claimed an exact identity")?
 		prepared = inspection(BuildHarness.ok!(suite, place, ["plan", "build", "one", "--prepare", "--json"])?.out)?
 		BuildHarness.require!(prepared.prepared and prepared.build_identity.ends_with(".drv") and prepared.snapshot_digest == declared.snapshot_digest and prepared.baseline == "unavailable", "prepared plan has different declaration evidence or advanced baseline")?
+		# Preparation asks Nix for two things only: the NAR hash of each measured
+		# input, and the derivation with import-from-derivation forbidden.
 		for event in BuildHarness.events!(suite)?.drop_first(before_plan) {
-			BuildHarness.require!(event.kind != "nix" or (!event.argv.contains("build") and event.argv.contains("allow-import-from-derivation") and event.argv.contains("false")), "planning executed a build or allowed import from derivation")?
+			hashing = event.argv.contains("hash") and event.argv.contains("path")
+			BuildHarness.require!(event.kind != "nix" or hashing or (!event.argv.contains("build") and event.argv.contains("allow-import-from-derivation") and event.argv.contains("false")), "planning executed a build or allowed import from derivation: ${Str.inspect(event.argv)}")?
 		}
 		first = record(BuildHarness.ok!(suite, place, ["build", "one", "--json"])?.out)?
 		BuildHarness.require!(first.build_identity == prepared.build_identity and first.snapshot_digest == prepared.snapshot_digest, "execution diverged from prepared recipe/evidence")?
