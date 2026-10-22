@@ -121,6 +121,21 @@ Lower :: [].{
 				}
 			}
 		}
+		# References the Nix resolver owns are held to its flake-reference
+		# grammar here, as its tool names are; the core checks only that a
+		# reference is readable text.
+		for resolver in project.resolvers.keep_if(|entry| entry.provider == "nix") {
+			for owned in resolver.inputs {
+				match project.inputs.find_first(|input| input.name == owned) {
+					Ok(input) => Native.check_ref(input.url)?
+					Err(_) => {}
+				}
+				match project.build_sources.find_first(|source| source.name == owned) {
+					Ok(source) => Native.check_ref(source.ref)?
+					Err(_) => {}
+				}
+			}
+		}
 		Ok(project)
 	}
 
@@ -132,8 +147,7 @@ Lower :: [].{
 			Resolver(provider, inputs) => { ..acc, resolvers: acc.resolvers.append({ provider, inputs: inputs.map(|input| input.to_str()) }) }
 			Executor(name, selected) => { ..acc, executors: acc.executors.append(executor(name.to_str(), selected)) }
 			Packages(name, source) => { ..acc, sources: acc.sources.append({ name: name.to_str(), provider: provider(source) }) }
-			Input(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Flake }) }
-			Overlay(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Overlay }) }
+			Input(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str() }) }
 			Environment(name, inner) => {
 				lowered = environment(name.to_str(), inner)?
 				# Environments sharing a bundle share its one locked source.
@@ -659,6 +673,6 @@ expect Lower.lower([Name("unowned"), Environment("build", []), Executor("native"
 # Flake inputs, overlays, build sources and Roc bundles are Nix-typed, so the
 # Nix resolver owns them without a Resolver line; one merges with an explicit
 # Nix entry, and another provider's Resolver takes a name out of Nix's hands.
-expect Lower.lower([Name("owned"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Overlay("roc", "github:roc-lang/roc-overlay"), Input("utils", "github:numtide/flake-utils"), Environment("dev", [Overlays(["roc"])])]).map_ok(|spec| spec.resolvers) == Ok([{ provider: "nix", inputs: ["roc", "utils"] }])
-expect Lower.lower([Name("merged"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Resolver("nix", ["roc"]), Overlay("roc", "github:roc-lang/roc-overlay"), Input("utils", "github:numtide/flake-utils"), Environment("dev", [Overlays(["roc"])])]).map_ok(|spec| spec.resolvers) == Ok([{ provider: "nix", inputs: ["roc", "utils"] }])
+expect Lower.lower([Name("owned"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Input("roc", "github:roc-lang/roc-overlay"), Input("utils", "github:numtide/flake-utils"), Environment("dev", [Overlays(["roc"])])]).map_ok(|spec| spec.resolvers) == Ok([{ provider: "nix", inputs: ["roc", "utils"] }])
+expect Lower.lower([Name("merged"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Resolver("nix", ["roc"]), Input("roc", "github:roc-lang/roc-overlay"), Input("utils", "github:numtide/flake-utils"), Environment("dev", [Overlays(["roc"])])]).map_ok(|spec| spec.resolvers) == Ok([{ provider: "nix", inputs: ["roc", "utils"] }])
 expect Lower.lower([Name("elsewhere"), Resolver("fixture", ["assets"]), Environment("build", []), Executor("native", Adapter("fixture", "")), Source("assets", "path:./assets"), Build("app", [Execute("native"), Use("build"), Inputs(["assets"]), Run(["build"]), Output("out")])]).map_ok(|spec| spec.resolvers) == Ok([{ provider: "fixture", inputs: ["assets"] }])

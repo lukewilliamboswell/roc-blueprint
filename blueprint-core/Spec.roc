@@ -18,7 +18,7 @@ Spec := {
 	resolvers : List(Resolver),
 	executors : List(Executor),
 	build_executors : List(BuildExecutor),
-	inputs : List({ name : Str, url : Str, kind : [Overlay, Flake] }),
+	inputs : List({ name : Str, url : Str }),
 	environments : List({ name : Str, parents : List(Str), tools : List({ source : Str, name : Str }), overlays : List(Str) }),
 	system_tools : List({ environment : Str, system : Str, tools : List({ source : Str, name : Str }) }),
 	commands : List({ environment : Str, name : Str, tool : { source : Str, name : Str } }),
@@ -60,7 +60,10 @@ Spec := {
 	Executor : { name : Str, provider : Str, source : Str }
 	BuildExecutor : { build : Str, executor : Str }
 	Source : { name : Str, provider : Provider }
-	Input : { name : Str, url : Str, kind : [Overlay, Flake] }
+
+	## An input the owning resolver fetches; an environment that lists it in
+	## `overlays` applies it to its package set as that provider defines.
+	Input : { name : Str, url : Str }
 	Tool : { source : Str, name : Str }
 	Environment : { name : Str, parents : List(Str), tools : List(Tool), overlays : List(Str) }
 	SystemTools : { environment : Str, system : Str, tools : List(Tool) }

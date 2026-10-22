@@ -159,7 +159,6 @@
 		(resolvers (((provider "nix") (inputs ("roc")))))
 		(build_sources ())
 		(inputs ((
-			(kind Overlay)
 			(name "roc")
 			(url "github:roc-lang/roc-overlay"))))
 		(overlays ((

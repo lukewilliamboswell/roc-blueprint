@@ -2,7 +2,7 @@
 	(format ((major 3) (minor 0)))
 	(name "roc-blueprint")
 	(sources (((name "default") (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/nixos-unstable"))))))
-	(inputs (((kind Overlay) (name "roc")
+	(inputs (( (name "roc")
 		(url "github:roc-lang/roc-overlay"))))
 	(environments (((name "dev") (parents ())
 		(tools (((source "default") (name "rocpkgs.nightly"))

@@ -2,8 +2,8 @@
 ((format ((major 3) (minor 0))) (name "scoped-overlays")
  (systems ("x86_64-linux"))
  (sources (((name "default") (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/nixos-unstable"))))))
- (inputs (((name "base") (kind Overlay) (url "path:./overlays/base"))
-   ((name "patch") (kind Overlay) (url "path:./overlays/patch"))))
+ (inputs (((name "base") (url "path:./overlays/base"))
+   ((name "patch") (url "path:./overlays/patch"))))
  (environments (
    ((name "base") (parents ()) (overlays ("base"))
     (tools (((source "default") (name "fixtureTool")))))

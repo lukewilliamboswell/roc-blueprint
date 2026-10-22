@@ -3,7 +3,7 @@
  (requires ("explicit-sources" "programs" "expects"))
  (systems ("x86_64-linux" "aarch64-linux"))
  (sources (((name "nix") (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/nixos-unstable"))))))
- (inputs (((name "zig") (urls ("github:mitchellh/zig-overlay")) (kind Overlay))))
+ (inputs (((name "zig") (urls ("github:mitchellh/zig-overlay")))))
  (programs (((name "roc-stable") (system "x86_64-linux") (urls ("https://example.test/roc-x86_64.tar.gz")) (unpack TarGz) (path "roc/roc"))
             ((name "roc-stable") (system "aarch64-linux") (urls ("https://example.test/roc-arm64.tar.gz")) (unpack TarGz) (path "roc/roc"))))
  (environments (((name "dev") (parents ()) (tools ()) (overlays ()))

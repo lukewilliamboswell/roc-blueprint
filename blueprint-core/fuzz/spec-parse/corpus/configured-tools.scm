@@ -3,7 +3,7 @@
  (requires ("configured-tools"))
  (systems ("x86_64-linux"))
  (sources (((name "default") (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/nixos-unstable"))))))
- (inputs (((name "rust") (url "github:oxalica/rust-overlay") (kind Overlay))))
+ (inputs (((name "rust") (url "github:oxalica/rust-overlay"))))
  (environments (((name "base") (parents ()) (tools ()) (overlays ("rust")))
                 ((name "dev") (parents ("base")) (tools ()) (overlays ()))))
  (configured_tools (((environment "base")

@@ -7,8 +7,8 @@
             (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/nixos-unstable"))))
            ((name "stable")
             (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs/nixos-24.05"))))))
- (inputs (((name "roc") (url "github:roc-lang/roc-overlay") (kind Overlay))
-          ((name "utils") (url "github:numtide/flake-utils") (kind Flake))))
+ (inputs (((name "roc") (url "github:roc-lang/roc-overlay"))
+          ((name "utils") (url "github:numtide/flake-utils"))))
  (environments (
    ((name "dev") (parents ())
     (tools (((source "default") (name "hello"))

@@ -8,7 +8,7 @@ config = [
 	Name("build-integration"),
 	Systems(["x86_64-linux"]),
 	Packages("default", From(NixPackages("@PACKAGES@"))),
-	Overlay("roc", "@ROC_OVERLAY@"),
+	Input("roc", "@ROC_OVERLAY@"),
 	# The fixture's tasks and builds are Roc scripts: one pinned compiler and
 	# the bundles those scripts name, and no other tool. Roc takes the first
 	# `--` for itself, so each command has one before the script's arguments.

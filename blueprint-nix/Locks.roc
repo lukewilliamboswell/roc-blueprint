@@ -18,6 +18,11 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	## package providers stay outside Nix, not silently rewritten as nixpkgs,
 	## and so does a source that names no package set: nothing is resolved
 	## that the project did not declare.
+	## The inputs some environment applies to its package set as overlays.
+	## Nix learns an input's role from that use; the Spec declares none.
+	overlay_names : Spec -> List(Str)
+	overlay_names = |spec| Project.unique(spec.environments.fold([], |names, env| names.concat(env.overlays)))
+
 	inputs : Spec -> Try(List(Input), Str)
 	inputs = |spec| {
 		var $inputs = []
@@ -31,7 +36,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 				name: input.name,
 				ref: normalize_ref(input.url)?,
 				flake: True,
-				kind: if (input.kind == Overlay) "overlay" else "flake",
+				kind: if (overlay_names(spec).contains(input.name)) "overlay" else "flake",
 			})
 		}
 		# The bundle of a Roc package no build uses is the Core's to fetch.
@@ -1518,7 +1523,7 @@ expect match locked_fixture {
 import "tests/empty-overlay-scopes.authority.scm" as overlay_scopes_authority : Str
 
 expect {
-	original = { ..Spec.empty("roc-gui"), systems: ["x86_64-linux", "aarch64-darwin"], sources: [{ name: "default", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/6774f7bc253789b113a4f39285dc0fa100abeacc" } }], inputs: [{ name: "roc", kind: Overlay, url: "github:roc-lang/roc-overlay" }], resolvers: [{ provider: "nix", inputs: ["roc"] }], environments: [{ name: "dev", parents: [], tools: [], overlays: ["roc"] }] }
+	original = { ..Spec.empty("roc-gui"), systems: ["x86_64-linux", "aarch64-darwin"], sources: [{ name: "default", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/6774f7bc253789b113a4f39285dc0fa100abeacc" } }], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay" }], resolvers: [{ provider: "nix", inputs: ["roc"] }], environments: [{ name: "dev", parents: [], tools: [], overlays: ["roc"] }] }
 	authority = Lock.parse(overlay_scopes_authority).map_err(|_| "invalid current authority fixture")?
 	before = Locks.from_lock(authority)?
 	file = { name: "freetype-source", url: "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz", sha256: "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f" }

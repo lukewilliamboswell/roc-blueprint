@@ -27,7 +27,6 @@ Config :: [].{
 		Resolver(Str, List(InputName)),
 		Executor(InputName, ExecutorProvider),
 		Input(InputName, FlakeRef),
-		Overlay(InputName, FlakeRef),
 		Environment(EnvName, List(EnvironmentSetting)),
 		Shell(EnvName, List(ShellSetting)),
 		Task(TaskName, List(TaskSetting)),

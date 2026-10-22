@@ -7,6 +7,7 @@ import Layout
 import Steps
 import Lock
 import Value
+import Activation
 
 Provider := {
 	## Short name, e.g. "nix". Spec `raw` entries naming it are for this provider.
@@ -35,6 +36,10 @@ Provider := {
 	## before any effect.
 	validate_executor : Spec.Executor -> Try({}, Str),
 
+	## A reference of an input or build source this provider resolves. The
+	## grammar is the provider's; the core never interprets it.
+	validate_reference : Str -> Try({}, Str),
+
 	## Inspect: the files this provider would generate for the whole Spec.
 	render : Spec -> Try(List(File), Str),
 
@@ -50,6 +55,12 @@ Provider := {
 	## validated Spec and Lock. The host captures declared project files and
 	## performs the described effects. Never resolves or changes pins.
 	realise : Spec, Request, Str, Layout, Lock -> Try(Steps, [InvalidLock(Str), Unrealisable(Str)]),
+
+	## Entering an environment as data: the argv that prints what the
+	## provider's shell for this step would export, and its decoding into an
+	## Activation. The host runs the argv and renders the result at the edge.
+	activation_argv : Steps.Step -> Try(List(Str), Str),
+	activation : Str -> Try(Activation, Str),
 
 	## Build execution options and native-result decoding belong to the provider.
 	## The consumer executes argv and prints this provider-neutral result.

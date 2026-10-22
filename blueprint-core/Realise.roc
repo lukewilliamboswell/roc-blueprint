@@ -226,6 +226,13 @@ Realise :: [].{
 		for executor in project.executors.keep_if(|entry| entry.provider == provider.name) {
 			_ = (provider.validate_executor)(executor).map_err(|problem| [problem])?
 		}
+		owned = project.resolvers.keep_if(|entry| entry.provider == provider.name).fold([], |names, entry| names.concat(entry.inputs))
+		for input in project.inputs.keep_if(|entry| owned.contains(entry.name)) {
+			_ = (provider.validate_reference)(input.url).map_err(|problem| [problem])?
+		}
+		for source in Project.resolved_build_sources(project).keep_if(|entry| owned.contains(entry.name)) {
+			_ = (provider.validate_reference)(source.ref).map_err(|problem| [problem])?
+		}
 		for tool in project.environments.fold([], |tools, environment| tools.concat(environment.tools)).concat(project.system_tools.fold([], |tools, entry| tools.concat(entry.tools))).concat(project.commands.map(|entry| entry.tool)).concat(project.configured_tools.map(|entry| entry.tool)) {
 			if project.sources.any(|source| source.name == tool.source and source.provider.name == provider.name) {
 				_ = (provider.validate_tool)(tool.name).map_err(|problem| [problem])?
@@ -497,6 +504,9 @@ stub = Provider.{
 	validate_source: |_source| Ok({}),
 	validate_tool: |_name| Ok({}),
 	validate_executor: |_executor| Ok({}),
+	validate_reference: |_reference| Ok({}),
+	activation_argv: |_step| Err("not entered here"),
+	activation: |_text| Err("not entered here"),
 	name: "nix",
 	features: [],
 	realises: |source| source.name == "nix" and source.version == 1,
@@ -617,10 +627,10 @@ locked = Lock.{
 	sources: [],
 	hints: [],
 	fetched: [
-		{ name: "roc-stable", system: "x86_64-linux", urls: roc_urls("x86_64-linux"), sha256: roc_sha, size: 69614310, obtained: Both },
-		{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256: roc_sha, size: 66810227, obtained: Published },
-		{ name: "roc-stable", system: "x86_64-windows", urls: ["https://example.test/roc-windows.zip"], sha256: roc_sha, size: 67310620, obtained: Published },
-		{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux"], sha256: tool_sha, size: 5900520, obtained: Computed },
+		{ name: "roc-stable", system: "x86_64-linux", urls: roc_urls("x86_64-linux"), sha256: roc_sha, size: 69614310, obtained: Both, served: [], witness: "" },
+		{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256: roc_sha, size: 66810227, obtained: Published, served: [], witness: "" },
+		{ name: "roc-stable", system: "x86_64-windows", urls: ["https://example.test/roc-windows.zip"], sha256: roc_sha, size: 67310620, obtained: Published, served: [], witness: "" },
+		{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux"], sha256: tool_sha, size: 5900520, obtained: Computed, served: [], witness: "" },
 	],
 }
 
@@ -789,7 +799,7 @@ expect {
 # A program the Lock has not resolved, or resolved from other URLs, is named
 # with the command that resolves it; every such program is, in one answer.
 expect {
-	stale = { ..locked, fetched: [{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/older.tar.gz"], sha256: roc_sha, size: 1, obtained: Computed }] }
+	stale = { ..locked, fetched: [{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/older.tar.gz"], sha256: roc_sha, size: 1, obtained: Computed, served: [], witness: "" }] }
 	planned(sample, Request.Run("check", []), "x86_64-linux", unix, stale) == Err([
 		"roc-stable for x86_64-linux: Blueprint.roc now names https://example.test/roc-x86_64-linux.tar.gz, https://mirror.example.test/roc-x86_64-linux.tar.gz, the lock https://example.test/older.tar.gz; run blueprint update roc-stable",
 		"tool for x86_64-linux is not in Blueprint.lock; run blueprint update",
@@ -804,7 +814,7 @@ expect {
 # A digest that is not one is never handed to an executor to compare with.
 expect
 	["", "893c86d2", "sha256:${roc_sha}", roc_sha.replace_each("8", "G"), "${roc_sha}00"].all(
-		|sha256| planned(sample, Request.Run("script", []), "aarch64-darwin", unix, { ..locked, fetched: [{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256, size: 1, obtained: Computed }] }) == Err(["roc-stable for aarch64-darwin: Blueprint.lock holds no SHA-256 for it; run blueprint update roc-stable"]),
+		|sha256| planned(sample, Request.Run("script", []), "aarch64-darwin", unix, { ..locked, fetched: [{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256, size: 1, obtained: Computed, served: [], witness: "" }] }) == Err(["roc-stable for aarch64-darwin: Blueprint.lock holds no SHA-256 for it; run blueprint update roc-stable"]),
 	)
 
 # The request is refused whole before planning: an invalid project, a System
@@ -892,7 +902,7 @@ expect {
 		and names(fetching) == []
 		and names({ ..fetching, sources: [{ name: "channel", provider: { name: "guix", version: 1, ref: "https://example.test/guix.git" } }] }) == []
 		and names({ ..fetching, sources: sample.sources }) == ["nix"]
-		and names({ ..fetching, resolvers: [{ provider: "nix", inputs: ["roc"] }], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }) == ["nix"]
+		and names({ ..fetching, resolvers: [{ provider: "nix", inputs: ["roc"] }], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay" }] }) == ["nix"]
 		and names({ ..fetching, resolvers: [{ provider: "nix", inputs: ["assets"] }], build_sources: fetching.build_sources.append({ name: "assets", ref: "path:./assets" }) }) == ["nix"]
 		# A build in an environment with a Roc package makes its bundle a provider's.
 		and names({ ..fetching, resolvers: [{ provider: "nix", inputs: ["roc-abc"] }], builds: [{ name: "app", environment: "scripts", inputs: [], needs: [], run: ["true"], output: "out" }] }) == ["nix"]

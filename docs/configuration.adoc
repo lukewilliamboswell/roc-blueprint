@@ -44,11 +44,8 @@ complete file with the current URL.
 | `Packages(InputName, From(Provider))`
 | A package source and the set it is: `NixPackages(FlakeRef)` or `GuixPackages(Str)`. Every source is declared; none is implied, and a project that takes no tool from a package source declares none.
 
-| `Overlay(InputName, FlakeRef)`
-| Named overlay input; only environments selecting its name apply it.
-
 | `Input(InputName, FlakeRef)`
-| Other flake input; not a tool source or overlay.
+| A flake input the Nix resolver fetches: an overlay when an environment lists it in `Overlays`, otherwise a plain input for `Raw` data. It is not a tool source.
 
 | `Resolver(Str, List(InputName))`
 | Assigns sources, inputs and overlays that are not package sources to a provider. `Input`, `Overlay` and `Source` declarations, and the Roc bundle sources `RocPackages` adds (each named `roc-<bundle file name without .tar.zst>`, see <<roc-packages>>), belong to Nix without one; write `Resolver` only to assign one of them to another provider. Package sources already identify their provider; core `SourceFile` needs no resolver.
@@ -118,7 +115,7 @@ and `Expect` occur at most once each:
 | Programs the machine must already have on `PATH`; see <<expect-a-tool-on-the-machine>>.
 
 | `Overlays(List(InputName))`
-| Ordered selection of declared overlay names.
+| Ordered inputs applied to this environment's package set as overlays.
 
 | `Extend(EnvName)`
 | Inherit one environment's tools, overlays, commands, configured tools, Roc packages, programs and expected tools before appending this environment's selections.
@@ -442,8 +439,8 @@ and those options:
 
 [source,roc]
 ----
-Overlay("rust", "github:oxalica/rust-overlay"),
-Overlay("zig", "github:mitchellh/zig-overlay"),
+Input("rust", "github:oxalica/rust-overlay"),
+Input("zig", "github:mitchellh/zig-overlay"),
 Environment("host", [
 	Overlays(["rust", "zig"]),
 	Tools(["nix#zigpkgs.\"0.16.0\""]),
@@ -514,7 +511,7 @@ source: select the attribute, quoting a segment that contains dots.
 
 [source,roc]
 ----
-Overlay("zig", "github:mitchellh/zig-overlay"),
+Input("zig", "github:mitchellh/zig-overlay"),
 Environment("dev", [Overlays(["zig"]), Tools(["nix#zigpkgs.\"0.16.0\""])]),
 ----
 
@@ -566,7 +563,7 @@ its compiler from a Nix source, since the Nix executor does not support download
 ----
 Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 Executor("native", Nix("nix")),
-Overlay("roc", "github:roc-lang/roc-overlay/76fdbdc2c34adf35eea5fae1d991ca29591a1a7c"),
+Input("roc", "github:roc-lang/roc-overlay/76fdbdc2c34adf35eea5fae1d991ca29591a1a7c"),
 Environment("build-scripts", [
 	Overlays(["roc"]),
 	Command("roc-stable", "nix#rocpkgs.nightly-2026-10-18-1df370f"),

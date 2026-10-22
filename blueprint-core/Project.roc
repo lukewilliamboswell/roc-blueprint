@@ -80,9 +80,6 @@ Project :: [].{
 		Ok({})
 	}
 
-	valid_ref : Str -> Bool
-	valid_ref = |url| clean(url) and ["github:", "gitlab:", "sourcehut:", "flake:", "git+", "path:", "file:", "https://", "http://", "tarball+"].any(|prefix| url.starts_with(prefix) and !url.drop_prefix(prefix).is_empty())
-
 	## A download URL names its bytes by itself: `https://<host>/<path>`, with
 	## no credentials, query or fragment, and no empty, `.` or `..` segment.
 	## `http://127.0.0.1`, with or without a port, is one too: nothing leaves
@@ -298,8 +295,10 @@ Project :: [].{
 				return Err("DuplicateRocPackage: environment ${entry.environment}: ${entry.name}")
 			}
 		}
+		# A reference's grammar belongs to the resolver that owns it; the core
+		# asks only that it be text a reviewer can read.
 		for input in spec.inputs {
-			if !valid_ref(input.url) {
+			if !clean(input.url) or input.url.is_empty() {
 				return Err("invalid input reference: ${input.name}")
 			}
 		}
@@ -389,7 +388,7 @@ Project :: [].{
 				}
 			}
 			for overlay in resolved.overlays {
-				if !spec.inputs.any(|i| i.name == overlay and i.kind == Overlay) {
+				if !spec.inputs.any(|i| i.name == overlay) {
 					return Err("unknown overlay: ${overlay}")
 				}
 			}
@@ -998,9 +997,9 @@ fixture = |environments| Spec.{
 		{ name: "guix", provider: { name: "guix", version: 1, ref: "https://git.savannah.gnu.org/git/guix.git" } },
 	],
 	inputs: [
-		{ name: "first", url: "github:example/first", kind: Overlay },
-		{ name: "second", url: "github:example/second", kind: Overlay },
-		{ name: "data", url: "github:example/data", kind: Flake },
+		{ name: "first", url: "github:example/first" },
+		{ name: "second", url: "github:example/second" },
+		{ name: "data", url: "github:example/data" },
 	],
 	environments,
 	system_tools: [],
@@ -1052,7 +1051,9 @@ expect Project.validate(fixture([{ ..base, parents: ["dev"] }, child])).is_err()
 expect Project.validate(fixture([base, { ..child, parents: ["base", "base"] }])).is_err()
 expect Project.validate(fixture([{ ..base, tools: [{ source: "missing", name: "git" }] }])) == Err("unknown source: missing; Blueprint.roc declares nix, guix")
 expect Project.validate(fixture([{ ..base, overlays: ["missing"] }])) == Err("unknown overlay: missing")
-expect Project.validate(fixture([{ ..base, overlays: ["data"] }])) == Err("unknown overlay: data")
+# Any declared input may be applied as an overlay; the provider gives that meaning. An undeclared name cannot.
+expect Project.validate(fixture([{ ..base, overlays: ["data"] }])).is_ok()
+expect Project.validate(fixture([{ ..base, overlays: ["ghost"] }])) == Err("unknown overlay: ghost")
 expect Project.validate(fixture([{ ..base, tools: [{ source: "nix", name: "git#extra" }] }])).is_err()
 expect Project.validate(fixture([{ ..base, name: "bad/name" }])).is_err()
 
@@ -1567,7 +1568,7 @@ expect {
 	Project.validate({ ..spec, shells: [shell, shell] }) == Err("DuplicateShell: default") and
 		Project.validate({ ..spec, tasks: [task, task] }) == Err("DuplicateTask: check") and
 			Project.validate({ ..spec, sources: [{ name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }, { name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-24.05" } }] }) == Err("DuplicateSource: nix") and
-				Project.validate({ ..spec, inputs: [{ name: "tools", url: "github:example/tools", kind: Flake }, { name: "tools", url: "github:example/overlay", kind: Overlay }] }) == Err("DuplicateInput: tools")
+				Project.validate({ ..spec, inputs: [{ name: "tools", url: "github:example/tools" }, { name: "tools", url: "github:example/overlay" }] }) == Err("DuplicateInput: tools")
 }
 
 # Package sources, flake inputs and build sources share one input namespace.

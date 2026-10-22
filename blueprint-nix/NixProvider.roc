@@ -10,6 +10,7 @@ import core.Steps
 import core.Provider
 import core.Realise
 import core.JsonData
+import core.Activation
 import Locks
 import LockJson
 import Runner
@@ -27,6 +28,9 @@ NixProvider :: [].{
 		validate_source: validate_source,
 		validate_tool: |name| Native.check_tool(Nix, name),
 		validate_executor: Native.check_executor,
+		validate_reference: Native.check_ref,
+		activation_argv,
+		activation,
 		build_prepare_argv,
 		build_prepared,
 		build_execute_argv,
@@ -89,7 +93,7 @@ NixProvider :: [].{
 
 	validate_source : Spec.Provider -> Try({}, Str)
 	validate_source = |source| {
-		if !realises(source) or !Project.valid_ref(source.ref) {
+		if !realises(source) or Native.check_ref(source.ref).is_err() {
 			return Err("unsupported Nix source declaration version or reference")
 		}
 		Ok({})
@@ -699,8 +703,10 @@ NixProvider :: [].{
 						"    ${quote(source.name)}.url = ${quote(url)};\n",
 					)?
 				}
+				# An input some environment applies as an overlay enters only with
+				# such an environment; any other input is a plain flake input.
 				for input in spec.inputs.keep_if(
-					|i| i.kind == Flake
+					|i| !Locks.overlay_names(spec).contains(i.name)
 						or environments.any(|e| e.overlays.contains(i.name)),
 				) {
 					$declared = $declared.append({ name: input.name, kind: "flake" })
@@ -887,6 +893,43 @@ NixProvider :: [].{
 			|seen, name|
 				if (seen.contains(name)) seen else seen.append(name),
 		)
+	}
+
+	## What `nix develop` would export for a shell or task step, printed as
+	## data instead of entered: the same installable, the same read-only lock.
+	activation_argv : Steps.Step -> Try(List(Str), Str)
+	activation_argv = |step| {
+		match step.argv {
+			[program, "develop", .. as rest] => {
+				installable = rest.keep_if(|arg| arg.contains("#devShells.")).first().map_err(|_| "Nix shell plan names no dev shell")?
+				options = rest.keep_if(|arg| arg.starts_with("--no-"))
+				Ok([program, "print-dev-env", "--json"].concat(options).append(installable))
+			}
+			_ => Err("not a Nix shell plan")
+		}
+	}
+
+	## The exported variables of a dev shell. Nix lists every variable of
+	## the shell; only exported ones reach a caller, and PATH becomes search
+	## path entries. The store is read only, so nothing here is a secret.
+	activation : Str -> Try(Activation, Str)
+	activation = |text| {
+		data = JsonData.decode(text).map_err(|_| "Nix returned invalid dev shell JSON")?
+		variables = JsonData.object(JsonData.field(data, "variables").map_err(|_| "Nix dev shell JSON has no variables")?).map_err(|_| "Nix dev shell variables are invalid")?
+		var $path = []
+		var $exported = []
+		for variable in variables {
+			kind = JsonData.string(JsonData.field(variable.value, "type") ?? JsonData.String("")) ?? ""
+			if kind == "exported" {
+				value = JsonData.string(JsonData.field(variable.value, "value") ?? JsonData.String("")).map_err(|_| "Nix exported ${variable.name} as something other than text")?
+				if variable.name == "PATH" {
+					$path = value.split_on(":").keep_if(|entry| !entry.is_empty()).map(|entry| { directory: entry, origin: "nix" })
+				} else if Activation.valid_name(variable.name) and !["HOME", "TMPDIR", "TEMPDIR", "TMP", "TEMP", "SHLVL", "PWD", "OLDPWD", "NIX_BUILD_TOP"].contains(variable.name) {
+					$exported = $exported.append({ name: variable.name, value, origin: "nix" })
+				}
+			}
+		}
+		Ok(Activation.{ path: $path, variables: $exported })
 	}
 
 	## Native output is always decoded, including the human path.
@@ -1502,7 +1545,7 @@ expect NixProvider.render_environment(mk({ ..simple, sources: [{ name: "guix", p
 # shell out: what remains is what Nix has to lock, here an overlay. A build
 # is never left out: Nix cannot build it, and that is said.
 expect {
-	locking = mk({ ..simple, sources: [], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }], tasks: [{ name: "check", environment: "dev", run: ["true"] }] })
+	locking = mk({ ..simple, sources: [], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay" }], tasks: [{ name: "check", environment: "dev", run: ["true"] }] })
 	building = { ..locking, requires_: ["builds"], executors: [{ name: "native", provider: "nix", source: "" }], build_executors: [{ build: "app", executor: "native" }], builds: [{ name: "app", environment: "dev", inputs: [], needs: [], run: ["true"], output: "out" }] }
 	NixProvider.whole(locking) == [] and NixProvider.whole(mk(simple)) == ["dev"] and NixProvider.whole(building) == ["dev"]
 		and NixProvider.render(locking).map_ok(|text| text.contains("mkShell") or text.contains("\"default\"")) == Ok(False)
@@ -1537,7 +1580,7 @@ expect {
 	both = {
 		..simple,
 		sources: [stable, unstable],
-		inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }],
+		inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay" }],
 		environments: [{ ..alias_environment("dev", ["default", "stable"]), overlays: ["roc"] }],
 	}
 	only_named = {
@@ -1573,10 +1616,10 @@ expect {
 	}
 	as_overlay = {
 		..simple,
-		inputs: [{ name: "nixpkgs", url: "github:example/overlay", kind: Overlay }],
+		inputs: [{ name: "nixpkgs", url: "github:example/overlay" }],
 		environments: [{ ..base, overlays: ["nixpkgs"] }],
 	}
-	as_input = { ..simple, inputs: [{ name: "nixpkgs", url: "github:example/flake", kind: Flake }] }
+	as_input = { ..simple, inputs: [{ name: "nixpkgs", url: "github:example/flake" }] }
 	alias_lines(as_source) == Ok(["    \"nixpkgs\".url = \"github:NixOS/nixpkgs/nixos-24.05\";", "            \"nixpkgs\" = import inputs.\"nixpkgs\" { inherit system overlays; };", "            sets.\"nixpkgs\".\"git\""])
 		and alias_lines(as_overlay) == Ok(["    \"nixpkgs\".url = \"github:example/overlay\";", "          overlays = [ inputs.\"nixpkgs\".overlays.default ];"])
 		and alias_lines(as_input) == Ok(["    \"nixpkgs\".url = \"github:example/flake\";"])
@@ -1625,8 +1668,8 @@ expect {
 	stacked = {
 		..simple,
 		inputs: [
-			{ name: "base", url: "github:example/base", kind: Overlay },
-			{ name: "patch", url: "github:example/patch", kind: Overlay },
+			{ name: "base", url: "github:example/base" },
+			{ name: "patch", url: "github:example/patch" },
 		],
 		environments: [parent, child],
 	}
@@ -2395,8 +2438,8 @@ expect {
 	data = {
 		..TestData.data,
 		inputs: [
-			{ name: "first", url, kind: Overlay },
-			{ name: "second", url, kind: Overlay },
+			{ name: "first", url },
+			{ name: "second", url },
 		],
 		environments: [
 			{ ..TestData.builder, overlays: ["first", "second"] },
@@ -2413,8 +2456,8 @@ expect {
 			reordered = TestData.project({
 				..data,
 				inputs: [
-					{ name: "second", url, kind: Overlay },
-					{ name: "first", url, kind: Overlay },
+					{ name: "second", url },
+					{ name: "first", url },
 				],
 				environments: [
 					{ ..TestData.builder, name: "other" },
@@ -3355,7 +3398,7 @@ expect (NixProvider.provider.realises)({ name: "nix", version: 1, ref: "github:N
 expect {
 	project = TestData.project(TestData.data)
 	(NixProvider.provider.resolve)(project, "x86_64-linux", TestData.layout, All).map_ok(|resolution| resolution.present) == Ok([{ program: "nix", because: "Blueprint.roc declares the Nix source default, which Nix resolves" }])
-		and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }) == "Blueprint.roc declares the input roc, which Nix resolves"
+		and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay" }] }) == "Blueprint.roc declares the input roc, which Nix resolves"
 		and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [] }) == "Blueprint.roc declares the source assets, which Nix locks"
 }
 
@@ -3419,3 +3462,13 @@ expect {
 		and NixProvider.build_prepared("{\"version\":4,\"derivations\":{\"../captured.drv\":{\"outputs\":{\"out\":{\"path\":\"result\"}}}}}").is_err()
 		and NixProvider.build_prepared("{\"version\":4,\"derivations\":{\"captured.drv\":{\"outputs\":{\"out\":{\"path\":\"../result\"}}}}}").is_err()
 }
+
+# Entering an environment as data: the shell's installable is printed, not
+# entered, and only what Nix would export reaches the caller.
+expect {
+	step = { action: Shell("default"), argv: ["nix", "develop", "--no-update-lock-file", "--no-write-lock-file", "path:/p/.blueprint#devShells.x86_64-linux.default"], files: [], operations: [], artifacts: [] }
+	NixProvider.activation_argv(step) == Ok(["nix", "print-dev-env", "--json", "--no-update-lock-file", "--no-write-lock-file", "path:/p/.blueprint#devShells.x86_64-linux.default"])
+		and NixProvider.activation_argv({ ..step, argv: ["nix", "build", "x"] }).is_err()
+}
+expect NixProvider.activation("{\"variables\":{\"PATH\":{\"type\":\"exported\",\"value\":\"/nix/store/a-git/bin:/nix/store/b-zig/bin\"},\"NIX_CFLAGS\":{\"type\":\"exported\",\"value\":\"-O2\"},\"HOME\":{\"type\":\"exported\",\"value\":\"/homeless\"},\"local\":{\"type\":\"var\",\"value\":\"x\"},\"fn\":{\"type\":\"function\"}}}") == Ok({ path: [{ directory: "/nix/store/a-git/bin", origin: "nix" }, { directory: "/nix/store/b-zig/bin", origin: "nix" }], variables: [{ name: "NIX_CFLAGS", value: "-O2", origin: "nix" }] })
+expect NixProvider.activation("{}").is_err() and NixProvider.activation("not json").is_err()

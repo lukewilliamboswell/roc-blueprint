@@ -84,6 +84,18 @@ Native :: [].{
 		if (valid) Ok({}) else Err("invalid ${if (provider == Nix) "Nix" else "Guix"} tool: ${name}")
 	}
 
+	## A flake reference as the Nix resolver accepts it. The core keeps only
+	## the requirement that a reference be readable text.
+	check_ref : Str -> Try({}, Str)
+	check_ref = |url| {
+		prefixes = ["github:", "gitlab:", "sourcehut:", "flake:", "git+", "path:", "file:", "https://", "http://", "tarball+"]
+		if Project.clean(url) and prefixes.any(|prefix| url.starts_with(prefix) and !url.drop_prefix(prefix).is_empty()) {
+			Ok({})
+		} else {
+			Err("invalid Nix reference: ${url}")
+		}
+	}
+
 	## A Nix executor bootstraps its runner and sandbox from a declared Nix
 	## package source. Nothing else is accepted, and nothing is guessed.
 	check_executor : Spec.Executor -> Try({}, Str)
@@ -149,3 +161,5 @@ expect Native.check_tool(Guix, "g++@12.3:lib").is_ok()
 expect Native.check_executor({ name: "native", provider: "nix", source: "pkgs" }) == Ok({})
 expect Native.check_executor({ name: "native", provider: "nix", source: "" }).is_err()
 expect Native.check_executor({ name: "native", provider: "guix", source: "channel" }).is_err()
+expect Native.check_ref("github:NixOS/nixpkgs/nixos-unstable").is_ok() and Native.check_ref("path:./assets").is_ok()
+expect Native.check_ref("github:").is_err() and Native.check_ref("nixpkgs").is_err() and Native.check_ref("github:a b").is_err()

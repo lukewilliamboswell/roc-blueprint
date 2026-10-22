@@ -3,7 +3,7 @@
  (systems ("x86_64-linux"))
  (sources (((name "default")
    (provider ((name "nix") (version 1) (ref "github:NixOS/nixpkgs"))))))
- (inputs (((kind Flake) (name "extra") (url "github:a/b"))))
+ (inputs (( (name "extra") (url "github:a/b"))))
  (environments (((name "dev") (parents ()) (overlays ())
    (tools (((name "git") (source "default")))))))
  (shells (((name "default") (environment "dev"))))

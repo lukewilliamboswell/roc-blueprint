@@ -40,7 +40,7 @@ CliUpdateTest := [].{
 	local_inputs = [
 		{ kind: "build-source", wire: "${wire.replace_each("(requires (\"explicit-sources\"))", "(requires (\"explicit-sources\" \"sources\"))").drop_suffix(")")}(resolvers (((provider \"nix\") (inputs (\"assets\")))))(build_sources (((name \"assets\") (ref \"path:./outer/assets\")))))" },
 		{ kind: "package-source", wire: wire.replace_each("(provider ((name \"nix\") (ref \"github:NixOS/nixpkgs/nixos-unstable\") (version 1)))", "(provider ((name \"nix\") (ref \"path:./outer/assets\") (version 1)))") },
-		{ kind: "overlay", wire: "${wire.drop_suffix(")")}(resolvers (((provider \"nix\") (inputs (\"assets\")))))(inputs (((name \"assets\") (url \"path:./outer/assets\") (kind Overlay)))))" },
+		{ kind: "overlay", wire: "${wire.drop_suffix(")")}(resolvers (((provider \"nix\") (inputs (\"assets\")))))(inputs (((name \"assets\") (url \"path:./outer/assets\")))))" },
 	]
 
 	## `size` bytes that are not text, different for every seed: the authority

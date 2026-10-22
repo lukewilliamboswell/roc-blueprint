@@ -69,7 +69,7 @@ RocPackagesTest := [].{
 				"	Name(\"roc-packages\"),",
 				"	Systems([\"x86_64-linux\"]),",
 				"	Packages(\"nix\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),",
-				"	Overlay(\"roc\", \"${overlay}\"),",
+				"	Input(\"roc\", \"${overlay}\"),",
 				"	Environment(\"packages\", [RocPackages([${urls}])]),",
 				"	Environment(\"dev\", [Extend(\"packages\"), Overlays([\"roc\"]), Command(\"roc-stable\", \"nix#rocpkgs.${roc_tag}\")]),",
 				"	Environment(\"plain\", [Tools([\"nix#hello\"])]),",
@@ -481,4 +481,4 @@ expect leftover("blueprint-abc.x1y2z3.tmp") and leftover("abc.0123456789abcdef.t
 expect same_names(["a", "b"], ["b", "a"]) and !same_names(["a"], ["a", "b"])
 expect RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", ["https://e.test/a.tar.zst", "https://e.test/b.tar.zst"], WithBuild).contains("RocPackages([\"https://e.test/a.tar.zst\", \"https://e.test/b.tar.zst\"])")
 expect RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", [], WithBuild).contains("Build(\"offline\"") and !RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", [], TasksOnly).contains("Build(")
-expect RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", [], WithBuild).contains("Overlay(\"roc\", \"github:roc-lang/roc-overlay/pinned\")")
+expect RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", [], WithBuild).contains("Input(\"roc\", \"github:roc-lang/roc-overlay/pinned\")")
