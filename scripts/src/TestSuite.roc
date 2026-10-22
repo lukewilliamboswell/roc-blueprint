@@ -41,7 +41,7 @@ TestSuite := [].{
 				"	Systems([\"x86_64-linux\"]),",
 				"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
 				"	Environment(\"builder\", [Tools([\"default#coreutils\"])]),",
-				"	Executor(\"native\", \"nix\", \"default\"), Build(\"copy\", [Execute(\"native\"), Use(\"builder\"), Run([\"cp\", \"message.txt\", \"copied.txt\"]), Output(\"copied.txt\")]),",
+				"	Executor(\"native\", Nix(\"default\")), Build(\"copy\", [Execute(\"native\"), Use(\"builder\"), Run([\"cp\", \"message.txt\", \"copied.txt\"]), Output(\"copied.txt\")]),",
 				"]",
 				"",
 			],
@@ -220,6 +220,7 @@ static! = |context| {
 	for report in ["blueprint-core/LockSnapshot.roc", "blueprint-core/JsonData.roc", "blueprint-core/BuildModel.roc"] {
 		problem!(StaticChecks.core_report_contract_problem(read!(context, report)?))?
 	}
+	problem!(StaticChecks.native_grammar_problem(read!(context, "blueprint-nix/Native.roc")?, read!(context, "blueprint-platform/Lower.roc")?))?
 
 	step!("The CLI records a download of its compiler for every system it runs on")?
 	problem!(StaticChecks.bootstrap_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-cli/Bootstrap.roc")?))?

@@ -84,6 +84,19 @@ Native :: [].{
 		if (valid) Ok({}) else Err("invalid ${if (provider == Nix) "Nix" else "Guix"} tool: ${name}")
 	}
 
+	## A Nix executor bootstraps its runner and sandbox from a declared Nix
+	## package source. Nothing else is accepted, and nothing is guessed.
+	check_executor : Spec.Executor -> Try({}, Str)
+	check_executor = |executor| {
+		if executor.provider != "nix" {
+			return Err("executor ${executor.name} is not a Nix executor")
+		}
+		if executor.source.is_empty() {
+			return Err("Nix executor ${executor.name} requires a bootstrap package source; declare Executor(\"${executor.name}\", Nix(\"<packages>\"))")
+		}
+		Ok({})
+	}
+
 	## Check only the requested environment's normalized dependency closure.
 	## This models Guix shell capability without implementing a Guix executor.
 	check_environment : Spec, ProviderName, Str -> Try({}, Str)
@@ -133,3 +146,6 @@ expect Native.check_tool(Nix, "").is_err()
 expect Native.check_tool(Guix, "python@3.12:out").is_ok()
 expect Native.check_tool(Guix, "git::out").is_err()
 expect Native.check_tool(Guix, "g++@12.3:lib").is_ok()
+expect Native.check_executor({ name: "native", provider: "nix", source: "pkgs" }) == Ok({})
+expect Native.check_executor({ name: "native", provider: "nix", source: "" }).is_err()
+expect Native.check_executor({ name: "native", provider: "guix", source: "channel" }).is_err()

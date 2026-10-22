@@ -25,7 +25,7 @@ Config :: [].{
 		Systems(List(System)),
 		Packages(InputName, PackageSource),
 		Resolver(Str, List(InputName)),
-		Executor(InputName, Str, Str),
+		Executor(InputName, ExecutorProvider),
 		Input(InputName, FlakeRef),
 		Overlay(InputName, FlakeRef),
 		Environment(EnvName, List(EnvironmentSetting)),
@@ -82,6 +82,12 @@ Config :: [].{
 	## The declared package source and its provider.
 	PackageSource : [From(Provider)]
 	Provider : [NixPackages(FlakeRef), GuixPackages(Str), Adapter(ProviderSource)]
+
+	## A build executor carries its provider's own settings, as a package
+	## source does. `Nix` bootstraps the runner and sandbox from the named
+	## Nix package source; `Adapter(provider, source)` declares another
+	## provider's executor, whose bootstrap source may be "".
+	ExecutorProvider : [Nix(InputName), Adapter(Str, Str)]
 
 	## A tool is written `<source>#<name>` for a declared source, in Tools,
 	## ToolsFor, Command and ToolWith alike. Tools and Overlays occur at most

@@ -6,7 +6,6 @@ app [config] { pf: platform "../../blueprint-platform/main.roc" }
 import pf.Recipes
 
 config = [
-	Resolver("nix", ["utils", "roc"]),
 	Name("fixture"),
 	Systems(["x86_64-linux"]),
 	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),

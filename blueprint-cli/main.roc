@@ -337,7 +337,14 @@ check! = |loaded, ctx| {
 	native_command!(OsStr.from_str(roc!(ctx)?)).args(["check", "Blueprint.roc"].map(OsStr.from_str))
 		.cwd(path(ctx.layout.project_root)).exec!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
-	_ = rendered(loaded?)?
+	spec = loaded?
+	_ = rendered(spec)?
+	# A build whose executor this blueprint cannot drive is a configuration
+	# problem, said here rather than at the first `build`.
+	for executor in spec.executors {
+		adapter = providers.find_first(|candidate| candidate.name == executor.provider).map_err(|_| InvalidProject("executor ${executor.name} names provider ${executor.provider}, which this blueprint does not register"))?
+		(adapter.validate_executor)(executor).map_err(|message| InvalidProject(message))?
+	}
 	Stdout.line!("Blueprint.roc is valid")
 }
 
@@ -754,15 +761,7 @@ realise! = |spec, request, ctx| {
 	layout = ctx.layout
 	# What the Spec alone rules out is said before the authority is read.
 	Realise.preflight(spec, request, ctx.target, layout, providers).map_err(|problems| PlanFailed(problems))?
-	if !(path(layout.lock_path).exists!()?) {
-		return Err(LockFailed("missing authoritative lock; run `blueprint update`"))
-	}
-	safe_path!(layout.lock_path)?
-	if path(layout.lock_path).type!()? != IsFile {
-		return Err(UnsafePath(layout.lock_path))
-	}
-	lock = Lock.parse(path(layout.lock_path).read_utf8!()?)
-		.map_err(|_| LockFailed("unsupported Blueprint lock format; Blueprint 0.7 requires Lock 2"))?
+	lock = read_lock!(layout)?
 	lock.stale(spec).map_err(|message| LockFailed(message))?
 	# Everything that stops the request is known, and said together, before
 	# the first effect of any step.
@@ -1318,7 +1317,12 @@ report_build! = |plan, name, ctx| {
 			# Validate the public result consistently before advancing the baseline.
 			json_report = BuildReport.render_evidence(name, ctx.target, adapter.name, built, ctx.build_sources, snapshot).map_err(|message| RenderFailed(message))?
 			record = { schema_version: 1, snapshot, build_identity: built.build_identity, outputs: built.outputs }
-			save_build_record!(record, ctx)?
+			# The artifact exists whatever happens to the local record; a lost
+			# record only leaves `explain` without a baseline.
+			match save_build_record!(record, ctx) {
+				Ok({}) => {}
+				Err(problem) => Stderr.line!("warning: the local build record for ${name} was not saved, so `blueprint explain build ${name}` keeps its earlier baseline, if any: ${problem}")?
+			}
 			reported = if ctx.build_json {
 				json_report
 			} else {
@@ -1350,7 +1354,8 @@ inspect_build! = |spec, options, ctx| {
 		# Structural inspection needs no native execution preflight.
 		executor = Project.build_executor(validated, options.name).map_err(|message| RenderFailed(message))?
 		adapter = providers.find_first(|candidate| candidate.name == executor.provider).map_err(|_| RenderFailed("no build executor provider"))?
-		lock = Lock.parse(path(ctx.layout.lock_path).read_utf8!()?).map_err(|_| LockFailed("unsupported Blueprint.lock; Blueprint 0.7 requires Lock 2"))?
+		(adapter.validate_executor)(executor).map_err(|message| RenderFailed(message))?
+		lock = read_lock!(ctx.layout)?
 		lock.stale(spec).map_err(|message| LockFailed(message))?
 		# Inspect selected local pins independently of native host/layout limits.
 		locals = (adapter.build_local_inputs)(validated, options.name, ctx.layout, lock).map_err(|message| RenderFailed(message))?
@@ -1358,6 +1363,20 @@ inspect_build! = |spec, options, ctx| {
 		snapshot = build_snapshot!(validated, options.name, adapter, snapshot_pins(lock, ctx.target, adapter).map_err(|message| RenderFailed(message))?, ctx)?
 		render_build_inspection!(snapshot, { build_identity: "", outputs: [] }, False, options.explain, { ..ctx, build_json: options.json })
 	}
+}
+
+## The committed authority, or why it cannot be read: a request never
+## resolves pins itself, so a missing lock names the command that does.
+read_lock! : Layout => Try(Lock, _)
+read_lock! = |layout| {
+	if !(path(layout.lock_path).exists!()?) {
+		return Err(LockFailed("missing authoritative lock; run `blueprint update`"))
+	}
+	safe_path!(layout.lock_path)?
+	if path(layout.lock_path).type!()? != IsFile {
+		return Err(UnsafePath(layout.lock_path))
+	}
+	Lock.parse(path(layout.lock_path).read_utf8!()?).map_err(|_| LockFailed("unsupported Blueprint lock format; Blueprint 0.7 requires Lock 2"))
 }
 
 ## Verified fetched tools share the named content-evidence model, not provider hints.
@@ -1437,14 +1456,14 @@ selected_entries! = |root, prefix, selected, all, exclusions, layout| {
 build_record_path : BuildModel.Snapshot, Context -> Str
 build_record_path = |snapshot, ctx| "${ctx.layout.workspace}/build-records/${snapshot.system}/${snapshot.name}.scm"
 
-save_build_record! : BuildModel.Record, Context => Try({}, _)
+save_build_record! : BuildModel.Record, Context => Try({}, Str)
 save_build_record! = |record, ctx| {
-	text = BuildModel.render_record(record).map_err(|message| RenderFailed(message))?
+	text = BuildModel.render_record(record)?
 	file = build_record_path(record.snapshot, ctx)
-	safe_path!(file)?
-	path(Paths.parent(file)).create_all!()?
-	ignore_generated!(ctx.layout)?
-	atomic_write!(file, text)
+	safe_path!(file).map_err(|err| describe(err, ""))?
+	path(Paths.parent(file)).create_all!().map_err(|err| Str.inspect(err))?
+	ignore_generated!(ctx.layout).map_err(|err| Str.inspect(err))?
+	atomic_write!(file, text).map_err(|err| Str.inspect(err))
 }
 
 render_build_inspection! : BuildModel.Snapshot, Provider.PreparedBuild, Bool, Bool, Context => Try({}, _)
@@ -1490,7 +1509,8 @@ render_build_inspection! = |snapshot, prepared, exact, explain, ctx| {
 		Stdout.line!("supported guarantees: ${Str.join_with(adapter.build_guarantees, ", ")}")?
 		for node in snapshot.nodes {
 			Stdout.line!("  ${node.name}: ${Json.to_str(node.command)} [${node.environment}; executor ${node.executor}] -> ${node.output}")?
-			Stdout.line!("  ${node.name}: ${node.files.len().to_str()} selected entries; inputs ${Str.join_with(node.inputs.map(|input| input.name), ", ")}; needs ${Str.join_with(node.dependencies, ", ")}")?
+			listed = |names| if (names.is_empty()) "none" else Str.join_with(names, ", ")
+			Stdout.line!("  ${node.name}: ${node.files.len().to_str()} selected entries; inputs ${listed(node.inputs.map(|input| input.name))}; needs ${listed(node.dependencies)}")?
 		}
 		if exact {
 			Stdout.line!("build identity: ${prepared.build_identity}")?
@@ -2016,7 +2036,7 @@ expect match Lock.parse(lock_report_authority) {
 }
 
 # Updating another program, adding/removing tasks, and a future minor lock
-# encoding leave a selected source and its content content_identity unchanged.
+# encoding leave a selected source and its content identity unchanged.
 expect match Lock.parse(lock_report_authority) {
 	Ok(lock) => {
 		before = LockReport.render(lock, ["nixpkgs"], True, providers)

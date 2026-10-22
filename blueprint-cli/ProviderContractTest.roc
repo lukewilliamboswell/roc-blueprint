@@ -17,6 +17,7 @@ provider : Provider
 provider = Provider.{
 	validate_source: |_source| Ok({}),
 	validate_tool: |_name| Ok({}),
+	validate_executor: |executor| if (executor.source.is_empty()) Err("fixture executor requires a channel") else Ok({}),
 	name: "guix",
 	features: ["builds", "build-files"],
 	realises: |source| source.name == "guix" and source.version == 1,
@@ -139,7 +140,7 @@ expect {
 	result() == Ok(True)
 }
 
-# Unknown adapters retain authoritative content_identity without guessing its kind.
+# Unknown adapters retain their authoritative content identity without guessing its kind.
 expect {
 	result = || {
 		text = LockReport.render(locked?, ["channel"], True, [])?

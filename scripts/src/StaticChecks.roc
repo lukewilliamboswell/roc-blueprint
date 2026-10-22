@@ -49,6 +49,24 @@ StaticChecks := [].{
 		} else ""
 	}
 
+	## The platform validates native authoring grammar through
+	## blueprint-nix/Native.roc, and the release bundle copies that one file
+	## into the platform (scripts/src/Bundle.roc). That holds only while
+	## Native.roc needs nothing but core modules and Lower.roc takes nothing
+	## else from the nix package.
+	native_grammar_problem : Str, Str -> Str
+	native_grammar_problem = |native_source, lower_source| {
+		foreign = native_source.split_on("\n").keep_if(|line| line.starts_with("import ") and !line.starts_with("import core."))
+		other = lower_source.split_on("\n").keep_if(|line| line.starts_with("import nix.") and line != "import nix.Native")
+		if !foreign.is_empty() {
+			"blueprint-nix/Native.roc must import only core modules, because the platform bundle copies it: ${Str.join_with(foreign, ", ")}"
+		} else if !other.is_empty() {
+			"blueprint-platform/Lower.roc may take only Native from the nix package: ${Str.join_with(other, ", ")}"
+		} else {
+			""
+		}
+	}
+
 	## Exported report codecs stay in the pure core package; no adapter or IO.
 	core_report_contract_problem : Str -> Str
 	core_report_contract_problem = |source| {
@@ -320,3 +338,7 @@ expect !StaticChecks.lock_inspector_contract_problem("import Store\n").is_empty(
 expect StaticChecks.core_report_contract_problem("import Lock\nimport JsonData\n") == ""
 expect !StaticChecks.core_report_contract_problem("import nix.NixProvider\n").is_empty()
 expect !StaticChecks.core_report_contract_problem("import pf.Path\n").is_empty()
+
+expect StaticChecks.native_grammar_problem("import core.Spec\nimport core.Project\n", "import Config\nimport nix.Native\n") == ""
+expect StaticChecks.native_grammar_problem("import core.Spec\nimport Locks\n", "import nix.Native\n").contains("import Locks")
+expect StaticChecks.native_grammar_problem("import core.Spec\n", "import nix.Native\nimport nix.NixProvider\n").contains("import nix.NixProvider")

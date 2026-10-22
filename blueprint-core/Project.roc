@@ -945,7 +945,7 @@ Project :: [].{
 		}
 		for input in declared {
 			if !$owned.contains(input) {
-				return Err("input has no resolver owner: ${input}; declare Resolver")
+				return Err("input ${input} has no resolver owner; declare Resolver(provider, [\"${input}\"])")
 			}
 		}
 		var $builds = []

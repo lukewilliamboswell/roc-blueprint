@@ -26,6 +26,7 @@ NixProvider :: [].{
 	provider = Provider.{
 		validate_source: validate_source,
 		validate_tool: |name| Native.check_tool(Nix, name),
+		validate_executor: Native.check_executor,
 		build_prepare_argv,
 		build_prepared,
 		build_execute_argv,
@@ -294,9 +295,7 @@ NixProvider :: [].{
 				}
 				for selected in $builds {
 					executor = Project.build_executor(project, selected.name)?
-					if executor.provider != "nix" or executor.source.is_empty() {
-						return Err("Nix build ${selected.name} requires an explicit Nix executor bootstrap source")
-					}
+					Native.check_executor(executor).map_err(|problem| "Nix build ${selected.name}: ${problem}")?
 					use = Project.environment_use(project, selected.environment, target)?
 					if !(use.programs.is_empty() and use.unavailable.is_empty() and use.expects.is_empty()) {
 						return Err("Nix build ${selected.name} does not support downloaded or expected tools")

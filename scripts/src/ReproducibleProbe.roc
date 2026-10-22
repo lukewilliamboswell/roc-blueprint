@@ -69,12 +69,12 @@ probe! = |suite, variant, output| {
 	Path.create_dir!(Path.utf8(project))?
 	place = BuildHarness.layout(project)
 	platform_path = BuildHarness.relative(project, "${suite.root}/blueprint-platform/main.roc")
-	config = "app [config] { pf: platform \"${platform_path}\" }\nconfig = [Name(\"two-host-producer\"), Systems([\"x86_64-linux\"]), Packages(\"nix\", From(NixPackages(\"${suite.pins.nixpkgs.ref}\"))), Environment(\"producer\", [Tools([\"nix#coreutils\"])]), Executor(\"native\", \"nix\", \"nix\"), Build(\"copy\", [Execute(\"native\"), Use(\"producer\"), Files([\"input.txt\"]), Run([\"cp\", \"input.txt\", \"output\"]), Output(\"output\")])]\n"
+	config = "app [config] { pf: platform \"${platform_path}\" }\nconfig = [Name(\"two-host-producer\"), Systems([\"x86_64-linux\"]), Packages(\"nix\", From(NixPackages(\"${suite.pins.nixpkgs.ref}\"))), Environment(\"producer\", [Tools([\"nix#coreutils\"])]), Executor(\"native\", Nix(\"nix\")), Build(\"copy\", [Execute(\"native\"), Use(\"producer\"), Files([\"input.txt\"]), Run([\"cp\", \"input.txt\", \"output\"]), Output(\"output\")])]\n"
 	Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), config)?
 	Path.write_utf8!(Path.utf8("${project}/input.txt"), "same producer bytes on both independent hosts\n")?
 	_ = BuildHarness.ok!(online, place, ["update"])?
 	# The public lock projection supplies both Nix's SRI hash and the neutral
-	# content content_identity; no test-specific conversion or native lock parser.
+	# content identity; no test-specific conversion or native lock parser.
 	locked : { format : U64, sources : { nix : { content_identity : Str, ref : Str, metadata : { nix : { fetchTree : { narHash : Str, rev : Str } } } } } }
 	locked = Json.parse(BuildHarness.ok!(online, place, ["lock", "show", "--json", "nix"])?.out)?
 	BuildHarness.require!(locked.format == 2 and locked.sources.nix.metadata.nix.fetchTree.narHash == suite.pins.nixpkgs.nar_hash and locked.sources.nix.ref == suite.pins.nixpkgs.ref, "probe lock projection differs from committed package pin")?

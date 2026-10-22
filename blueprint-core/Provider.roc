@@ -30,6 +30,11 @@ Provider := {
 	validate_source : Spec.Provider -> Try({}, Str),
 	validate_tool : Str -> Try({}, Str),
 
+	## An executor declaration this provider owns. Its settings must be
+	## usable by this provider; `check` and planning refuse one that is not,
+	## before any effect.
+	validate_executor : Spec.Executor -> Try({}, Str),
+
 	## Inspect: the files this provider would generate for the whole Spec.
 	render : Spec -> Try(List(File), Str),
 

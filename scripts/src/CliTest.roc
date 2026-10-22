@@ -392,7 +392,7 @@ cases! = |bench| {
 	foreign = Str.join_with(
 		[
 			"	Packages(\"foreign\", From(GuixPackages(\"current\"))),",
-			"	Resolver(\"nix\", [\"foreign-overlay\"]), Overlay(\"foreign-overlay\", \"github:example/unused-overlay\"),",
+			"	Overlay(\"foreign-overlay\", \"github:example/unused-overlay\"),",
 			"	Environment(\"foreign\", [Tools([\"foreign#python@3.12:out\"]), Overlays([\"foreign-overlay\"])]),",
 			"",
 		],
@@ -419,7 +419,7 @@ cases! = |bench| {
 	stale = isolated!(test, "stale-intent")?
 	settings!(test, stale, CliTest.valid)?
 	update!(test, stale)?
-	settings!(test, stale, "${CliTest.valid}	Resolver(\"nix\", [\"utils\"]), Input(\"utils\", \"github:numtide/flake-utils\"),\n")?
+	settings!(test, stale, "${CliTest.valid}	Input(\"utils\", \"github:numtide/flake-utils\"),\n")?
 	CliHarness.contains!(run!(test, stale, ["run", "echo-args"], 1, [])?, "changed its inputs, resolver ownership since the lock was resolved", "run echo-args with a stale lock")?
 	CliHarness.same_calls!(CliHarness.calls!("${stale}/nix-calls")?, [], "the provider ran with a stale lock")?
 	Script.pass!("a lock resolved for other inputs is refused, naming them, before the provider runs")?
@@ -434,7 +434,7 @@ cases! = |bench| {
 	]
 	for case in collisions {
 		cwd = isolated!(test, "collision-${case.name}")?
-		settings!(test, cwd, "${CliTest.valid}	Executor(\"native\", \"nix\", \"default\"), Build(\"app\", [Execute(\"native\"), Use(\"ci\"), Run([\"true\"]), Output(\"result\")]),\n")?
+		settings!(test, cwd, "${CliTest.valid}	Executor(\"native\", Nix(\"default\")), Build(\"app\", [Execute(\"native\"), Use(\"ci\"), Run([\"true\"]), Output(\"result\")]),\n")?
 		generated = "${cwd}/generated"
 		output = run!(test, cwd, case.command, 1, [("BLUEPRINT_GENERATED_ROOT", generated), ("BLUEPRINT_WORKSPACE", "${generated}/${case.workspace}")])?
 		CliHarness.contains!(output, "must not overlap", "blueprint ${case.name} with its workspace at ${case.workspace}")?

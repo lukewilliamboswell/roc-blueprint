@@ -302,13 +302,13 @@ settings_module = |name, settings|
 	"import pf.Config\n${name} :: [].{\n\tsettings : List(Config.Setting)\n\tsettings = [${settings}]\n}\n"
 
 build_base =
-	\\Name("builds"), Executor("native", "fixture", ""), Resolver("fixture", ["assets"]), Environment("builder", []), Source("assets", "path:./assets")
+	\\Name("builds"), Executor("native", Adapter("fixture", "")), Resolver("fixture", ["assets"]), Environment("builder", []), Source("assets", "path:./assets")
 
 build_settings =
 	\\Build("app", [Execute("native"), Use("builder"), Inputs(["assets"]), Needs(["library"]), Run(["python3", "build.py", "", "two words", "$HOME"]), Output("dist/app")]), Build("library", [Execute("native"), Use("builder"), Run(["python3", "library.py"]), Output("dist/library")])
 
 workflow_base =
-	\\Name("workflows"), Executor("native", "fixture", ""), Environment("dev", []), Task("check.all", [Use("dev"), Run(["true"])]), Build("app", [Execute("native"), Use("dev"), Run(["true"]), Output("out")])
+	\\Name("workflows"), Executor("native", Adapter("fixture", "")), Environment("dev", []), Task("check.all", [Use("dev"), Run(["true"])]), Build("app", [Execute("native"), Use("dev"), Run(["true"]), Output("out")])
 
 ## Typed workflow references keep argv and repeated task and build steps.
 workflow_steps =
@@ -340,12 +340,12 @@ valid_fixtures = [
 	),
 	valid(
 		"Commands",
-		\\[Name("commands"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Resolver("nix", ["roc"]), Overlay("roc", "github:roc-lang/roc-overlay"), Environment("base", [Command("vcs", "nix#git"), Command("py", "nix#python3")]), Environment("dev", [Extend("base"), Overlays(["roc"]), Command("py", "nix#python312"), Command("roc-stable", "nix#rocpkgs.nightly")]), Shell("default", [Use("dev")])]
+		\\[Name("commands"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Overlay("roc", "github:roc-lang/roc-overlay"), Environment("base", [Command("vcs", "nix#git"), Command("py", "nix#python3")]), Environment("dev", [Extend("base"), Overlays(["roc"]), Command("py", "nix#python312"), Command("roc-stable", "nix#rocpkgs.nightly")]), Shell("default", [Use("dev")])]
 		,
 	),
 	valid(
 		"ConfiguredTools",
-		\\[Name("configured"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Resolver("nix", ["rust"]), Overlay("rust", "github:oxalica/rust-overlay"), Environment("base", [Overlays(["rust"]), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("x86_64-unknown-linux-musl")]))])]), Environment("dev", [Extend("base"), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("aarch64-unknown-linux-musl")])), ("extensions", List([Str("rust-src")]))])]), Shell("default", [Use("dev")])]
+		\\[Name("configured"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Overlay("rust", "github:oxalica/rust-overlay"), Environment("base", [Overlays(["rust"]), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("x86_64-unknown-linux-musl")]))])]), Environment("dev", [Extend("base"), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("aarch64-unknown-linux-musl")])), ("extensions", List([Str("rust-src")]))])]), Shell("default", [Use("dev")])]
 		,
 	),
 	valid(
@@ -605,7 +605,7 @@ core_fixtures = [
 	rejected(
 		"BuildCycle",
 		"build cycle",
-		\\[Name("bad"), Executor("native", "fixture", ""), Environment("builder", []), Build("app", [Execute("native"), Use("builder"), Needs(["library"]), Run(["true"]), Output("out")]), Build("library", [Execute("native"), Use("builder"), Needs(["app"]), Run(["true"]), Output("out")])]
+		\\[Name("bad"), Executor("native", Adapter("fixture", "")), Environment("builder", []), Build("app", [Execute("native"), Use("builder"), Needs(["library"]), Run(["true"]), Output("out")]), Build("library", [Execute("native"), Use("builder"), Needs(["app"]), Run(["true"]), Output("out")])]
 		,
 	),
 	rejected("WorkflowNul", "NUL in argv", "[${workflow_base}, Workflow(\"ci\", [RunTask(\"check.all\", [Str.from_utf8([0]) ?? \"\"])])]"),
@@ -616,7 +616,7 @@ core_fixtures = [
 ## `count` builds, each needing the one before it.
 build_chain : U64 -> Str
 build_chain = |count| {
-	var $items = ["Name(\"deep\")", "Environment(\"builder\", [])", "Executor(\"native\", \"fixture\", \"\")"]
+	var $items = ["Name(\"deep\")", "Environment(\"builder\", [])", "Executor(\"native\", Adapter(\"fixture\", \"\"))"]
 	var $index = 0
 	while $index < count {
 		needs = if $index == 0 "" else "Needs([\"b${($index - 1).to_str()}\"]), "
@@ -685,7 +685,7 @@ expect ConfigTest.problem(rejected("A", "MissingName", ""), { ..crashed("compile
 expect ConfigTest.problem(bad_quote("A", "is not a system", ""), crashed("invalid string: \"linux\" is not a system")) == ""
 expect ConfigTest.problem(bad_quote("A", "is not a system", ""), crashed("\"linux\" is not a system")) == "expected checked-name rejection for A, got exit 1"
 
-expect build_chain(2) == "[Name(\"deep\"), Environment(\"builder\", []), Executor(\"native\", \"fixture\", \"\"), Build(\"b0\", [Execute(\"native\"), Use(\"builder\"), Run([\"true\"]), Output(\"out\")]), Build(\"b1\", [Execute(\"native\"), Use(\"builder\"), Needs([\"b0\"]), Run([\"true\"]), Output(\"out\")])]"
+expect build_chain(2) == "[Name(\"deep\"), Environment(\"builder\", []), Executor(\"native\", Adapter(\"fixture\", \"\")), Build(\"b0\", [Execute(\"native\"), Use(\"builder\"), Run([\"true\"]), Output(\"out\")]), Build(\"b1\", [Execute(\"native\"), Use(\"builder\"), Needs([\"b0\"]), Run([\"true\"]), Output(\"out\")])]"
 expect doubling_workflows(2).ends_with("Workflow(\"w0\", [RunTask(\"check\", [])]), Workflow(\"w1\", [RunWorkflow(\"w0\"), RunWorkflow(\"w0\")])]")
 
 expect missing_marker("Builds", "(builds (a))", ["(builds "]) == Err(NoneMissing)

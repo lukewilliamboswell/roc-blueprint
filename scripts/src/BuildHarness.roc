@@ -125,7 +125,6 @@ BuildHarness := [].{
 		("PACKAGES", pins.nixpkgs.ref),
 		("ROC_OVERLAY", pins.overlay.ref),
 		("ROC_COMPILER", pins.compiler),
-		("ROC_SOURCE_NAMES", Str.join_with(pins.bundles.map(|bundle| "\"roc-${(bundle.ref.split_on("/").last() ?? "").drop_suffix(".tar.zst")}\""), ", ")),
 		("ROC_PACKAGES", Str.join_with(pins.bundles.map(|bundle| "\"${bundle.ref}\""), ", ")),
 	]
 

@@ -223,6 +223,9 @@ Realise :: [].{
 		for source in project.sources.keep_if(|entry| entry.provider.name == provider.name) {
 			_ = (provider.validate_source)(source.provider).map_err(|problem| [problem])?
 		}
+		for executor in project.executors.keep_if(|entry| entry.provider == provider.name) {
+			_ = (provider.validate_executor)(executor).map_err(|problem| [problem])?
+		}
 		for tool in project.environments.fold([], |tools, environment| tools.concat(environment.tools)).concat(project.system_tools.fold([], |tools, entry| tools.concat(entry.tools))).concat(project.commands.map(|entry| entry.tool)).concat(project.configured_tools.map(|entry| entry.tool)) {
 			if project.sources.any(|source| source.name == tool.source and source.provider.name == provider.name) {
 				_ = (provider.validate_tool)(tool.name).map_err(|problem| [problem])?
@@ -493,6 +496,7 @@ stub : Provider
 stub = Provider.{
 	validate_source: |_source| Ok({}),
 	validate_tool: |_name| Ok({}),
+	validate_executor: |_executor| Ok({}),
 	name: "nix",
 	features: [],
 	realises: |source| source.name == "nix" and source.version == 1,
@@ -975,4 +979,12 @@ expect {
 		},
 	}
 	Realise.plan(project, Request.Run("compile", []), "x86_64-linux", unix, locked, [stub, adapter]).map_ok(|steps| steps.steps.map(|step| step.argv)) == Ok([["fixture-env", "exec"]]) and Realise.preflight({ ..project, environments: [{ ..project.environments.first()?, tools: [{ source: "channel", name: "unsupported" }] }] }, Request.Run("compile", []), "x86_64-linux", unix, [adapter]) == Err(["fixture tools require a channel"])
+}
+
+# An executor's settings are validated by the provider that owns it, before
+# any effect, so a build that could never execute is refused at planning.
+expect {
+	project = { ..Spec.empty("checked"), systems: ["x86_64-linux"], requires_: ["builds"], environments: [{ name: "empty", parents: [], tools: [], overlays: [] }], executors: [{ name: "native", provider: "fixture", source: "" }], build_executors: [{ build: "artifact", executor: "native" }], builds: [{ name: "artifact", environment: "empty", inputs: [], needs: [], run: ["produce"], output: "out" }] }
+	strict = { ..stub, name: "fixture", preflight: |_spec, _request, _system, _layout| Ok({}), validate_executor: |executor| if (executor.source.is_empty()) Err("fixture executor ${executor.name} needs a bootstrap source") else Ok({}) }
+	Realise.preflight(project, Request.Build("artifact"), "x86_64-linux", unix, [strict]) == Err(["fixture executor native needs a bootstrap source"])
 }

@@ -5,8 +5,7 @@ app [config] {
 }
 
 config = [
-	Resolver("nix", ["roc", "remote", @ROC_SOURCE_NAMES@]),
-	Executor("native", "nix", "default"),
+	Executor("native", Nix("default")),
 	Name("remote-source-policy"),
 	Systems(["x86_64-linux"]),
 	Packages("default", From(NixPackages("@PACKAGES@"))),

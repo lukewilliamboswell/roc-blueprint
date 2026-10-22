@@ -58,6 +58,7 @@ provider : List(Provider.LockedSource) -> Provider
 provider = |pins| Provider.{
 	validate_source: |_source| Ok({}),
 	validate_tool: |_name| Ok({}),
+	validate_executor: |_executor| Ok({}),
 	name: "guix",
 	features: [],
 	realises: |_source| False,
