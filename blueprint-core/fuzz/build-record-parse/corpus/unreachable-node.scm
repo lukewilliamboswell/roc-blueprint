@@ -1,0 +1,46 @@
+(
+	(build_identity "native:build")
+	(outputs ((
+		(name "out")
+		(path "/output"))))
+	(schema_version 1)
+	(snapshot (
+		(name "app")
+		(nodes ((
+			(command ("compile"))
+			(declarations "compile")
+			(dependencies ())
+			(environment "dev")
+			(executor "native")
+			(files ((
+				(digest "a")
+				(path "lib.c"))))
+			(inputs ((
+				(content_identity "v1")
+				(name "compiler")
+				(provider "example"))))
+			(name "lib")
+			(output "lib")
+			(selected_files true)) (
+			(command ("link"))
+			(declarations "link")
+			(dependencies ("lib"))
+			(environment "dev")
+			(executor "native")
+			(files ())
+			(inputs ())
+			(name "app")
+			(output "app")
+			(selected_files false)) (
+			(command ("true"))
+			(declarations "true")
+			(dependencies ())
+			(environment "dev")
+			(executor "native")
+			(files ())
+			(inputs ())
+			(name "orphan")
+			(output "orphan")
+			(selected_files false))))
+		(provider "example")
+		(system "linux"))))

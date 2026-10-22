@@ -18,17 +18,19 @@ blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation
   Sbom.roc               pure SBOM inventory; writes SPDX 3.0.1, SPDX 2.3 and CycloneDX 1.7, reads SPDX 3.0.1, 2.3 and 2.2 and its own CycloneDX
   Spdx3.roc, Spdx2.roc   the SPDX 3.0.1 and 2.x rules, held to the schemas pinned in tests/sbom/schema/
   CycloneDx.roc          the CycloneDX 1.7 rules, held to the schema pinned in tests/sbom/schema/
-  fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip, lock-parse,
-                         lock-snapshot-parse, lock-snapshot-round-trip, lock-snapshot-project,
-                         sbom-render, sbom-read
+  fuzz/                  roc-fuzz targets: spec-parse, spec-round-trip, project-validate,
+                         lock-parse, lock-snapshot-parse, lock-snapshot-round-trip,
+                         lock-snapshot-project, sbom-render, sbom-read, build-record-parse,
+                         build-model-compare, nix-native-decode, nix-lock-decode
 blueprint-nix/           importable pure Nix provider (depends only on blueprint-core)
   NixProvider.roc        shared pure request planning and flake rendering
   Locks.roc              Nix pins <-> the Lock: Sources plus a "nix" hint
   tests/                 Spec fixtures and golden flakes
 blueprint-cli/           the blueprint CLI (basic-cli + weaver), which executes provider plans
   Store.roc, Download.roc  the per-user store of downloads and the HTTPS client that fills it
+  StoreRecord.roc        the record the store keeps beside a tree, read and written without effects
   Bootstrap.roc          identity of the compiler archive embedded in each CLI
-  compilers.roc          the same metadata as a package for build tooling
+  compilers.roc          Bootstrap and StoreRecord as a package for build tooling and tests
   Published.roc          what a release publishes as the digest of an asset, asked by update
 fixtures/consumer/       independent consumer of the Spec and Nix packages
 fixtures/overlays/       overlay flakes for scripts/test_scenarios.roc
@@ -343,6 +345,40 @@ without one of them does not.
 Normal execution tests explicitly initialize authority with `update` first.
 The complete artifacts example is executed in a temporary copy by
 the workflow suite (`scripts/test_workflows.roc`).
+
+[#keep-fuzz-coverage-with-the-code]
+=== Keep fuzz coverage with the code
+
+Every reader of bytes that Blueprint did not write in the same process has a
+fuzz target in `blueprint-core/fuzz/`: committed authority (the Spec:
+`spec-parse`, `spec-round-trip` and `project-validate`; the Lock:
+`lock-parse`), reports it reads back (the lock snapshot: `lock-snapshot-parse`,
+`lock-snapshot-round-trip` and `lock-snapshot-project`; SBOMs: `sbom-read` and
+`sbom-render`), native tool output a provider decodes (Nix derivation, build
+and dev-shell JSON: `nix-native-decode`; the native lock graph and the Nix
+pins in the Lock: `nix-lock-decode`) and local records (build records:
+`build-record-parse` and `build-model-compare`).
+
+* A reader has a mutation target with a seeded corpus and a dictionary. A
+  value with a generator also has a generation target for its round-trip and
+  idempotence properties.
+* A pull request that adds or changes such a reader adds or extends its
+  target in the same change. The `static` group keeps the target matrix of
+  `.github/workflows/fuzz.yml` equal to the directories of
+  `blueprint-core/fuzz/`, so CI cannot forget a new target. Reviewers ask of
+  every new parser what reads it, and which target covers it.
+* A corpus holds one valid document per schema version, one seed per refusal
+  the parser names, and every crashing input ever found, committed under
+  `corpus/` with a name that says what it found. The replay on every commit
+  then guards it for good.
+* CI replays the corpora on every commit, which takes seconds. The weekly
+  workflow fuzzes each target for 300 seconds in parallel jobs and keeps what
+  it finds in the Actions cache, so each week starts where the last ended.
+  `scripts/fuzz.roc SECONDS [TARGET...]` runs a longer campaign on request.
+  The weekly budget is set in `fuzz.yml`, and changing it is a deliberate
+  decision recorded there.
+* Only pure code is fuzzable: a reader that lives in the CLI app moves to a
+  pure module in `blueprint-core` or an adapter before it can have a target.
 
 == The job with no Nix
 
