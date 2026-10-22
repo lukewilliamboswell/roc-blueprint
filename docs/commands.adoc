@@ -18,6 +18,9 @@ only a committed lock, and works even when `Blueprint.roc` is absent or invalid.
 | `blueprint run TASK [-- ARGS...]`
 | Run the task's argv in its environment, with the extra arguments appended
 
+| `blueprint env NAME [--json \| --github-path \| --github-env]`
+| Print what entering the shell `NAME` exports, as shell lines to `eval`, a JSON report, or the lines a GitHub Actions step appends; nothing is entered
+
 | `blueprint build NAME`
 | Prepare and obtain an artifact plus declared dependencies through its selected executor; print its output path
 
@@ -83,6 +86,31 @@ When a project fetches the same nightly with `Recipes.roc_nightly`, it can
 reuse the compiler archive Blueprint installed in its store. Matching tags
 does not make an independently installed `roc-stable`, such as a Nix package,
 reuse Blueprint's cached executable.
+
+== Use an environment from another program
+
+`blueprint env NAME` describes the shell `NAME` as data instead of entering
+it: the directory of fetched programs the core puts first on `PATH`, and what
+the provider's shell would export, obtained by asking the provider for its
+shell as data (Nix answers with `nix print-dev-env`). Nothing runs in the
+environment. The directory of programs is kept at
+`.blueprint/env/NAME/bin`, rebuilt on every call, so what was printed stays
+valid until the next `blueprint update`.
+
+[source,sh]
+----
+eval "$(blueprint env dev)"              # this shell
+blueprint env dev --github-path >> "$GITHUB_PATH"
+blueprint env dev --github-env >> "$GITHUB_ENV"
+blueprint env dev --json                 # for an editor or agent
+----
+
+The shell rendering single-quotes every value and prepends to the caller's
+own `PATH`. The JSON report has `format` `1`, `path` entries `{ directory,
+origin }` first on the search path first, and `variables` `{ name, value,
+origin }`; `origin` names what supplies each, such as `blueprint` for fetched
+programs or `nix`. A provider's shell variables that describe its own process,
+such as `HOME` and `PWD`, are not exported.
 
 == What a run does, in order
 
@@ -287,7 +315,7 @@ check `format`, accept extra fields and treat ordering as insignificant.
 | For a remote Nix tree source, the exact locked fetch attributes, with string `type`, `owner`/`repo` or `url`, optional `rev` and numeric `lastModified`, `narHash`, and any applicable locked fetch flags or host metadata. No registry resolution or defaults are inserted. The flake-only `dir` selection is omitted because it is not a `builtins.fetchTree` argument. It is omitted for local paths; other providers define their own metadata. Local paths require a project location and Blueprint's tree verification.
 
 | `fetched`
-| Array of program entries. Each has string `name`, `system`, `sha256`, `content_identity`, array of string `urls`, integer `size` (download bytes), and string `obtained` (`computed`, `published`, `both`, or `unstated`). `content_identity` is `sha256:` followed by the download hash. URL or provenance changes do not change byte identity.
+| Array of program entries. Each has string `name`, `system`, `sha256`, `content_identity`, array of string `urls`, integer `size` (download bytes), string `obtained` (`computed`, `published`, `both`, or `unstated`), array of string `served` and string `witness`. `served` lists the hosts that served the bytes `blueprint update` hashed, after any redirect, sorted; it is empty when nothing was downloaded, as for a digest that was only published. `witness` is the address a published digest was read from, such as the GitHub releases API address of the release, and is empty when the digest was only computed. `content_identity` is `sha256:` followed by the download hash. URL or provenance changes do not change byte identity.
 |===
 
 An external producer can save a named pin without parsing Blueprint's lock:
@@ -404,17 +432,23 @@ that is answered downloads it for this machine alone.
 
 === New download hosts
 
-After writing the lock, `blueprint update` prints every download host the new
-lock names and the lock before it did not, one to a line:
+For each download it hashed, the lock records the hosts that served the
+bytes, after any redirect, beside the URLs `Blueprint.roc` declares. Before
+it writes the lock, `blueprint update` prints every download host the new
+lock names and the lock before it did not, one to a line, and says whether a
+URL in `Blueprint.roc` declares it or a redirect led there:
 
 [source]
 ----
-Blueprint.lock now names download hosts it did not name before:
-  github.com
+Blueprint.lock will name download hosts it did not name before:
+  github.com, declared in Blueprint.roc
+  release-assets.githubusercontent.com, reached by a redirect
 ----
 
 It prints nothing when there is none. A new host in a lock update is worth a
-reviewer's look.
+reviewer's look, and one reached by a redirect is named by no line of
+`Blueprint.roc`. The list comes before the lock is written, so an update that
+then fails to write it has still said what it would have named.
 
 == Environment variables
 

@@ -59,6 +59,9 @@ provider = |pins| Provider.{
 	validate_source: |_source| Ok({}),
 	validate_tool: |_name| Ok({}),
 	validate_executor: |_executor| Ok({}),
+	validate_reference: |_reference| Ok({}),
+	activation_argv: |_step| Err("not entered here"),
+	activation: |_text| Err("not entered here"),
 	name: "guix",
 	features: [],
 	realises: |_source| False,
@@ -161,7 +164,7 @@ fetched = Fuzz.map(
 			2 => Both
 			_ => Unstated
 		}
-		{ name: nonblank(r.name), system: nonblank(r.system), urls, sha256: hex_of(r.hash), size: r.size, obtained }
+		{ name: nonblank(r.name), system: nonblank(r.system), urls, sha256: hex_of(r.hash), size: r.size, obtained, served: [], witness: "" }
 	},
 )
 

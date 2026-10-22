@@ -29,7 +29,7 @@ import StubTool
 ##   nix         record; `flake update [INPUT...]` writes a `flake.lock` from `STUB_NIX_FIXTURE`
 ##               as `STUB_NIX_MODE` says (`declared` or `local`, the latter with
 ##               `STUB_NIX_REV`), after waiting at `STUB_NIX_PAUSE` if set;
-##               `derivation show` returns a static prepared recipe; `build` returns native JSON for that recipe; `develop` exits 23 if `STUB_NIX_FAIL`,
+##               `derivation show` returns a static prepared recipe; `build` returns native JSON for that recipe; `print-dev-env --json` prints one tool directory (`STUB_NIX_DEV_PATH`) and the shell named; `develop` exits 23 if `STUB_NIX_FAIL`,
 ##               and with `STUB_NIX_RUN` runs what follows `--command`, as it is
 ##               found on this process's PATH
 ##   guix        record, exit 99
@@ -129,6 +129,13 @@ act! = |role, args| {
 						Err(_) => {}
 					}
 					written!(Json.to_str([{ drvPath: optional!("STUB_NIX_RESULT_DRV") ?? drv, outputs: { out: variable!("STUB_NIX_OUT")? } }]).concat("\n"))
+				}
+				["print-dev-env", "--json", .. as rest] => {
+					# What `nix develop` would export, as data: one tool directory,
+					# the shell named, and a few variables a caller must not inherit.
+					installable = rest.last() ?? ""
+					tools = optional!("STUB_NIX_DEV_PATH") ?? "/nix/store/00000000000000000000000000000000-stub-env/bin"
+					written!("{\"variables\":{\"PATH\":{\"type\":\"exported\",\"value\":${Json.to_str(tools)}},\"STUB_DEV_SHELL\":{\"type\":\"exported\",\"value\":${Json.to_str(installable)}},\"HOME\":{\"type\":\"exported\",\"value\":\"/homeless-shelter\"},\"shellHook\":{\"type\":\"var\",\"value\":\"\"}}}\n")
 				}
 				["develop", ..] =>
 					if optional!("STUB_NIX_FAIL").is_ok() {

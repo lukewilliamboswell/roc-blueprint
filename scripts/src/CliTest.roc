@@ -392,7 +392,7 @@ cases! = |bench| {
 	foreign = Str.join_with(
 		[
 			"	Packages(\"foreign\", From(GuixPackages(\"current\"))),",
-			"	Overlay(\"foreign-overlay\", \"github:example/unused-overlay\"),",
+			"	Input(\"foreign-overlay\", \"github:example/unused-overlay\"),",
 			"	Environment(\"foreign\", [Tools([\"foreign#python@3.12:out\"]), Overlays([\"foreign-overlay\"])]),",
 			"",
 		],
@@ -413,6 +413,25 @@ cases! = |bench| {
 	CliHarness.contains!(run!(test, closure, ["update"], 1, [])?, "no registered resolver for guix", "update with an unregistered declared resolver")?
 	untouched!(closure)?
 	Script.pass!("inspection excludes unselected Guix tools and overlays; update refuses the unregistered resolver before effects")?
+
+	# `env` prints what entering a shell exports, as data: the provider is
+	# asked what its shell would export and nothing is entered.
+	entered = isolated!(test, "env")?
+	settings!(test, entered, CliTest.valid)?
+	update!(test, entered)?
+	installable = "path:${entered}/.blueprint#devShells.x86_64-linux.ci"
+	exported = run!(test, entered, ["env", "ci"], 0, [])?
+	CliHarness.check!(exported == "export PATH='/nix/store/00000000000000000000000000000000-stub-env/bin':\"$PATH\"\nexport STUB_DEV_SHELL='${installable}'\n", "env ci printed ${Str.inspect(exported)}")?
+	CliHarness.same_calls!(CliHarness.calls!("${entered}/nix-calls")?, [["print-dev-env", "--json", "--no-update-lock-file", "--no-write-lock-file", installable]], "env ci asked Nix for its shell as data")?
+	as_json = run!(test, entered, ["env", "ci", "--json"], 0, [])?
+	CliHarness.check!(as_json.starts_with("{\"format\":1,") and as_json.contains("\"directory\":\"/nix/store/00000000000000000000000000000000-stub-env/bin\"") and as_json.contains("\"origin\":\"nix\""), "env ci --json printed ${Str.inspect(as_json)}")?
+	github = run!(test, entered, ["env", "ci", "--github-env"], 0, [])?
+	CliHarness.check!(github == "STUB_DEV_SHELL=${installable}\n", "env ci --github-env printed ${Str.inspect(github)}")?
+	# Each rendering asked Nix for the shell as data once and entered nothing.
+	asked = CliHarness.calls!("${entered}/nix-calls")?
+	CliHarness.check!(asked.len() == 3 and asked.all(|call| call.first() == Ok("print-dev-env")), "env entered or built something: ${Str.inspect(asked)}")?
+	CliHarness.check!(!CliHarness.present!("${entered}/Blueprint.lock.tmp") and CliHarness.present!("${entered}/Blueprint.lock"), "env changed the lock")?
+	Script.pass!("env: a shell's activation is printed as shell exports, JSON or GitHub env lines, from what Nix would export, without entering it")?
 
 	# The Core rejects a lock whose recorded intent no longer matches the
 	# Spec, naming what changed, before the provider plans anything.

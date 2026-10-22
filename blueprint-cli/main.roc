@@ -13,6 +13,7 @@ app [main!] {
 
 import pf.Cmd
 import pf.Env
+import pf.File
 import pf.OsStr
 import pf.Path
 import pf.Stdout
@@ -31,6 +32,7 @@ import core.Realise
 import core.Lock
 import core.Tree
 import core.BuildModel
+import core.Activation
 import core.Sexpr
 import Bootstrap
 import Download
@@ -68,6 +70,7 @@ Command : [
 	Run({ task : Str, args : List(Str) }),
 	Build({ name : Str, json : Bool, rebuild : Bool }),
 	InspectBuild({ name : Str, json : Bool, prepare : Bool, explain : Bool }),
+	Activate({ name : Str, format : ActivationFormat }),
 	Workflow(Str),
 	Tasks,
 	Update(List(Str)),
@@ -197,6 +200,16 @@ cli_for = |loaded| {
 		{ name: if (explain) "explain" else "plan", description: if (explain) "Explain changes from the last successful local build" else "Inspect declared build inputs and dependencies", mapper: |command| command },
 	)
 
+	env_cmd = SubCmd.finish(
+		{
+			json: Opt.flag({ short: "", long: "json", help: "Render the activation as a JSON report." }),
+			github_path: Opt.flag({ short: "", long: "github-path", help: "Print the lines a GitHub Actions step appends to $GITHUB_PATH." }),
+			github_env: Opt.flag({ short: "", long: "github-env", help: "Print the lines a GitHub Actions step appends to $GITHUB_ENV." }),
+			target: Param.str({ name: "name", help: "The declared shell.", default: NoDefault }),
+		}.Cli,
+		{ name: "env", description: "Print what entering a shell exports, without entering it", mapper: |options| Activate({ name: options.target, format: if (options.json) JsonReport else if (options.github_path) GithubPath else if (options.github_env) GithubEnv else ShellLines }) },
+	)
+
 	Cli.assert_valid(
 		Cli.finish(
 			SubCmd.optional([
@@ -211,6 +224,7 @@ cli_for = |loaded| {
 				build_cmd,
 				inspect_build_cmd(False),
 				inspect_build_cmd(True),
+				env_cmd,
 				workflow_cmd,
 				SubCmd.empty({ name: "tasks", description: "List the tasks", value: Tasks }),
 				update_cmd,
@@ -306,6 +320,7 @@ run! = |command, loaded, context| {
 				Run({ task, args }) => realise!(spec, Request.Run(task, args), ctx)
 				Build(options) => realise!(spec, Request.Build(options.name), { ..ctx, build_json: options.json, rebuild: options.rebuild })
 				InspectBuild(options) => inspect_build!(spec, options, ctx)
+				Activate(options) => realise!(spec, Request.Shell(options.name), { ..ctx, build_mode: Activate, activation_format: options.format })
 				Workflow(name) => realise!(spec, Request.Workflow(name), ctx)
 				Tasks => list_tasks!(spec)
 				Update(names) => resolve!(spec, names, ctx)
@@ -513,7 +528,11 @@ roc! = |_ctx| {
 	}
 }
 
-Context : { layout : Layout, target : Str, build_json : Bool, rebuild : Bool, build_sources : List(Lock.Source), build_pins : List(Lock.Source), build_spec : Spec, build_mode : [Execute, Plan, Explain] }
+## How `env` renders an activation: shell exports to `eval`, a JSON report,
+## or the lines a GitHub Actions step appends to its path or env file.
+ActivationFormat : [ShellLines, JsonReport, GithubPath, GithubEnv]
+
+Context : { layout : Layout, target : Str, build_json : Bool, rebuild : Bool, build_sources : List(Lock.Source), build_pins : List(Lock.Source), build_spec : Spec, build_mode : [Execute, Plan, Explain, Activate], activation_format : ActivationFormat }
 
 ## Caller paths are observations, resolved once against the selected root.
 context! : () => Try(Context, _)
@@ -549,6 +568,7 @@ context! = || {
 		build_pins: [],
 		build_spec: Spec.empty(""),
 		build_mode: Execute,
+		activation_format: ShellLines,
 		layout: Layout.{
 			project_root: root,
 			workspace,
@@ -1008,6 +1028,9 @@ execute_prepared! = |step, fetched, ctx, witness_directory| {
 	publish_roc_bundles!($roc_bundles, ctx)?
 	if $programs.is_empty() {
 		start!({ ..step, argv: $argv }, [], "", ctx)
+	} else if ctx.build_mode == Activate {
+		bin = activation_bin!(step, $programs, ctx)?
+		start!({ ..step, argv: $argv }, $programs.map(|program| program.name), bin, ctx)
 	} else {
 		# The step's own directory of links, first on its PATH and gone when
 		# it ends, however it ends.
@@ -1039,6 +1062,9 @@ start! : Steps.Step, List(Str), Str, Context => Try({}, _)
 start! = |step, names, bin, ctx| {
 	layout = ctx.layout
 	directories = if (bin.is_empty()) [] else [bin]
+	if ctx.build_mode == Activate {
+		return activate!(step, bin, ctx)
+	}
 	match step.action {
 		Build(name) => report_build!(step, name, ctx)
 		Shell(_) if step.argv.is_empty() => {
@@ -1288,6 +1314,57 @@ copy_roc_package! = |source, target| {
 	Ok({})
 }
 
+## A lasting directory of links for an activation, under the workspace, so
+## that what `env` printed stays valid after it exited. It is rebuilt each
+## time, so it never holds a program the Lock no longer names.
+activation_bin! : Steps.Step, List({ name : Str, file : Str }), Context => Try(Str, _)
+activation_bin! = |step, programs, ctx| {
+	layout = ctx.layout
+	shell = match step.action {
+		Shell(name) => name
+		_ => return Err(ActivationFailed("only a shell's environment can be printed"))
+	}
+	bin = "${layout.workspace}/env/${shell}/bin"
+	safe_path!(layout.workspace)?
+	if path(bin).exists!()? {
+		path(bin).delete_all!()?
+	}
+	path(bin).create_all!()?
+	ignore_generated!(layout)?
+	for program in programs {
+		Store.expose!(bin, program.name, program.file).map_err(|message| FetchFailed(message))?
+	}
+	Ok(bin)
+}
+
+## What entering this step's environment exports, as data: the core's own
+## directory of fetched programs, then what the provider's shell would
+## export, asked for as data and never entered. Rendered as the caller asked.
+activate! : Steps.Step, Str, Context => Try({}, _)
+activate! = |step, bin, ctx| {
+	own = Activation.{ path: if (bin.is_empty()) [] else [{ directory: bin, origin: "blueprint" }], variables: [] }
+	provided = if step.argv.is_empty() {
+		Activation.empty
+	} else {
+		adapter = providers.find_first(|candidate| (candidate.activation_argv)(step).is_ok())
+			.map_err(|_| ActivationFailed("no provider of this blueprint can describe this environment as data"))?
+		argv = (adapter.activation_argv)(step).map_err(|message| ActivationFailed(message))?
+		text = match argv {
+			[program, .. as args] => native_command!(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(ctx.layout.project_root)).stderr(Inherit).capture!()?
+			[] => return Err(ActivationFailed("the provider named no command"))
+		}
+		(adapter.activation)(text).map_err(|message| ActivationFailed(message))?
+	}
+	activation = Activation.merge(own, provided)
+	output = match ctx.activation_format {
+		ShellLines => Activation.shell(activation)
+		JsonReport => Activation.to_json(activation).map_err(|message| ActivationFailed(message))?.concat("\n")
+		GithubPath => Activation.github(activation).path
+		GithubEnv => Activation.github(activation).env
+	}
+	Stdout.write!(output)
+}
+
 ## Decode every provider result once; execution uses the exact prepared recipe.
 report_build! : Steps.Step, Str, Context => Try({}, _)
 report_build! = |plan, name, ctx| {
@@ -1304,6 +1381,7 @@ report_build! = |plan, name, ctx| {
 		return Err(RenderFailed("selected build inputs changed during preparation; retry"))
 	}
 	match ctx.build_mode {
+		Activate => Err(ActivationFailed("a build has no environment to print; name a shell"))
 		Plan => render_build_inspection!(snapshot, prepared, True, False, ctx)
 		Explain => render_build_inspection!(snapshot, prepared, True, True, ctx)
 		Execute => {
@@ -1433,9 +1511,15 @@ selected_entries! = |root, prefix, selected, all, exclusions, layout| {
 	var $entries = []
 	directory = if (prefix == "") root else "${root}/${prefix}"
 	for entry_path in path(directory).list!()? {
-		full = Paths.portable(entry_path.to_str()?)
-		name = full.split_on("/").last() ?? full
+		# A name need not be UTF-8, and the provider's snapshot takes it as it
+		# is. Here it is shown lossily and kept distinct by its own digest.
+		raw = basename_bytes(Path.to_os_str(entry_path).to_bytes())
+		name = match Str.from_utf8(raw) {
+			Ok(text) => text
+			Err(_) => lossy_name(raw)
+		}
 		relative = if (prefix == "") name else "${prefix}/${name}"
+		full = "${root}/${relative}"
 		excluded = [".git", ".hg", ".svn", ".jj"].contains(name) or [layout.workspace, layout.generated_root, layout.lock_path].contains(full) or exclusions.contains(name) or exclusions.contains(full)
 		included = all or selected.any(|item| relative == item or relative.starts_with("${item}/") or item.starts_with("${relative}/"))
 		if !excluded and included {
@@ -1444,13 +1528,51 @@ selected_entries! = |root, prefix, selected, all, exclusions, layout| {
 					$entries = $entries.append({ path: relative, kind: Dir }).concat(selected_entries!(root, relative, selected, all, exclusions, layout)?)
 				}
 				IsFile => {
-					$entries = $entries.append({ path: relative, kind: File({ executable: entry_path.is_executable!()?, digest: Store.file_digest!(full)? }) })
+					$entries = $entries.append({ path: relative, kind: File({ executable: entry_path.is_executable!()?, digest: entry_digest!(entry_path)? }) })
 				}
 				_ => return Err(UnsafePath(full))
 			}
 		}
 	}
 	Ok($entries)
+}
+
+## The bytes after the last separator of a listed path.
+basename_bytes : List(U8) -> List(U8)
+basename_bytes = |raw| {
+	var $start = 0
+	var $index = 0
+	for byte in raw {
+		# A slash, or the backslash Windows lists with.
+		if byte == 47 or byte == 92 {
+			$start = $index + 1
+		}
+		$index = $index + 1
+	}
+	raw.drop_first($start)
+}
+
+## A name that is not UTF-8, shown lossily and kept distinct from any other
+## by the first bytes of its own digest.
+lossy_name : List(U8) -> Str
+lossy_name = |raw| {
+	tag = Str.from_utf8(Crypto.SHA256.hash(raw).to_hex().to_utf8().take_first(8)) ?? "unnamed"
+	"${Str.from_utf8_lossy(raw)}~${tag}"
+}
+
+expect basename_bytes("/a/b/c.txt".to_utf8()) == "c.txt".to_utf8() and basename_bytes("plain".to_utf8()) == "plain".to_utf8()
+expect lossy_name("x".to_utf8().append(255)).starts_with("x") and lossy_name("x".to_utf8().append(255)) != lossy_name("x".to_utf8().append(254))
+
+## A listed file's SHA-256, read through its own path so that a name that is
+## not UTF-8 is still measured.
+entry_digest! : Path => Try(Crypto.SHA256.Digest, _)
+entry_digest! = |file| {
+	reader = File.open_reader_with_capacity!(file, 65536)?
+	var $hasher = Crypto.SHA256.Hasher.empty()
+	for! chunk in reader.chunks() {
+		$hasher = $hasher.write(chunk?)
+	}
+	Ok($hasher.finish())
 }
 
 build_record_path : BuildModel.Snapshot, Context -> Str
@@ -1731,14 +1853,41 @@ resolve! = |input_spec, names, ctx| {
 	}
 	sources = pins.sources.keep_if(|source| source.provider != "file").concat(spec.source_files.map(Lock.file_pin))
 	lock = { ..pins, intent: Lock.intent_of(spec), fetched, sources }
-	path(Paths.parent(layout.lock_path)).create_all!()?
-	publish_authority!(layout.lock_path, prior, lock.to_str())?
-	# A new place downloads come from is what a reviewer of the lock should
-	# not miss among its digests.
-	match Lock.new_hosts(known, fetched) {
-		[] => Ok({})
-		added => Stdout.line!("Blueprint.lock now names download hosts it did not name before:\n${Str.join_with(added.map(|host| "  ${host}"), "\n")}")
+	# A new place downloads come from, declared or reached by a redirect, is
+	# what a reviewer of the lock should not miss among its digests. It is
+	# said before the lock is published: no lock names a host this update
+	# did not say.
+	notice = hosts_notice(known, fetched)
+	if !notice.is_empty() {
+		Stdout.line!(notice)?
 	}
+	path(Paths.parent(layout.lock_path)).create_all!()?
+	publish_authority!(layout.lock_path, prior, lock.to_str())
+}
+
+## What an update says of the download hosts the lock it writes names and the
+## lock before it did not, one to a line, each with how the lock came to name
+## it: a URL Blueprint.roc declares, or a redirect from one. Empty when there
+## is none.
+hosts_notice : List(Lock.Fetched), List(Lock.Fetched) -> Str
+hosts_notice = |before, after| {
+	redirected = Lock.redirected(after)
+	how = |name| if (redirected.contains(name)) "  ${name}, reached by a redirect" else "  ${name}, declared in Blueprint.roc"
+	match Lock.new_hosts(before, after) {
+		[] => ""
+		added => "Blueprint.lock will name download hosts it did not name before:\n${Str.join_with(added.map(how), "\n")}"
+	}
+}
+
+expect {
+	entry = |urls, served| { name: "tool", system: "x86_64-linux", urls, sha256: "aa", size: 3, obtained: Computed, served, witness: "" }
+	release = "https://github.com/o/r/releases/download/1/t"
+	before = [entry([release], ["github.com"])]
+	after = [entry([release, "https://mirror.example.test/t"], ["release-assets.githubusercontent.com"])]
+	hosts_notice(before, after) == "Blueprint.lock will name download hosts it did not name before:\n  mirror.example.test, declared in Blueprint.roc\n  release-assets.githubusercontent.com, reached by a redirect"
+		and hosts_notice([], before) == "Blueprint.lock will name download hosts it did not name before:\n  github.com, declared in Blueprint.roc"
+		and hosts_notice(after, after) == ""
+		and hosts_notice(after, before) == ""
 }
 
 ## A Lock with no pins: what a project that asks no provider starts from.
@@ -1847,16 +1996,17 @@ obtain! = |program, host, asked| {
 	what = "${program.name} for ${program.system}"
 	here = program.system == host
 	held = if (here) compiler_held!(what, program) else Err(NotHeld)
-	downloaded : Try({ sha256 : Str, size : U64, bytes : List(U8) }, [NotDownloaded])
+	downloaded : Try({ sha256 : Str, size : U64, bytes : List(U8), served : Str }, [NotDownloaded])
 	downloaded = if held.is_err() and (here or looked.published.is_err()) {
-		Ok(Store.hashed!(what, program.urls).map_err(|message| FetchFailed(absent_advice(program, message)))?)
+		Ok(hashed!(what, program.urls).map_err(|message| FetchFailed(absent_advice(program, message)))?)
 	} else {
 		Err(NotDownloaded)
 	}
-	computed : Try(Lock.Digest, [NotDownloaded])
+	# Bytes the store already held were served by no host now.
+	computed : Try(Lock.Hashed, [NotDownloaded])
 	computed = match held {
-		Ok(found) => Ok(found)
-		Err(_) => downloaded.map_ok(|found| { sha256: found.sha256, size: found.size })
+		Ok(found) => Ok({ sha256: found.sha256, size: found.size, served: [] })
+		Err(_) => downloaded.map_ok(|found| { sha256: found.sha256, size: found.size, served: [found.served] })
 	}
 	entry = Lock.record(program, computed, looked.published)
 		.map_err(|message| FetchFailed(message))?
@@ -1868,6 +2018,29 @@ obtain! = |program, host, asked| {
 		_ => {}
 	}
 	Ok({ entry, asked: looked.asked })
+}
+
+## The first of a program's URLs that serves it, tried in order, hashed, with
+## the host that served the bytes after any redirect: what the update records
+## of where they came from. The address that served them is not kept, only
+## its host: a release host signs the address it redirects to.
+hashed! : Str, List(Str) => Try({ sha256 : Str, size : U64, bytes : List(U8), served : Str }, Str)
+hashed! = |what, urls| {
+	var $failures = []
+	for url in urls {
+		_ = Stderr.line!("blueprint: fetching ${what} from ${url} to record its digest")
+		match Download.served!(url) {
+			Ok(answer) => return Ok({ sha256: Crypto.SHA256.hash(answer.bytes).to_hex(), size: answer.bytes.len(), bytes: answer.bytes, served: Lock.host(answer.url) })
+			Err(reason) => {
+				$failures = $failures.append("could not download ${what} from ${url}: ${reason}")
+			}
+		}
+	}
+	match $failures {
+		[] => Err("${what} has no URL to download it from")
+		[only] => Err(only)
+		_ => Err("no URL of ${what} served it:\n  ${Str.join_with($failures, "\n  ")}")
+	}
 }
 
 ## What to add to a download's failure during an update. A recipe answers
@@ -1902,10 +2075,11 @@ compiler_held! = |what, program| {
 }
 
 ## What a program's release publishes for its download, when its first URL is
-## a release asset: asked of the release's host, once for each release. A
+## a release asset: asked of the release's host, once for each release, and
+## the address asked, which the lock keeps as the digest's witness. A
 ## release that cannot be asked about is said so once, and every download of
 ## it is then hashed here, as for a host that publishes nothing.
-published! : Spec.Program, List(Asked) => { published : Try(Lock.Digest, [NotPublished]), asked : List(Asked) }
+published! : Spec.Program, List(Asked) => { published : Try(Lock.Reported, [NotPublished]), asked : List(Asked) }
 published! = |program, asked| {
 	release = match program.urls.first().map_ok(Published.release) {
 		Ok(Ok(found)) => found
@@ -1924,7 +2098,7 @@ published! = |program, asked| {
 		}
 	}
 	published = match known.last().map_ok(|entry| entry.answer) {
-		Ok(Described(text)) => Published.digest(text, release.asset).map_err(|_| NotPublished)
+		Ok(Described(text)) => Published.digest(text, release.asset).map_ok(|found| { sha256: found.sha256, size: found.size, witness: release.api }).map_err(|_| NotPublished)
 		_ => Err(NotPublished)
 	}
 	{ published, asked: known }
@@ -2004,6 +2178,7 @@ describe = |err, provider|
 		NeedsFeatures(missing) => "Blueprint.roc needs features: ${Str.join_with(missing, ", ")}; upgrade blueprint"
 		InvalidProject(msg) => "invalid Spec project: ${msg}"
 		RenderFailed(msg) => "cannot generate the ${provider} files: ${msg}"
+		ActivationFailed(msg) => "cannot describe the environment: ${msg}"
 		RocPackagesFailed(msg) => msg
 		FetchFailed(msg) => msg
 		BadSpec(MissingRequiredField(field)) => "the Spec from Blueprint.roc is missing ${field}"
@@ -2044,7 +2219,7 @@ expect match Lock.parse(lock_report_authority) {
 			Ok(parsed) => LockReport.render(parsed, ["nixpkgs"], True, providers)
 			Err(_) => Err("future minor did not parse")
 		}
-		program = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc"], sha256: "1111", size: 4, obtained: Computed }
+		program = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc"], sha256: "1111", size: 4, obtained: Computed, served: [], witness: "" }
 		spec = Spec.empty("test")
 		with_task = { ..spec, tasks: [{ name: "check", environment: "dev", run: ["check"] }] }
 		Lock.intent_of(spec) == Lock.intent_of(with_task)
