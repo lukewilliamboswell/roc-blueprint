@@ -35,13 +35,13 @@ BuildWorkflowGates := [].{
 	task_line = |argv| "task ${BuildHarness.hex(argv.fold([], |bytes, arg| bytes.concat(arg.to_utf8()).append(0)))}"
 
 	## What one recorded `nix` call did, if it was a build or ran a task:
-	## the artifact a `nix build` named, or the command `nix develop` ran.
+	## the exact prepared installable a `nix build` executed, or the task command.
 	observe : List(Str) -> [Built(Str), Ran(List(Str)), Other, Ambiguous]
 	observe = |argv|
 		match argv {
 			["build", ..] =>
-				match argv.keep_if(|arg| arg.contains("#packages.")) {
-					[installable] => Built(installable.split_on(".").last() ?? "")
+				match argv.keep_if(|arg| arg.starts_with("/nix/store/") and arg.ends_with(".drv^*")) {
+					[installable] => Built(installable)
 					_ => Ambiguous
 				}
 
@@ -238,6 +238,10 @@ workflow! = |suite, place, name, expected, refusal| {
 	good = refusal.is_empty()
 	start = BuildHarness.events!(suite)?.len()
 	ran = if good BuildHarness.ok!(suite, place, ["workflow", name])? else BuildHarness.refused!(suite, place, ["workflow", name], refusal)?
+	# Bind each native invocation to the CLI's selected build and prepared
+	# identity. Keep every announcement: a task can change the next preparation
+	# of the same build, and failed builds still have an invocation.
+	var $prepared = ran.err.split_on("\n").keep_if(|line| line.starts_with("building ") and line.contains(": /nix/store/") and line.ends_with(".drv")).map(|line| line.drop_prefix("building ").split_on(": "))
 	var $observed = []
 	var $commands = []
 	for entry in BuildHarness.events!(suite)?.drop_first(start) {
@@ -246,10 +250,23 @@ workflow! = |suite, place, name, expected, refusal| {
 		} else {
 			action = BuildWorkflowGates.observe(entry.argv)
 			BuildHarness.require!(action != Ambiguous, "${name}: a build named no single artifact: ${Str.inspect(entry.argv)}")?
-			$observed = $observed.concat(built_steps(action))
+			match action {
+				Built(installable) => {
+					match $prepared.first() {
+						Ok([selected, identity]) => {
+							BuildHarness.require!(installable == "${identity}^*", "${name}: executed ${installable}, prepared ${identity}")?
+							$observed = $observed.append(BuildWorkflowGates.build(selected))
+						}
+						_ => BuildHarness.require!(Bool.False, "${name}: native build has no selected preparation")?
+					}
+					$prepared = $prepared.drop_first(1)
+				}
+				_ => {}
+			}
 			$commands = $commands.concat(ran_command(action))
 		}
 	}
+	BuildHarness.require!($prepared.is_empty(), "${name}: selected preparation was not executed")?
 	BuildHarness.require!($observed == expected, "${name}: effect order ${Str.inspect($observed)}, expected ${Str.inspect(expected)}")?
 	tasks = expected.keep_if(|step| step.kind == "task").map(|step| ["roc-stable", "task.roc", "--", suite.events].concat(step.argv))
 	BuildHarness.require!($commands == tasks, "${name}: task process argv ${Str.inspect($commands)}, expected ${Str.inspect(tasks)}")?
@@ -263,13 +280,6 @@ workflow! = |suite, place, name, expected, refusal| {
 	BuildHarness.require!(printed == wanted, "${name}: stdout order ${Str.inspect(printed)}, expected ${Str.inspect(wanted)}")?
 	Ok({ outputs, ran })
 }
-
-built_steps : [Built(Str), Ran(List(Str)), Other, Ambiguous] -> List(BuildWorkflowGates.Step)
-built_steps = |action|
-	match action {
-		Built(name) => [BuildWorkflowGates.build(name)]
-		_ => []
-	}
 
 ran_command : [Built(Str), Ran(List(Str)), Other, Ambiguous] -> List(List(Str))
 ran_command = |action|
@@ -390,7 +400,9 @@ example_smoke! = |suite| {
 expect BuildWorkflowGates.arguments_json == Json.to_str(BuildWorkflowGates.arguments)
 expect BuildWorkflowGates.record(["x"]) == { kind: "task", argv: ["record", "configured argument", "x"] }
 expect BuildWorkflowGates.task_line(["record", "", "a b"]) == "task 7265636f7264000061206200"
-expect BuildWorkflowGates.observe(["build", "--no-link", "path:/w/generated#packages.x86_64-linux.app"]) == Built("app")
+expect BuildWorkflowGates.observe(["build", "--no-link", "/nix/store/captured.drv^*", "--json"]) == Built("/nix/store/captured.drv^*")
+expect BuildWorkflowGates.observe(["build", "path:/w/generated#packages.x86_64-linux.app"]) == Ambiguous
+expect BuildWorkflowGates.observe(["build", "/nix/store/one.drv^*", "/nix/store/two.drv^*"]) == Ambiguous
 expect BuildWorkflowGates.observe(["build", "--no-link"]) == Ambiguous
 expect BuildWorkflowGates.observe(["develop", "--no-update-lock-file", "path:/w#devShells.x.y", "--command", "roc-stable", "task.roc", ""]) == Ran(["roc-stable", "task.roc", ""])
 expect BuildWorkflowGates.observe(["develop", "path:/w#devShells.x.y"]) == Other
