@@ -630,6 +630,79 @@ expect {
 	scope("dep") == "excluded" and components.all(|entry| (entry.field("scope") ?? JsonData.Null).string() != Ok("required"))
 }
 
+# A source bundle is inventoried from the archive the bundler produced, member
+# by member: a bundler packs what a module imports as well as what it is
+# given, so a module that imports a text file and a LICENSE ships four
+# members. Each is stated by its digest, and a composition that omits one is
+# refused by name.
+member = |name, content| { name, size: content.to_utf8().len(), sha256: Crypto.SHA256.hash(content.to_utf8()).to_hex() }
+
+bundle_members = [member("main.roc", "module [hello]\n"), member("Example.roc", "import \"message.txt\" as message : Str\n"), member("LICENSE", "UPL-1.0\n"), member("message.txt", "hello\n")]
+
+message_input = "archive-member:message.txt:${Crypto.SHA256.hash("hello\n".to_utf8()).to_hex()}"
+
+bundle_composition : Sbom.Composition
+bundle_composition = {
+	archive = Sbom.archive_members("sources", bundle_members) ?? crash "invalid member listing"
+	sources = { ..component("sources", "example-bundle", "1.0.0"), target: "source" }
+	{ ..SbomTest.composition, components: [sources].concat(archive.components), relationships: [edge("Subject", "sources", "contains")].concat(archive.relationships), coverage: [{ scope: "members", status: "complete", reason: "Every archive member is stated by SHA-256", contact: "https://example.org/support" }] }
+}
+
+## `bundle_composition` without the member `message.txt`.
+dropped_composition = { ..bundle_composition, components: bundle_composition.components.keep_if(|entry| entry.id != "member-message.txt"), relationships: bundle_composition.relationships.keep_if(|relation| relation.to != "member-message.txt") }
+
+inspect_bundle = |composition| Sbom.inspect_archive(SbomTest.spec, SbomTest.lock, "source", composition, bundle_members)
+
+expect
+	match Sbom.archive_members("sources", bundle_members) {
+		Ok(archive) =>
+			archive.components.map(|entry| entry.id) == ["member-main.roc", "member-Example.roc", "member-LICENSE", "member-message.txt"]
+				and archive.components.all(|entry| entry.origin == "reviewed" and entry.target == "source" and entry.license == "NOASSERTION" and entry.download == "NOASSERTION" and entry.producer == "NOASSERTION" and entry.version == "sha256-${entry.sha256}" and entry.identity == "urn:blueprint:archive-member:${entry.name}:${entry.sha256}" and bundle_members.any(|listed| listed.name == entry.name and listed.sha256 == entry.sha256))
+					and archive.relationships.all(|relation| relation.from == "sources" and relation.relation == "contains" and relation.scope.is_empty() and relation.basis.contains("bytes"))
+						and archive.relationships.map(|relation| relation.to) == archive.components.map(|entry| entry.id)
+		Err(_) => False
+	}
+expect
+	match inspect_bundle(bundle_composition) {
+		Ok(inventory) => inventory.components.keep_if(|entry| entry.identity.starts_with("urn:blueprint:archive-member:")).len() == 4 and inventory.inspected.is_empty()
+		Err(_) => False
+	}
+expect
+	match inspect_bundle(dropped_composition) {
+		Err(problem) => problem.contains("message.txt (sha256 ") and problem.contains(message_input)
+		Ok(_) => False
+	}
+expect Sbom.members_accounted(bundle_members, bundle_composition).is_ok()
+expect Sbom.members_accounted(bundle_members, dropped_composition).is_err()
+# Without the listing, the omission goes unnoticed: the archive is the proof.
+expect Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", dropped_composition).is_ok()
+# A reviewer's own component that states the same bytes accounts for a member.
+expect {
+	reviewed = { ..bundle_composition, components: bundle_composition.components.map(|entry| if (entry.id == "member-LICENSE") { ..entry, id: "licence", name: "Universal Permissive License", license: "UPL-1.0", producer: "Organization: Oracle" } else entry), relationships: bundle_composition.relationships.map(|relation| if (relation.to == "member-LICENSE") { ..relation, to: "licence" } else relation) }
+	inspect_bundle(reviewed).is_ok()
+}
+# So does an input disposition, which is then exported like any input's.
+expect
+	match inspect_bundle({ ..dropped_composition, inputs: [{ input: message_input, component: "", reason: "Greeting text imported by Example.roc; not code" }] }) {
+		Ok(inventory) => inventory.inspected == [message_input] and inventory.inputs.len() == 1
+		Err(_) => False
+	}
+# A disposition for a member a component already states is an unknown input.
+expect inspect_bundle({ ..bundle_composition, inputs: [{ input: message_input, component: "member-message.txt", reason: "Stated twice" }] }).is_err()
+# Only a source archive has members.
+expect Sbom.inspect_archive(SbomTest.spec, SbomTest.lock, "x86_64-linux", bundle_composition, bundle_members).is_err()
+# A listing with a repeated or unsafe name or a bad digest is refused.
+expect Sbom.archive_members("sources", bundle_members.append(member("main.roc", "other"))).is_err()
+expect Sbom.archive_members("sources", [member("../escape", "x")]).is_err()
+expect Sbom.archive_members("sources", [member("/etc/passwd", "x")]).is_err()
+expect Sbom.archive_members("sources", [member("a/./b", "x")]).is_err()
+expect Sbom.archive_members("sources", [member("a b", "x")]).is_err()
+expect Sbom.archive_members("sources", [member("", "x")]).is_err()
+expect Sbom.archive_members("sources", [{ ..member("a", "x"), sha256: "BAD" }]).is_err()
+expect Sbom.members_accounted([member("../escape", "x")], bundle_composition).is_err()
+expect Sbom.archive_members("sources", [member("fonts/a+b.ttf", "x"), member("fonts/a-b.ttf", "y")]).is_ok()
+expect Sbom.member_input(member("message.txt", "hello\n")) == message_input
+
 # Binding inputs must track the current public Spec and Lock wire contracts.
 expect Spec.parse(fixture_input_spec) == Ok(SbomTest.spec)
 expect Lock.parse(fixture_input_lock) == Ok(SbomTest.lock)

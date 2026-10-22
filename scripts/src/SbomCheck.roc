@@ -5,6 +5,7 @@ import core.Sidecar
 import compilers.Bootstrap
 import Bundle
 import Integrity
+import SbomFiles
 import "../../tests/sbom/fixtures/native-linux.spdx.json" as fixture_3 : Str
 import "../../tests/sbom/fixtures/native-linux.spdx-2.3.json" as fixture_2 : Str
 import "../../tests/sbom/fixtures/native-linux.cdx.json" as fixture_cdx : Str
@@ -90,6 +91,14 @@ SbomCheck := [].{
 			core = find("core").map_err(|_| Invalid("missing core"))?
 			if core.sha256 != Integrity.digest(Path.read_bytes!(Path.utf8("${root}/dist/${core_name}"))?) {
 				return Err(Invalid("core bundle digest differs"))
+			}
+		}
+		if evidence.target == "source" {
+			# Every member of the released archive is stated by its digest.
+			for member in SbomFiles.archive_members!("${root}/dist/${document.name}")? {
+				if !document.packages_.any(|entry| entry.sha256 == member.sha256) {
+					return Err(Invalid("archive member ${member.name} is not stated by SHA-256"))
+				}
 			}
 		}
 		if ids.contains("linker-inputs") {

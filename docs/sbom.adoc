@@ -445,6 +445,8 @@ The compiler pin matches `blueprint compiler-version` for that release.
 [source,console]
 ----
 roc run <immutable-tool-bundle-url> -- inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
+roc run <immutable-tool-bundle-url> -- members dist/my-package.tar.zst members.json
+roc run <immutable-tool-bundle-url> -- inspect Spec Blueprint.lock composition.json source inventory.json --members members.json
 roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary
 roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx-2.3.json --spdx-2.3
 roc run <immutable-tool-bundle-url> -- check --inventory inventory.json --artifacts dist dist/my-binary.spdx.json dist/my-binary.cdx.json dist/my-binary.spdx-2.3.json
@@ -452,7 +454,10 @@ roc run <immutable-tool-bundle-url> -- check --inventory inventory.json --artifa
 
 The first `bind` writes `dist/my-binary.spdx.json` and `dist/my-binary.cdx.json`;
 the second adds the SPDX 2.3 rendering, and `check` checks all three. See
-<<bind-the-final-bytes-separately>>.
+<<bind-the-final-bytes-separately>>. `members` and `inspect --members`
+inventory a source archive from its own contents; see
+<<inventory-a-source-bundle-from-its-archive>>. They need only a `tar` that
+reads zstd on `PATH`.
 
 No Blueprint project is required; even an unrelated invalid `Blueprint.roc`
 in the working directory is ignored. Supply the already evaluated Spec and
@@ -669,6 +674,66 @@ Inputs are limited to 1 MiB, JSON nesting to 64 levels, imports to 16,
 components to 4,096 and relationships to 16,384. Licenses and exceptions are
 checked against the pinned SPDX License List 3.26.0 and expression grammar.
 
+[#inventory-a-source-bundle-from-its-archive]
+== Inventory a source bundle from its archive
+
+A source bundle's inventory comes from the archive the bundler produced, not
+from the list of files you asked it to pack. `roc bundle` follows
+`import "file" as x : Str` (or `List(U8)`) and packs those files even when
+they are not command arguments, so a font, a lookup table or a licence
+notice that a module imports is in the shipped archive whether or not
+anyone named it. The explicit arguments choose what to bundle; the archive
+is the proof of what was bundled.
+
+`members` lists a produced `.tar.zst` member by member. It runs the system
+`tar`, which must read zstd, lists the archive, refuses a member that is a
+symbolic or hard link, a device or a fifo, or whose name has a `..` part or a
+leading `/`, and only then extracts the members into a fresh private
+temporary directory, hashes each one and deletes the directory. Nothing is
+executed from the archive, and no Blueprint project or Nix is needed.
+
+[source,console]
+----
+roc bundle main.roc --output-dir dist
+roc run <tool> -- members dist/<hash>.tar.zst sbom/members.json
+----
+
+The listing names the archive, its SHA-256 and each member's name, size and
+SHA-256 in archive order:
+
+[source,json]
+----
+{"archive": "<hash>.tar.zst", "sha256": "<the archive's SHA-256>",
+ "members": [
+   {"name": "main.roc", "size": 139, "sha256": "<its SHA-256>"},
+   {"name": "Example.roc", "size": 41, "sha256": "<its SHA-256>"},
+   {"name": "LICENSE", "size": 8, "sha256": "<its SHA-256>"},
+   {"name": "message.txt", "size": 6, "sha256": "<its SHA-256>"}]}
+----
+
+Pass it to `inspect` with `--members`, for a `source` target:
+
+[source,console]
+----
+roc run <tool> -- inspect sbom/Spec sbom/Lock sbom/composition.json source sbom/inventory.json --members sbom/members.json
+----
+
+`inspect` then refuses a composition that does not account for every member.
+A member is accounted for by a component whose `sha256` is the member's, or
+by an input disposition named `archive-member:NAME:SHA256` with a reason, for
+example a notice file that is not code. The refusal names each member that
+has neither. The usual way to account for them is to generate one component
+per member and a `contains` relationship from the bundle's component to each,
+as `Sbom.archive_members` in `blueprint-core` does and as Blueprint's own
+release does: the member's name, `sha256-<digest>` as its version and
+`urn:blueprint:archive-member:<name>:<digest>` as its identity, with
+`NOASSERTION` for the supplier, download and license. A reviewer replaces a
+generated component with a fuller one, naming the licence of a bundled
+third-party asset, as long as it states the same SHA-256. A member no
+component states is a known input, so its disposition is exported in the
+sidecar's evidence like any other input's. Without `--members`, nothing
+checks the archive against the composition.
+
 [#chain-sboms-across-dependencies]
 == Chain SBOMs across your dependencies
 
@@ -882,10 +947,18 @@ no empty project Lock substitutes for release-input knowledge.
 The compiler used to build Blueprint is a build input. The target compiler
 archive imported into its executable is a separate contained component with
 its own archive SHA-256. A source bundle does not contain that compiler.
-The platform source bundle records each declared target linker member with its
-own SHA-256, separately from the original input archive, and includes known
-musl/Zig and Windows startup inputs
-and depends on the sibling core bundle fetched later by Roc.
+Each source bundle, the core, the platform and the standalone tool, is
+inventoried from the archive in `dist/`, as
+<<inventory-a-source-bundle-from-its-archive>> describes: every member is a
+component stated by its own SHA-256, contained by the bundle's source
+component, so a file a module imports is listed whether or not
+`scripts/bundle.roc` named it. The platform source bundle records each
+declared target linker member with its own SHA-256, separately from the
+original input archive, as the same component the archive listing yields,
+and includes known musl/Zig and Windows startup inputs and depends on the
+sibling core bundle fetched later by Roc. `scripts/check_sbom.roc
+--release-root` refuses a source bundle sidecar that omits a member of its
+archive.
 
 The native CLI inventory preserves the pinned basic-cli Cargo graph and a
 known SQLite native relationship; reviewed provenance lives in `sbom/upstream/`.

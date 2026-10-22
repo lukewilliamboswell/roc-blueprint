@@ -15,7 +15,15 @@ import core.Sbom
 import core.Sidecar
 
 ## Offline report from already evaluated Spec/Lock; no provider/Store effects.
-## inspect SPEC LOCK COMPOSITION TARGET OUTPUT
+## members ARCHIVE OUTPUT
+## `members` lists a produced `.tar.zst` archive, such as a `roc bundle`,
+## with the system `tar`: each regular member's name, size and SHA-256, so
+## the archive, not the bundler's argument list, says what a source bundle
+## holds. Links, devices and unsafe names are refused.
+## inspect SPEC LOCK COMPOSITION TARGET OUTPUT [--members LISTING]
+## With `--members`, a `source` inventory must account for every member of
+## the listing `members` wrote: a component that states its SHA-256, or an
+## input disposition `archive-member:NAME:SHA256`.
 ## bind INVENTORY SUBJECT CONTEXT ARTIFACT [OUTPUT [--spdx-2.3 | --cyclonedx]]
 ## Without OUTPUT, `bind` writes ARTIFACT.spdx.json (SPDX 3.0.1 JSON-LD) and
 ## ARTIFACT.cdx.json (CycloneDX 1.7) beside the artifact. With OUTPUT it
@@ -46,21 +54,42 @@ read! = |name| {
 }
 
 run! = |args| match args {
-	["inspect", spec_path, lock_path, composition_path, target, output] => {
-		spec = Spec.parse(read!(spec_path)?).map_err(|error| Invalid(Str.inspect(error)))?
-		lock = Lock.parse(read!(lock_path)?).map_err(|error| Invalid(Str.inspect(error)))?
-		composition : Sbom.Composition
-		composition = Json.parse(read!(composition_path)?).map_err(|error| Invalid(Str.inspect(error)))?
-		inventory = Sbom.inspect(spec, lock, target, composition).map_err(|error| Invalid(error))?
-		SbomFiles.write_new!(output, "${Json.to_str(inventory)}\n")?
+	["members", archive, output] => {
+		if archive == output {
+			return Err(Invalid("listing must not overwrite archive"))
+		}
+		members = SbomFiles.archive_members!(archive)?
+		listing : Sbom.Listing
+		listing = { archive: archive.replace_each("\\", "/").split_on("/").last() ?? archive, sha256: SbomFiles.digest!(archive)?, members }
+		SbomFiles.write_new!(output, "${Json.to_str(listing)}\n")?
 		Stdout.line!(output)
 	}
+	["inspect", spec_path, lock_path, composition_path, target, output] => inspect!(spec_path, lock_path, composition_path, target, output, "")
+	["inspect", spec_path, lock_path, composition_path, target, output, "--members", listing_path] => inspect!(spec_path, lock_path, composition_path, target, output, listing_path)
 	["bind", inventory_path, subject_path, context_path, artifact] => bind!(inventory_path, subject_path, context_path, artifact, [("${artifact}.spdx.json", Sbom.render), ("${artifact}.cdx.json", Sbom.render_cyclonedx)])
 	["bind", inventory_path, subject_path, context_path, artifact, output] => bind!(inventory_path, subject_path, context_path, artifact, [(output, Sbom.render)])
 	["bind", inventory_path, subject_path, context_path, artifact, output, "--spdx-2.3"] => bind!(inventory_path, subject_path, context_path, artifact, [(output, Sbom.render_spdx2)])
 	["bind", inventory_path, subject_path, context_path, artifact, output, "--cyclonedx"] => bind!(inventory_path, subject_path, context_path, artifact, [(output, Sbom.render_cyclonedx)])
 	["check", .. as rest] => check!(rest, { artifacts: "", inventory: "" })
-	_ => Err(Invalid("usage: scripts/sbom.roc inspect SPEC LOCK COMPOSITION TARGET OUTPUT | bind INVENTORY SUBJECT CONTEXT ARTIFACT [OUTPUT [--spdx-2.3 | --cyclonedx]] | check [--artifacts DIR] [--inventory INVENTORY] DOCUMENT..."))
+	_ => Err(Invalid("usage: scripts/sbom.roc members ARCHIVE OUTPUT | inspect SPEC LOCK COMPOSITION TARGET OUTPUT [--members LISTING] | bind INVENTORY SUBJECT CONTEXT ARTIFACT [OUTPUT [--spdx-2.3 | --cyclonedx]] | check [--artifacts DIR] [--inventory INVENTORY] DOCUMENT..."))
+}
+
+## Inspect the composition against the Spec and Lock, and against the
+## archive's member listing when one is named.
+inspect! = |spec_path, lock_path, composition_path, target, output, listing_path| {
+	spec = Spec.parse(read!(spec_path)?).map_err(|error| Invalid(Str.inspect(error)))?
+	lock = Lock.parse(read!(lock_path)?).map_err(|error| Invalid(Str.inspect(error)))?
+	composition : Sbom.Composition
+	composition = Json.parse(read!(composition_path)?).map_err(|error| Invalid(Str.inspect(error)))?
+	inventory = if listing_path.is_empty() {
+		Sbom.inspect(spec, lock, target, composition).map_err(|error| Invalid(error))?
+	} else {
+		listing : Sbom.Listing
+		listing = Json.parse(read!(listing_path)?).map_err(|error| Invalid(Str.inspect(error)))?
+		Sbom.inspect_archive(spec, lock, target, composition, listing.members).map_err(|error| Invalid(error))?
+	}
+	SbomFiles.write_new!(output, "${Json.to_str(inventory)}\n")?
+	Stdout.line!(output)
 }
 
 check! = |args, options|

@@ -138,7 +138,25 @@ Sbom := [].{
 	## Resolve only reviewed source/program references. A component never chooses
 	## a new pin; conflicting supplemental metadata is rejected.
 	inspect : Spec, Lock, Str, Composition -> Try(Inventory, Str)
-	inspect = |spec, lock, target, composition| {
+	inspect = |spec, lock, target, composition| inspect_with(spec, lock, target, composition, [])
+
+	## `inspect` for a `source` subject whose produced archive is at hand: the
+	## composition must account for every member of `members`, the archive's
+	## listing (see `members_accounted`). A member no component states by
+	## digest is a known input, so its disposition is required and exported
+	## like any other input's. The explicit arguments to the bundler choose
+	## what to bundle; the archive is the proof of what was bundled.
+	inspect_archive : Spec, Lock, Str, Composition, List(Member) -> Try(Inventory, Str)
+	inspect_archive = |spec, lock, target, composition, members| {
+		if target != "source" {
+			return Err("an archive member listing describes a source archive; the inventory target is ${target}")
+		}
+		members_accounted(members, composition)?
+		inspect_with(spec, lock, target, composition, members)
+	}
+
+	inspect_with : Spec, Lock, Str, Composition, List(Member) -> Try(Inventory, Str)
+	inspect_with = |spec, lock, target, composition, members| {
 		if target != "source" and !spec.systems.contains(target) {
 			return Err("inventory target is not declared by Spec")
 		}
@@ -202,7 +220,8 @@ Sbom := [].{
 			expanded = expand_import(imported, target, binding)?
 			$combined = { ..$combined, components: $combined.components.concat(expanded.components), relationships: $combined.relationships.concat(expanded.relationships), coverage: $combined.coverage.append(expanded.coverage) }
 		}
-		inspect_composition(lock, target, $combined, known_inputs(spec, lock, target))
+		unstated = members.keep_if(|member| !states_member(composition.components, member)).map(member_input)
+		inspect_composition(lock, target, $combined, known_inputs(spec, lock, target).concat(unstated))
 	}
 
 	## Recipes outside a Blueprint project supply their observed authoritative
@@ -216,6 +235,77 @@ Sbom := [].{
 			return Err("duplicate known input")
 		}
 		inspect_composition(Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], fetched: [], hints: [] }, target, composition, known)
+	}
+
+	## A member of a produced archive: its name in the archive, its size and
+	## the SHA-256 of its bytes, as `tar` lists it and hashing gives it. The
+	## standalone tool's `members` writes a `Listing` of them.
+	Member : { name : Str, size : U64, sha256 : Str }
+
+	## What `members` writes: the archive's file name and SHA-256, and its
+	## members in archive order.
+	Listing : { archive : Str, sha256 : Str, members : List(Member) }
+
+	## The identity of a member component: the member's name and bytes.
+	member_identity : Member -> Str
+	member_identity = |member| "urn:blueprint:archive-member:${member.name}:${member.sha256}"
+
+	## The input disposition that accounts for a member no component states.
+	member_input : Member -> Str
+	member_input = |member| "archive-member:${member.name}:${member.sha256}"
+
+	## One reviewed component per member of the archive that `subject`, a
+	## component of the composition, delivers, and a `contains` edge from
+	## `subject` to each. A bundler packs what a module imports as well as
+	## what it is given, so the archive, not the argument list, says what a
+	## source bundle holds. Each member's bytes are its identity: version
+	## `sha256-DIGEST` and identity `urn:blueprint:archive-member:NAME:DIGEST`.
+	## The archive says nothing of a member's supplier, download or license,
+	## so each is `NOASSERTION` until reviewed; a reviewer replaces a member's
+	## component with a fuller one that states the same SHA-256. A listing
+	## with a repeated name, a name with an empty, `.` or `..` part or a
+	## leading `/`, or a digest that is not 64 lowercase hex digits is
+	## refused.
+	archive_members : Str, List(Member) -> Try({ components : List(Component), relationships : List(Edge) }, Str)
+	archive_members = |subject, members| {
+		valid_members(members)?
+		ids = members.map(member_id)
+		if unique(ids).len() != ids.len() {
+			return Err("two archive members map to one component identifier")
+		}
+		components = members.map(
+			|member| {
+				id: member_id(member),
+				name: member.name,
+				producer: "NOASSERTION",
+				version: "sha256-${member.sha256}",
+				identity: member_identity(member),
+				download: "NOASSERTION",
+				sha256: member.sha256,
+				license: "NOASSERTION",
+				license_url: "",
+				modified: "",
+				target: "source",
+				origin: "reviewed",
+			},
+		)
+		relationships = members.map(|member| { from: subject, to: member_id(member), relation: "contains", scope: "", basis: "Member ${member.name} of the produced archive, ${member.size.to_str()} bytes; the SHA-256 is the member's bytes, not the archive's" })
+		Ok({ components, relationships })
+	}
+
+	## Whether `composition` accounts for every member of an archive listing:
+	## a component states the member's bytes by SHA-256, or an input
+	## disposition named `archive-member:NAME:DIGEST` says what became of it.
+	## The refusal names each member that neither does.
+	members_accounted : List(Member), Composition -> Try({}, Str)
+	members_accounted = |members, composition| {
+		valid_members(members)?
+		declared = composition.inputs.map(|disposition| disposition.input)
+		missing = members.keep_if(|member| !states_member(composition.components, member) and !declared.contains(member_input(member)))
+		match missing {
+			[] => Ok({})
+			_ => Err("the archive holds ${Str.join_with(missing.map(|member| "${member.name} (sha256 ${member.sha256})"), ", ")}, which no component states by SHA-256 and no input disposition accounts for; add the members with archive_members, or an input disposition ${Str.join_with(missing.map(member_input), ", ")} with the reason")
+		}
 	}
 
 	## Shared validation path for provider-neutral supplemental/imported graphs.
@@ -421,6 +511,53 @@ valid_id = |id| !id.is_empty() and id != subject_id and id != "DOCUMENT" and id.
 
 hex : Str -> Bool
 hex = |value| value.to_utf8().len() == 64 and value.to_utf8().all(|byte| (byte >= '0' and byte <= '9') or (byte >= 'a' and byte <= 'f'))
+
+## Whether a component states the member's bytes: its SHA-256 is the
+## member's, whatever else the reviewer knows of it.
+states_member : List(Sbom.Component), Sbom.Member -> Bool
+states_member = |components, member| components.any(|component| component.sha256 == member.sha256)
+
+## A member name a `tar` would create only below the extraction directory,
+## that an identity can carry: no empty, `.` or `..` part, so no leading
+## `/`, and no control, space, backslash or `?` byte.
+member_name : Str -> Bool
+member_name = |name| {
+	parts = name.split_on("/")
+	!name.is_empty() and name.to_utf8().len() <= 512 and !parts.any(|part| part.is_empty() or part == "." or part == "..") and name.to_utf8().all(|byte| byte > 32 and byte != 127 and byte != '\\' and byte != '?')
+}
+
+valid_members : List(Sbom.Member) -> Try({}, Str)
+valid_members = |members| {
+	if members.len() > 4096 {
+		return Err("more than 4096 archive members")
+	}
+	names = members.map(|member| member.name)
+	if unique(names).len() != names.len() {
+		return Err("an archive member is listed twice")
+	}
+	for member in members {
+		if !member_name(member.name) {
+			return Err("unsafe archive member name ${Json.to_str(member.name)}")
+		}
+		if !hex(member.sha256) {
+			return Err("the SHA-256 of archive member ${member.name} is not 64 lowercase hex digits")
+		}
+	}
+	Ok({})
+}
+
+## The component identifier of a member: `member-` and its path with `/`
+## and `_` as `-`, as the platform's linker members are named, or, when the
+## path has other characters an identifier cannot, a hashed form of it.
+member_id : Sbom.Member -> Str
+member_id = |member| {
+	direct = "member-${member.name.replace_each("/", "-").replace_each("_", "-")}"
+	if (valid_id(direct) and direct.to_utf8().len() <= 128) direct else "member-${local_ref(member.name)}"
+}
+
+expect member_id({ name: "targets/x64musl/libc.a", size: 0, sha256: "" }) == "member-targets-x64musl-libc.a"
+expect member_id({ name: "fonts/a+b.ttf", size: 0, sha256: "" }).starts_with("member-fonts-a-b.ttf-")
+expect member_name("src/Main.roc") and member_name("LICENSE") and !member_name("") and !member_name("/etc/passwd") and !member_name("../escape") and !member_name("a/../b") and !member_name("dir/") and !member_name("a b") and !member_name("a\\b")
 
 leaks : Str -> Bool
 leaks = |value| ["/Users/", "/home/", "/private/", "/tmp/", "/var/", "/nix/store/", "C:\\\\Users\\\\", "token=", "password=", "ghp_", "github_pat_", "BEGIN PRIVATE KEY"].any(|marker| value.contains(marker))

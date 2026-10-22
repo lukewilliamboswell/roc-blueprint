@@ -247,6 +247,27 @@ write! = |root, filename, version, target, composition, created, commit, revisio
 			$inputs = $inputs.append({ input: "platform-member:${member}:${member_sha}", component: member_id, reason: "Actual recipe-declared delivered linker member; input archive hash is recorded separately" })
 		}
 	}
+	if target == "source" {
+		# The produced archive, not the bundler's argument list, says what a
+		# source bundle holds: `roc bundle` packs the files its modules import
+		# too. Every member is stated by digest; a declared linker member is
+		# an archive member as well, and stays one component.
+		members = SbomFiles.archive_members!("${root}/dist/${filename}")?
+		archive = Sbom.archive_members("sources", members).map_err(|message| Invalid(message))?
+		for member_component in archive.components {
+			match $delivered_components.find_first(|entry| entry.id == member_component.id) {
+				Ok(declared) =>
+					if declared.sha256 != member_component.sha256 {
+						return Err(Invalid("archive member ${member_component.name} differs from the declared linker member"))
+					}
+				Err(_) => {
+					$delivered_components = $delivered_components.append(member_component)
+					$delivered_edges = $delivered_edges.concat(archive.relationships.keep_if(|relation| relation.to == member_component.id))
+				}
+			}
+		}
+		Sbom.members_accounted(members, { ..composition, components: $delivered_components, inputs: $inputs }).map_err(|message| Invalid(message))?
+	}
 	inventory = Sbom.inspect_declared(target, { ..composition, components: $delivered_components.concat($tool_components), relationships: $delivered_edges.concat($tool_edges), inputs: $inputs }, $inputs.map(|entry| entry.input)).map_err(|message| Invalid(message))?
 	digest = SbomFiles.digest!("${root}/dist/${filename}")?
 	subject = { filename, version, target, sha256: digest, url: Bundle.release_url(Bundle.default_repository, version, filename) }
