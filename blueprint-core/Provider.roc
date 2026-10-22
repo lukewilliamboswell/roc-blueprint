@@ -1,5 +1,5 @@
-# The Core <-> Provider contract: pure functions only. The Core (a consumer
-# such as the blueprint CLI) performs every effect these results describe.
+# Pure core-library <-> provider-adapter contract. These functions describe
+# effects; a host such as the Blueprint CLI performs and verifies them.
 # See docs/architecture.adoc, invariant 7.
 import Spec
 import Request
@@ -7,6 +7,7 @@ import Layout
 import Steps
 import Lock
 import Value
+import Activation
 
 Provider := {
 	## Short name, e.g. "nix". Spec `raw` entries naming it are for this provider.
@@ -15,11 +16,29 @@ Provider := {
 	## The Spec `requires` features this provider implements.
 	features : List(Str),
 
+	## Supported operations and guarantees of successful execution, not
+	## observations that planning has executed or validated a sandbox.
+	build_capabilities : List(Str),
+	build_guarantees : List(Str),
+
 	## Whether this provider supplies the tools of a package source with this
 	## intent. The Core asks a provider to realise an environment only when
 	## the environment has a tool from such a source; what an environment
 	## fetches or expects of the machine is the Core's own.
 	realises : Spec.Provider -> Bool,
+
+	## Native declaration grammar belongs to the selected adapter.
+	validate_source : Spec.Provider -> Try({}, Str),
+	validate_tool : Str -> Try({}, Str),
+
+	## An executor declaration this provider owns. Its settings must be
+	## usable by this provider; `check` and planning refuse one that is not,
+	## before any effect.
+	validate_executor : Spec.Executor -> Try({}, Str),
+
+	## A reference of an input or build source this provider resolves. The
+	## grammar is the provider's; the core never interprets it.
+	validate_reference : Str -> Try({}, Str),
 
 	## Inspect: the files this provider would generate for the whole Spec.
 	render : Spec -> Try(List(File), Str),
@@ -33,15 +52,31 @@ Provider := {
 	preflight : Spec, Request, Str, Layout -> Try({}, Str),
 
 	## Fetch + Realise + Activate: the ordered steps for one request, from the
-	## Lock only. Never resolves or changes pins. The Core has already rejected
-	## a stale Lock.
+	## validated Spec and Lock. The host captures declared project files and
+	## performs the described effects. Never resolves or changes pins.
 	realise : Spec, Request, Str, Layout, Lock -> Try(Steps, [InvalidLock(Str), Unrealisable(Str)]),
+
+	## Entering an environment as data: the argv that prints what the
+	## provider's shell for this step would export, and its decoding into an
+	## Activation. The host runs the argv and renders the result at the edge.
+	activation_argv : Steps.Step -> Try(List(Str), Str),
+	activation : Str -> Try(Activation, Str),
 
 	## Build execution options and native-result decoding belong to the provider.
 	## The consumer executes argv and prints this provider-neutral result.
-	build_argv : Steps.Step, BuildOptions -> Try(List(Str), Str),
+	build_prepare_argv : Steps.Step -> Try(List(Str), Str),
+	build_prepared : Str -> Try(PreparedBuild, Str),
+	build_execute_argv : Steps.Step, PreparedBuild, BuildOptions -> Try(List(Str), Str),
 	build_result : Str -> Try(BuildResult, Str),
+
+	## Direct imported pins of one build, versus closure-wide provenance.
+	build_inputs : Spec, Str -> Try(List(Str), Str),
 	build_sources : Spec, Str -> Try(List(Str), Str),
+	build_exclusions : Spec, Layout -> Try(List(Str), Str),
+
+	## Selected local pins can be inspected without native execution/layout
+	## restrictions. The host measures and verifies these paths.
+	build_local_inputs : Spec, Str, Layout, Lock -> Try(List({ name : Str, path : Str, digest : Str }), Str),
 
 	## Resolve: what the Core must stage and run to produce a native lock, for
 	## every input or for the named ones alone. The Core asks only a provider
@@ -54,18 +89,20 @@ Provider := {
 	lock_from_native : Spec, Layout, Str, List({ path : Str, digest : Str }) -> Try(Lock, Str),
 }.{
 
-	BuildOptions : { json : Bool, rebuild : Bool }
+	BuildOptions : { rebuild : Bool }
 
 	## Identity is opaque outside its provider: a Nix derivation, for example.
 	## Native details stay namespaced when rendered, never mandatory core fields.
-	BuildResult : { recipe_identity : Str, outputs : List({ name : Str, path : Str }), metadata : List({ name : Str, value : Value }) }
+	PreparedBuild : { build_identity : Str, outputs : List({ name : Str, path : Str }) }
+
+	BuildResult : { build_identity : Str, outputs : List({ name : Str, path : Str }), metadata : List({ name : Str, value : Value }) }
 
 	## Inspection returns relative names; executable Steps files are absolute.
 	File : { path : Str, contents : Str }
 
 	## Unknown means the adapter has not established the kind of content.
 	DigestKind : [File, Tree, Unknown]
-	LockedSource : { name : Str, identity : Str, digest_kind : DigestKind, metadata : List({ name : Str, value : Value }) }
+	LockedSource : { name : Str, content_identity : Str, digest_kind : DigestKind, metadata : List({ name : Str, value : Value }) }
 
 	## Which pins an update resolves again. `Named` moves only the inputs with
 	## these names and keeps every other pin of the Lock, which the Core has

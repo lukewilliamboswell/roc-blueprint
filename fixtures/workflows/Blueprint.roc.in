@@ -4,16 +4,18 @@ app [config] {
 }
 
 config = [
+	Executor("native", Nix("default")),
 	Name("workflow-integration"),
 	Systems(["x86_64-linux"]),
 	Packages("default", From(NixPackages("@PACKAGES@"))),
-	Packages("foreign", From(GuixPackages("https://example.invalid/guix"))),
-	Overlay("roc", "@ROC_OVERLAY@"),
+	Input("roc", "@ROC_OVERLAY@"),
 	# Tasks and builds are Roc scripts: one pinned compiler and the bundles
 	# those scripts name, and no other tool. Roc takes the first `--` for
 	# itself, so each command has one before the script's arguments.
 	Environment("builder", [Overlays(["roc"]), Command("roc-stable", "default#rocpkgs.@ROC_COMPILER@"), RocPackages([@ROC_PACKAGES@])]),
-	Environment("foreign", [Tools(["foreign#python"])]),
+	# An environment no executor here can supply: it expects a tool of the
+	# machine, which the sandbox never has and this machine does not either.
+	Environment("foreign", [Expect(["blueprint-fixture-absent-tool"])]),
 	Source("assets", "path:./assets"),
 	Task("record", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "record", "configured argument"])]),
 	Task("prepare", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "prepare"])]),
@@ -21,10 +23,11 @@ config = [
 	Task("dirty", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "dirty"])]),
 	Task("fail", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "fail"])]),
 	Task("later", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "record", "unsupported task reached"])]),
-	Build("library", [Use("builder"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
+	Build("library", [Execute("native"), Use("builder"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
 	Build(
 		"app",
 		[
+			Execute("native"),
 			Use("builder"),
 			Inputs(["assets"]),
 			Needs(["library"]),
@@ -32,9 +35,9 @@ config = [
 			Output("dist/app"),
 		],
 	),
-	Build("fail", [Use("builder"), Run(["roc-stable", "build.roc", "--", "fail"]), Output("dist/fail")]),
-	Build("later-library", [Use("builder"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
-	Build("later-app", [Use("builder"), Needs(["later-library"]), Run(["roc-stable", "build.roc", "--", "fail"]), Output("dist/fail")]),
+	Build("fail", [Execute("native"), Use("builder"), Run(["roc-stable", "build.roc", "--", "fail"]), Output("dist/fail")]),
+	Build("later-library", [Execute("native"), Use("builder"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
+	Build("later-app", [Execute("native"), Use("builder"), Needs(["later-library"]), Run(["roc-stable", "build.roc", "--", "fail"]), Output("dist/fail")]),
 	Workflow("empty", []),
 	Workflow("nested-empty", [RunWorkflow("empty"), RunWorkflow("empty")]),
 	Workflow("ci", [RunTask("prepare", []), BuildArtifact("app"), RunTask("record", ["after build"])]),

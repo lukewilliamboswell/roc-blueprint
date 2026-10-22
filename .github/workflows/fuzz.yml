@@ -23,7 +23,7 @@ jobs:
       matrix:
         # The directories of blueprint-core/fuzz; scripts/test.roc static
         # fails when the two differ.
-        target: [lock-parse, lock-snapshot-parse, lock-snapshot-project, lock-snapshot-round-trip, sbom-read, sbom-render, spec-parse, spec-round-trip]
+        target: [build-model-compare, build-record-parse, lock-parse, lock-snapshot-parse, lock-snapshot-project, lock-snapshot-round-trip, nix-lock-decode, nix-native-decode, project-validate, sbom-read, sbom-render, spec-parse, spec-round-trip]
     name: ${{ matrix.target }}
     runs-on: ubuntu-latest
     timeout-minutes: 60

@@ -8,7 +8,7 @@ import cli.OsStr
 import cli.Stderr
 import src/LockSnapshotTest
 
-## The lock snapshot contract, `blueprint-core/lock-snapshot-v1.schema.json`
+## The lock snapshot contract, `blueprint-core/lock-snapshot-v2.schema.json`
 ## and its profile, checked in Roc against a built official consumer. All
 ## expects run via `roc test`.
 ##

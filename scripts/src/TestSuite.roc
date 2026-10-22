@@ -26,7 +26,7 @@ TestSuite := [].{
 	requested = |args|
 		match args.find_first(|name| !groups.contains(name)) {
 			Ok(name) => Err(UnknownGroup(name))
-			Err(_) => Ok(if args.is_empty() groups else args)
+			Err(_) => Ok(if (args.is_empty()) groups else args)
 		}
 
 	## A project whose one build copies a file with a tool of its environment.
@@ -41,7 +41,7 @@ TestSuite := [].{
 				"	Systems([\"x86_64-linux\"]),",
 				"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
 				"	Environment(\"builder\", [Tools([\"default#coreutils\"])]),",
-				"	Build(\"copy\", [Use(\"builder\"), Run([\"cp\", \"message.txt\", \"copied.txt\"]), Output(\"copied.txt\")]),",
+				"	Executor(\"native\", Nix(\"default\")), Build(\"copy\", [Execute(\"native\"), Use(\"builder\"), Run([\"cp\", \"message.txt\", \"copied.txt\"]), Output(\"copied.txt\")]),",
 				"]",
 				"",
 			],
@@ -84,7 +84,7 @@ read! : Context, Str => Try(Str, _)
 read! = |context, file| Path.read_utf8!(Path.utf8("${context.root}/${file}"))
 
 problem! : Str => Try({}, _)
-problem! = |reason| if reason.is_empty() Ok({}) else Script.fail!(reason)
+problem! = |reason| if (reason.is_empty()) Ok({}) else Script.fail!(reason)
 
 file_names! : Str => Try(List(Str), _)
 file_names! = |directory| {
@@ -217,9 +217,15 @@ static! = |context| {
 		problem!(StaticChecks.lock_inspector_contract_problem(read!(context, report)?))?
 	}
 
-	for report in ["blueprint-core/LockSnapshot.roc", "blueprint-core/JsonData.roc"] {
+	for report in ["blueprint-core/LockSnapshot.roc", "blueprint-core/JsonData.roc", "blueprint-core/BuildModel.roc", "blueprint-core/Activation.roc"] {
 		problem!(StaticChecks.core_report_contract_problem(read!(context, report)?))?
 	}
+	problem!(StaticChecks.native_grammar_problem(read!(context, "blueprint-nix/Native.roc")?, read!(context, "blueprint-platform/Lower.roc")?))?
+	var $authority = []
+	for file in ["blueprint-cli/Store.roc", "blueprint-cli/StoreRecord.roc", "blueprint-cli/Bootstrap.roc", "blueprint-core/Lock.roc", "blueprint-core/Spec.roc", "blueprint-core/BuildModel.roc", "blueprint-core/Sexpr.roc"] {
+		$authority = $authority.append((file, read!(context, file)?))
+	}
+	problem!(StaticChecks.json_authority_problem($authority))?
 
 	step!("The CLI records a download of its compiler for every system it runs on")?
 	problem!(StaticChecks.bootstrap_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-cli/Bootstrap.roc")?))?
@@ -332,6 +338,9 @@ cli! = |context| {
 
 	step!("Explicit update source safety and concurrent authority publication")?
 	script!(context, "test_update", [])?
+
+	step!("Structural build plans and dependency explanations without Nix")?
+	script!(context, "test_build_planning", [])?
 
 	step!("Staged isolation witness, build runner path and refusals")?
 	script!(context, "test_isolation", [])?

@@ -1,4 +1,4 @@
-## `blueprint`: turns a `Blueprint.roc` into a reproducible development environment.
+## `blueprint`: executes declared environments, tasks, builds and workflows.
 ##
 ## The Roc compiler validates `Blueprint.roc` and prints the blueprint Spec;
 ## this CLI consumes pure plans and owns file/process effects. Only explicit
@@ -13,6 +13,7 @@ app [main!] {
 
 import pf.Cmd
 import pf.Env
+import pf.File
 import pf.OsStr
 import pf.Path
 import pf.Stdout
@@ -30,6 +31,9 @@ import core.Provider
 import core.Realise
 import core.Lock
 import core.Tree
+import core.BuildModel
+import core.Activation
+import core.Sexpr
 import Bootstrap
 import Download
 import Paths
@@ -49,8 +53,8 @@ version = "0.7.0"
 ## a concrete provider: everything else uses the Provider contract
 ## (docs/architecture.adoc, invariant 7; checked by scripts/test.roc). Which
 ## of them a request needs is not chosen here or by the caller's environment:
-## `Realise.plan` asks one only for an environment that has a tool from a
-## source it supplies.
+## `Realise.plan` routes environments through declared package-source owners
+## and Builds through their explicit executors.
 providers : List(Provider)
 providers = [NixProvider.provider]
 
@@ -61,10 +65,13 @@ provider_names = Str.join_with(providers.map(|provider| provider.name), ", ")
 Command : [
 	CompilerVersion,
 	LockShow({ json : Bool, names : List(Str) }),
+	StoreVerify({ json : Bool, repair : Bool }),
 	Gen,
 	Shell(Str),
 	Run({ task : Str, args : List(Str) }),
 	Build({ name : Str, json : Bool, rebuild : Bool }),
+	InspectBuild({ name : Str, json : Bool, prepare : Bool, explain : Bool }),
+	Activate({ name : Str, format : ActivationFormat }),
 	Workflow(Str),
 	Tasks,
 	Update(List(Str)),
@@ -115,7 +122,19 @@ cli_for = |loaded| {
 				{ name: "show", description: "Inspect committed pins without evaluating Blueprint.roc", mapper: |r| LockShow(r) },
 			),
 		]),
-		{ name: "lock", description: "Read committed pins without evaluating the project", mapper: |c| c },
+		{ name: "lock", description: "Inspect committed pins", mapper: |c| c },
+	)
+	store_cmd = SubCmd.finish(
+		SubCmd.required([
+			SubCmd.finish(
+				{
+					json: Opt.flag({ short: "", long: "json", help: "Print the report as one JSON object." }),
+					repair: Opt.flag({ short: "", long: "repair", help: "Replace a tree or record that differs, and remove a damaged archive." }),
+				}.Cli,
+				{ name: "verify", description: "Unpack every stored archive again and compare its trees and their records, with no download", mapper: |r| StoreVerify(r) },
+			),
+		]),
+		{ name: "store", description: "Inspect the store of downloads", mapper: |c| c },
 	)
 	requirements_cmd = SubCmd.finish(
 		{
@@ -180,6 +199,30 @@ cli_for = |loaded| {
 			}
 		}
 
+	inspect_build_cmd = |explain| SubCmd.finish(
+		SubCmd.required([
+			SubCmd.finish(
+				{
+					json: Opt.flag({ short: "", long: "json", help: "Render the shared build evidence as JSON." }),
+					prepare: Opt.flag({ short: "", long: "prepare", help: "Prepare an exact native build identity without building." }),
+					target: Param.str({ name: "name", help: "The declared build.", default: NoDefault }),
+				}.Cli,
+				{ name: "build", description: "Inspect a declared build", mapper: |options| InspectBuild({ name: options.target, json: options.json, prepare: options.prepare, explain }) },
+			),
+		]),
+		{ name: if (explain) "explain" else "plan", description: if (explain) "Explain changes from the last successful local build" else "Inspect declared build inputs and dependencies", mapper: |command| command },
+	)
+
+	env_cmd = SubCmd.finish(
+		{
+			json: Opt.flag({ short: "", long: "json", help: "Render the activation as a JSON report." }),
+			github_path: Opt.flag({ short: "", long: "github-path", help: "Print the lines a GitHub Actions step appends to $GITHUB_PATH." }),
+			github_env: Opt.flag({ short: "", long: "github-env", help: "Print the lines a GitHub Actions step appends to $GITHUB_ENV." }),
+			target: Param.str({ name: "name", help: "The declared shell.", default: NoDefault }),
+		}.Cli,
+		{ name: "env", description: "Print what entering a shell exports, without entering it", mapper: |options| Activate({ name: options.target, format: if (options.json) JsonReport else if (options.github_path) GithubPath else if (options.github_env) GithubEnv else ShellLines }) },
+	)
+
 	Cli.assert_valid(
 		Cli.finish(
 			SubCmd.optional([
@@ -192,10 +235,14 @@ cli_for = |loaded| {
 				shell_cmd,
 				run_cmd,
 				build_cmd,
+				inspect_build_cmd(False),
+				inspect_build_cmd(True),
+				env_cmd,
 				workflow_cmd,
 				SubCmd.empty({ name: "tasks", description: "List the tasks", value: Tasks }),
 				update_cmd,
 				lock_cmd,
+				store_cmd,
 				requirements_cmd,
 				SubCmd.empty({ name: "check", description: "Validate Blueprint.roc", value: Check }),
 				SubCmd.empty({ name: "spec", description: "Print the Spec", value: PrintSpec }),
@@ -243,15 +290,24 @@ task_choice = |task|
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |raw_args| {
 	# These inspectors must parse before project paths, configuration, host or
-	# compiler overrides are observed. LockShow selects only its lock path.
+	# compiler overrides are observed. LockShow selects only its lock path;
+	# StoreVerify reads only the store.
 	independent_query = match raw_args {
-		[first, ..] => first.to_bytes() == "compiler-version".to_utf8() or first.to_bytes() == "lock".to_utf8()
+		[first, ..] => ["compiler-version", "lock", "store"].any(|name| first.to_bytes() == name.to_utf8())
 		_ => False
 	}
 	context = if (independent_query) Err(NoBlueprint) else context!()
-	loaded = match context {
+	# Evaluation resolves and verifies the compiler once; every later use of
+	# it in this process, such as `check` or publishing Roc packages, takes
+	# the resolved path instead of verifying the store again.
+	evaluated = match context {
 		Ok(ctx) => evaluate!(ctx)
 		Err(err) => Err(err)
+	}
+	loaded = evaluated.map_ok(|found| found.spec)
+	prepared = match evaluated {
+		Ok(found) => Ok(found.ctx)
+		Err(_) => context
 	}
 	# basic-cli supplies arguments without the executable name.
 	match Cli.parse_or_display_message(cli_for(loaded), raw_args, OsStr.to_raw) {
@@ -261,7 +317,7 @@ main! = |raw_args| {
 			Err(Exit(2))
 		}
 		Ok(command) =>
-			match run!(command ?? Gen, loaded, context) {
+			match run!(command ?? Gen, loaded, prepared) {
 				Ok({}) => Ok({})
 				Err(err) => {
 					_ = Stderr.line!("blueprint: ${describe(err, provider_names)}")
@@ -274,6 +330,7 @@ main! = |raw_args| {
 run! = |command, loaded, context| {
 	match command {
 		LockShow({ json, names }) => inspect_lock!(json, names)
+		StoreVerify(options) => store_verify!(options)
 		CompilerVersion => Stdout.line!(compiler_version.trim())
 		Check => check!(loaded, context?)
 		_ => {
@@ -281,11 +338,14 @@ run! = |command, loaded, context| {
 			spec = loaded?
 			match command {
 				LockShow({ json, names }) => inspect_lock!(json, names)
+				StoreVerify(options) => store_verify!(options)
 				CompilerVersion => Stdout.line!(compiler_version.trim())
 				Gen => realise!(spec, Request.Generate, ctx)
 				Shell(name) => realise!(spec, Request.Shell(name), ctx)
 				Run({ task, args }) => realise!(spec, Request.Run(task, args), ctx)
 				Build(options) => realise!(spec, Request.Build(options.name), { ..ctx, build_json: options.json, rebuild: options.rebuild })
+				InspectBuild(options) => inspect_build!(spec, options, ctx)
+				Activate(options) => realise!(spec, Request.Shell(options.name), { ..ctx, build_mode: Activate, activation_format: options.format })
 				Workflow(name) => realise!(spec, Request.Workflow(name), ctx)
 				Tasks => list_tasks!(spec)
 				Update(names) => resolve!(spec, names, ctx)
@@ -309,48 +369,110 @@ inspect_lock! = |json, names| {
 	Stdout.write!(report)
 }
 
+## `blueprint store verify`: like `inspect_lock!`, it observes no project,
+## host or compiler. It reads the store, and writes to it only to repair, and
+## downloads nothing. It fails when anything it found was not intact, even
+## when it has repaired that.
+store_verify! : { json : Bool, repair : Bool } => Try({}, _)
+store_verify! = |{ json, repair }| {
+	store = Store.root!().map_err(|message| StoreFailed(message))?
+	report = (if (repair) Store.repair!(store) else Store.verify!(store)).map_err(|message| StoreFailed(message))?
+	Stdout.write!(if (json) store_json(report) else store_text(report))?
+	if report.counts.intact == report.findings.len() {
+		Ok({})
+	} else if repair {
+		Err(StoreFailed("the store was not intact; what differed is repaired as reported"))
+	} else {
+		Err(StoreFailed("the store is not intact; `blueprint store verify --repair` makes what differs again from its archive"))
+	}
+}
+
+## How a verdict reads: in a line, in JSON, and what it says beside that.
+verdict_words : Store.Verdict -> { label : Str, name : Str, detail : Str }
+verdict_words = |verdict|
+	match verdict {
+		Intact => { label: "intact", name: "intact", detail: "" }
+		ArchiveDamaged(detail) => { label: "archive damaged", name: "archive_damaged", detail }
+		TreeDiffers(detail) => { label: "tree differs", name: "tree_differs", detail }
+		RecordDiffers(detail) => { label: "record differs", name: "record_differs", detail }
+		NoRecord => { label: "no record", name: "no_record", detail: "" }
+		NoArchive => { label: "no archive", name: "no_archive", detail: "" }
+	}
+
+## One line for each finding and each repair, and a line that sums them up.
+store_text : Store.Report -> Str
+store_text = |report| {
+	found = report.findings.map(
+		|finding| {
+			said = verdict_words(finding.verdict)
+			if (said.detail.is_empty()) "${said.label} ${finding.item}" else "${said.label} ${finding.item}: ${said.detail}"
+		},
+	)
+	repaired = report.repaired.map(|done| "repaired ${done.item}: ${done.action}")
+	counts = report.counts
+	others = [("archive damaged", counts.archive_damaged), ("tree differs", counts.tree_differs), ("record differs", counts.record_differs), ("no record", counts.no_record), ("no archive", counts.no_archive)]
+		.keep_if(|(_, count)| count > 0)
+		.map(|(label, count)| ", ${count.to_str()} ${label}")
+	totals = "store ${report.store}: ${report.findings.len().to_str()} checked, ${counts.intact.to_str()} intact${Str.join_with(others, "")}${if (repaired.is_empty()) "" else "; ${repaired.len().to_str()} repaired"}"
+	Str.join_with(found.concat(repaired).append(totals), "\n").concat("\n")
+}
+
+store_report_format : U64
+store_report_format = 1
+
+## The report as one JSON object, for a program to read. The store's own
+## records stay S-expressions; this is presentation.
+store_json : Store.Report -> Str
+store_json = |report| {
+	findings = report.findings.map(
+		|finding| {
+			said = verdict_words(finding.verdict)
+			{ item: finding.item, verdict: said.name, detail: said.detail }
+		},
+	)
+	Json.to_str({ format: store_report_format, store: report.store, findings, counts: report.counts, repaired: report.repaired }).concat("\n")
+}
+
 ## Type-check Blueprint.roc (including whole-config validation), then reuse
-## the Spec loaded for CLI parsing to check provider compatibility. This also
-## preserves validation for older platforms that only lower at run time.
+## the Spec loaded for CLI parsing to check provider compatibility.
 check! : Try(Spec, _), Context => Try({}, _)
 check! = |loaded, ctx| {
 	check_host!()?
 	native_command!(OsStr.from_str(roc!(ctx)?)).args(["check", "Blueprint.roc"].map(OsStr.from_str))
 		.cwd(path(ctx.layout.project_root)).exec!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
-	_ = rendered(loaded?)?
+	spec = loaded?
+	_ = rendered(spec)?
+	# A build whose executor this blueprint cannot drive is a configuration
+	# problem, said here rather than at the first `build`.
+	for executor in spec.executors {
+		adapter = providers.find_first(|candidate| candidate.name == executor.provider).map_err(|_| InvalidProject("executor ${executor.name} names provider ${executor.provider}, which this blueprint does not register"))?
+		(adapter.validate_executor)(executor).map_err(|message| InvalidProject(message))?
+	}
 	Stdout.line!("Blueprint.roc is valid")
 }
 
 ## Compile and run Blueprint.roc, then parse the Spec it prints.
-evaluate! : Context => Try(Spec, _)
+evaluate! : Context => Try({ spec : Spec, ctx : Context }, _)
 evaluate! = |ctx| {
 	root = ctx.layout.project_root
 	if !(path("${root}/Blueprint.roc").exists!() ?? False) {
 		return Err(NoBlueprint)
 	}
 	check_host!()?
-	output = native_command!(OsStr.from_str(roc!(ctx)?)).args(["Blueprint.roc"].map(OsStr.from_str))
+	compiler = roc!(ctx)?
+	resolved = { ..ctx, compiler: Resolved(compiler) }
+	output = native_command!(OsStr.from_str(compiler)).args(["Blueprint.roc"].map(OsStr.from_str))
 		.cwd(path(root)).capture!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = Spec.parse(output).map_err(|err| BadSpec(err))?
-	current_platform(spec)?
 	missing = spec.unsupported_features(providers.fold(Realise.features, |all, provider| all.concat(provider.features)))
 	if !missing.is_empty() {
 		return Err(NeedsFeatures(missing))
 	}
-	Project.validate(spec).map_err(|message| InvalidProject(message))
+	validated = Project.validate(spec).map_err(|message| InvalidProject(message))?
+	Ok({ spec: validated, ctx: resolved })
 }
-
-## A Spec from a platform older than 0.6.0 does not say that its sources are
-## all declared: its tools may name a source that platform implied, which
-## nothing here supplies. It is refused as that, before anything in it is
-## read as if it were complete.
-current_platform : Spec -> Try({}, [OldPlatform])
-current_platform = |spec| if (spec.requires_.contains("explicit-sources")) Ok({}) else Err(OldPlatform)
-
-expect current_platform({ ..Spec.empty("x"), requires_: ["explicit-sources", "programs"] }) == Ok({})
-expect current_platform(Spec.empty("x")) == Err(OldPlatform) and current_platform({ ..Spec.empty("x"), requires_: ["sources", "builds"] }) == Err(OldPlatform)
 
 ## The files every provider would generate for the Spec.
 rendered : Spec -> Try(List(Provider.File), _)
@@ -458,8 +580,12 @@ print_files! = |spec| {
 ## this executable is kept in the store, by its digest. No provider is asked:
 ## reading a Blueprint.roc needs none installed.
 roc! : Context => Try(Str, _)
-roc! = |_ctx| {
+roc! = |ctx| {
 	expected = "Roc compiler version ${compiler_version.trim()}"
+	match ctx.compiler {
+		Resolved(compiler) => return Ok(compiler)
+		Unresolved => {}
+	}
 	match Env.var_str!("ROC") {
 		Ok(override) => {
 			compiler = if override.contains("/") and !override.starts_with("/") {
@@ -498,7 +624,11 @@ roc! = |_ctx| {
 	}
 }
 
-Context : { layout : Layout, target : Str, build_json : Bool, rebuild : Bool, build_sources : List(Lock.Source) }
+## How `env` renders an activation: shell exports to `eval`, a JSON report,
+## or the lines a GitHub Actions step appends to its path or env file.
+ActivationFormat : [ShellLines, JsonReport, GithubPath, GithubEnv]
+
+Context : { layout : Layout, target : Str, build_json : Bool, rebuild : Bool, build_sources : List(Lock.Source), build_pins : List(Lock.Source), build_spec : Spec, build_mode : [Execute, Plan, Explain, Activate], activation_format : ActivationFormat, compiler : [Unresolved, Resolved(Str)] }
 
 ## Caller paths are observations, resolved once against the selected root.
 context! : () => Try(Context, _)
@@ -531,6 +661,11 @@ context! = || {
 		build_json: False,
 		rebuild: False,
 		build_sources: [],
+		build_pins: [],
+		build_spec: Spec.empty(""),
+		build_mode: Execute,
+		activation_format: ShellLines,
+		compiler: Unresolved,
 		layout: Layout.{
 			project_root: root,
 			workspace,
@@ -743,29 +878,36 @@ realise! = |spec, request, ctx| {
 	layout = ctx.layout
 	# What the Spec alone rules out is said before the authority is read.
 	Realise.preflight(spec, request, ctx.target, layout, providers).map_err(|problems| PlanFailed(problems))?
-	if !(path(layout.lock_path).exists!()?) {
-		return Err(LockFailed("missing authoritative lock; run `blueprint update`"))
-	}
-	safe_path!(layout.lock_path)?
-	if path(layout.lock_path).type!()? != IsFile {
-		return Err(UnsafePath(layout.lock_path))
-	}
-	lock = Lock.parse(path(layout.lock_path).read_utf8!()?)
-		.map_err(|_| LockFailed("unsupported Blueprint lock format; run blueprint update"))?
-	# Stale for every project: said as what it is, not as what changed.
-	if Lock.from_before_explicit_sources(lock) {
-		return Err(OldLock)
-	}
+	lock = read_lock!(layout)?
 	lock.stale(spec).map_err(|message| LockFailed(message))?
 	# Everything that stops the request is known, and said together, before
 	# the first effect of any step.
 	steps = Realise.plan(spec, request, ctx.target, layout, lock, providers)
 		.map_err(|problems| PlanFailed(problems))?
+	# Capability refusals precede downloads, staging and runtime authorization.
+	for step in steps.steps {
+		match step.action {
+			Build(name) => {
+				artifact = step.artifacts.find_first(|entry| entry.name == name).map_err(|_| RenderFailed("missing build artifact"))?
+				adapter = providers.find_first(|entry| entry.name == artifact.provider).map_err(|_| RenderFailed("missing build adapter"))?
+				required = ["builds", "prepare"].concat(if (ctx.rebuild) ["checked-rebuild"] else [])
+				missing = required.keep_if(|capability| !adapter.build_capabilities.contains(capability))
+				if !missing.is_empty() {
+					return Err(RenderFailed("provider ${adapter.name} does not support ${Str.join_with(missing, ", ")}"))
+				}
+			}
+			_ => {}
+		}
+	}
 	# A build cannot run on this host: say so before the first step's effects.
 	for step in steps.steps {
 		for operation in step.operations {
 			match operation {
-				LocalSystem(system) => runner_host(host_system!(), system)?
+				LocalSystem(system) => {
+					if ctx.build_mode == Execute {
+						runner_host(host_system!(), system)?
+					}
+				}
 				_ => {}
 			}
 		}
@@ -773,15 +915,16 @@ realise! = |spec, request, ctx| {
 	present!(steps.steps, request)?
 	fetched = fetch_programs!(steps.steps)?
 	for step in steps.steps {
-		used = match step.action {
+		(used, measured_pins) = match step.action {
 			Build(name) => {
 				artifact = step.artifacts.find_first(|item| item.name == name).map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
 				adapter = providers.find_first(|candidate| candidate.name == artifact.provider).map_err(|_| RenderFailed("unknown build provider: ${artifact.provider}"))?
-				(adapter.build_sources)(spec, name).map_err(|message| RenderFailed(message))?
+				names = (adapter.build_sources)(spec, name).map_err(|message| RenderFailed(message))?
+				(names, snapshot_pins(lock, ctx.target, adapter).map_err(|message| RenderFailed(message))?)
 			}
-			_ => []
+			_ => ([], [])
 		}
-		execute_step!(step, fetched, { ..ctx, build_sources: lock.sources.keep_if(|source| used.contains(source.name)) })?
+		execute_step!(step, fetched, { ..ctx, build_spec: spec, build_pins: measured_pins, build_sources: lock.sources.keep_if(|source| used.contains(source.name)) })?
 	}
 	Ok({})
 }
@@ -877,24 +1020,16 @@ expect !source_is_embedded_compiler("different bytes", "x86_64-linux")
 ## effect.
 execute_step! : Steps.Step, List(Fetched), Context => Try({}, _)
 execute_step! = |step, fetched, ctx| {
-	# Refuse stale local trees before creating any caller-generated state.
-	for operation in step.operations {
-		match operation {
-			VerifyTree({ path: local, digest }) => {
-				safe_source!(local)?
-				if tree_digest!(local)? != digest {
-					return Err(LockFailed("local source ${local} changed; run `blueprint update`"))
-				}
-			}
-			_ => {}
-		}
-	}
+	verify_tree_operations!(step.operations)?
 	isolation = step.operations.find_first(
 		|operation| match operation {
 			Isolation(_) => True
 			_ => False
 		},
 	)
+	if ctx.build_mode != Execute {
+		return execute_prepared!(step, fetched, ctx, "")
+	}
 	match isolation {
 		Ok(Isolation({ directory, .. })) => {
 			safe_path!(directory)?
@@ -908,13 +1043,55 @@ execute_step! = |step, fetched, ctx| {
 	}
 }
 
+verify_tree_operations! : List(Steps.Operation) => Try({}, _)
+verify_tree_operations! = |operations| {
+	for operation in operations {
+		match operation {
+			VerifyTree({ path: local, digest }) => {
+				safe_source!(local)?
+				if tree_digest!(local)? != digest {
+					return Err(LockFailed("local source ${local} changed; run `blueprint update`"))
+				}
+			}
+			_ => {}
+		}
+	}
+	Ok({})
+}
+
+## A step's copies of project files (see `snapshot!`) are its provider's
+## only while the step runs: by its end the provider has read them into its
+## own store, and a copy left in a generated root would be read again with
+## it by every later evaluation. Clear what an interrupted run left before
+## anything is staged, and this step's copies once its command has ended,
+## however it ended.
 execute_prepared! : Steps.Step, List(Fetched), Context, Str => Try({}, _)
 execute_prepared! = |step, fetched, ctx, witness_directory| {
+	snapshots = snapshots_root(ctx.layout)
+	clear_snapshots!(snapshots)
+	result = run_prepared!(step, fetched, ctx, witness_directory)
+	clear_snapshots!(snapshots)
+	result
+}
+
+## Remove a directory of copies, unless it is not where it should be: a
+## path through a link is never followed, and a refusal is said elsewhere.
+clear_snapshots! : Str => {}
+clear_snapshots! = |directory| {
+	if safe_path!(directory).is_ok() and (path(directory).exists!() ?? False) {
+		_ = path(directory).delete_all!()
+	}
+	{}
+}
+
+run_prepared! : Steps.Step, List(Fetched), Context, Str => Try({}, _)
+run_prepared! = |step, fetched, ctx, witness_directory| {
 	layout = ctx.layout
 	var $files = step.files
 	var $argv = step.argv
 	var $roc_bundles = []
 	var $programs = []
+	var $originals = []
 	for operation in step.operations {
 		match operation {
 			SourceFile(source) => {
@@ -924,8 +1101,25 @@ execute_prepared! = |step, fetched, ctx, witness_directory| {
 				} else {
 					Store.source_file!(store, source).map_err(|message| FetchFailed(message))?
 				}
+				$originals = $originals.append({ sha256: source.sha256, file })
 				marker = "@blueprint-source-file-${source.sha256}@"
 				$files = $files.map(|entry| { ..entry, contents: entry.contents.replace_each(marker, Json.to_str(file)) })
+			}
+			Measure({ target, argv, marker, record }) => {
+				local = match target {
+					Snapshot(build) => snapshot!(step, build, ctx)?
+					SourceFile(sha256) =>
+						$originals.find_first(|original| original.sha256 == sha256)
+							.map_ok(|original| original.file)
+							.map_err(|_| FetchFailed("no original file with SHA-256 ${sha256} was staged before the step measured it"))?
+				}
+				identity = if argv.is_empty() {
+					""
+				} else {
+					measure!(argv.append(local), ctx)?
+				}
+				text = measured_record(record, local, identity)
+				$files = $files.map(|entry| { ..entry, contents: entry.contents.replace_each(marker, text) })
 			}
 			VerifyTree({ path: local, digest }) => {
 				safe_source!(local)?
@@ -938,18 +1132,22 @@ execute_prepared! = |step, fetched, ctx, witness_directory| {
 				}
 			}
 			Isolation({ placeholder, .. }) => {
-				mnt = namespace!("mnt")?
-				net = namespace!("net")?
-				atomic_write!("${witness_directory}/witness", "${mnt}\n${net}\n")?
-				# Nix checks the source as its build user before mounting it. The
-				# owned parent permits traversal but no listing or other-user writes;
-				# the witness is readable even with a restrictive caller umask.
-				Cmd.new("chmod").args(["0444", "--", "${witness_directory}/witness"].map(OsStr.from_str)).exec!()?
-				Cmd.new("chmod").args(["0711", "--", witness_directory].map(OsStr.from_str)).exec!()?
-				$argv = $argv.map(|arg| arg.replace_each(placeholder, witness_directory))
+				if ctx.build_mode == Execute {
+					mnt = namespace!("mnt")?
+					net = namespace!("net")?
+					atomic_write!("${witness_directory}/witness", "${mnt}\n${net}\n")?
+					# Nix checks the source as its build user before mounting it. The
+					# owned parent permits traversal but no listing or other-user writes;
+					# the witness is readable even with a restrictive caller umask.
+					Cmd.new("chmod").args(["0444", "--", "${witness_directory}/witness"].map(OsStr.from_str)).exec!()?
+					Cmd.new("chmod").args(["0711", "--", witness_directory].map(OsStr.from_str)).exec!()?
+					$argv = $argv.map(|arg| arg.replace_each(placeholder, witness_directory))
+				}
 			}
 			LocalSystem(system) => {
-				runner_host(host_system!(), system)?
+				if ctx.build_mode == Execute {
+					runner_host(host_system!(), system)?
+				}
 			}
 
 			RocBundles(bundles) => {
@@ -970,6 +1168,9 @@ execute_prepared! = |step, fetched, ctx, witness_directory| {
 	publish_roc_bundles!($roc_bundles, ctx)?
 	if $programs.is_empty() {
 		start!({ ..step, argv: $argv }, [], "", ctx)
+	} else if ctx.build_mode == Activate {
+		bin = activation_bin!(step, $programs, ctx)?
+		start!({ ..step, argv: $argv }, $programs.map(|program| program.name), bin, ctx)
 	} else {
 		# The step's own directory of links, first on its PATH and gone when
 		# it ends, however it ends.
@@ -992,6 +1193,73 @@ execute_prepared! = |step, fetched, ctx, witness_directory| {
 	}
 }
 
+## Run a Measure's command from the project root and take what it prints,
+## trimmed, as the provider's identity of the content.
+measure! : List(Str), Context => Try(Str, _)
+measure! = |argv, ctx| {
+	printed = capture_build_command!(argv, ctx)?.trim()
+	if printed.is_empty() {
+		return Err(RenderFailed("`${Str.join_with(argv, " ")}` printed no identity"))
+	}
+	Ok(printed)
+}
+
+## A Measure's record: `@path@` and `@identity@` in `template` replaced by
+## the JSON strings of the two, neither looked for inside the other.
+measured_record : Str, Str, Str -> Str
+measured_record = |template, local, identity|
+	Str.join_with(template.split_on("@path@").map(|part| part.replace_each("@identity@", Json.to_str(identity))), Json.to_str(local))
+
+expect measured_record("{\"path\":@path@,\"narHash\":@identity@}", "/w/@identity@ \"q\"", "sha256-x=") == "{\"path\":\"/w/@identity@ \\\"q\\\"\",\"narHash\":\"sha256-x=\"}"
+expect measured_record("{\"path\":@path@}", "/w/a", "") == "{\"path\":\"/w/a\"}"
+
+## Copy the project files `build` selects (see `selected_walk!`) into a
+## directory of their own in the workspace, emptied first, for the provider
+## to read as a locked path. Names keep their bytes and files their
+## permissions, so the provider sees what the build's evidence measures.
+## The copy lasts until the step ends (see `execute_prepared!`).
+snapshot! : Steps.Step, Str, Context => Try(Str, _)
+snapshot! = |step, build, ctx| {
+	layout = ctx.layout
+	spec = Project.validate(ctx.build_spec).map_err(|message| RenderFailed(message))?
+	artifact = step.artifacts.find_first(|item| item.name == build).map_err(|_| RenderFailed("build plan is missing artifact ${build}"))?
+	adapter = providers.find_first(|candidate| candidate.name == artifact.provider).map_err(|_| RenderFailed("unknown build provider: ${artifact.provider}"))?
+	exclusions = (adapter.build_exclusions)(spec, layout).map_err(|message| RenderFailed(message))?
+	selection = build_selection(spec, build)
+	walked = selected_walk!(layout.project_root, path(layout.project_root), "", [], selection.paths, selection.all, exclusions, layout)?
+	missing_selected(selection.paths, walked.map(|entry| entry.path))?
+	copy = snapshot_root(layout, build)
+	safe_path!(copy)?
+	if path(copy).exists!()? {
+		path(copy).delete_all!()?
+	}
+	path(copy).create_all!()?
+	if Layout.contains(layout.generated_root, copy) {
+		ignore_generated!(layout)?
+	}
+	for entry in walked {
+		target = beneath(copy, entry.raw)
+		match entry.kind {
+			Dir => target.create_dir!()?
+			File => Path.copy!(entry.source, target).map_err(|err| RenderFailed("cannot copy ${entry.path} for build ${build}: ${Str.inspect(err)}"))?
+		}
+	}
+	Ok(copy)
+}
+
+## Where the host copies builds' selected project files for their provider.
+snapshots_root : Layout -> Str
+snapshots_root = |layout| "${layout.workspace}/snapshots"
+
+snapshot_root : Layout, Str -> Str
+snapshot_root = |layout, build| "${snapshots_root(layout)}/${build}"
+
+## `relative`, a path as listed, below `directory`, keeping its bytes.
+beneath : Str, List(U8) -> Path
+beneath = |directory, relative| Path.unix_bytes(directory.to_utf8().append('/').concat(relative))
+
+expect Path.to_os_str(beneath("/w/snapshots/app", "a/b".to_utf8().append(255))).to_bytes() == "/w/snapshots/app/a/b".to_utf8().append(255)
+
 ## Start a step's command from the project root, with `bin` ahead of the
 ## caller's PATH when the step has programs there. A program the argv names
 ## that is one of them is started from `bin` itself, whatever the caller's
@@ -1001,6 +1269,9 @@ start! : Steps.Step, List(Str), Str, Context => Try({}, _)
 start! = |step, names, bin, ctx| {
 	layout = ctx.layout
 	directories = if (bin.is_empty()) [] else [bin]
+	if ctx.build_mode == Activate {
+		return activate!(step, bin, ctx)
+	}
 	match step.action {
 		Build(name) => report_build!(step, name, ctx)
 		Shell(_) if step.argv.is_empty() => {
@@ -1250,38 +1521,395 @@ copy_roc_package! = |source, target| {
 	Ok({})
 }
 
-## Resolve the selected installable with the exact planned build command.
-## Dependency metadata stays descriptive; no store paths are guessed for it.
+## A lasting directory of links for an activation, under the workspace, so
+## that what `env` printed stays valid after it exited. It is rebuilt each
+## time, so it never holds a program the Lock no longer names.
+activation_bin! : Steps.Step, List({ name : Str, file : Str }), Context => Try(Str, _)
+activation_bin! = |step, programs, ctx| {
+	layout = ctx.layout
+	shell = match step.action {
+		Shell(name) => name
+		_ => return Err(ActivationFailed("only a shell's environment can be printed"))
+	}
+	bin = "${layout.workspace}/env/${shell}/bin"
+	safe_path!(layout.workspace)?
+	if path(bin).exists!()? {
+		path(bin).delete_all!()?
+	}
+	path(bin).create_all!()?
+	ignore_generated!(layout)?
+	for program in programs {
+		Store.expose!(bin, program.name, program.file).map_err(|message| FetchFailed(message))?
+	}
+	Ok(bin)
+}
+
+## What entering this step's environment exports, as data: the core's own
+## directory of fetched programs, then what the provider's shell would
+## export, asked for as data and never entered. Rendered as the caller asked.
+activate! : Steps.Step, Str, Context => Try({}, _)
+activate! = |step, bin, ctx| {
+	own = Activation.{ path: if (bin.is_empty()) [] else [{ directory: bin, origin: "blueprint" }], variables: [] }
+	provided = if step.argv.is_empty() {
+		Activation.empty
+	} else {
+		adapter = providers.find_first(|candidate| (candidate.activation_argv)(step).is_ok())
+			.map_err(|_| ActivationFailed("no provider of this blueprint can describe this environment as data"))?
+		argv = (adapter.activation_argv)(step).map_err(|message| ActivationFailed(message))?
+		text = match argv {
+			[program, .. as args] => native_command!(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(ctx.layout.project_root)).stderr(Inherit).capture!()?
+			[] => return Err(ActivationFailed("the provider named no command"))
+		}
+		(adapter.activation)(text).map_err(|message| ActivationFailed(message))?
+	}
+	activation = Activation.merge(own, provided)
+	output = match ctx.activation_format {
+		ShellLines => Activation.shell(activation)
+		JsonReport => Activation.to_json(activation).map_err(|message| ActivationFailed(message))?.concat("\n")
+		GithubPath => Activation.github(activation).path
+		GithubEnv => Activation.github(activation).env
+	}
+	Stdout.write!(output)
+}
+
+## Decode every provider result once; execution uses the exact prepared recipe.
 report_build! : Steps.Step, Str, Context => Try({}, _)
 report_build! = |plan, name, ctx| {
-	root = ctx.layout.project_root
-	for artifact in plan.artifacts {
-		Stderr.line!(
-			"building ${artifact.name}: ${artifact.installable} "
-				.concat("(output ${artifact.output})"),
-		)?
-	}
-	artifact = plan.artifacts.find_first(|item| item.name == name)
-		.map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
+	artifact = plan.artifacts.find_first(|item| item.name == name).map_err(|_| RenderFailed("build plan is missing artifact ${name}"))?
 	adapter = providers.find_first(|candidate| candidate.name == artifact.provider).map_err(|_| RenderFailed("unknown build provider: ${artifact.provider}"))?
-	argv = (adapter.build_argv)(plan, { json: ctx.build_json, rebuild: ctx.rebuild }).map_err(|message| RenderFailed(message))?
-	match argv {
-		[program, .. as args] => {
-			result = native_command!(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(root))
-				.stderr(Inherit).capture!()?
+	# The provider reads the copies this step made, locked by their measured
+	# identity, so the evidence measures those copies and not the project,
+	# which may change meanwhile.
+	copied = plan.operations.keep_oks(
+		|operation|
+			match operation {
+				Measure({ target: Snapshot(build), .. }) => Ok(build)
+				_ => Err(NotCopied)
+			},
+	)
+	snapshot = build_snapshot!(ctx.build_spec, name, adapter, ctx.build_pins, copied, ctx)?
+	preparation = (adapter.build_prepare_argv)(plan).map_err(|message| RenderFailed(message))?
+	prepared_text = capture_build_command!(preparation, ctx)?
+	prepared = (adapter.build_prepared)(prepared_text).map_err(|message| RenderFailed(message))?
+	match ctx.build_mode {
+		Activate => Err(ActivationFailed("a build has no environment to print; name a shell"))
+		Plan => render_build_inspection!(snapshot, prepared, True, False, ctx)
+		Explain => render_build_inspection!(snapshot, prepared, True, True, ctx)
+		Execute => {
+			argv = (adapter.build_execute_argv)(plan, prepared, { rebuild: ctx.rebuild }).map_err(|message| RenderFailed(message))?
+			Stderr.line!("building ${name}: ${prepared.build_identity}")?
+			result = capture_build_command!(argv, ctx)?
+			built = (adapter.build_result)(result).map_err(|message| RenderFailed(message))?
+			if built.build_identity != prepared.build_identity or built.outputs != prepared.outputs {
+				return Err(RenderFailed("provider result does not match the prepared build"))
+			}
+			# Validate the public result consistently before advancing the baseline.
+			json_report = BuildReport.render_evidence(name, ctx.target, adapter.name, built, ctx.build_sources, snapshot).map_err(|message| RenderFailed(message))?
+			record = { schema_version: 1, snapshot, build_identity: built.build_identity, outputs: built.outputs }
+			# The artifact exists whatever happens to the local record; a lost
+			# record only leaves `explain` without a baseline.
+			match save_build_record!(record, ctx) {
+				Ok({}) => {}
+				Err(problem) => Stderr.line!("warning: the local build record for ${name} was not saved, so `blueprint explain build ${name}` keeps its earlier baseline, if any: ${problem}")?
+			}
 			reported = if ctx.build_json {
-				built = (adapter.build_result)(result).map_err(|message| RenderFailed(message))?
-				BuildReport.render(name, ctx.target, adapter.name, built, ctx.build_sources).map_err(|message| RenderFailed(message))?
+				json_report
 			} else {
-				result
+				Str.join_with(built.outputs.map(|output| output.path), "\n").concat("\n")
 			}
 			Stdout.write!(reported)?
-			Stderr.line!(
-				"built ${artifact.name}: ${artifact.installable} -> "
-					.concat(result.trim()),
-			)
+			Stderr.line!("built ${name}: ${built.build_identity} -> ${Str.join_with(built.outputs.map(|output| output.path), " ")}")
 		}
-		[] => Err(RenderFailed("build plan has no command"))
+	}
+}
+
+capture_build_command! : List(Str), Context => Try(Str, _)
+capture_build_command! = |argv, ctx| {
+	match argv {
+		[program, .. as args] => native_command!(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(path(ctx.layout.project_root)).stderr(Inherit).capture!()
+		[] => Err(RenderFailed("build operation has no command"))
+	}
+}
+
+inspect_build! = |spec, options, ctx| {
+	if options.prepare {
+		mode = if (options.explain) Explain else Plan
+		realise!(spec, Request.Build(options.name), { ..ctx, build_mode: mode, build_json: options.json })
+	} else {
+		validated = Project.validate(spec).map_err(|message| RenderFailed(message))?
+		if !validated.systems.contains(ctx.target) {
+			return Err(RenderFailed("execution system ${ctx.target} is not declared by the project"))
+		}
+		# Structural inspection needs no native execution preflight.
+		executor = Project.build_executor(validated, options.name).map_err(|message| RenderFailed(message))?
+		adapter = providers.find_first(|candidate| candidate.name == executor.provider).map_err(|_| RenderFailed("no build executor provider"))?
+		(adapter.validate_executor)(executor).map_err(|message| RenderFailed(message))?
+		lock = read_lock!(ctx.layout)?
+		lock.stale(spec).map_err(|message| LockFailed(message))?
+		# Inspect selected local pins independently of native host/layout limits.
+		locals = (adapter.build_local_inputs)(validated, options.name, ctx.layout, lock).map_err(|message| RenderFailed(message))?
+		verify_tree_operations!(locals.map(|local| VerifyTree({ path: local.path, digest: local.digest })))?
+		snapshot = build_snapshot!(validated, options.name, adapter, snapshot_pins(lock, ctx.target, adapter).map_err(|message| RenderFailed(message))?, [], ctx)?
+		render_build_inspection!(snapshot, { build_identity: "", outputs: [] }, False, options.explain, { ..ctx, build_json: options.json })
+	}
+}
+
+## The committed authority, or why it cannot be read: a request never
+## resolves pins itself, so a missing lock names the command that does.
+read_lock! : Layout => Try(Lock, _)
+read_lock! = |layout| {
+	if !(path(layout.lock_path).exists!()?) {
+		return Err(LockFailed("missing authoritative lock; run `blueprint update`"))
+	}
+	safe_path!(layout.lock_path)?
+	if path(layout.lock_path).type!()? != IsFile {
+		return Err(UnsafePath(layout.lock_path))
+	}
+	Lock.parse(path(layout.lock_path).read_utf8!()?).map_err(|_| LockFailed("unsupported Blueprint lock format; Blueprint 0.7 requires Lock 2"))
+}
+
+## Verified fetched tools share the named content-evidence model, not provider hints.
+snapshot_pins : Lock, Str, Provider -> Try(List(Lock.Source), Str)
+snapshot_pins = |lock, system, adapter| {
+	projected = if lock.sources.any(|source| source.provider == adapter.name) {
+		(adapter.inspect_lock)(lock)?
+	} else {
+		[]
+	}
+	pins = lock.sources.map(
+		|source| {
+			match projected.find_first(|entry| entry.name == source.name) {
+				Ok(entry) => { ..source, digest: entry.content_identity }
+				Err(_) => source
+			}
+		},
+	)
+	Ok(pins.concat(lock.fetched.keep_if(|entry| entry.system == system).map(|entry| { name: entry.name, provider: "blueprint", ref: "", rev: "", digest: "sha256:${entry.sha256}" })))
+}
+
+## The input evidence of a build and its closure. A build named in `copied`
+## is measured in the copy of its selected files the step made for its
+## provider; any other in the project itself, as structural planning does.
+build_snapshot! : Spec, Str, Provider, List(Lock.Source), List(Str), Context => Try(BuildModel.Snapshot, _)
+build_snapshot! = |input_spec, name, adapter, pins, copied, ctx| {
+	spec = Project.validate(input_spec).map_err(|message| RenderFailed(message))?
+	closure = Project.build_closure(spec, name).map_err(|message| RenderFailed(message))?
+	exclusions = (adapter.build_exclusions)(spec, ctx.layout).map_err(|message| RenderFailed(message))?
+	var $nodes = []
+	for build in closure {
+		selection = build_selection(spec, build.name)
+		root = if (copied.contains(build.name)) snapshot_root(ctx.layout, build.name) else ctx.layout.project_root
+		entries = selected_entries!(root, selection.paths, selection.all, exclusions, ctx.layout)?
+		missing_selected(selection.paths, entries.map(|entry| entry.path))?
+		files = entries.map(
+			|entry| {
+				digest = Tree.digest([entry]).map_err(|message| RenderFailed(message))?
+				Ok({ path: entry.path, digest })
+			},
+		).fold(Ok([]), |acc, item| Ok(acc?.append(item?)))?
+		sources = (adapter.build_inputs)(spec, build.name).map_err(|message| RenderFailed(message))?
+		$nodes = $nodes.append(BuildModel.capture_node(spec, build, ctx.target, files, sources, pins).map_err(|message| RenderFailed(message))?)
+	}
+	Ok({ name, system: ctx.target, provider: adapter.name, nodes: $nodes })
+}
+
+## The paths a build selects with `Files`, or its whole project without them.
+build_selection : Spec, Str -> { paths : List(Str), all : Bool }
+build_selection = |spec, build|
+	match spec.build_files.find_first(|entry| entry.build == build) {
+		Ok(entry) => { paths: entry.paths, all: False }
+		Err(_) => { paths: [], all: True }
+	}
+
+## A selected path that is not there is an error, not an unchanged or empty input.
+missing_selected : List(Str), List(Str) -> Try({}, _)
+missing_selected = |selected, found| {
+	for item in selected {
+		if !found.contains(item) {
+			return Err(RenderFailed("missing selected build path: ${item}"))
+		}
+	}
+	Ok({})
+}
+
+## The selected entries below `root` as evidence: each file's digest and
+## whether it is executable.
+selected_entries! : Str, List(Str), Bool, List(Str), Layout => Try(List(Tree.Entry), _)
+selected_entries! = |root, selected, all, exclusions, layout| {
+	var $entries = []
+	for entry in selected_walk!(root, path(root), "", [], selected, all, exclusions, layout)? {
+		kind = match entry.kind {
+			Dir => Dir
+			File => File({ executable: entry.source.is_executable!()?, digest: entry_digest!(entry.source)? })
+		}
+		$entries = $entries.append({ path: entry.path, kind })
+	}
+	Ok($entries)
+}
+
+## A project entry a build selects: its name in evidence, shown lossily when
+## it is not UTF-8, and the bytes of that name as listed, relative to the
+## root, and where it is.
+Selected : { path : Str, raw : List(U8), source : Path, kind : [Dir, File] }
+
+## The entries in `directory`, which is `prefix` (`raw_prefix` as listed)
+## below `root`, that a build selects, each directory before what it holds.
+## This is the one selection rule: the host copies exactly these for the
+## provider to read (`snapshot!`) and measures exactly these as evidence. It
+## leaves out what the Nix adapter's own filter left out before the host
+## made the copy: VCS metadata named `.git`, `.hg`, `.svn` or `.jj` at any
+## depth; the workspace, the generated root and the lock; and whatever the
+## provider's `build_exclusions` names, by name at any depth or by absolute
+## path. An excluded entry is never inspected. A selected symlink or special
+## file is refused.
+selected_walk! : Str, Path, Str, List(U8), List(Str), Bool, List(Str), Layout => Try(List(Selected), _)
+selected_walk! = |root, directory, prefix, raw_prefix, selected, all, exclusions, layout| {
+	var $entries = []
+	for entry_path in directory.list!()? {
+		# A name need not be UTF-8, and the copy keeps it as it is. Evidence
+		# shows it lossily and keeps it distinct by its own digest.
+		raw = basename_bytes(Path.to_os_str(entry_path).to_bytes())
+		name = match Str.from_utf8(raw) {
+			Ok(text) => text
+			Err(_) => lossy_name(raw)
+		}
+		relative = if (prefix == "") name else "${prefix}/${name}"
+		listed = if (raw_prefix.is_empty()) raw else raw_prefix.append('/').concat(raw)
+		full = "${root}/${relative}"
+		excluded = [".git", ".hg", ".svn", ".jj"].contains(name) or [layout.workspace, layout.generated_root, layout.lock_path].contains(full) or exclusions.contains(name) or exclusions.contains(full)
+		included = all or selected.any(|item| relative == item or relative.starts_with("${item}/") or item.starts_with("${relative}/"))
+		if !excluded and included {
+			match entry_path.type!()? {
+				IsDir => {
+					$entries = $entries.append({ path: relative, raw: listed, source: entry_path, kind: Dir }).concat(selected_walk!(root, entry_path, relative, listed, selected, all, exclusions, layout)?)
+				}
+				IsFile => {
+					$entries = $entries.append({ path: relative, raw: listed, source: entry_path, kind: File })
+				}
+				IsSymLink => return Err(Refused("snapshot refuses symlink: ${full}"))
+				IsOther => return Err(Refused("snapshot refuses special file: ${full}"))
+			}
+		}
+	}
+	Ok($entries)
+}
+
+## The bytes after the last separator of a listed path.
+basename_bytes : List(U8) -> List(U8)
+basename_bytes = |raw| {
+	var $start = 0
+	var $index = 0
+	for byte in raw {
+		# A slash, or the backslash Windows lists with.
+		if byte == 47 or byte == 92 {
+			$start = $index + 1
+		}
+		$index = $index + 1
+	}
+	raw.drop_first($start)
+}
+
+## A name that is not UTF-8, shown lossily and kept distinct from any other
+## by the first bytes of its own digest.
+lossy_name : List(U8) -> Str
+lossy_name = |raw| {
+	tag = Str.from_utf8(Crypto.SHA256.hash(raw).to_hex().to_utf8().take_first(8)) ?? "unnamed"
+	"${Str.from_utf8_lossy(raw)}~${tag}"
+}
+
+expect basename_bytes("/a/b/c.txt".to_utf8()) == "c.txt".to_utf8() and basename_bytes("plain".to_utf8()) == "plain".to_utf8()
+expect lossy_name("x".to_utf8().append(255)).starts_with("x") and lossy_name("x".to_utf8().append(255)) != lossy_name("x".to_utf8().append(254))
+
+## A listed file's SHA-256, read through its own path so that a name that is
+## not UTF-8 is still measured.
+entry_digest! : Path => Try(Crypto.SHA256.Digest, _)
+entry_digest! = |file| {
+	reader = File.open_reader_with_capacity!(file, 65536)?
+	var $hasher = Crypto.SHA256.Hasher.empty()
+	for! chunk in reader.chunks() {
+		$hasher = $hasher.write(chunk?)
+	}
+	Ok($hasher.finish())
+}
+
+build_record_path : BuildModel.Snapshot, Context -> Str
+build_record_path = |snapshot, ctx| "${ctx.layout.workspace}/build-records/${snapshot.system}/${snapshot.name}.scm"
+
+save_build_record! : BuildModel.Record, Context => Try({}, Str)
+save_build_record! = |record, ctx| {
+	text = BuildModel.render_record(record)?
+	file = build_record_path(record.snapshot, ctx)
+	safe_path!(file).map_err(|err| describe(err, ""))?
+	path(Paths.parent(file)).create_all!().map_err(|err| Str.inspect(err))?
+	ignore_generated!(ctx.layout).map_err(|err| Str.inspect(err))?
+	atomic_write!(file, text).map_err(|err| Str.inspect(err))
+}
+
+render_build_inspection! : BuildModel.Snapshot, Provider.PreparedBuild, Bool, Bool, Context => Try({}, _)
+render_build_inspection! = |snapshot, prepared, exact, explain, ctx| {
+	file = build_record_path(snapshot, ctx)
+	safe_path!(file)?
+	baseline = if path(file).exists!()? {
+		text = path(file).read_utf8!()?
+		BuildModel.parse_record(text)
+	} else {
+		Err("no successful local build record")
+	}
+	comparison = match baseline {
+		Ok(previous) => BuildModel.compare(previous.snapshot, snapshot)
+		Err(message) => Err(message)
+	}
+	changes = comparison ?? []
+	status = match comparison {
+		Ok(_) => "available"
+		Err(_) => "unavailable"
+	}
+	reason = match comparison {
+		Ok(_) => ""
+		Err(message) => message
+	}
+	identity_status = if !exact or comparison.is_err() {
+		"unavailable"
+	} else {
+		match baseline {
+			Ok(previous) if previous.snapshot.provider == snapshot.provider => if (previous.build_identity == prepared.build_identity) "unchanged" else "changed"
+			_ => "unavailable"
+		}
+	}
+	adapter = providers.find_first(|candidate| candidate.name == snapshot.provider).map_err(|_| RenderFailed("unknown build provider"))?
+	required = BuildModel.required_capabilities(snapshot).concat(if (exact) ["prepare"] else [])
+	if ctx.build_json {
+		inspection : BuildModel.Inspection
+		inspection = { required_capabilities: required, provider_capabilities: adapter.build_capabilities, supported_guarantees: adapter.build_guarantees, schema_version: 1, name: snapshot.name, system: snapshot.system, provider: snapshot.provider, prepared: exact, build_identity: prepared.build_identity, outputs: prepared.outputs, snapshot_digest: BuildModel.digest(snapshot), snapshot, baseline: status, baseline_reason: reason, build_identity_status: identity_status, changes }
+		Stdout.line!(Json.to_str(inspection))
+	} else {
+		Stdout.line!("build ${snapshot.name} [${snapshot.system}] via ${snapshot.provider}")?
+		Stdout.line!("required capabilities: ${Str.join_with(required, ", ")}")?
+		Stdout.line!("supported guarantees: ${Str.join_with(adapter.build_guarantees, ", ")}")?
+		for node in snapshot.nodes {
+			Stdout.line!("  ${node.name}: ${Json.to_str(node.command)} [${node.environment}; executor ${node.executor}] -> ${node.output}")?
+			listed = |names| if (names.is_empty()) "none" else Str.join_with(names, ", ")
+			Stdout.line!("  ${node.name}: ${node.files.len().to_str()} selected entries; inputs ${listed(node.inputs.map(|input| input.name))}; needs ${listed(node.dependencies)}")?
+		}
+		if exact {
+			Stdout.line!("build identity: ${prepared.build_identity}")?
+		}
+		if explain {
+			if status == "unavailable" {
+				Stdout.line!("baseline unavailable: ${reason}")?
+			} else {
+				if changes.is_empty() {
+					Stdout.line!("declared inputs unchanged")?
+				}
+				for change in changes {
+					Stdout.line!("${Str.join_with(change.dependency_path, " -> ")}: ${change.kind}: ${change.name}")?
+				}
+				if exact {
+					Stdout.line!("build identity ${identity_status}")?
+				}
+			}
+		}
+		Ok({})
 	}
 }
 
@@ -1423,7 +2051,8 @@ list_tasks! = |spec| {
 ## of the authority, which must exist and be current for Blueprint.roc. An
 ## update of programs alone asks no provider.
 resolve! : Spec, List(Str), Context => Try({}, _)
-resolve! = |spec, names, ctx| {
+resolve! = |input_spec, names, ctx| {
+	spec = Project.validate(input_spec).map_err(|message| Refused(message))?
 	layout = ctx.layout
 	safe_path!(layout.lock_path)?
 	prior = authority_token!(layout.lock_path)?
@@ -1431,6 +2060,16 @@ resolve! = |spec, names, ctx| {
 	declared = Project.unique(spec.programs.map(|program| program.name).concat(spec.source_files.map(|source| source.name)))
 	wanted = names.keep_if(|name| declared.contains(name))
 	others = names.keep_if(|name| !declared.contains(name))
+	if names.is_empty() or !others.is_empty() {
+		owners = Project.unique(spec.sources.map(|source| source.provider.name).concat(spec.resolvers.map(|resolver| resolver.provider)))
+		missing = owners.keep_if(|owner| !providers.any(|adapter| adapter.name == owner))
+		if !missing.is_empty() {
+			return Err(Refused("no registered resolver for ${Str.join_with(missing, ", ")}"))
+		}
+		if owners.len() > 1 {
+			return Err(Refused("mixed resolver ownership is not supported"))
+		}
+	}
 	several = Refused("several providers have pins to resolve for this project, and one lock holds those of one")
 	pins = if names.is_empty() {
 		match Realise.resolvers(spec, providers) {
@@ -1442,12 +2081,9 @@ resolve! = |spec, names, ctx| {
 		lock = match before {
 			Held(found) => found
 			Absent => return Err(LockFailed("no lock to keep the other pins from; run `blueprint update` without input names first"))
-			Unreadable => return Err(LockFailed("unsupported Blueprint lock format; run `blueprint update` without input names"))
+			Unreadable => return Err(LockFailed("unsupported Blueprint lock format; Blueprint 0.7 requires Lock 2"))
 		}
-		if Lock.from_before_explicit_sources(lock) {
-			return Err(OldLock)
-		}
-		lock.stale(spec).map_err(|message| LockFailed("${message} without input names"))?
+		Lock.stale_except_files(lock, spec, wanted).map_err(|message| LockFailed("${message} without input names"))?
 		if others.is_empty() {
 			lock
 		} else {
@@ -1474,14 +2110,41 @@ resolve! = |spec, names, ctx| {
 	}
 	sources = pins.sources.keep_if(|source| source.provider != "file").concat(spec.source_files.map(Lock.file_pin))
 	lock = { ..pins, intent: Lock.intent_of(spec), fetched, sources }
-	path(Paths.parent(layout.lock_path)).create_all!()?
-	publish_authority!(layout.lock_path, prior, lock.to_str())?
-	# A new place downloads come from is what a reviewer of the lock should
-	# not miss among its digests.
-	match Lock.new_hosts(known, fetched) {
-		[] => Ok({})
-		added => Stdout.line!("Blueprint.lock now names download hosts it did not name before:\n${Str.join_with(added.map(|host| "  ${host}"), "\n")}")
+	# A new place downloads come from, declared or reached by a redirect, is
+	# what a reviewer of the lock should not miss among its digests. It is
+	# said before the lock is published: no lock names a host this update
+	# did not say.
+	notice = hosts_notice(known, fetched)
+	if !notice.is_empty() {
+		Stdout.line!(notice)?
 	}
+	path(Paths.parent(layout.lock_path)).create_all!()?
+	publish_authority!(layout.lock_path, prior, lock.to_str())
+}
+
+## What an update says of the download hosts the lock it writes names and the
+## lock before it did not, one to a line, each with how the lock came to name
+## it: a URL Blueprint.roc declares, or a redirect from one. Empty when there
+## is none.
+hosts_notice : List(Lock.Fetched), List(Lock.Fetched) -> Str
+hosts_notice = |before, after| {
+	redirected = Lock.redirected(after)
+	how = |name| if (redirected.contains(name)) "  ${name}, reached by a redirect" else "  ${name}, declared in Blueprint.roc"
+	match Lock.new_hosts(before, after) {
+		[] => ""
+		added => "Blueprint.lock will name download hosts it did not name before:\n${Str.join_with(added.map(how), "\n")}"
+	}
+}
+
+expect {
+	entry = |urls, served| { name: "tool", system: "x86_64-linux", urls, sha256: "aa", size: 3, obtained: Computed, served, witness: "" }
+	release = "https://github.com/o/r/releases/download/1/t"
+	before = [entry([release], ["github.com"])]
+	after = [entry([release, "https://mirror.example.test/t"], ["release-assets.githubusercontent.com"])]
+	hosts_notice(before, after) == "Blueprint.lock will name download hosts it did not name before:\n  mirror.example.test, declared in Blueprint.roc\n  release-assets.githubusercontent.com, reached by a redirect"
+		and hosts_notice([], before) == "Blueprint.lock will name download hosts it did not name before:\n  github.com, declared in Blueprint.roc"
+		and hosts_notice(after, after) == ""
+		and hosts_notice(after, before) == ""
 }
 
 ## A Lock with no pins: what a project that asks no provider starts from.
@@ -1590,16 +2253,17 @@ obtain! = |program, host, asked| {
 	what = "${program.name} for ${program.system}"
 	here = program.system == host
 	held = if (here) compiler_held!(what, program) else Err(NotHeld)
-	downloaded : Try({ sha256 : Str, size : U64, bytes : List(U8) }, [NotDownloaded])
+	downloaded : Try({ sha256 : Str, size : U64, bytes : List(U8), served : Str }, [NotDownloaded])
 	downloaded = if held.is_err() and (here or looked.published.is_err()) {
-		Ok(Store.hashed!(what, program.urls).map_err(|message| FetchFailed(absent_advice(program, message)))?)
+		Ok(hashed!(what, program.urls).map_err(|message| FetchFailed(absent_advice(program, message)))?)
 	} else {
 		Err(NotDownloaded)
 	}
-	computed : Try(Lock.Digest, [NotDownloaded])
+	# Bytes the store already held were served by no host now.
+	computed : Try(Lock.Hashed, [NotDownloaded])
 	computed = match held {
-		Ok(found) => Ok(found)
-		Err(_) => downloaded.map_ok(|found| { sha256: found.sha256, size: found.size })
+		Ok(found) => Ok({ sha256: found.sha256, size: found.size, served: [] })
+		Err(_) => downloaded.map_ok(|found| { sha256: found.sha256, size: found.size, served: [found.served] })
 	}
 	entry = Lock.record(program, computed, looked.published)
 		.map_err(|message| FetchFailed(message))?
@@ -1611,6 +2275,29 @@ obtain! = |program, host, asked| {
 		_ => {}
 	}
 	Ok({ entry, asked: looked.asked })
+}
+
+## The first of a program's URLs that serves it, tried in order, hashed, with
+## the host that served the bytes after any redirect: what the update records
+## of where they came from. The address that served them is not kept, only
+## its host: a release host signs the address it redirects to.
+hashed! : Str, List(Str) => Try({ sha256 : Str, size : U64, bytes : List(U8), served : Str }, Str)
+hashed! = |what, urls| {
+	var $failures = []
+	for url in urls {
+		_ = Stderr.line!("blueprint: fetching ${what} from ${url} to record its digest")
+		match Download.served!(url) {
+			Ok(answer) => return Ok({ sha256: Crypto.SHA256.hash(answer.bytes).to_hex(), size: answer.bytes.len(), bytes: answer.bytes, served: Lock.host(answer.url) })
+			Err(reason) => {
+				$failures = $failures.append("could not download ${what} from ${url}: ${reason}")
+			}
+		}
+	}
+	match $failures {
+		[] => Err("${what} has no URL to download it from")
+		[only] => Err(only)
+		_ => Err("no URL of ${what} served it:\n  ${Str.join_with($failures, "\n  ")}")
+	}
 }
 
 ## What to add to a download's failure during an update. A recipe answers
@@ -1645,10 +2332,11 @@ compiler_held! = |what, program| {
 }
 
 ## What a program's release publishes for its download, when its first URL is
-## a release asset: asked of the release's host, once for each release. A
+## a release asset: asked of the release's host, once for each release, and
+## the address asked, which the lock keeps as the digest's witness. A
 ## release that cannot be asked about is said so once, and every download of
 ## it is then hashed here, as for a host that publishes nothing.
-published! : Spec.Program, List(Asked) => { published : Try(Lock.Digest, [NotPublished]), asked : List(Asked) }
+published! : Spec.Program, List(Asked) => { published : Try(Lock.Reported, [NotPublished]), asked : List(Asked) }
 published! = |program, asked| {
 	release = match program.urls.first().map_ok(Published.release) {
 		Ok(Ok(found)) => found
@@ -1667,7 +2355,7 @@ published! = |program, asked| {
 		}
 	}
 	published = match known.last().map_ok(|entry| entry.answer) {
-		Ok(Described(text)) => Published.digest(text, release.asset).map_err(|_| NotPublished)
+		Ok(Described(text)) => Published.digest(text, release.asset).map_ok(|found| { sha256: found.sha256, size: found.size, witness: release.api }).map_err(|_| NotPublished)
 		_ => Err(NotPublished)
 	}
 	{ published, asked: known }
@@ -1738,7 +2426,6 @@ describe = |err, provider|
 				.concat("set ROC to use another compatible executable:\n${message}")
 		# A message that already names the command is not told it twice.
 		LockFailed(message) => if (message.contains("blueprint update")) message else "${message}; use `blueprint update` to initialize or deliberately refresh pins"
-		OldLock => "Blueprint.lock was written by blueprint 0.5 or older, which gave every project a package source it did not declare; run `blueprint update` to resolve it again with this blueprint, and review what changes"
 		PlanFailed([problem]) => problem
 		PlanFailed(problems) => "this cannot be carried out:\n  ${Str.join_with(problems, "\n  ")}"
 		UnsafePath(value) => "refusing unsafe or symlinked runtime path: ${value}"
@@ -1746,12 +2433,12 @@ describe = |err, provider|
 		BadSpec(InvalidSexpr(msg)) => "could not read the Spec from Blueprint.roc: ${msg}"
 		BadSpec(UnsupportedFormat({ major, minor })) => "Spec format ${U64.to_str(major)}.${U64.to_str(minor)} is not supported by this blueprint (understands major ${Spec.current_format.major.to_str()}); upgrade blueprint or change the platform version"
 		NeedsFeatures(missing) => "Blueprint.roc needs features: ${Str.join_with(missing, ", ")}; upgrade blueprint"
-		OldPlatform => "Blueprint.roc uses a roc-blueprint platform older than 0.6.0; update the platform URL in its app header and see docs/releases/0.6.0"
 		InvalidProject(msg) => "invalid Spec project: ${msg}"
 		RenderFailed(msg) => "cannot generate the ${provider} files: ${msg}"
+		ActivationFailed(msg) => "cannot describe the environment: ${msg}"
 		RocPackagesFailed(msg) => msg
 		FetchFailed(msg) => msg
-		BadSpec(MissingRequiredField("format")) => "Blueprint.roc uses an older roc-blueprint platform that this blueprint can't read; update the platform URL in its app header to a current release"
+		StoreFailed(msg) => msg
 		BadSpec(MissingRequiredField(field)) => "the Spec from Blueprint.roc is missing ${field}"
 		BadExitStatus(Cmd.Output.{ command, status, stderr_bytes, .. }) =>
 			"`${command}` failed (${Str.inspect(status)}):\n".concat(Str.from_utf8_lossy(stderr_bytes))
@@ -1769,10 +2456,10 @@ import "../fixtures/consumer/authority.lock" as lock_report_authority : Str
 expect match Lock.parse(lock_report_authority) {
 	Ok(lock) => match LockReport.render(lock, ["nixpkgs"], True, providers) {
 		Ok(text) => {
-			decoded : Try({ format : U64, sources : { nixpkgs : { identity : Str, metadata : { nix : { fetchTree : { rev : Str, narHash : Str, lastModified : U64, owner : Str } } } } }, fetched : List(Str) }, _)
+			decoded : Try({ format : U64, sources : { nixpkgs : { content_identity : Str, metadata : { nix : { fetchTree : { rev : Str, narHash : Str, lastModified : U64, owner : Str } } } } }, fetched : List(Str) }, _)
 			decoded = Json.parse(text)
 			match decoded {
-				Ok(read) => read.format == 1 and read.sources.nixpkgs.metadata.nix.fetchTree == { rev: "4975466d324710c576dc11ad614684e6bd8cad8e", narHash: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=", lastModified: 1790185690, owner: "NixOS" } and read.sources.nixpkgs.identity == "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5" and read.fetched.is_empty() and !text.contains("roc-overlay")
+				Ok(read) => read.format == 2 and read.sources.nixpkgs.metadata.nix.fetchTree == { rev: "4975466d324710c576dc11ad614684e6bd8cad8e", narHash: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=", lastModified: 1790185690, owner: "NixOS" } and read.sources.nixpkgs.content_identity == "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5" and read.fetched.is_empty() and !text.contains("roc-overlay")
 				Err(_) => False
 			}
 		}
@@ -1790,7 +2477,7 @@ expect match Lock.parse(lock_report_authority) {
 			Ok(parsed) => LockReport.render(parsed, ["nixpkgs"], True, providers)
 			Err(_) => Err("future minor did not parse")
 		}
-		program = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc"], sha256: "1111", size: 4, obtained: Computed }
+		program = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc"], sha256: "1111", size: 4, obtained: Computed, served: [], witness: "" }
 		spec = Spec.empty("test")
 		with_task = { ..spec, tasks: [{ name: "check", environment: "dev", run: ["check"] }] }
 		Lock.intent_of(spec) == Lock.intent_of(with_task)
@@ -1810,7 +2497,7 @@ expect match Lock.parse(lock_report_authority) {
 	Err(_) => False
 }
 
-# Updating a different remote source preserves the selected identity; changing
+# Updating a different remote source preserves the selected content_identity; changing
 # that source's own NAR content changes it, with no graph-layout fingerprint.
 expect {
 	changed = |sri, hex| {
@@ -1832,7 +2519,7 @@ expect {
 lock_pin_identity : Lock -> Try(Str, Str)
 lock_pin_identity = |lock| {
 	text = LockReport.render(lock, ["nixpkgs"], True, providers)?
-	decoded : Try({ sources : { nixpkgs : { identity : Str } } }, _)
+	decoded : Try({ sources : { nixpkgs : { content_identity : Str } } }, _)
 	decoded = Json.parse(text)
-	decoded.map_ok(|read| read.sources.nixpkgs.identity).map_err(|_| "invalid inspector JSON")
+	decoded.map_ok(|read| read.sources.nixpkgs.content_identity).map_err(|_| "invalid inspector JSON")
 }

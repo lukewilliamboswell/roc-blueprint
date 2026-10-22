@@ -54,7 +54,7 @@ StubTool := [].{
 	record_file = |nanos, pid| {
 		digits = nanos.to_str()
 		width = digits.to_utf8().len()
-		padding = Str.join_with(List.repeat("0", if width < 24 24 - width else 0), "")
+		padding = Str.join_with(List.repeat("0", if (width < 24) 24 - width else 0), "")
 		"${padding}${digits}-${pid}.json"
 	}
 
@@ -106,6 +106,26 @@ StubTool := [].{
 		root = LockJson.set(LockJson.field(nodes, "root")?, "inputs", LockJson.Object($root_inputs))?
 		pinned = LockJson.set(LockJson.set(nodes, "foreign-overlay", foreign)?, "root", root)?
 		Ok(LockJson.encode(LockJson.set(graph, "nodes", pinned)?))
+	}
+
+	## Match follows edges emitted by the generated flake, without inventing pins.
+	with_follows : Str, Str -> Try(Str, Str)
+	with_follows = |text_, flake| {
+		graph = LockJson.decode(text_)?
+		nodes = LockJson.field(graph, "nodes")?
+		root = LockJson.field(nodes, "root")?
+		var $edges = LockJson.field(root, "inputs")?
+		for line in flake.split_on("\n") {
+			match line.trim().split_on("\".follows = \"") {
+				[left, right] if left.starts_with("\"") and right.ends_with("\";") => {
+					name = left.drop_prefix("\"")
+					target = right.drop_suffix("\";")
+					$edges = LockJson.set($edges, name, LockJson.Array([LockJson.String(target)]))?
+				}
+				_ => {}
+			}
+		}
+		Ok(LockJson.encode(LockJson.set(graph, "nodes", LockJson.set(nodes, "root", LockJson.set(root, "inputs", $edges)?)?)?))
 	}
 
 	## A native lock from the provider's local fixture without its `assets`
@@ -186,3 +206,9 @@ expect StubTool.local_graph(local_fixture, "b") == Ok(
 	"{\"root\":\"root\",\"version\":7,\"nodes\":{\"default\":{\"locked\":{\"type\":\"github\",\"rev\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}},"
 		.concat("\"root\":{\"inputs\":{\"default\":\"default\"}}}}"),
 )
+
+expect {
+	text_ = StubTool.with_follows(consumer_fixture, "    \"packages\".follows = \"nixpkgs\";\n")?
+	graph = LockJson.decode(text_)?
+	LockJson.field(LockJson.field(LockJson.field(LockJson.field(graph, "nodes")?, "root")?, "inputs")?, "packages") == Ok(LockJson.Array([LockJson.String("nixpkgs")]))
+}

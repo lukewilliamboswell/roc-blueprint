@@ -1,12 +1,15 @@
-= Work without Nix
+= Work without a provider
 
-Nix is one place a project's tools can come from, and `blueprint` starts it
-only for what a project takes from it. A project that fetches its programs,
-expects the rest of the machine and declares no build runs every task with no
-Nix installed. This chapter says what such a project looks like, what each
-command then does, and where the downloads are kept.
+A package provider is one place a project's tools can come from, and
+`blueprint` starts one only for what a project takes from it. Nix is the
+provider that ships today; the core supplies the rest itself: programs
+fetched by digest, Roc packages, tools the machine is expected to have, and
+the tasks, shells and activations that use them. A project that fetches its
+programs, expects the rest of the machine and declares no build runs every
+task with no provider installed. This chapter says what such a project looks
+like, what each command then does, and where the downloads are kept.
 
-== A project that never starts Nix
+== A project that never starts a provider
 
 [source,roc]
 ----
@@ -29,44 +32,45 @@ config = [
 ]
 ----
 
-Nothing in this file is Nix's: there is no `Packages`, `Overlay`, `Input`,
+Nothing in this file belongs to a provider: there is no `Packages`, `Input`,
 `Source` or `Build`, and no tool written `"<source>#<name>"`. The compiler
 comes from a release by a digest in `Blueprint.lock`, `git` is the machine's,
 and the Roc packages are downloaded by the URLs that name their hashes.
 
-What starts Nix is decided by `Blueprint.roc` alone, never by a variable, a
-flag or what happens to be installed:
+What starts a provider is decided by `Blueprint.roc` alone, never by a
+variable, a flag or what happens to be installed:
 
 [cols="2,3",options="header"]
 |===
 | Request
-| Starts Nix when
+| Starts a provider when
 
-| `blueprint run TASK`, `blueprint shell`
-| The environment has, on this system, a tool from a Nix package source:
+| `blueprint run TASK`, `blueprint shell`, `blueprint env NAME`
+| The environment has, on this system, a tool from a package source:
   `Tools`, `ToolsFor` this system, `Command` or `ToolWith`. An overlay the
-  environment selects does not start Nix by itself.
+  environment selects does not start a provider by itself.
 
 | `blueprint workflow NAME`
 | One of its tasks does, or it has a build.
 
-| `blueprint build NAME`
-| Always. A build runs in Nix's sandbox.
+| `blueprint build NAME`, `plan build NAME --prepare`
+| Always. A build runs through the executor it selects.
 
 | `blueprint update`
-| `Blueprint.roc` declares something Nix resolves: a Nix package source, an
-  `Input` or `Overlay`, a `Source`, or a Roc package that a build's
-  environment has. An update that names only fetched programs never does.
+| `Blueprint.roc` declares something a provider resolves: a package source, an
+  `Input`, a `Source`, or a Roc package that a build's environment has. An
+  update that names only fetched programs never does.
 
-| `blueprint check`, `spec`, `tasks`, `requirements`, `gen`, `flake`
+| `blueprint check`, `spec`, `tasks`, `requirements`, `gen`, `flake`, `plan build NAME`, `lock show`, `store verify`
 | Never.
 |===
 
 `blueprint requirements` gives the first row's answer for a project's tasks
 without running anything; see
-xref:commands.adoc#what-tasks-need[What tasks need]. Where Nix is needed and
-`nix` is not on `PATH`, the command stops before it downloads or runs
-anything and names the tool that asked for it:
+xref:commands.adoc#what-tasks-need[What tasks need]. Where a provider is
+needed and its program, `nix` for the Nix provider, is not on `PATH`, the
+command stops before it downloads or runs anything and names the tool that
+asked for it:
 
 [source]
 ----
@@ -74,7 +78,7 @@ blueprint: this machine lacks what the task needs, and blueprint installs none o
   nix: environment host takes nix#zigpkgs."0.16.0" from the Nix source nix
 ----
 
-== What each command does without Nix
+== What each command does without a provider
 
 [cols="2,5",options="header"]
 |===
@@ -123,8 +127,9 @@ directory, named by content:
 
 [source]
 ----
-<store>/v1/artifacts/sha256/<hex>            the downloaded bytes
-<store>/v1/trees/sha256/<hex>.<kind>/        those bytes, made usable
+<store>/v1/artifacts/sha256/<hex>                  the downloaded bytes
+<store>/v1/trees/sha256/<hex>.<kind>/              those bytes, made usable
+<store>/v1/trees/sha256/<hex>.<kind>.digest        what that tree held when made
 ----
 
 `<store>` is `blueprint` under `XDG_CACHE_HOME`, or under `.cache` in `HOME`
@@ -140,11 +145,19 @@ are not those its name says is removed, with every tree made from it, and
 downloaded again. A download that does not have the length and the SHA-256
 in `Blueprint.lock` is not kept and nothing is unpacked from it.
 
-A tree is derived state::
-It is checked once, when it is made from an artifact that has just been
-verified, and is not verified again. Whoever can write to the store can
-change a tree. In CI, cache `v1/artifacts` alone, keyed on `Blueprint.lock`:
-trees are rebuilt from it, and a cached artifact is re-hashed like any other.
+A tree is never trusted either::
+When a tree is made from an artifact that has just been verified, its digest
+is recorded beside it as S-expression text, never inside it: the content
+digest `blueprint` uses for local sources, over every file, directory and
+executable bit, with where each symbolic link leads. Before every use, after
+its artifact, the tree is hashed again and compared with that record, which
+only reads it. A tree that differs, or has no record, is removed and made
+again from the verified artifact, with no download. In CI, cache
+`v1/artifacts` alone, keyed on `Blueprint.lock`: trees are rebuilt from it,
+and a cached artifact is re-hashed like any other. This check cannot see a
+tree and its record changed together; `blueprint store verify` compares both
+with a fresh extraction of the archive, and `--repair` makes them again. See
+xref:commands.adoc#verify-the-store[Verify the store].
 
 An archive is listed before it is unpacked::
 An archive that holds an absolute name, a `..` segment, a name that is not
@@ -156,13 +169,13 @@ Two runs at once are safe::
 Each file and tree is written under a fresh name beside its final one and
 renamed into place, so no half-written file is ever seen and two processes
 that fetch the same thing both succeed. There is one gap: a run that finds
-an artifact with the wrong bytes removes its trees, and another process that
-is running a program from such a tree at that moment loses it.
+an artifact or a tree that is not what was recorded removes the tree, and
+another process that is running a program from it at that moment loses it.
 
 The store may be deleted at any time; the next run fetches what it needs
 again. The files of a tree are read-only and its directories are not, so an
 ordinary `rm -r` removes it. A Roc nightly is about 67 MB as an artifact and
-about 220 MB unpacked.
+about 220 MB unpacked, and both are hashed on every use.
 
 == How a download is made
 
@@ -183,15 +196,18 @@ xref:configuration.adoc#roc-packages[Lock the Roc packages scripts use].
 For each step, `blueprint` makes a directory `run/run-<random>/bin` under the
 generated directory (`.blueprint/` unless you moved it), holding one symbolic
 link for each fetched program, named as `Fetch` names it and pointing at the
-program inside its tree. That directory is put first on the step's `PATH`,
-ahead of everything the caller had, and is removed when the step ends,
-however it ends. A task whose command is the name of a fetched program is
-started from that link whatever else is on `PATH`.
+program inside its tree. On Windows, and wherever a symbolic link cannot be
+made, the program is copied there with its mode instead. Nothing is exposed
+through a hard link, which would be the store's own file under a second name
+that a step could write through. That directory is put first on the step's
+`PATH`, ahead of everything the caller had, and is removed when the step
+ends, however it ends. A task whose command is the name of a fetched program
+is started from that link whatever else is on `PATH`.
 
 Expected programs are not put anywhere: they are found on the caller's
 `PATH`, which the step inherits after the links. In an environment that also
-has Nix tools, `nix develop` is started with that `PATH` and puts its own
-tools ahead of it.
+has a provider's tools, the provider's shell is started with that `PATH` and
+puts its own tools ahead of it; for Nix that is `nix develop`.
 
 == Programs blueprint still starts
 
@@ -214,17 +230,19 @@ whatever the project expects:
 | Making a downloaded `File` executable and a tree's files read-only on Linux and macOS.
 |===
 
-== What still needs Nix
+== What still needs a provider
 
-* A sandboxed build, always, and only on x86_64 Linux. A build's environment
-  may not have fetched programs or expected tools: a sandbox holds nothing of
-  the machine.
-* Any tool from a Nix package source, in the environments that have one.
-  Other tasks of the same project run without Nix.
-* `blueprint update` in a project that declares anything Nix resolves. Adding
-  the first Nix source to a project therefore makes its lock stale for every
-  task until someone with Nix runs `blueprint update` and commits the result;
-  after that, the tasks that use no Nix tool again run without it.
+* A build, always: it runs through the executor it selects, and the Nix
+  executor builds sandboxed on x86_64 Linux only. That sandbox holds nothing
+  of the machine, so a build's environment may not have fetched programs or
+  expected tools.
+* Any tool from a package source, in the environments that have one. Other
+  tasks of the same project run without the provider.
+* `blueprint update` in a project that declares anything a provider resolves.
+  Adding the first package source to a project therefore makes its lock stale
+  for every task until someone with that provider runs `blueprint update` and
+  commits the result; after that, the tasks that use no provider tool again
+  run without it.
 
 == Windows
 
@@ -234,8 +252,8 @@ lock, reporting requirements, and building and running a basic-cli program.
 
 The store uses `LOCALAPPDATA` when `XDG_CACHE_HOME` is unset.
 `Recipes.roc_nightly` selects the nightly's zip and `roc.exe`; the Windows
-`tar` reads zip archives. Fetched programs are exposed with hard links, or
-copies when the store is on another drive, and need no `ln` or `chmod`.
+`tar` reads zip archives. Fetched programs are copied into a step's `bin`
+directory with their mode, never hard-linked, and need no `ln` or `chmod`.
 
 Include `"x86_64-windows"` in the project's `Systems`: the default list
 contains Linux and macOS only, and fetched programs are locked for the
@@ -250,6 +268,6 @@ workaround on Windows and still builds, links and runs the program. It
 disables Roc's compilation cache for that invocation; Blueprint's download
 store and lock verification still apply.
 
-Nix tools and sandboxed builds remain
+Provider tools and sandboxed builds remain
 unavailable. CI checks Windows Server; Windows 10 and 11 desktop installations
 have not been verified here.

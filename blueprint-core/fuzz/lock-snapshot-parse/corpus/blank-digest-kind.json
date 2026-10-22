@@ -1,1 +1,1 @@
-{"format":1,"sources":{"c":{"name":"c","provider":"guix","ref":"","rev":"","digest":"d","identity":"i","digestKind":" ","flatSha256":null,"metadata":{}}},"fetched":[]}
+{"format":2,"sources":{"c":{"name":"c","provider":"guix","ref":"","rev":"","digest":"d","content_identity":"i","digestKind":" ","flatSha256":null,"metadata":{}}},"fetched":[]}

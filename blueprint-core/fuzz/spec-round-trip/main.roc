@@ -1,4 +1,4 @@
-# Generate major-2 wire records, including arbitrary provider and graph data.
+# Generate major-3 wire records, including arbitrary provider and graph data.
 app [target] {
 	core: "../../main.roc",
 	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst",
@@ -44,9 +44,9 @@ source = {
 		{ kind: Fuzz.u8_in(0, 2), ref: Fuzz.str }.Fuzz,
 		|r|
 			match r.kind {
-				0 => Auto
-				1 => NixPackages(r.ref)
-				_ => GuixPackages(r.ref)
+				0 => { name: "fixture", version: 1, ref: r.ref }
+				1 => { name: "nix", version: 1, ref: r.ref }
+				_ => { name: "guix", version: 1, ref: r.ref }
 			},
 	),
 }.Fuzz
@@ -55,10 +55,6 @@ input : Fuzz.Generator(Spec.Input)
 input = {
 	name: Fuzz.str,
 	url: Fuzz.str,
-	kind: Fuzz.map(
-		Fuzz.u8_in(0, 1),
-		|n| if (n == 0) Overlay else Flake,
-	),
 }.Fuzz
 
 tool : Fuzz.Generator(Spec.Tool)
@@ -168,6 +164,9 @@ spec_generator = Fuzz.map(
 		raw: Fuzz.list(raw, 3),
 	}.Fuzz,
 	|r| Spec.{
+		resolvers: [],
+		executors: [],
+		build_executors: [],
 		source_files: [],
 		build_files: [],
 		format: { major: Spec.current_format.major, minor: r.minor },

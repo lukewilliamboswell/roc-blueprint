@@ -1,2 +1,3 @@
-## Shared compiler metadata for the CLI and its release tooling.
-package [Bootstrap] { core: "../blueprint-core/main.roc" }
+## The pure modules of the CLI that its tooling and tests share: the compiler
+## it embeds, and the record its store keeps beside a tree.
+package [Bootstrap, StoreRecord] { core: "../blueprint-core/main.roc" }

@@ -1,8 +1,9 @@
 = Run blueprint
 
 Run project commands in the directory containing `Blueprint.roc`, or set
-`BLUEPRINT_ROOT`. `compiler-version` works in any directory. `lock show` needs
-only a committed lock, and works even when `Blueprint.roc` is absent or invalid.
+`BLUEPRINT_ROOT`. `compiler-version` and `store verify` work in any directory.
+`lock show` needs only a committed lock, and works even when `Blueprint.roc` is
+absent or invalid.
 
 [cols="3,5",options="header"]
 |===
@@ -18,8 +19,17 @@ only a committed lock, and works even when `Blueprint.roc` is absent or invalid.
 | `blueprint run TASK [-- ARGS...]`
 | Run the task's argv in its environment, with the extra arguments appended
 
+| `blueprint env NAME`, with `--json`, `--github-path` or `--github-env`
+| Print what entering the shell `NAME` exports, as shell lines to `eval`, a JSON report, or the lines a GitHub Actions step appends; nothing is entered
+
 | `blueprint build NAME`
-| Snapshot and build an artifact plus dependencies in Nix's sandbox; print its actual store path
+| Prepare and obtain an artifact plus declared dependencies through its selected executor; print its output path
+
+| `blueprint plan build NAME [--prepare] [--json]`
+| Inspect the build request; optionally prepare its exact provider build identity without executing builds
+
+| `blueprint explain build NAME [--prepare] [--json]`
+| Explain changes against the last successful local build; optionally compare exact prepared build identities
 
 | `blueprint workflow NAME`
 | Execute an ordered task/build workflow, stopping on failure
@@ -39,8 +49,11 @@ only a committed lock, and works even when `Blueprint.roc` is absent or invalid.
 | `blueprint lock show [--json] [NAME...]`
 | Read committed pins and per-entry content identities without evaluating the project. See <<inspect-committed-pins>>
 
+| `blueprint store verify [--repair] [--json]`
+| Unpack every archive in the store of downloads again and compare each tree and its record with it, without a project or a download; exit 1 when anything differs. `--repair` makes what differs again. See <<verify-the-store>>
+
 | `blueprint check`
-| Run the compiler check and validate all shell/task/build environments without requiring a lock
+| Run the compiler check and validate all shell/task/build environments and executor declarations without requiring a lock
 
 | `blueprint spec` / `blueprint flake`
 | Print the Spec or the generated flake
@@ -78,10 +91,35 @@ reuse the compiler archive Blueprint installed in its store. Matching tags
 does not make an independently installed `roc-stable`, such as a Nix package,
 reuse Blueprint's cached executable.
 
+== Use an environment from another program
+
+`blueprint env NAME` describes the shell `NAME` as data instead of entering
+it: the directory of fetched programs the core puts first on `PATH`, and what
+the provider's shell would export, obtained by asking the provider for its
+shell as data (Nix answers with `nix print-dev-env`). Nothing runs in the
+environment. The directory of programs is kept at
+`.blueprint/env/NAME/bin`, rebuilt on every call, so what was printed stays
+valid until the next `blueprint update`.
+
+[source,sh]
+----
+eval "$(blueprint env dev)"              # this shell
+blueprint env dev --github-path >> "$GITHUB_PATH"
+blueprint env dev --github-env >> "$GITHUB_ENV"
+blueprint env dev --json                 # for an editor or agent
+----
+
+The shell rendering single-quotes every value and prepends to the caller's
+own `PATH`. The JSON report has `format` `1`, `path` entries `{ directory,
+origin }` first on the search path first, and `variables` `{ name, value,
+origin }`; `origin` names what supplies each, such as `blueprint` for fetched
+programs or `nix`. A provider's shell variables that describe its own process,
+such as `HOME` and `PWD`, are not exported.
+
 == What a run does, in order
 
-`blueprint run`, `shell`, `workflow` and `build` do the same things in the
-same order, and each stops the command before the next begins:
+`blueprint run`, `shell`, `workflow` and `build` share the following
+validation and execution boundary:
 
 . Read `Blueprint.roc` with the Roc compiler, and refuse what the
   configuration alone rules out, such as a task that does not exist or a
@@ -99,7 +137,7 @@ same order, and each stops the command before the next begins:
   programs first on `PATH`.
 
 Nothing is downloaded, generated or run for a request that fails an earlier
-check. xref:without-nix.adoc#the-store-of-downloads[Work without Nix]
+check. xref:no-provider.adoc#the-store-of-downloads[Work without a provider]
 describes the store and the `PATH` of a step.
 
 == What each command validates
@@ -168,7 +206,7 @@ With `--json` the report is one JSON object for a program to read:
 | The system the report is for.
 
 | `providers`
-| The providers that must be on the machine to run the reported tasks on that system, each once. `"nix"` is there exactly when one of those tasks has, in its environment on that system, a tool from a Nix package source. A Nix source that is declared and that no reported task uses does not put it there. Neither does a shell, a build or `blueprint update`: they are not tasks, a build always needs Nix, and an update needs it whenever the project declares something Nix resolves.
+| The providers that must be on the machine to run the reported tasks on that system, each once. `"nix"` is there exactly when one of those tasks has, in its environment on that system, a tool from a Nix package source. A Nix source that is declared and that no reported task uses does not put it there. Neither does a shell, a build or `blueprint update`: they are not tasks. Build execution requirements follow the selected executor, and an update needs Nix only for declarations it owns.
 
 | `expects`
 | The programs those tasks expect the machine to have already, each once.
@@ -220,15 +258,15 @@ stdout. Diagnostics go to stderr. Output order follows the lock; use the
 per-entry identity when fingerprinting a dependency, rather than the output
 bytes or whole lock.
 
-`--json` emits one JSON object followed by a newline. Its `format` is `1`,
+`--json` emits one JSON object followed by a newline. Its `format` is `2`,
 independent of the lock's own format. Every field listed here is present; a
-change a reader of format 1 could misread gets another number. Readers should
+change a reader of format 2 could misread gets another number. Readers should
 check `format`, accept extra fields and treat ordering as insignificant.
 
 [source,json]
 ----
 {
-  "format": 1,
+  "format": 2,
   "sources": {
     "nix": {
       "name": "nix",
@@ -238,7 +276,7 @@ check `format`, accept extra fields and treat ordering as insignificant.
       "digest": "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5",
       "digestKind": "tree",
       "flatSha256": null,
-      "identity": "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5",
+      "content_identity": "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5",
       "metadata": {
         "nix": {
           "fetchTree": {
@@ -266,9 +304,9 @@ check `format`, accept extra fields and treat ordering as insignificant.
 | Object keyed by the declared source name, covering package sources, inputs, overlays and build sources.
 
 | `sources.NAME.name`, `provider`, `ref`, `rev`, `digest`
-| The source fields recorded in the lock. `rev` is empty when absent. `digest` is the existing provider content digest; prefer `identity` for fingerprinting because aliases may have an empty recorded digest.
+| The source fields recorded in the lock. `rev` is empty when absent. `digest` is the existing provider content digest; prefer `content_identity` for fingerprinting because aliases may have an empty recorded digest.
 
-| `sources.NAME.identity`
+| `sources.NAME.content_identity`
 | Per-entry pinned content identity, opaque outside the named provider. Compare identities together with `provider`; unknown providers retain their recorded digest. For Nix and core file sources the identity is `sha256:<hex>`. Nix remote entries use the decoded NAR hash, local entries the recorded Blueprint tree digest, and follows entries their resolved target's identity. It is independent of names, mutable reference spelling, tasks, other entries, provider graph node names, and lock format minor versions. Unrelated updates and adding/removing tasks cannot change it. For trees it identifies the full source tree, including when a flake selects a subdirectory within that tree. For `SourceFile`, it identifies the unchanged original file bytes.
 
 | `sources.NAME.digestKind`, `flatSha256`
@@ -281,7 +319,7 @@ check `format`, accept extra fields and treat ordering as insignificant.
 | For a remote Nix tree source, the exact locked fetch attributes, with string `type`, `owner`/`repo` or `url`, optional `rev` and numeric `lastModified`, `narHash`, and any applicable locked fetch flags or host metadata. No registry resolution or defaults are inserted. The flake-only `dir` selection is omitted because it is not a `builtins.fetchTree` argument. It is omitted for local paths; other providers define their own metadata. Local paths require a project location and Blueprint's tree verification.
 
 | `fetched`
-| Array of program entries. Each has string `name`, `system`, `sha256`, `identity`, array of string `urls`, integer `size` (download bytes), and string `obtained` (`computed`, `published`, `both`, or `unstated`). `identity` is `sha256:` followed by the download hash. URL or provenance changes do not change byte identity.
+| Array of program entries. Each has string `name`, `system`, `sha256`, `content_identity`, array of string `urls`, integer `size` (download bytes), string `obtained` (`computed`, `published`, `both`, or `unstated`), array of string `served` and string `witness`. `served` lists the hosts that served the bytes `blueprint update` hashed, after any redirect, sorted; it is empty when nothing was downloaded, as for a digest that was only published. `witness` is the address a published digest was read from, such as the GitHub releases API address of the release, and is empty when the digest was only computed. `content_identity` is `sha256:` followed by the download hash. URL or provenance changes do not change byte identity.
 |===
 
 An external producer can save a named pin without parsing Blueprint's lock:
@@ -297,19 +335,70 @@ A Nix expression can consume that JSON directly:
 ----
 let
   locked = builtins.fromJSON (builtins.readFile ./locked-input.json);
-  pin = assert locked.format == 1; locked.sources.nix;
+  pin = assert locked.format == 2; locked.sources.nix;
   nixpkgs = builtins.fetchTree pin.metadata.nix.fetchTree;
 in import nixpkgs.outPath { }
 ----
 
 The inspector itself is offline; evaluating `builtins.fetchTree` may fetch the
-source if Nix does not already have it. Use `sources.nix.identity` as the
+source if Nix does not already have it. Use `sources.nix.content_identity` as the
 producer's input fingerprint so an unrelated `roc-stable` update does not
 invalidate the producer's artifacts.
 
+== Verify the store
+
+Every use of a fetched program checks the store of downloads first: its
+archive is hashed again and compared with the SHA-256 it is named by, and its
+tree is hashed again and compared with the record written beside it when it
+was unpacked. An archive that differs is downloaded again, and a tree that
+differs is made again from its archive. That check guarantees a tree is what
+its record says. It cannot see a tree and its record changed together, so
+that they agree: nothing in it compares the tree with what its archive
+unpacks to.
+
+`blueprint store verify` makes that comparison, at the cost of unpacking every
+archive again. It hashes each archive in the store; for each tree with a
+record, it unpacks the archive afresh into a scratch directory beside the
+trees, never inside one, compares the tree and its record with that
+extraction, and removes the scratch directory. It reads the store and nothing
+else: not `Blueprint.roc`, the lock, a compiler or the network. It changes
+nothing.
+
+[source]
+----
+$ blueprint store verify
+intact /home/me/.cache/blueprint/v1/artifacts/sha256/<a>
+tree differs /home/me/.cache/blueprint/v1/trees/sha256/<a>.tar.gz: it and its record agree, but it holds sha256:<x>, and its archive unpacks to sha256:<y>
+intact /home/me/.cache/blueprint/v1/artifacts/sha256/<b>
+intact /home/me/.cache/blueprint/v1/trees/sha256/<b>.file
+store /home/me/.cache/blueprint: 4 checked, 3 intact, 1 tree differs
+blueprint: the store is not intact; `blueprint store verify --repair` makes what differs again from its archive
+----
+
+Each archive is followed by its trees, in the order of their digests. A
+finding is `intact`; `archive damaged`, when an archive is not its SHA-256;
+`tree differs` or `record differs`, from the fresh extraction; `no record`,
+for a tree with none; or `no archive`, for a tree whose archive is missing or
+damaged, which nothing can verify without a download. The status is 0 when
+every finding is `intact`, and 1 otherwise.
+
+`--repair` then makes the store what it should be, and prints a `repaired`
+line for each change. A tree that differs, or has no record, is replaced by
+its fresh extraction, with a record; a record that differs is written again.
+A damaged archive is removed, and so is a tree with no archive, for the next
+use to download the archive and make the tree from it. Nothing is downloaded,
+and the status still says what was found: run `verify` again to see a clean
+store.
+
+`--json` prints one JSON object for a program to read: `format` `1`, `store`,
+`findings` as `{ item, verdict, detail }` with `verdict` one of `intact`,
+`archive_damaged`, `tree_differs`, `record_differs`, `no_record` and
+`no_archive`, `counts` of each verdict, and `repaired` as `{ item, action }`.
+The JSON is presentation: the records in the store remain S-expressions.
+
 == What update needs and records
 
-`blueprint update` is the one command that decides what a project uses. It
+`blueprint update` is the command that explicitly selects dependency pins. It
 writes the whole lock or nothing.
 
 Pure Roc consumers can import the official `core.LockSnapshot` module from
@@ -398,17 +487,23 @@ that is answered downloads it for this machine alone.
 
 === New download hosts
 
-After writing the lock, `blueprint update` prints every download host the new
-lock names and the lock before it did not, one to a line:
+For each download it hashed, the lock records the hosts that served the
+bytes, after any redirect, beside the URLs `Blueprint.roc` declares. Before
+it writes the lock, `blueprint update` prints every download host the new
+lock names and the lock before it did not, one to a line, and says whether a
+URL in `Blueprint.roc` declares it or a redirect led there:
 
 [source]
 ----
-Blueprint.lock now names download hosts it did not name before:
-  github.com
+Blueprint.lock will name download hosts it did not name before:
+  github.com, declared in Blueprint.roc
+  release-assets.githubusercontent.com, reached by a redirect
 ----
 
 It prints nothing when there is none. A new host in a lock update is worth a
-reviewer's look.
+reviewer's look, and one reached by a redirect is named by no line of
+`Blueprint.roc`. The list comes before the lock is written, so an update that
+then fails to write it has still said what it would have named.
 
 == Environment variables
 
@@ -417,8 +512,8 @@ reviewer's look.
 * *`BLUEPRINT_WORKSPACE`*, *`BLUEPRINT_GENERATED_ROOT`*, *`BLUEPRINT_LOCK`*
   choose caller paths; relative values resolve against the selected project
   root, not the invocation directory. Out-of-tree generated roots are supported.
-* *`BLUEPRINT_TARGET`* selects a declared target (default: this machine's
-  System).
+* *`BLUEPRINT_TARGET`* selects the declared execution system (default: this
+  machine's System), not a separate artifact target.
 * *`ROC`* selects the compiler that reads `Blueprint.roc`, which must be the
   nightly `blueprint` was built for; unset, a matching `roc` on `PATH` is
   used, or the nightly is downloaded into the store.

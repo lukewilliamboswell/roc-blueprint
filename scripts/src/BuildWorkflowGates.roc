@@ -35,13 +35,13 @@ BuildWorkflowGates := [].{
 	task_line = |argv| "task ${BuildHarness.hex(argv.fold([], |bytes, arg| bytes.concat(arg.to_utf8()).append(0)))}"
 
 	## What one recorded `nix` call did, if it was a build or ran a task:
-	## the artifact a `nix build` named, or the command `nix develop` ran.
+	## the exact prepared installable a `nix build` executed, or the task command.
 	observe : List(Str) -> [Built(Str), Ran(List(Str)), Other, Ambiguous]
 	observe = |argv|
 		match argv {
 			["build", ..] =>
-				match argv.keep_if(|arg| arg.contains("#packages.")) {
-					[installable] => Built(installable.split_on(".").last() ?? "")
+				match argv.keep_if(|arg| arg.starts_with("/nix/store/") and arg.ends_with(".drv^*")) {
+					[installable] => Built(installable)
 					_ => Ambiguous
 				}
 
@@ -149,14 +149,17 @@ gates! = |suite| {
 
 	reject_capabilities!(suite, state)?
 
-	# Remove only disposable old roots so they cannot become ordinary inputs.
+	# Remove both disposable old roots before changing the active layout.
+	# Old build records otherwise become ordinary project inputs at `work/`.
+	Path.delete_all!(Path.utf8(place.workspace))?
 	Path.delete_all!(Path.utf8(place.generated))?
 	outside = { ..place, workspace: "${suite.work}/outside-work", generated: "${suite.work}/outside-generated" }
 	moved = workflow!(suite, outside, "repeat", repeat, "")?
 	BuildHarness.require!(moved.outputs == [cached, cached], "out-of-tree layout changed artifact")?
 	_ = artifact!(cached, second_source, edited_bytes)?
+	# The workspace keeps only the build records, `explain`'s baseline.
 	BuildHarness.require!(
-		(Path.is_dir!(Path.utf8(outside.generated)) ?? Bool.False) and !BuildHarness.exists!(outside.workspace),
+		(Path.is_dir!(Path.utf8(outside.generated)) ?? Bool.False) and BuildHarness.names!(outside.workspace)? == ["build-records"],
 		"caller-selected out-of-tree roots not used",
 	)?
 	BuildHarness.require!(
@@ -237,6 +240,10 @@ workflow! = |suite, place, name, expected, refusal| {
 	good = refusal.is_empty()
 	start = BuildHarness.events!(suite)?.len()
 	ran = if good BuildHarness.ok!(suite, place, ["workflow", name])? else BuildHarness.refused!(suite, place, ["workflow", name], refusal)?
+	# Bind each native invocation to the CLI's selected build and prepared
+	# identity. Keep every announcement: a task can change the next preparation
+	# of the same build, and failed builds still have an invocation.
+	var $prepared = ran.err.split_on("\n").keep_if(|line| line.starts_with("building ") and line.contains(": /nix/store/") and line.ends_with(".drv")).map(|line| line.drop_prefix("building ").split_on(": "))
 	var $observed = []
 	var $commands = []
 	for entry in BuildHarness.events!(suite)?.drop_first(start) {
@@ -245,10 +252,23 @@ workflow! = |suite, place, name, expected, refusal| {
 		} else {
 			action = BuildWorkflowGates.observe(entry.argv)
 			BuildHarness.require!(action != Ambiguous, "${name}: a build named no single artifact: ${Str.inspect(entry.argv)}")?
-			$observed = $observed.concat(built_steps(action))
+			match action {
+				Built(installable) => {
+					match $prepared.first() {
+						Ok([selected, identity]) => {
+							BuildHarness.require!(installable == "${identity}^*", "${name}: executed ${installable}, prepared ${identity}")?
+							$observed = $observed.append(BuildWorkflowGates.build(selected))
+						}
+						_ => BuildHarness.require!(Bool.False, "${name}: native build has no selected preparation")?
+					}
+					$prepared = $prepared.drop_first(1)
+				}
+				_ => {}
+			}
 			$commands = $commands.concat(ran_command(action))
 		}
 	}
+	BuildHarness.require!($prepared.is_empty(), "${name}: selected preparation was not executed")?
 	BuildHarness.require!($observed == expected, "${name}: effect order ${Str.inspect($observed)}, expected ${Str.inspect(expected)}")?
 	tasks = expected.keep_if(|step| step.kind == "task").map(|step| ["roc-stable", "task.roc", "--", suite.events].concat(step.argv))
 	BuildHarness.require!($commands == tasks, "${name}: task process argv ${Str.inspect($commands)}, expected ${Str.inspect(tasks)}")?
@@ -262,13 +282,6 @@ workflow! = |suite, place, name, expected, refusal| {
 	BuildHarness.require!(printed == wanted, "${name}: stdout order ${Str.inspect(printed)}, expected ${Str.inspect(wanted)}")?
 	Ok({ outputs, ran })
 }
-
-built_steps : [Built(Str), Ran(List(Str)), Other, Ambiguous] -> List(BuildWorkflowGates.Step)
-built_steps = |action|
-	match action {
-		Built(name) => [BuildWorkflowGates.build(name)]
-		_ => []
-	}
 
 ran_command : [Built(Str), Ran(List(Str)), Other, Ambiguous] -> List(List(Str))
 ran_command = |action|
@@ -296,10 +309,12 @@ artifact! = |output, source, generated| {
 
 noops! : BuildHarness.Suite, BuildHarness.Layout => Try({}, _)
 noops! = |suite, place| {
-	# An existing nonempty generated tree must not even be restaged. A build
-	# keeps nothing in a workspace that is not the generated root.
+	# An existing nonempty generated tree must not even be restaged. In a
+	# workspace that is not the generated root a build keeps only its
+	# records, the baseline `explain` compares with; the copy of the project
+	# it made for Nix is gone once the build ends.
 	BuildHarness.require!(
-		!BuildHarness.snapshot!(place.generated)?.is_empty() and BuildHarness.snapshot!(place.workspace)?.is_empty(),
+		!BuildHarness.snapshot!(place.generated)?.is_empty() and BuildHarness.names!(place.workspace)? == ["build-records"],
 		"no-op test needs prior state",
 	)?
 	for name in ["empty", "nested-empty"] {
@@ -314,14 +329,17 @@ noops! = |suite, place| {
 reject_capabilities! : BuildHarness.Suite, State => Try({}, _)
 reject_capabilities! = |suite, state| {
 	config = Path.utf8("${state.place.project}/Blueprint.roc")
-	for (name, old, new) in [
-		("unsupported-task", "Task(\"later\", [Use(\"builder\")", "Task(\"later\", [Use(\"foreign\")"),
-		("unsupported-build", "Build(\"later-library\", [Use(\"builder\")", "Build(\"later-library\", [Use(\"foreign\")"),
+	# A task whose environment expects a tool the machine lacks is refused when
+	# the whole workflow is checked; a build in that environment is refused by
+	# the Nix executor, which supplies nothing of the machine.
+	for (name, old, new, diagnostic) in [
+		("unsupported-task", "Task(\"later\", [Use(\"builder\")", "Task(\"later\", [Use(\"foreign\")", "blueprint-fixture-absent-tool"),
+		("unsupported-build", "Build(\"later-library\", [Execute(\"native\"), Use(\"builder\")", "Build(\"later-library\", [Execute(\"native\"), Use(\"foreign\")", "does not support downloaded or expected tools"),
 	] {
 		BuildHarness.require!(count(state.config, old) == 1, "vacuous negative fixture edit")?
 		Path.write_utf8!(config, state.config.replace_each(old, new))?
 		before = state!(suite, state.place)?
-		refused = BuildHarness.refused!(suite, state.place, ["workflow", name], "Guix")?
+		refused = BuildHarness.refused!(suite, state.place, ["workflow", name], diagnostic)?
 		BuildHarness.require!(state!(suite, state.place)? == before, "${name} performed effects before whole-closure preflight")?
 		BuildHarness.require!(refused.stdout.is_empty(), "unsupported closure produced a marker")?
 	}
@@ -384,7 +402,9 @@ example_smoke! = |suite| {
 expect BuildWorkflowGates.arguments_json == Json.to_str(BuildWorkflowGates.arguments)
 expect BuildWorkflowGates.record(["x"]) == { kind: "task", argv: ["record", "configured argument", "x"] }
 expect BuildWorkflowGates.task_line(["record", "", "a b"]) == "task 7265636f7264000061206200"
-expect BuildWorkflowGates.observe(["build", "--no-link", "path:/w/generated#packages.x86_64-linux.app"]) == Built("app")
+expect BuildWorkflowGates.observe(["build", "--no-link", "/nix/store/captured.drv^*", "--json"]) == Built("/nix/store/captured.drv^*")
+expect BuildWorkflowGates.observe(["build", "path:/w/generated#packages.x86_64-linux.app"]) == Ambiguous
+expect BuildWorkflowGates.observe(["build", "/nix/store/one.drv^*", "/nix/store/two.drv^*"]) == Ambiguous
 expect BuildWorkflowGates.observe(["build", "--no-link"]) == Ambiguous
 expect BuildWorkflowGates.observe(["develop", "--no-update-lock-file", "path:/w#devShells.x.y", "--command", "roc-stable", "task.roc", ""]) == Ran(["roc-stable", "task.roc", ""])
 expect BuildWorkflowGates.observe(["develop", "path:/w#devShells.x.y"]) == Other

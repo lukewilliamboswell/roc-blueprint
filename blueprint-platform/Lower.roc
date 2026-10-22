@@ -1,12 +1,14 @@
 # Authoring cardinality checks feed the shared whole-project validator.
 import Config
 import Recipes
+import ProviderSource
 import System
 import Url
 import Val
 import core.Spec
 import core.Project
 import core.Value
+import nix.Native
 
 ## Lower authoring settings, then share semantic validation with Spec consumers.
 ## Setting cardinality belongs here because the Spec stores only one value.
@@ -15,6 +17,9 @@ Lower :: [].{
 		names : List(Str),
 		systems : List(List(System)),
 		sources : List(Spec.Source),
+		resolvers : List(Spec.Resolver),
+		executors : List(Spec.Executor),
+		build_executors : List(Spec.BuildExecutor),
 		inputs : List(Spec.Input),
 		environments : List(Spec.Environment),
 		system_tools : List(Spec.SystemTools),
@@ -46,7 +51,7 @@ Lower :: [].{
 	lower : List(Config.Setting) -> Try(Spec, Str)
 	lower = |settings| {
 		initial : Acc
-		initial = { source_files: [], names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], configured_tools: [], roc_packages: [], recipes: [], environment_programs: [], expects: [], shells: [], tasks: [], build_sources: [], builds: [], build_files: [], workflows: [], extensions: [], raw: [] }
+		initial = { resolvers: [], executors: [], build_executors: [], source_files: [], names: [], systems: [], sources: [], inputs: [], environments: [], system_tools: [], commands: [], configured_tools: [], roc_packages: [], recipes: [], environment_programs: [], expects: [], shells: [], tasks: [], build_sources: [], builds: [], build_files: [], workflows: [], extensions: [], raw: [] }
 		acc = settings.fold(Ok(initial), |result, setting| add(result?, setting))?
 		name = match acc.names {
 			[] => return Err("MissingName: declare Name once")
@@ -77,33 +82,61 @@ Lower :: [].{
 				.concat(if (acc.roc_packages.is_empty()) [] else ["roc-packages"])
 				.concat(if (programs.is_empty() and acc.environment_programs.is_empty()) [] else ["programs"])
 				.concat(if (acc.expects.is_empty()) [] else ["expects"])
-		Project.validate(
-			Spec.{
-				source_files: acc.source_files,
-				format: Spec.current_format,
-				name,
-				requires_,
-				systems: systems.map(|system| system.to_str()),
-				sources: acc.sources,
-				inputs: acc.inputs,
-				environments: acc.environments,
-				system_tools: acc.system_tools,
-				commands: acc.commands,
-				configured_tools: acc.configured_tools,
-				roc_packages: acc.roc_packages,
-				programs,
-				environment_programs: acc.environment_programs,
-				expects: acc.expects,
-				shells: acc.shells,
-				tasks: acc.tasks,
-				build_sources: acc.build_sources,
-				build_files: acc.build_files,
-				builds: acc.builds,
-				workflows: acc.workflows,
-				extensions: acc.extensions,
-				raw: acc.raw,
-			},
-		)
+		lowered = Spec.{
+			resolvers: acc.resolvers,
+			executors: acc.executors,
+			build_executors: acc.build_executors,
+			source_files: acc.source_files,
+			format: Spec.current_format,
+			name,
+			requires_,
+			systems: systems.map(|system| system.to_str()),
+			sources: acc.sources,
+			inputs: acc.inputs,
+			environments: acc.environments,
+			system_tools: acc.system_tools,
+			commands: acc.commands,
+			configured_tools: acc.configured_tools,
+			roc_packages: acc.roc_packages,
+			programs,
+			environment_programs: acc.environment_programs,
+			expects: acc.expects,
+			shells: acc.shells,
+			tasks: acc.tasks,
+			build_sources: acc.build_sources,
+			build_files: acc.build_files,
+			builds: acc.builds,
+			workflows: acc.workflows,
+			extensions: acc.extensions,
+			raw: acc.raw,
+		}
+		project = Project.validate({ ..lowered, resolvers: owned_resolvers(lowered) })?
+		for environment in project.environments {
+			for tool in environment.tools.concat(project.commands.keep_if(|entry| entry.environment == environment.name).map(|entry| entry.tool)).concat(project.configured_tools.keep_if(|entry| entry.environment == environment.name).map(|entry| entry.tool)).concat(project.system_tools.keep_if(|entry| entry.environment == environment.name).fold([], |tools, entry| tools.concat(entry.tools))) {
+				source = project.sources.find_first(|candidate| candidate.name == tool.source).map_err(|_| "unknown source: ${tool.source}")?
+				if source.provider.name == "nix" {
+					Native.check_tool(Nix, tool.name)?
+				} else if source.provider.name == "guix" {
+					Native.check_tool(Guix, tool.name)?
+				}
+			}
+		}
+		# References the Nix resolver owns are held to its flake-reference
+		# grammar here, as its tool names are; the core checks only that a
+		# reference is readable text.
+		for resolver in project.resolvers.keep_if(|entry| entry.provider == "nix") {
+			for owned in resolver.inputs {
+				match project.inputs.find_first(|input| input.name == owned) {
+					Ok(input) => Native.check_ref(input.url)?
+					Err(_) => {}
+				}
+				match project.build_sources.find_first(|source| source.name == owned) {
+					Ok(source) => Native.check_ref(source.ref)?
+					Err(_) => {}
+				}
+			}
+		}
+		Ok(project)
 	}
 
 	add : Acc, Config.Setting -> Try(Acc, Str)
@@ -111,9 +144,10 @@ Lower :: [].{
 		next = match setting {
 			Name(name) => { ..acc, names: acc.names.append(name) }
 			Systems(systems) => { ..acc, systems: acc.systems.append(systems) }
-			Packages(name, source) => { ..acc, sources: acc.sources.append({ name: name.to_str(), provider: provider(name.to_str(), source)? }) }
-			Input(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Flake }) }
-			Overlay(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str(), kind: Overlay }) }
+			Resolver(provider, inputs) => { ..acc, resolvers: acc.resolvers.append({ provider, inputs: inputs.map(|input| input.to_str()) }) }
+			Executor(name, selected) => { ..acc, executors: acc.executors.append(executor(name.to_str(), selected)) }
+			Packages(name, source) => { ..acc, sources: acc.sources.append({ name: name.to_str(), provider: provider(source) }) }
+			Input(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str() }) }
 			Environment(name, inner) => {
 				lowered = environment(name.to_str(), inner)?
 				# Environments sharing a bundle share its one locked source.
@@ -126,8 +160,12 @@ Lower :: [].{
 			Source(name, ref) => { ..acc, build_sources: acc.build_sources.append({ name: name.to_str(), ref: ref.to_str() }) }
 			Build(name, inner) => {
 				var $selected = []
+				var $executors = []
 				for build_setting in inner {
 					match build_setting {
+						Execute(executor) => {
+							$executors = $executors.append({ build: name.to_str(), executor: executor.to_str() })
+						}
 						Files(paths) => {
 							$selected = $selected.append(paths)
 						}
@@ -137,8 +175,12 @@ Lower :: [].{
 				if $selected.len() > 1 {
 					return Err("DuplicateFiles: build ${name.to_str()}")
 				}
+				lowered_build = build(name.to_str(), inner)?
+				if $executors.len() != 1 {
+					return Err("build ${name.to_str()} requires exactly one Execute")
+				}
 				files = $selected.map(|paths| { build: name.to_str(), paths })
-				{ ..acc, builds: acc.builds.append(build(name.to_str(), inner)?), build_files: acc.build_files.concat(files) }
+				{ ..acc, builds: acc.builds.append(lowered_build), build_files: acc.build_files.concat(files), build_executors: acc.build_executors.concat($executors) }
 			}
 			Workflow(name, steps) => {
 				..acc,
@@ -224,15 +266,39 @@ Lower :: [].{
 			RunWorkflow(name) => RunWorkflow(name.to_str())
 		}
 
-	## A source says which package set it is. `Auto`, which left that to the
-	## consumer, is still a tag of the type for one release, so that a
-	## configuration from before 0.6 is told what to write.
-	provider : Str, Config.PackageSource -> Try(Spec.Provider, Str)
-	provider = |name, source|
+	## Lower an executor declaration to its provider name and bootstrap source.
+	executor : Str, Config.ExecutorProvider -> Spec.Executor
+	executor = |name, selected|
+		match selected {
+			Nix(source) => { name, provider: "nix", source: source.to_str() }
+			Adapter(provider_name, source) => { name, provider: provider_name, source }
+		}
+
+	## Declarations whose type already names Nix, flake inputs and overlays,
+	## build sources and Roc package bundles, are owned by the Nix resolver
+	## unless a Resolver assigns them elsewhere. The Spec records the result
+	## explicitly, so a consumer never guesses an owner.
+	owned_resolvers : Spec -> List(Spec.Resolver)
+	owned_resolvers = |spec| {
+		declared = spec.inputs.map(|input| input.name).concat(Project.resolved_build_sources(spec).map(|source| source.name))
+		owned = spec.resolvers.fold([], |names, resolver| names.concat(resolver.inputs))
+		unowned = Project.unique(declared.keep_if(|name| !owned.contains(name)))
+		if unowned.is_empty() {
+			spec.resolvers
+		} else if spec.resolvers.any(|resolver| resolver.provider == "nix") {
+			spec.resolvers.map(|resolver| if (resolver.provider == "nix") { ..resolver, inputs: resolver.inputs.concat(unowned) } else resolver)
+		} else {
+			spec.resolvers.append({ provider: "nix", inputs: unowned })
+		}
+	}
+
+	## Lower an explicitly declared package source.
+	provider : Config.PackageSource -> Spec.Provider
+	provider = |source|
 		match source {
-			Auto => Err("Packages(\"${name}\", Auto): the Auto source was removed in 0.6; name the package set, as in From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))")
-			From(NixPackages(ref)) => Ok(NixPackages(ref.to_str()))
-			From(GuixPackages(channel)) => Ok(GuixPackages(channel))
+			From(NixPackages(ref)) => { name: "nix", version: 1, ref: ref.to_str() }
+			From(GuixPackages(channel)) => { name: "guix", version: 1, ref: channel }
+			From(Adapter(declaration)) => { name: declaration.provider(), version: declaration.version(), ref: declaration.reference() }
 		}
 
 	## The feature every Spec lowered here requires: its sources are all
@@ -355,6 +421,7 @@ Lower :: [].{
 			{ environments: [], inputs: [], needs: [], runs: [], outputs: [] },
 			|acc, setting|
 				match setting {
+					Execute(_) => acc
 					Files(_) => acc
 					Use(env) => { ..acc, environments: acc.environments.append(env.to_str()) }
 					Inputs(inputs) => { ..acc, inputs: acc.inputs.append(inputs.map(|input| input.to_str())) }
@@ -402,11 +469,10 @@ Lower :: [].{
 # project that declares none has none, and a consumer from before that refuses
 # the Spec by the feature's name.
 expect Lower.lower([Name("plain"), Environment("dev", [])]).map_ok(|spec| (spec.requires_, spec.sources)) == Ok((["explicit-sources"], []))
-expect Lower.lower([Name("sourced"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [Tools(["nix#git"])])]).map_ok(|spec| (spec.requires_, spec.sources)) == Ok((["explicit-sources"], [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }]))
+expect Lower.lower([Name("sourced"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [Tools(["nix#git"])])]).map_ok(|spec| (spec.requires_, spec.sources)) == Ok((["explicit-sources"], [{ name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }]))
 
 # A source that leaves its package set to the consumer is told what to write,
 # and a tool cannot name a source that is not declared.
-expect Lower.lower([Name("invalid"), Packages("default", Auto)]) == Err("Packages(\"default\", Auto): the Auto source was removed in 0.6; name the package set, as in From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))")
 expect Lower.lower([Name("invalid"), Environment("dev", [Tools(["nix#git"])])]) == Err("unknown source: nix; Blueprint.roc declares no package source")
 expect Lower.lower([Name("invalid"), Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))), Environment("dev", [Command("vcs", "nix#git")])]) == Err("unknown source: nix; Blueprint.roc declares stable")
 
@@ -594,7 +660,19 @@ expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev
 expect Lower.lower([Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(Archive("https://example.test/tool.zip", Zip, "tool.exe"), ["https://mirror.example.test/tool.zip", "https://mirror.example.test/tool.zip"]))])])]) == Err("program tool on x86_64-linux names a URL twice:\n    https://mirror.example.test/tool.zip")
 
 # File selection is optional; an explicit empty selection is distinct from omitted.
-expect Lower.lower([Name("selected"), Environment("build", []), Build("app", [Use("build"), Files(["scripts", "recipe.txt"]), Run(["build"]), Output("out")])]).map_ok(|spec| { files: spec.build_files, feature: spec.requires_.contains("build-files") }) == Ok({ files: [{ build: "app", paths: ["scripts", "recipe.txt"] }], feature: True })
-expect Lower.lower([Name("empty"), Environment("build", []), Build("app", [Use("build"), Files([]), Run(["build"]), Output("out")])]).map_ok(|spec| spec.build_files) == Ok([{ build: "app", paths: [] }])
-expect Lower.lower([Name("duplicate"), Environment("build", []), Build("app", [Use("build"), Files([]), Files([]), Run(["build"]), Output("out")])]) == Err("DuplicateFiles: build app")
-expect Lower.lower([Name("escape"), Environment("build", []), Build("app", [Use("build"), Files(["../outside"]), Run(["build"]), Output("out")])]) == Err("invalid selected build path: ../outside")
+expect Lower.lower([Name("selected"), Environment("build", []), Executor("native", Adapter("fixture", "")), Build("app", [Execute("native"), Use("build"), Files(["scripts", "recipe.txt"]), Run(["build"]), Output("out")])]).map_ok(|spec| { files: spec.build_files, feature: spec.requires_.contains("build-files") }) == Ok({ files: [{ build: "app", paths: ["scripts", "recipe.txt"] }], feature: True })
+expect Lower.lower([Name("empty"), Environment("build", []), Executor("native", Adapter("fixture", "")), Build("app", [Execute("native"), Use("build"), Files([]), Run(["build"]), Output("out")])]).map_ok(|spec| spec.build_files) == Ok([{ build: "app", paths: [] }])
+expect Lower.lower([Name("duplicate"), Environment("build", []), Executor("native", Adapter("fixture", "")), Build("app", [Execute("native"), Use("build"), Files([]), Files([]), Run(["build"]), Output("out")])]) == Err("DuplicateFiles: build app")
+expect Lower.lower([Name("escape"), Environment("build", []), Executor("native", Adapter("fixture", "")), Build("app", [Execute("native"), Use("build"), Files(["../outside"]), Run(["build"]), Output("out")])]) == Err("invalid selected build path: ../outside")
+
+# An executor carries its provider's settings: a Nix executor names the package
+# source it bootstraps from, and another adapter's executor may name none.
+expect Lower.lower([Name("executors"), Packages("pkgs", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("build", []), Executor("native", Nix("pkgs")), Executor("other", Adapter("fixture", "")), Build("app", [Execute("native"), Use("build"), Run(["build"]), Output("out")])]).map_ok(|spec| spec.executors) == Ok([{ name: "native", provider: "nix", source: "pkgs" }, { name: "other", provider: "fixture", source: "" }])
+expect Lower.lower([Name("unowned"), Environment("build", []), Executor("native", Nix("pkgs")), Build("app", [Execute("native"), Use("build"), Run(["build"]), Output("out")])]) == Err("executor native bootstrap source pkgs is not owned by nix")
+
+# Flake inputs, overlays, build sources and Roc bundles are Nix-typed, so the
+# Nix resolver owns them without a Resolver line; one merges with an explicit
+# Nix entry, and another provider's Resolver takes a name out of Nix's hands.
+expect Lower.lower([Name("owned"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Input("roc", "github:roc-lang/roc-overlay"), Input("utils", "github:numtide/flake-utils"), Environment("dev", [Overlays(["roc"])])]).map_ok(|spec| spec.resolvers) == Ok([{ provider: "nix", inputs: ["roc", "utils"] }])
+expect Lower.lower([Name("merged"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Resolver("nix", ["roc"]), Input("roc", "github:roc-lang/roc-overlay"), Input("utils", "github:numtide/flake-utils"), Environment("dev", [Overlays(["roc"])])]).map_ok(|spec| spec.resolvers) == Ok([{ provider: "nix", inputs: ["roc", "utils"] }])
+expect Lower.lower([Name("elsewhere"), Resolver("fixture", ["assets"]), Environment("build", []), Executor("native", Adapter("fixture", "")), Source("assets", "path:./assets"), Build("app", [Execute("native"), Use("build"), Inputs(["assets"]), Run(["build"]), Output("out")])]).map_ok(|spec| spec.resolvers) == Ok([{ provider: "fixture", inputs: ["assets"] }])

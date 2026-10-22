@@ -1,5 +1,5 @@
-# Pure planning of a request: what the Core supplies itself, and what it asks
-# of a provider. See docs/architecture.adoc, stages Fetch and Realise.
+# Pure request planning. The core library selects adapters and describes
+# work; an effect host such as the CLI executes and verifies the result.
 import Spec
 import Project
 import Request
@@ -8,13 +8,10 @@ import Lock
 import Steps
 import Provider
 
-## The Core's own plan for a request. An environment's fetched programs, the
-## tools it expects of the machine and its Roc packages are the Core's to
-## supply and check, from the Spec and the Lock alone. A provider is asked
-## only for an environment that has a tool from a package source it
-## supplies, and what the Core supplies is then added to the provider's
-## steps. Nothing here observes the machine: the result is data for an
-## executor.
+## Plans compose core-managed downloads, host-tool requirements and Roc
+## packages with selected provider operations. Tasks and shells route through
+## their environments' declared package-source owners; Builds route through
+## their explicit executors. Nothing here observes or changes the machine.
 Realise :: [].{
 
 	## The Spec features planned here, whatever provider is at hand.
@@ -53,8 +50,8 @@ Realise :: [].{
 	## expects is the Core's own.
 	resolvers : Spec, List(Provider) -> List(Provider)
 	resolvers = |project, providers| {
-		shared = !project.inputs.is_empty() or !Project.resolved_build_sources(project).is_empty()
-		providers.keep_if(|candidate| shared or project.sources.any(|source| (candidate.realises)(source.provider)))
+		owners = Project.unique(project.sources.map(|source| source.provider.name).concat(project.resolvers.keep_if(|resolver| !resolver.inputs.is_empty()).map(|resolver| resolver.provider)))
+		providers.keep_if(|candidate| owners.contains(candidate.name))
 	}
 
 	## An update was asked for names that are neither an input a provider
@@ -196,69 +193,66 @@ Realise :: [].{
 		}
 	}
 
-	## A sandboxed build is a provider's whole. Its PATH is its environment's
-	## package tools and nothing of the machine, so an environment in its
-	## closure that fetches or expects is refused: the program would not be
-	## there. With no tool at all, the sandbox is that of the first declared
-	## source a provider supplies; a project that declares none cannot build.
+	## Build execution is selected explicitly. Provider capability validation
+	## determines which package, downloaded or host tools it can support.
 	built : Spec, Str, Request, Str, Layout, Authority, List(Provider) -> Try(List(Steps.Step), List(Str))
 	built = |project, name, request, system, layout, authority, providers| {
 		closure = Project.build_closure(project, name).map_err(|message| [message])?
-		var $problems = []
-		var $sources = []
-		for environment in Project.unique(closure.map(|build| build.environment)) {
-			match Project.environment_use(project, environment, system) {
-				Ok(use) => {
-					if !(use.programs.is_empty() and use.unavailable.is_empty() and use.expects.is_empty()) {
-						$problems = $problems.append("build ${name}: environment ${environment} has fetched programs or expected tools, and a sandboxed build has only the tools of its package sources")
-					}
-					$sources = $sources.concat(use.tools.map(|tool| tool.source))
-				}
-				Err(problem) => {
-					$problems = $problems.append(problem)
-				}
-			}
+		executors = closure.map(|build| Project.build_executor(project, build.name))
+		var $owners = []
+		for selected in executors {
+			executor = selected.map_err(|problem| [problem])?
+			$owners = Project.unique($owners.append(executor.provider))
 		}
-		environment = closure.last().map_ok(|build| build.environment) ?? ""
-		chosen = if $sources.is_empty() {
-			match project.sources.find_first(|source| providers.any(|candidate| (candidate.realises)(source.provider))) {
-				Ok(source) => Ok([source.name])
-				Err(_) => Err("build ${name} runs in a provider's sandbox, and Blueprint.roc declares no package source for one; declare one with Packages${declared(project)}")
-			}
-		} else {
-			Ok($sources)
+		if $owners.len() != 1 {
+			return Err(["build ${name} requires unsupported mixed executors: ${Str.join_with($owners, ", ")}"])
 		}
-		steps = match chosen {
-			Ok(names) =>
-				match supplier(project, providers, environment, names) {
-					Ok(provider) => asked(provider, project, request, system, layout, authority)
-					Err(problem) => Err([problem])
-				}
-
-			Err(problem) => Err([problem])
-		}
-		match steps {
-			Ok(provided) => if ($problems.is_empty()) Ok(provided) else Err($problems)
-			Err(problems) => Err($problems.concat(problems))
+		owner = $owners.first() ?? ""
+		selected = providers.keep_if(|candidate| candidate.name == owner)
+		match selected {
+			[provider] => asked(provider, project, request, system, layout, authority)
+			[] => Err(["build ${name} executor provider is unavailable: ${owner}"])
+			_ => Err(["build ${name} executor provider is registered more than once: ${owner}"])
 		}
 	}
 
 	## A provider's steps for one atomic request, or what it says against it.
 	## Before a Lock is read it is asked only whether it would refuse.
 	asked : Provider, Spec, Request, Str, Layout, Authority -> Try(List(Steps.Step), List(Str))
-	asked = |provider, project, request, system, layout, authority|
+	asked = |provider, project, request, system, layout, authority| {
+		for source in project.sources.keep_if(|entry| entry.provider.name == provider.name) {
+			_ = (provider.validate_source)(source.provider).map_err(|problem| [problem])?
+		}
+		for executor in project.executors.keep_if(|entry| entry.provider == provider.name) {
+			_ = (provider.validate_executor)(executor).map_err(|problem| [problem])?
+		}
+		owned = project.resolvers.keep_if(|entry| entry.provider == provider.name).fold([], |names, entry| names.concat(entry.inputs))
+		for input in project.inputs.keep_if(|entry| owned.contains(entry.name)) {
+			_ = (provider.validate_reference)(input.url).map_err(|problem| [problem])?
+		}
+		for source in Project.resolved_build_sources(project).keep_if(|entry| owned.contains(entry.name)) {
+			_ = (provider.validate_reference)(source.ref).map_err(|problem| [problem])?
+		}
+		for tool in project.environments.fold([], |tools, environment| tools.concat(environment.tools)).concat(project.system_tools.fold([], |tools, entry| tools.concat(entry.tools))).concat(project.commands.map(|entry| entry.tool)).concat(project.configured_tools.map(|entry| entry.tool)) {
+			if project.sources.any(|source| source.name == tool.source and source.provider.name == provider.name) {
+				_ = (provider.validate_tool)(tool.name).map_err(|problem| [problem])?
+			}
+		}
 		match authority {
 			Unread => {
 				(provider.preflight)(project, request, system, layout).map_err(|message| [message])?
 				Ok([])
 			}
-			Read(lock) =>
+			Read(lock) => {
+				_ = (provider.preflight)(project, request, system, layout).map_err(|message| [message])?
 				match (provider.realise)(project, request, system, layout, lock) {
 					Ok(steps) => Ok(steps.steps)
 					Err(InvalidLock(message)) => Err([message])
 					Err(Unrealisable(message)) => Err([message])
 				}
+			}
 		}
+	}
 
 	## The one provider that supplies every one of these sources. Tools of an
 	## environment come from sources by name; a source no provider here
@@ -269,13 +263,15 @@ Realise :: [].{
 		var $found = []
 		for name in Project.unique(source_names) {
 			source = project.sources.find_first(|s| s.name == name).map_err(|_| Project.unknown_source(project.sources, name))?
-			match providers.find_first(|candidate| (candidate.realises)(source.provider)) {
-				Ok(provider) => {
+			match providers.keep_if(|candidate| candidate.name == source.provider.name and (candidate.realises)(source.provider)) {
+				[provider] => {
+					_ = (provider.validate_source)(source.provider)?
 					if !$found.any(|known| known.name == provider.name) {
 						$found = $found.append(provider)
 					}
 				}
-				Err(_) => return Err("environment ${environment} takes tools from the source ${name} (${source_kind(source.provider)}), which no provider of this blueprint supplies")
+				[] => return Err("environment ${environment} takes tools from the source ${name} (${source_kind(source.provider)}), which no provider of this blueprint supplies")
+				_ => return Err("source ${name} provider is registered more than once: ${source.provider.name}")
 			}
 		}
 		match $found {
@@ -291,12 +287,7 @@ Realise :: [].{
 		if (project.sources.is_empty()) "" else " (it declares ${Str.join_with(project.sources.map(|source| "${source.name}, ${source_kind(source.provider)}"), "; ")})"
 
 	source_kind : Spec.Provider -> Str
-	source_kind = |provider|
-		match provider {
-			Auto => "Auto"
-			NixPackages(_) => "NixPackages"
-			GuixPackages(_) => "GuixPackages"
-		}
+	source_kind = |provider| "${provider.name} v${provider.version.to_str()}"
 
 	## What the Core supplies for an environment, as operations in the order
 	## an executor needs them: what the machine lacks is known before
@@ -510,19 +501,39 @@ Realise :: [].{
 ## It refuses the task `broken`, as a provider refuses what it cannot render.
 stub : Provider
 stub = Provider.{
+	validate_source: |_source| Ok({}),
+	validate_tool: |_name| Ok({}),
+	validate_executor: |_executor| Ok({}),
+	validate_reference: |_reference| Ok({}),
+	activation_argv: |_step| Err("not entered here"),
+	activation: |_text| Err("not entered here"),
 	name: "nix",
 	features: [],
-	realises: |source|
-		match source {
-			NixPackages(_) => True
-			_ => False
-		},
-	build_argv: |step, _options| Ok(step.argv),
+	realises: |source| source.name == "nix" and source.version == 1,
+	build_prepare_argv: |step| Ok(step.argv),
+	build_prepared: |_text| Err("not prepared here"),
+	build_execute_argv: |step, _prepared, _options| Ok(step.argv),
 	build_result: |_text| Err("not built here"),
+	build_exclusions: |_spec, _layout| Ok([]),
+	build_local_inputs: |_spec, _name, _layout, _lock| Ok([]),
+	build_capabilities: [],
+	build_guarantees: [],
+	build_inputs: |_spec, _name| Ok([]),
 	build_sources: |_spec, _name| Ok([]),
 	render: |_spec| Ok([]),
 	inspect_lock: |_lock| Ok([]),
-	preflight: |_spec, _request, _system, _layout| Ok({}),
+	preflight: |spec, request, _system, _layout| match request {
+		Request.Build(name) => {
+			closure = Project.build_closure(spec, name)?
+			for build in closure {
+				if !spec.environment_programs.keep_if(|entry| entry.environment == build.environment).is_empty() {
+					return Err("fixture executor rejects downloaded tools")
+				}
+			}
+			Ok({})
+		}
+		_ => Ok({})
+	},
 	realise: |_spec, request, system, layout, _lock|
 		match request {
 			Request.Run("broken", _) => Err(Unrealisable("unsupported Nix target riscv64-linux"))
@@ -560,9 +571,12 @@ tool_sha = "2c083762ce177e407730eaa41a8257631969341716950252df3c9fefd2b070aa"
 sample : Spec
 sample = {
 	..Spec.empty("sample"),
+	resolvers: [{ provider: "nix", inputs: ["roc-abc"] }],
+	executors: [{ name: "native", provider: "nix", source: "nix" }],
+	build_executors: ["library", "app", "fetched"].map(|build| { build, executor: "native" }),
 	systems: ["x86_64-linux", "aarch64-darwin", "x86_64-windows"],
 	requires_: ["programs", "expects", "roc-packages", "sources", "builds", "workflows"],
-	sources: [{ name: "guix", provider: GuixPackages("https://git.savannah.gnu.org/git/guix.git") }, { name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }],
+	sources: [{ name: "guix", provider: { name: "guix", version: 1, ref: "https://git.savannah.gnu.org/git/guix.git" } }, { name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }],
 	programs: [
 		{ name: "roc-stable", system: "x86_64-linux", urls: roc_urls("x86_64-linux"), unpack: TarGz, path: "roc/roc" },
 		{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), unpack: TarGz, path: "roc/roc" },
@@ -613,10 +627,10 @@ locked = Lock.{
 	sources: [],
 	hints: [],
 	fetched: [
-		{ name: "roc-stable", system: "x86_64-linux", urls: roc_urls("x86_64-linux"), sha256: roc_sha, size: 69614310, obtained: Both },
-		{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256: roc_sha, size: 66810227, obtained: Published },
-		{ name: "roc-stable", system: "x86_64-windows", urls: ["https://example.test/roc-windows.zip"], sha256: roc_sha, size: 67310620, obtained: Published },
-		{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux"], sha256: tool_sha, size: 5900520, obtained: Computed },
+		{ name: "roc-stable", system: "x86_64-linux", urls: roc_urls("x86_64-linux"), sha256: roc_sha, size: 69614310, obtained: Both, served: [], witness: "" },
+		{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256: roc_sha, size: 66810227, obtained: Published, served: [], witness: "" },
+		{ name: "roc-stable", system: "x86_64-windows", urls: ["https://example.test/roc-windows.zip"], sha256: roc_sha, size: 67310620, obtained: Published, served: [], witness: "" },
+		{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-x86_64-linux"], sha256: tool_sha, size: 5900520, obtained: Computed, served: [], witness: "" },
 	],
 }
 
@@ -712,18 +726,18 @@ expect planned(sample, Request.Shell("host"), "x86_64-linux", unix, locked).map_
 # is told what to declare, with what it does declare.
 expect planned(sample, Request.Build("app"), "x86_64-linux", unix, locked) == Ok([{ action: Build("app"), files: [{ path: "/project/.blueprint/flake.nix", contents: "{ }" }], argv: ["nix", "build", "app"], artifacts: [], operations: [] }])
 expect {
-	bare = { ..sample, workflows: [], tasks: [], shells: [], environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), builds: [{ name: "bare", environment: "plain", inputs: [], needs: [], run: ["true"], output: "out" }] }
+	bare = { ..sample, resolvers: [], workflows: [], tasks: [], shells: [], environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), build_executors: [{ build: "bare", executor: "native" }], builds: [{ name: "bare", environment: "plain", inputs: [], needs: [], run: ["true"], output: "out" }] }
 	planned(bare, Request.Build("bare"), "x86_64-linux", unix, locked).map_ok(|steps| steps.map(|step| step.argv)) == Ok([["nix", "build", "bare"]])
-		and planned({ ..bare, sources: [] }, Request.Build("bare"), "x86_64-linux", unix, locked) == Err(["build bare runs in a provider's sandbox, and Blueprint.roc declares no package source for one; declare one with Packages"])
-		and planned({ ..bare, sources: sample.sources.take_first(1) }, Request.Build("bare"), "x86_64-linux", unix, locked) == Err(["build bare runs in a provider's sandbox, and Blueprint.roc declares no package source for one; declare one with Packages (it declares guix, GuixPackages)"])
+		and planned({ ..bare, sources: [] }, Request.Build("bare"), "x86_64-linux", unix, locked) == Err(["executor native bootstrap source nix is not owned by nix"])
+		and planned({ ..bare, sources: sample.sources.take_first(1) }, Request.Build("bare"), "x86_64-linux", unix, locked) == Err(["executor native bootstrap source nix is not owned by nix"])
 }
 
 # A sandbox holds nothing of the machine, so a build whose own environment
 # fetches or expects is refused; one that only depends on such a build is too.
-expect planned(sample, Request.Build("fetched"), "x86_64-linux", unix, locked) == Err(["build fetched: environment scripts has fetched programs or expected tools, and a sandboxed build has only the tools of its package sources"])
+expect planned(sample, Request.Build("fetched"), "x86_64-linux", unix, locked) == Err(["fixture executor rejects downloaded tools"])
 expect {
-	needing = { ..sample, builds: sample.builds.append({ name: "outer", environment: "builder", inputs: [], needs: ["fetched"], run: ["true"], output: "out" }) }
-	planned(needing, Request.Build("outer"), "x86_64-linux", unix, locked) == Err(["build outer: environment scripts has fetched programs or expected tools, and a sandboxed build has only the tools of its package sources"])
+	needing = { ..sample, build_executors: sample.build_executors.append({ build: "outer", executor: "native" }), builds: sample.builds.append({ name: "outer", environment: "builder", inputs: [], needs: ["fetched"], run: ["true"], output: "out" }) }
+	planned(needing, Request.Build("outer"), "x86_64-linux", unix, locked) == Err(["fixture executor rejects downloaded tools"])
 }
 
 # Only a provider generates files, and only one that supplies a declared
@@ -732,9 +746,9 @@ expect {
 expect planned(sample, Request.Generate, "x86_64-linux", unix, locked) == Ok([{ action: Generate, files: [{ path: "/project/.blueprint/flake.nix", contents: "{ }" }], argv: [], artifacts: [], operations: [] }])
 expect Realise.plan(sample, Request.Generate, "x86_64-linux", unix, locked, []).map_ok(|steps| steps.steps) == Ok([])
 expect {
-	fetching = { ..sample, environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), shells: [], tasks: [], builds: [], workflows: [] }
+	fetching = { ..sample, executors: [], environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), shells: [], tasks: [], builds: [], build_executors: [], resolvers: [], workflows: [] }
 	planned({ ..fetching, sources: [] }, Request.Generate, "x86_64-linux", unix, locked) == Ok([])
-		and planned({ ..fetching, sources: [{ name: "channel", provider: GuixPackages("https://example.test/guix.git") }] }, Request.Generate, "x86_64-linux", unix, locked) == Ok([])
+		and planned({ ..fetching, sources: [{ name: "channel", provider: { name: "guix", version: 1, ref: "https://example.test/guix.git" } }] }, Request.Generate, "x86_64-linux", unix, locked) == Ok([])
 		and planned(fetching, Request.Generate, "x86_64-linux", unix, locked).map_ok(|steps| steps.len()) == Ok(1)
 }
 
@@ -755,16 +769,16 @@ expect {
 # build that cannot have its programs. The repeated task adds nothing.
 expect planned(sample, Request.Workflow("doomed"), "aarch64-darwin", unix, locked) == Err([
 	"task check: program tool is not available for aarch64-darwin (its recipe answers Unavailable)",
-	"environment foreign takes tools from the source guix (GuixPackages), which no provider of this blueprint supplies",
+	"environment foreign takes tools from the source guix (guix v1), which no provider of this blueprint supplies",
 	"task broken: program tool is not available for aarch64-darwin (its recipe answers Unavailable)",
 	"unsupported Nix target riscv64-linux",
-	"build fetched: environment scripts has fetched programs or expected tools, and a sandboxed build has only the tools of its package sources",
+	"fixture executor rejects downloaded tools",
 ])
 
 # A provider's own refusal, of the request or of the Lock, is the plan's.
 expect planned(sample, Request.Run("unpinned", []), "x86_64-linux", unix, locked) == Err(["the lock has no nix hint"])
-expect planned(sample, Request.Run("foreign", []), "x86_64-linux", unix, locked) == Err(["environment foreign takes tools from the source guix (GuixPackages), which no provider of this blueprint supplies"])
-expect Realise.plan(sample, Request.Run("host", []), "x86_64-linux", unix, locked, []).map_ok(|steps| steps.steps) == Err(["environment host takes tools from the source nix (NixPackages), which no provider of this blueprint supplies"])
+expect planned(sample, Request.Run("foreign", []), "x86_64-linux", unix, locked) == Err(["environment foreign takes tools from the source guix (guix v1), which no provider of this blueprint supplies"])
+expect Realise.plan(sample, Request.Run("host", []), "x86_64-linux", unix, locked, []).map_ok(|steps| steps.steps) == Err(["environment host takes tools from the source nix (nix v1), which no provider of this blueprint supplies"])
 
 # An environment cannot be entered by two providers at once.
 expect {
@@ -773,7 +787,7 @@ expect {
 		name: "guix",
 		realises: |source|
 			match source {
-				GuixPackages(_) => True
+				{ name: "guix", version: 1, ref: _ } => True
 				_ => False
 			},
 	}
@@ -785,7 +799,7 @@ expect {
 # A program the Lock has not resolved, or resolved from other URLs, is named
 # with the command that resolves it; every such program is, in one answer.
 expect {
-	stale = { ..locked, fetched: [{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/older.tar.gz"], sha256: roc_sha, size: 1, obtained: Computed }] }
+	stale = { ..locked, fetched: [{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/older.tar.gz"], sha256: roc_sha, size: 1, obtained: Computed, served: [], witness: "" }] }
 	planned(sample, Request.Run("check", []), "x86_64-linux", unix, stale) == Err([
 		"roc-stable for x86_64-linux: Blueprint.roc now names https://example.test/roc-x86_64-linux.tar.gz, https://mirror.example.test/roc-x86_64-linux.tar.gz, the lock https://example.test/older.tar.gz; run blueprint update roc-stable",
 		"tool for x86_64-linux is not in Blueprint.lock; run blueprint update",
@@ -800,7 +814,7 @@ expect {
 # A digest that is not one is never handed to an executor to compare with.
 expect
 	["", "893c86d2", "sha256:${roc_sha}", roc_sha.replace_each("8", "G"), "${roc_sha}00"].all(
-		|sha256| planned(sample, Request.Run("script", []), "aarch64-darwin", unix, { ..locked, fetched: [{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256, size: 1, obtained: Computed }] }) == Err(["roc-stable for aarch64-darwin: Blueprint.lock holds no SHA-256 for it; run blueprint update roc-stable"]),
+		|sha256| planned(sample, Request.Run("script", []), "aarch64-darwin", unix, { ..locked, fetched: [{ name: "roc-stable", system: "aarch64-darwin", urls: roc_urls("aarch64-darwin"), sha256, size: 1, obtained: Computed, served: [], witness: "" }] }) == Err(["roc-stable for aarch64-darwin: Blueprint.lock holds no SHA-256 for it; run blueprint update roc-stable"]),
 	)
 
 # The request is refused whole before planning: an invalid project, a System
@@ -855,7 +869,7 @@ expect Realise.requirements(sample, "aarch64-darwin", ["check", "script"], [stub
 # With no task named it answers for every task, and so meets the one whose
 # source nothing supplies; unknown names are all reported.
 expect Realise.requirements({ ..sample, workflows: [], tasks: sample.tasks.keep_if(|task| task.name != "foreign") }, "x86_64-linux", [], [stub]).map_ok(|needs| (needs.providers, needs.tasks.map(|entry| entry.task))) == Ok((["nix"], ["hello", "local", "script", "bare", "check", "host", "broken", "unpinned"]))
-expect Realise.requirements(sample, "x86_64-linux", [], [stub]) == Err(["environment foreign takes tools from the source guix (GuixPackages), which no provider of this blueprint supplies"])
+expect Realise.requirements(sample, "x86_64-linux", [], [stub]) == Err(["environment foreign takes tools from the source guix (guix v1), which no provider of this blueprint supplies"])
 expect Realise.requirements(sample, "x86_64-linux", ["absent", "hello", "gone"], [stub]) == Err(["unknown task: absent", "unknown task: gone"])
 expect Realise.requirements(sample, "riscv64-linux", [], [stub]) == Err(["target riscv64-linux is not declared by the project"])
 expect Realise.requirements(sample, "x86_64-linux", ["unpinned"], [stub]).map_ok(|needs| needs.tasks.map(|entry| entry.tools)) == Ok([["nix#coreutils"]])
@@ -868,7 +882,7 @@ expect Realise.preflight(sample, Request.Run("check", []), "x86_64-linux", unix,
 expect Realise.preflight(sample, Request.Workflow("ci"), "x86_64-linux", unix, [stub]) == Ok({})
 expect Realise.preflight(sample, Request.Run("unpinned", []), "x86_64-linux", unix, [stub]) == Ok({})
 expect Realise.preflight(sample, Request.Run("absent", []), "x86_64-linux", unix, [stub]) == Err(["unknown task: absent"])
-expect Realise.preflight(sample, Request.Run("foreign", []), "x86_64-linux", unix, [stub]) == Err(["environment foreign takes tools from the source guix (GuixPackages), which no provider of this blueprint supplies"])
+expect Realise.preflight(sample, Request.Run("foreign", []), "x86_64-linux", unix, [stub]) == Err(["environment foreign takes tools from the source guix (guix v1), which no provider of this blueprint supplies"])
 expect Realise.preflight(sample, Request.Run("check", []), "aarch64-darwin", unix, [stub]) == Err(["task check: program tool is not available for aarch64-darwin (its recipe answers Unavailable)"])
 expect {
 	refusing = { ..stub, preflight: |_spec, _request, _system, _layout| Err("unsupported Nix target riscv64-linux") }
@@ -882,16 +896,16 @@ expect {
 # Programs, expected tools and the Roc packages of tasks ask none.
 expect {
 	names = |project| Realise.resolvers(project, [stub]).map(|provider| provider.name)
-	fetching = { ..sample, sources: [], environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), shells: [], tasks: [], builds: [], workflows: [] }
+	fetching = { ..sample, executors: [], sources: [], environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), shells: [], tasks: [], builds: [], build_executors: [], resolvers: [], workflows: [] }
 	names(sample) == ["nix"]
 		# `sample` has Roc packages, and with no build they are the Core's.
 		and names(fetching) == []
-		and names({ ..fetching, sources: [{ name: "channel", provider: GuixPackages("https://example.test/guix.git") }] }) == []
+		and names({ ..fetching, sources: [{ name: "channel", provider: { name: "guix", version: 1, ref: "https://example.test/guix.git" } }] }) == []
 		and names({ ..fetching, sources: sample.sources }) == ["nix"]
-		and names({ ..fetching, inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }) == ["nix"]
-		and names({ ..fetching, build_sources: fetching.build_sources.append({ name: "assets", ref: "path:./assets" }) }) == ["nix"]
+		and names({ ..fetching, resolvers: [{ provider: "nix", inputs: ["roc"] }], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay" }] }) == ["nix"]
+		and names({ ..fetching, resolvers: [{ provider: "nix", inputs: ["assets"] }], build_sources: fetching.build_sources.append({ name: "assets", ref: "path:./assets" }) }) == ["nix"]
 		# A build in an environment with a Roc package makes its bundle a provider's.
-		and names({ ..fetching, builds: [{ name: "app", environment: "scripts", inputs: [], needs: [], run: ["true"], output: "out" }] }) == ["nix"]
+		and names({ ..fetching, resolvers: [{ provider: "nix", inputs: ["roc-abc"] }], builds: [{ name: "app", environment: "scripts", inputs: [], needs: [], run: ["true"], output: "out" }] }) == ["nix"]
 		and Realise.resolvers(sample, []).is_empty()
 }
 
@@ -902,7 +916,7 @@ expect Realise.unknown_names(["nope"], [], []) == "no input or program named nop
 # a Nix source none of its tasks uses needs no provider to run them; one tool
 # of that source in one task's environment requires it, for that task alone.
 expect {
-	declared = { ..sample, environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), tasks: sample.tasks.keep_if(|task| ["hello", "script", "check"].contains(task.name)), shells: [], builds: [], workflows: [] }
+	declared = { ..sample, environments: sample.environments.keep_if(|environment| environment.tools.is_empty()), tasks: sample.tasks.keep_if(|task| ["hello", "script", "check"].contains(task.name)), shells: [], builds: [], build_executors: [], resolvers: [], workflows: [] }
 	used = { ..declared, environments: declared.environments.append({ name: "host", parents: ["dev"], tools: [{ source: "nix", name: "zig" }], overlays: [] }), tasks: declared.tasks.append({ name: "host", environment: "host", run: ["zig", "build"] }) }
 	declared.sources.any(|source| (stub.realises)(source.provider))
 		and Realise.requirements(declared, "x86_64-linux", [], [stub]).map_ok(|needs| (needs.providers, needs.tasks.map(|entry| entry.providers))) == Ok(([], [[], [], []]))
@@ -925,8 +939,62 @@ expect {
 		shells: [],
 		tasks: [{ name: "hello", environment: "plain", run: ["hello"] }],
 		builds: [],
+		build_executors: [],
+		resolvers: [],
 		workflows: [],
 	}
 	Realise.requirements(scoped, "x86_64-linux", [], [stub]).map_ok(|needs| (needs.providers, needs.tasks.map(|entry| entry.tools))) == Ok((["nix"], [["nix#wayland"]]))
 		and Realise.requirements(scoped, "aarch64-darwin", [], [stub]).map_ok(|needs| (needs.providers, needs.tasks.map(|entry| entry.tools))) == Ok(([], [[]]))
+}
+
+# A tool-free executor has no package source. Registration order does not
+# determine ownership, and another registered provider observes nothing.
+expect {
+	project = { ..Spec.empty("independent"), systems: ["x86_64-linux"], requires_: ["builds"], environments: [{ name: "empty", parents: [], tools: [], overlays: [] }], executors: [{ name: "native", provider: "fixture", source: "" }], build_executors: [{ build: "artifact", executor: "native" }], builds: [{ name: "artifact", environment: "empty", inputs: [], needs: [], run: ["produce"], output: "out" }] }
+	executor = { ..stub, name: "fixture", preflight: |_spec, _request, _system, _layout| Ok({}) }
+	unselected = { ..stub, name: "unused", preflight: |_spec, _request, _system, _layout| Err("must not be asked"), realise: |_spec, _request, _system, _layout, _lock| Err(Unrealisable("must not be asked")) }
+	Realise.plan(project, Request.Build("artifact"), "x86_64-linux", unix, locked, [executor, unselected]).map_ok(|steps| steps.steps) == Realise.plan(project, Request.Build("artifact"), "x86_64-linux", unix, locked, [unselected, executor]).map_ok(|steps| steps.steps) and Realise.preflight(project, Request.Build("artifact"), "x86_64-linux", unix, [executor, unselected]) == Ok({}) and Realise.preflight({ ..project, build_executors: [] }, Request.Build("artifact"), "x86_64-linux", unix, [executor]) == Err(["build artifact has no executor; declare Execute"])
+}
+
+# Downloaded tools are an executor capability, never a blanket Core refusal.
+expect {
+	project = { ..Spec.empty("download-executor"), systems: ["x86_64-linux"], requires_: ["builds", "programs"], environments: [{ name: "download", parents: [], tools: [], overlays: [] }], programs: [sample.programs.first()?], environment_programs: [{ environment: "download", programs: ["roc-stable"] }], executors: [{ name: "verified", provider: "fixture", source: "" }], build_executors: [{ build: "artifact", executor: "verified" }], builds: [{ name: "artifact", environment: "download", inputs: [], needs: [], run: ["roc-stable", "build"], output: "out" }] }
+	executor = { ..stub, name: "fixture", preflight: |_spec, _request, _system, _layout| Ok({}) }
+	Realise.preflight(project, Request.Build("artifact"), "x86_64-linux", unix, [executor]) == Ok({}) and Realise.plan(project, Request.Build("artifact"), "x86_64-linux", unix, locked, [executor]).is_ok()
+}
+
+expect {
+	project = { ..Spec.empty("owned"), systems: ["x86_64-linux"], requires_: ["sources"], build_sources: [{ name: "assets", ref: "path:./assets" }], resolvers: [{ provider: "fixture", inputs: ["assets"] }] }
+	owner = { ..stub, name: "fixture" }
+	Realise.resolvers(project, [stub, owner]).map(|provider| provider.name) == ["fixture"] and Realise.resolvers(project, [owner, stub]).map(|provider| provider.name) == ["fixture"] and Project.validate({ ..project, resolvers: [] }).is_err() and Project.validate({ ..project, resolvers: [{ provider: "fixture", inputs: ["assets"] }, { provider: "nix", inputs: ["assets"] }] }).is_err()
+}
+
+# An environment-only adapter owns its native grammar without Nix-shaped
+# references, package attributes, build support or a bootstrap source.
+expect {
+	project = { ..Spec.empty("environment-adapter"), systems: ["x86_64-linux"], sources: [{ name: "channel", provider: { name: "fixture", version: 1, ref: "channel:native" } }], environments: [{ name: "dev", parents: [], tools: [{ source: "channel", name: "compiler@stable" }], overlays: [] }], tasks: [{ name: "compile", environment: "dev", run: ["compiler", "source"] }] }
+	adapter = {
+		..stub,
+		name: "fixture",
+		realises: |source| source.name == "fixture" and source.version == 1,
+		validate_source: |source| if (source.ref.starts_with("channel:")) Ok({}) else Err("unsupported fixture source"),
+		validate_tool: |name| if (name.contains("@")) Ok({}) else Err("fixture tools require a channel"),
+		preflight: |_spec, request, _system, _layout| match request {
+			Request.Run(_, _) => Ok({})
+			_ => Err("fixture adapter only enters task environments")
+		},
+		realise: |_spec, request, _system, _layout, _lock| match request {
+			Request.Run(name, _) => Ok(Steps.{ steps: [{ action: Run(name), files: [], argv: ["fixture-env", "exec"], artifacts: [], operations: [] }] })
+			_ => Err(Unrealisable("fixture adapter only enters task environments"))
+		},
+	}
+	Realise.plan(project, Request.Run("compile", []), "x86_64-linux", unix, locked, [stub, adapter]).map_ok(|steps| steps.steps.map(|step| step.argv)) == Ok([["fixture-env", "exec"]]) and Realise.preflight({ ..project, environments: [{ ..project.environments.first()?, tools: [{ source: "channel", name: "unsupported" }] }] }, Request.Run("compile", []), "x86_64-linux", unix, [adapter]) == Err(["fixture tools require a channel"])
+}
+
+# An executor's settings are validated by the provider that owns it, before
+# any effect, so a build that could never execute is refused at planning.
+expect {
+	project = { ..Spec.empty("checked"), systems: ["x86_64-linux"], requires_: ["builds"], environments: [{ name: "empty", parents: [], tools: [], overlays: [] }], executors: [{ name: "native", provider: "fixture", source: "" }], build_executors: [{ build: "artifact", executor: "native" }], builds: [{ name: "artifact", environment: "empty", inputs: [], needs: [], run: ["produce"], output: "out" }] }
+	strict = { ..stub, name: "fixture", preflight: |_spec, _request, _system, _layout| Ok({}), validate_executor: |executor| if (executor.source.is_empty()) Err("fixture executor ${executor.name} needs a bootstrap source") else Ok({}) }
+	Realise.preflight(project, Request.Build("artifact"), "x86_64-linux", unix, [strict]) == Err(["fixture executor native needs a bootstrap source"])
 }

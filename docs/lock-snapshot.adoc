@@ -1,7 +1,7 @@
 [#consume-lock-inspection-in-roc]
 = Consume lock inspection in pure Roc
 
-The official `LockSnapshot` module in `roc-blueprint-core` reads format-1
+The official `LockSnapshot` module in `roc-blueprint-core` reads format-2
 `blueprint lock show --json` output. It performs no I/O, evaluates no project,
 runs no provider and reads no Store. A decoded snapshot is operational
 inspection data, separate from authoritative `Lock`, build provenance and SBOMs.
@@ -106,15 +106,23 @@ same_source : LockSnapshot, LockSnapshot, Str -> Try(Bool, [MissingSource(Str)])
 same_source = |before, after, name| {
     left = LockSnapshot.source(before, name)?
     right = LockSnapshot.source(after, name)?
-    Ok(LockSnapshot.source_identity(left) == LockSnapshot.source_identity(right))
+    Ok(LockSnapshot.source_content_identity(left) == LockSnapshot.source_content_identity(right))
 }
 ----
 
-A source identity is `{ provider, value }`. The value is opaque outside that
+A source content identity is `{ provider, value }`. The value is opaque outside that
 provider: it need not be a SHA-256 or a path. A fetched program is selected
 by both name and system; its identity is the original download's SHA-256.
 `same_source` compares only the selected content identity. It does not infer
 which builds or shipped artifacts are affected by a change.
+
+A fetched entry also says where its digest came from. `obtained` is how it
+was obtained; `served` lists the hosts that served the bytes the update
+hashed, after any redirect, and is empty when nothing was downloaded;
+`witness` is the address a published digest was read from, and is empty when
+the digest was only computed. They are what a reviewer reads, not identity:
+neither changes `sha256` or `content_identity`, and neither is checked again
+when a program is downloaded.
 
 `Source.digest_kind` is `File`, `Tree`, or `Unknown(originalText)`; even future
 kind strings remain unknown to a reader that does not understand them.
@@ -140,7 +148,7 @@ with both compiler pins.
 `parse_json` returns `InvalidJson(message)`, `LimitExceeded(message)`,
 `UnsupportedFormat(number)` or `InvalidReport(message)`. It validates a
 supported numeric format before that version's field shapes, so a valid
-future-format document is not mistaken for a malformed format-1 report.
+future-format document is not mistaken for a malformed format-2 report.
 `source` and `fetched_program` return typed missing-entry errors.
 
 Readers accept additive fields at every report record. Unrecognized ordinary
@@ -159,11 +167,13 @@ would exceed 8 MiB. Duplicate decoded keys, including escaped aliases, invalid
 Unicode, trailing input, mismatched source names and duplicate program/system
 pairs fail. The `format` and `size` fields use unsigned base-10 integer
 lexemes; size must fit U64. Declared flat/program hashes must agree with their
-identities. Generic native numeric lexemes remain lossless and are never
+identities. Every fetched entry has `served`, an array of nonempty host
+strings, and `witness`, a string. Generic native numeric lexemes remain
+lossless and are never
 executed as source text.
 
-The existing core bundle includes `lock-snapshot-v1.schema.json`, also
-https://github.com/lukewilliamboswell/roc-blueprint/blob/0.7.0/blueprint-core/lock-snapshot-v1.schema.json[published with the tagged source].
+The existing core bundle includes `lock-snapshot-v2.schema.json`, also
+https://github.com/lukewilliamboswell/roc-blueprint/blob/0.7.0/blueprint-core/lock-snapshot-v2.schema.json[published with the tagged source].
 The local JSON Schema describes structure and additive-field compatibility.
 The runtime profile additionally checks duplicate keys, resource bounds,
 lexical integers and cross-field identity equality, which standard JSON Schema

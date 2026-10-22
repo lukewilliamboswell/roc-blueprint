@@ -349,5 +349,5 @@ sample_authority = Lock.to_str(
 
 expect CliHarness.authority_graph(sample_authority).map_ok(|graph| CliHarness.locked_rev(graph, "default")) == Ok(Ok("abc"))
 expect CliHarness.authority_graph(sample_authority).map_ok(|graph| CliHarness.locked_rev(graph, "absent").is_err()) == Ok(True)
-expect CliHarness.authority_graph("((format ((major 1) (minor 0))))") == Err("the lock has no nix hint")
+expect CliHarness.authority_graph("((format ((major 2) (minor 0))))") == Err("the lock has no nix hint")
 expect CliHarness.authority_graph("{}") == Err("not a Blueprint lock")

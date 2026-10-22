@@ -22,14 +22,17 @@ import Value
 ## - `hints` — provider-namespaced data `{ provider, value }` a provider needs
 ##   to reproduce its pins exactly, such as a native lock graph.
 ## - `fetched` — one entry per declared program and System: `{ name, system,
-##   urls, sha256, size, obtained }`, the SHA-256 (in hex) and length of the
-##   download when it was resolved, the URLs it was declared with, primary
-##   first, and how the digest was obtained (see `Obtained`). Programs are not
-##   part of `intent`: each entry carries its URLs, so one program whose URLs
-##   changed is stale alone.
+##   urls, sha256, size, obtained, served, witness }`, the SHA-256 (in hex)
+##   and length of the download when it was resolved, the URLs it was
+##   declared with, primary first, how the digest was obtained (see
+##   `Obtained`), the hosts that served the bytes Resolve hashed, after any
+##   redirect, and the address a published digest was read from. Programs
+##   are not part of `intent`: each entry carries its URLs, so one program
+##   whose URLs changed is stale alone.
 Lock := {
 	format : { major : U64, minor : U64 },
 	intent : {
+		resolvers : List(Spec.Resolver),
 		sources : List(Spec.Source),
 		inputs : List(Spec.Input),
 		build_sources : List(Spec.BuildSource),
@@ -37,7 +40,7 @@ Lock := {
 	},
 	sources : List({ name : Str, provider : Str, ref : Str, rev : Str, digest : Str }),
 	hints : List({ provider : Str, value : Value }),
-	fetched : List({ name : Str, system : Str, urls : List(Str), sha256 : Str, size : U64, obtained : [Computed, Published, Both, Unstated] }),
+	fetched : List({ name : Str, system : Str, urls : List(Str), sha256 : Str, size : U64, obtained : [Computed, Published, Both, Unstated], served : List(Str), witness : Str }),
 }.{
 	is_eq : _
 	encoder_for : _
@@ -45,7 +48,14 @@ Lock := {
 	Format : { major : U64, minor : U64 }
 	Source : { name : Str, provider : Str, ref : Str, rev : Str, digest : Str }
 	Hint : { provider : Str, value : Value }
-	Fetched : { name : Str, system : Str, urls : List(Str), sha256 : Str, size : U64, obtained : Obtained }
+
+	## One program's download on one System. `served`: the hosts that served
+	## the bytes Resolve hashed, after any redirect, sorted, each once; none
+	## when it hashed nothing it downloaded. `witness`: the address the
+	## release's description was read from when it published the digest, and
+	## empty when it did not. Neither is part of what a run checks: a run
+	## checks the bytes, wherever they come from, against the digest.
+	Fetched : { name : Str, system : Str, urls : List(Str), sha256 : Str, size : U64, obtained : Obtained, served : List(Str), witness : Str }
 
 	## How Resolve came by a download's digest, which is what a reviewer of
 	## the Lock is trusting. `Computed`: it downloaded the bytes and hashed
@@ -53,29 +63,48 @@ Lock := {
 	## that serves the download reports this digest, and the bytes were not
 	## downloaded; a run on that System still checks its download against
 	## it. `Both`: it hashed the bytes and the release reports the same.
-	## `Unstated`: an entry written before this was recorded.
+	## `Unstated`: the digest provenance is explicitly unknown. Where the
+	## bytes came from and where the report was read are the entry's
+	## `served` and `witness`.
 	Obtained : [Computed, Published, Both, Unstated]
 
 	## A download's digest, in hex, and its length.
 	Digest : { sha256 : Str, size : U64 }
 
+	## A digest Resolve computed, and the hosts that served the bytes it
+	## hashed, after any redirect: none when the bytes were already here.
+	Hashed : { sha256 : Str, size : U64, served : List(Str) }
+
+	## A digest a release publishes, and the address its description was
+	## read from.
+	Reported : { sha256 : Str, size : U64, witness : Str }
+
 	## The entry Resolve records for a program, from what it hashed itself
-	## and what the release reports, when there is either. Two digests that
-	## differ are never reconciled: one of them is not the release, and
-	## nothing is recorded.
-	record : Spec.Program, Try(Digest, [NotDownloaded]), Try(Digest, [NotPublished]) -> Try(Fetched, Str)
+	## and what the release reports, when there is either, each with where
+	## it came from. Two digests that differ are never reconciled: one of
+	## them is not the release, and nothing is recorded.
+	record : Spec.Program, Try(Hashed, [NotDownloaded]), Try(Reported, [NotPublished]) -> Try(Fetched, Str)
 	record = |program, computed, published| {
-		entry = |digest, obtained| { name: program.name, system: program.system, urls: program.urls, sha256: digest.sha256, size: digest.size, obtained }
+		entry = |sha256, size, obtained, served, witness| {
+			name: program.name,
+			system: program.system,
+			urls: program.urls,
+			sha256,
+			size,
+			obtained,
+			served: Project.unique(served.keep_if(|name| !name.is_empty())).sort_with(Project.bytewise),
+			witness,
+		}
 		match (computed, published) {
 			(Ok(own), Ok(theirs)) =>
-				if own == theirs {
-					Ok(entry(own, Both))
+				if own.sha256 == theirs.sha256 and own.size == theirs.size {
+					Ok(entry(own.sha256, own.size, Both, own.served, theirs.witness))
 				} else {
 					Err("${program.name} for ${program.system}: the download has SHA-256 ${own.sha256} and ${own.size.to_str()} bytes, and its release publishes ${theirs.sha256} and ${theirs.size.to_str()} bytes; nothing was recorded. One of the two is not what was released: do not use this download until you know which")
 				}
 
-			(Ok(own), Err(NotPublished)) => Ok(entry(own, Computed))
-			(Err(NotDownloaded), Ok(theirs)) => Ok(entry(theirs, Published))
+			(Ok(own), Err(NotPublished)) => Ok(entry(own.sha256, own.size, Computed, own.served, ""))
+			(Err(NotDownloaded), Ok(theirs)) => Ok(entry(theirs.sha256, theirs.size, Published, [], theirs.witness))
 			(Err(NotDownloaded), Err(NotPublished)) => Err("${program.name} for ${program.system}: no digest was computed or published")
 		}
 	}
@@ -127,25 +156,31 @@ Lock := {
 			_ => ""
 		}
 
-	## Every host the Lock's downloads name, each once, in order of first use.
+	## Every host the Lock's downloads name or were served from, each once,
+	## in order of first use: an entry's declared URLs, then the hosts that
+	## served its bytes.
 	hosts : List(Fetched) -> List(Str)
-	hosts = |entries| Project.unique(entries.fold([], |all, entry| all.concat(entry.urls.map(host))).keep_if(|name| !name.is_empty()))
+	hosts = |entries| Project.unique(entries.fold([], |all, entry| all.concat(entry.urls.map(host)).concat(entry.served)).keep_if(|name| !name.is_empty()))
 
-	## The download hosts `after` names and `before` did not: what a
-	## reviewer of an update should notice.
+	## The hosts that served downloads and that no download declares: the
+	## ones a redirect led to.
+	redirected : List(Fetched) -> List(Str)
+	redirected = |entries| {
+		declared = entries.fold([], |all, entry| all.concat(entry.urls.map(host)))
+		hosts(entries).keep_if(|name| !declared.contains(name))
+	}
+
+	## The download hosts `after` names or was served from and `before` did
+	## not: what a reviewer of an update should notice, whether Blueprint.roc
+	## declares the host or a redirect led there.
 	new_hosts : List(Fetched), List(Fetched) -> List(Str)
 	new_hosts = |before, after| {
 		known = hosts(before)
 		hosts(after).keep_if(|name| !known.contains(name))
 	}
 
-	## Whether blueprint 0.5 or older wrote the Lock: its intent holds a
-	## source that names no package set, which every project had then and
-	## none can declare now. Such a Lock is stale for every Spec, and is
-	## said to be old instead.
-	from_before_explicit_sources : Lock -> Bool
-	from_before_explicit_sources = |lock| lock.intent.sources.any(|source| source.provider == Auto)
 	Intent : {
+		resolvers : List(Spec.Resolver),
 		sources : List(Spec.Source),
 		inputs : List(Spec.Input),
 		build_sources : List(Spec.BuildSource),
@@ -156,6 +191,7 @@ Lock := {
 	## part of the intent; overlay order within an environment is.
 	intent_of : Spec -> Intent
 	intent_of = |spec| {
+		resolvers: spec.resolvers.map(|resolver| { provider: resolver.provider, inputs: resolver.inputs.sort_with(Project.bytewise) }).sort_with(|a, b| Project.bytewise(a.provider, b.provider)),
 		sources: spec.sources.sort_with(|x, y| Project.bytewise(x.name, y.name)),
 		inputs: spec.inputs.sort_with(|x, y| Project.bytewise(x.name, y.name)),
 		build_sources: Project.resolved_build_sources(spec).sort_with(|x, y| Project.bytewise(x.name, y.name)),
@@ -166,7 +202,7 @@ Lock := {
 	}
 
 	empty_intent : Intent
-	empty_intent = { sources: [], inputs: [], build_sources: [], overlays: [] }
+	empty_intent = { resolvers: [], sources: [], inputs: [], build_sources: [], overlays: [] }
 
 	## Fail, naming what changed, when the Spec no longer matches what was
 	## resolved. Settings Resolve does not consume never make a Lock stale.
@@ -182,6 +218,7 @@ Lock := {
 		changed = |what, same| if (same) [] else [what]
 		differences = changed("sources", lock.intent.sources == current.sources)
 			.concat(changed("inputs", lock.intent.inputs == current.inputs))
+			.concat(changed("resolver ownership", lock.intent.resolvers == current.resolvers))
 			.concat(changed("build sources", lock.intent.build_sources == current.build_sources))
 			.concat(changed("environment overlays", lock.intent.overlays == current.overlays))
 		if differences.is_empty() {
@@ -192,11 +229,22 @@ Lock := {
 	}
 
 	## Flat-file sources are Core-owned authority, not NAR tree identities.
+	## An explicit named update may replace only the named original-file pins.
+	## All other declarations and authority must still match. Verification of
+	## the newly declared bytes happens before the executor publishes the lock.
+	stale_except_files : Lock, Spec, List(Str) -> Try({}, Str)
+	stale_except_files = |lock, spec, names| {
+		kept_lock = { ..lock, sources: lock.sources.keep_if(|source| source.provider != "file" or !names.contains(source.name)) }
+		kept_spec = { ..spec, source_files: spec.source_files.keep_if(|source| !names.contains(source.name)) }
+		stale(kept_lock, kept_spec)
+	}
+
+	## Flat-file sources are Core-owned authority, not NAR tree identities.
 	file_pin : Spec.SourceFile -> Source
 	file_pin = |source| { name: source.name, provider: "file", ref: source.url, rev: "", digest: "sha256:${source.sha256}" }
 
 	current_format : Format
-	current_format = { major: 1, minor: 1 }
+	current_format = { major: 2, minor: 0 }
 
 	to_str : Lock -> Str
 	to_str = |lock| Str.concat(Sexpr.to_str(lock), "\n")
@@ -217,7 +265,7 @@ Lock := {
 				intent: wire.intent ?? empty_intent,
 				sources: wire.sources ?? [],
 				hints: wire.hints ?? [],
-				fetched: (wire.fetched ?? []).map(|entry| { name: entry.name, system: entry.system, urls: entry.urls, sha256: entry.sha256, size: entry.size, obtained: entry.obtained ?? Unstated }),
+				fetched: (wire.fetched ?? []).map(|entry| { name: entry.name, system: entry.system, urls: entry.urls, sha256: entry.sha256, size: entry.size, obtained: entry.obtained, served: entry.served, witness: entry.witness }),
 			},
 		)
 	}
@@ -251,19 +299,17 @@ Wire : {
 	fetched : Try(List(WireFetched), [Missing]),
 }
 
-## A fetched entry as it is read: one written before `obtained` was recorded
-## has none.
-WireFetched : { name : Str, system : Str, urls : List(Str), sha256 : Str, size : U64, obtained : Try(Lock.Obtained, [Missing]) }
+WireFetched : { name : Str, system : Str, urls : List(Str), sha256 : Str, size : U64, obtained : Lock.Obtained, served : List(Str), witness : Str }
 
 sample : Lock
 sample = Lock.{
 	format: Lock.current_format,
-	intent: { ..Lock.empty_intent, sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] },
+	intent: { ..Lock.empty_intent, sources: [{ name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] },
 	sources: [{ name: "nix", provider: "nix", ref: "github:NixOS/nixpkgs/nixos-unstable", rev: "4975466d324710c576dc11ad614684e6bd8cad8e", digest: "sha256-xJ+X4hBtOcAFGBOe5nAMyMUeF9foJBmIOu3NjBqBycU=" }],
 	hints: [{ provider: "nix", value: Value.Attrs([{ name: "version", value: Value.Int(7) }]) }],
 	fetched: [
-		{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc-linux.tar.gz"], sha256: "893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f", size: 69614310, obtained: Both },
-		{ name: "roc-stable", system: "aarch64-darwin", urls: ["https://example.test/roc-macos.tar.gz", "https://mirror.example.test/roc-macos.tar.gz"], sha256: "e0147f62f072a309519cbc2a6ebfa11e4bb8bac7903d5febaf7a112d1fc2842f", size: 66810227, obtained: Published },
+		{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc-linux.tar.gz"], sha256: "893c86d2da0a4c390cbdbd4258ce45d686e5ec15b42eeeb811fd1ac44537714f", size: 69614310, obtained: Both, served: ["objects.example.test"], witness: "https://api.example.test/repos/roc/releases/tags/1.0" },
+		{ name: "roc-stable", system: "aarch64-darwin", urls: ["https://example.test/roc-macos.tar.gz", "https://mirror.example.test/roc-macos.tar.gz"], sha256: "e0147f62f072a309519cbc2a6ebfa11e4bb8bac7903d5febaf7a112d1fc2842f", size: 66810227, obtained: Published, served: [], witness: "https://api.example.test/repos/roc/releases/tags/1.0" },
 	],
 }
 
@@ -271,26 +317,17 @@ expect Lock.parse(sample.to_str()) == Ok(sample)
 
 # Same major, any minor; unknown fields ignored; optional fields default empty.
 expect
-	match Lock.parse(sample.to_str().replace_each("(minor 1)", "(minor 9)")) {
-		Ok(lock) => lock.format == { major: 1, minor: 9 } and lock.sources == sample.sources
+	match Lock.parse(sample.to_str().replace_each("(minor 0)", "(minor 9)")) {
+		Ok(lock) => lock.format == { major: 2, minor: 9 } and lock.sources == sample.sources
 		Err(_) => False
 	}
-expect Lock.parse("((format ((major 1) (minor 1))))") == Ok(Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], hints: [], fetched: [] })
-expect Lock.parse("((format ((major 1) (minor 0))) (future (1 2 3)))").is_ok()
+expect Lock.parse("((format ((major 2) (minor 0))))") == Ok(Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], hints: [], fetched: [] })
+expect Lock.parse("((format ((major 2) (minor 0))) (future (1 2 3)))").is_ok()
 
-# A 1.0 Lock, as blueprint 0.5 wrote it, has fetched nothing and keeps its pins.
-expect
-	match Lock.parse("((format ((major 1) (minor 0))) (hints ()) (intent ((build_sources ()) (inputs ()) (overlays ()) (sources (((name \"default\") (provider Auto)))))) (sources (((digest \"sha256:00\") (name \"default\") (provider \"nix\") (ref \"github:NixOS/nixpkgs/nixos-unstable\") (rev \"abc\")))))") {
-		Ok(lock) => lock.format == { major: 1, minor: 0 } and lock.fetched == [] and lock.sources.map(|source| source.rev) == ["abc"] and lock.intent.sources == [{ name: "default", provider: Auto }]
-		Err(_) => False
-	}
+# Locks with unsupported major versions are rejected.
+expect Lock.parse("((format ((major 1) (minor 0))))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
 
-# A fetched entry is whole or the Lock is not read.
-expect Lock.parse("((format ((major 1) (minor 1))) (fetched (((name \"roc-stable\") (system \"x86_64-linux\") (urls (\"https://example.test/roc.tar.gz\")) (size 1)))))").is_err()
-expect Lock.parse("((format ((major 1) (minor 1))) (fetched (((name \"roc-stable\") (system \"x86_64-linux\") (urls (\"https://example.test/roc.tar.gz\")) (sha256 \"00\") (size -1)))))").is_err()
-
-# Other majors are rejected before the rest is read, even if it wouldn't parse.
-expect Lock.parse("((format ((major 2) (minor 0))) (sources 42))") == Err(UnsupportedFormat({ major: 2, minor: 0 }))
+expect Lock.parse("((format ((major 3) (minor 0))) (sources 42))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))
 
 # The pre-Lock JSON authority is not a Lock.
 expect Lock.parse("{\"version\":1}").is_err()
@@ -299,10 +336,10 @@ expect sample.hint("nix").is_ok() and sample.hint("conda") == Err(MissingHint)
 
 # Only what Resolve consumes can make a Lock stale, and the error says what.
 expect {
-	spec = { ..Spec.empty("x"), sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] }
+	spec = { ..Spec.empty("x"), sources: [{ name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] }
 	lock = { ..sample, intent: Lock.intent_of(spec) }
 	with_task = { ..spec, tasks: [{ name: "t", environment: "e", run: ["true"] }] }
-	with_input = { ..spec, inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay", kind: Overlay }] }
+	with_input = { ..spec, inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay" }] }
 	lock.stale(spec) == Ok({})
 		and lock.stale(with_task) == Ok({})
 		and lock.stale(with_input) == Err("Blueprint.roc changed its inputs since the lock was resolved; run blueprint update")
@@ -310,8 +347,8 @@ expect {
 
 # Declaration order is not intent; overlay order is.
 expect {
-	a = { name: "a", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }
-	b = { name: "b", provider: NixPackages("github:NixOS/nixpkgs/nixos-24.05") }
+	a = { name: "a", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }
+	b = { name: "b", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-24.05" } }
 	env = |overlays| { name: "dev", parents: [], tools: [], overlays }
 	one = { ..Spec.empty("x"), sources: [a, b], environments: [env(["p", "q"])] }
 	two = { ..Spec.empty("x"), sources: [b, a], environments: [env(["p", "q"])] }
@@ -343,7 +380,7 @@ expect {
 
 # Programs are not intent: declaring one leaves the pins of the Lock current.
 expect {
-	spec = { ..Spec.empty("x"), sources: [{ name: "nix", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] }
+	spec = { ..Spec.empty("x"), sources: [{ name: "nix", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] }
 	lock = { ..sample, intent: Lock.intent_of(spec) }
 	lock.stale({ ..spec, programs: [{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool"], unpack: File, path: "" }] }) == Ok({})
 }
@@ -361,28 +398,44 @@ expect {
 		and lock.stale(built) == Err("Blueprint.roc changed its build sources since the lock was resolved; run blueprint update")
 }
 
-# How a digest was obtained is written and read back. An entry from before
-# that was recorded is still read, and says nothing of it.
+# Current entries always record how their digest was obtained, the hosts
+# that served the bytes and where a published digest was read.
 expect sample.to_str().contains("(obtained Both)") and sample.to_str().contains("(obtained Published)")
-expect Lock.parse("((format ((major 1) (minor 1))) (fetched (((name \"roc-stable\") (system \"x86_64-linux\") (urls (\"https://example.test/roc.tar.gz\")) (sha256 \"00\") (size 1)))))").map_ok(|lock| lock.fetched) == Ok([{ name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/roc.tar.gz"], sha256: "00", size: 1, obtained: Unstated }])
-expect Lock.parse("((format ((major 1) (minor 1))) (fetched (((name \"t\") (system \"x86_64-linux\") (urls (\"https://example.test/t\")) (sha256 \"00\") (size 1) (obtained Computed)))))").map_ok(|lock| lock.fetched.map(|entry| entry.obtained)) == Ok([Computed])
-expect Lock.parse("((format ((major 1) (minor 1))) (fetched (((name \"t\") (system \"x86_64-linux\") (urls (\"https://example.test/t\")) (sha256 \"00\") (size 1) (obtained Guessed)))))").is_err()
+expect {
+	text = sample.to_str()
+	text.contains("(served (\"objects.example.test\"))") and text.contains("(served ())") and text.contains("(witness \"https://api.example.test/repos/roc/releases/tags/1.0\")")
+}
+expect Lock.parse({ ..sample, fetched: sample.fetched.map(|entry| { ..entry, obtained: Unstated, served: [], witness: "" }) }.to_str()).map_ok(|lock| lock.fetched.map(|entry| (entry.obtained, entry.served, entry.witness))) == Ok([(Unstated, [], ""), (Unstated, [], "")])
+expect Lock.parse("((format ((major 2) (minor 0))) (fetched (((name \"roc-stable\") (system \"x86_64-linux\") (urls (\"https://example.test/roc.tar.gz\")) (sha256 \"00\") (size 1) (served ()) (witness \"\")))))").is_err()
+expect Lock.parse("((format ((major 2) (minor 0))) (fetched (((name \"t\") (system \"x86_64-linux\") (urls (\"https://example.test/t\")) (sha256 \"00\") (size 1) (obtained Computed) (served (\"cdn.example.test\")) (witness \"\")))))").map_ok(|lock| lock.fetched.map(|entry| (entry.obtained, entry.served, entry.witness))) == Ok([(Computed, ["cdn.example.test"], "")])
+expect Lock.parse("((format ((major 2) (minor 0))) (fetched (((name \"t\") (system \"x86_64-linux\") (urls (\"https://example.test/t\")) (sha256 \"00\") (size 1) (obtained Guessed) (served ()) (witness \"\")))))").is_err()
+
+# An entry is read whole: one that says nothing of where its bytes came
+# from, or of where a published digest was read, is not an entry.
+expect Lock.parse("((format ((major 2) (minor 0))) (fetched (((name \"t\") (system \"x86_64-linux\") (urls (\"https://example.test/t\")) (sha256 \"00\") (size 1) (obtained Computed) (witness \"\")))))").is_err()
+expect Lock.parse("((format ((major 2) (minor 0))) (fetched (((name \"t\") (system \"x86_64-linux\") (urls (\"https://example.test/t\")) (sha256 \"00\") (size 1) (obtained Computed) (served ())))))").is_err()
+expect Lock.parse("((format ((major 2) (minor 0))) (fetched (((name \"t\") (system \"x86_64-linux\") (urls (\"https://example.test/t\")) (sha256 \"00\") (size 1) (obtained Computed) (served \"cdn.example.test\") (witness \"\")))))").is_err()
 
 linux_tool : Spec.Program
 linux_tool = { name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool-linux", "https://mirror.example.test/tool-linux"], unpack: File, path: "" }
 
 # A digest hashed here and reported by the release is recorded as both; either
-# alone is recorded as what it is, with the program's own URLs.
+# alone is recorded as what it is, with the program's own URLs. The hosts
+# that served the hashed bytes are kept sorted, each once; the release's
+# address is kept only for a digest it reported.
 expect {
-	own = { sha256: "aa", size: 3 }
-	Lock.record(linux_tool, Ok(own), Ok(own)) == Ok({ name: "tool", system: "x86_64-linux", urls: linux_tool.urls, sha256: "aa", size: 3, obtained: Both })
-		and Lock.record(linux_tool, Ok(own), Err(NotPublished)).map_ok(|entry| entry.obtained) == Ok(Computed)
-		and Lock.record(linux_tool, Err(NotDownloaded), Ok(own)).map_ok(|entry| (entry.sha256, entry.size, entry.obtained)) == Ok(("aa", 3, Published))
+	own = { sha256: "aa", size: 3, served: ["objects.example.test", "example.test", "objects.example.test", ""] }
+	theirs = { sha256: "aa", size: 3, witness: "https://api.example.test/repos/o/tool/releases/tags/1.0" }
+	Lock.record(linux_tool, Ok(own), Ok(theirs)) == Ok({ name: "tool", system: "x86_64-linux", urls: linux_tool.urls, sha256: "aa", size: 3, obtained: Both, served: ["example.test", "objects.example.test"], witness: theirs.witness })
+		and Lock.record(linux_tool, Ok(own), Err(NotPublished)).map_ok(|entry| (entry.obtained, entry.served, entry.witness)) == Ok((Computed, ["example.test", "objects.example.test"], ""))
+		and Lock.record(linux_tool, Err(NotDownloaded), Ok(theirs)).map_ok(|entry| (entry.sha256, entry.size, entry.obtained, entry.served, entry.witness)) == Ok(("aa", 3, Published, [], theirs.witness))
+		# Bytes that were already here were served by no host now.
+		and Lock.record(linux_tool, Ok({ ..own, served: [] }), Err(NotPublished)).map_ok(|entry| entry.served) == Ok([])
 }
 
 # Two digests that differ, or two lengths, record nothing and say both.
-expect Lock.record(linux_tool, Ok({ sha256: "aa", size: 3 }), Ok({ sha256: "bb", size: 3 })) == Err("tool for x86_64-linux: the download has SHA-256 aa and 3 bytes, and its release publishes bb and 3 bytes; nothing was recorded. One of the two is not what was released: do not use this download until you know which")
-expect Lock.record(linux_tool, Ok({ sha256: "aa", size: 3 }), Ok({ sha256: "aa", size: 4 })).is_err()
+expect Lock.record(linux_tool, Ok({ sha256: "aa", size: 3, served: ["example.test"] }), Ok({ sha256: "bb", size: 3, witness: "https://api.example.test/x" })) == Err("tool for x86_64-linux: the download has SHA-256 aa and 3 bytes, and its release publishes bb and 3 bytes; nothing was recorded. One of the two is not what was released: do not use this download until you know which")
+expect Lock.record(linux_tool, Ok({ sha256: "aa", size: 3, served: [] }), Ok({ sha256: "aa", size: 4, witness: "" })).is_err()
 expect Lock.record(linux_tool, Err(NotDownloaded), Err(NotPublished)).is_err()
 
 # A full update keeps what is unchanged and obtains what is new or declared
@@ -390,9 +443,9 @@ expect Lock.record(linux_tool, Err(NotDownloaded), Err(NotPublished)).is_err()
 expect {
 	macos_tool = { ..linux_tool, system: "aarch64-darwin", urls: ["https://example.test/tool-macos"] }
 	other = { ..linux_tool, name: "other", urls: ["https://example.test/other"] }
-	kept = { name: "tool", system: "x86_64-linux", urls: linux_tool.urls, sha256: "aa", size: 3, obtained: Both }
-	moved = { name: "tool", system: "aarch64-darwin", urls: ["https://example.test/older"], sha256: "bb", size: 4, obtained: Published }
-	gone = { name: "gone", system: "x86_64-linux", urls: ["https://example.test/gone"], sha256: "cc", size: 5, obtained: Computed }
+	kept = { name: "tool", system: "x86_64-linux", urls: linux_tool.urls, sha256: "aa", size: 3, obtained: Both, served: ["example.test"], witness: "https://api.example.test/tool" }
+	moved = { name: "tool", system: "aarch64-darwin", urls: ["https://example.test/older"], sha256: "bb", size: 4, obtained: Published, served: [], witness: "https://api.example.test/tool" }
+	gone = { name: "gone", system: "x86_64-linux", urls: ["https://example.test/gone"], sha256: "cc", size: 5, obtained: Computed, served: ["example.test"], witness: "" }
 	held = [gone, moved, kept]
 	Lock.refresh([linux_tool, macos_tool, other], held, All) == [Keep(kept), Obtain(macos_tool), Obtain(other)]
 		# A named program is obtained again on every System, changed or not; the
@@ -408,20 +461,33 @@ expect {
 # new ones are those the lock before did not name.
 expect Lock.host("https://github.com/roc-lang/nightlies/releases/download/x/roc.tar.gz") == "github.com" and Lock.host("http://127.0.0.1:4000/tool") == "127.0.0.1" and Lock.host("tool") == ""
 expect {
-	entry = |urls| { name: "tool", system: "x86_64-linux", urls, sha256: "aa", size: 3, obtained: Computed }
-	before = [entry(["https://example.test/a"])]
-	after = [entry(["https://example.test/b", "https://mirror.example.net/b"]), entry(["https://github.com/o/r/releases/download/1/t", "https://mirror.example.net/t"])]
+	entry = |urls, served| { name: "tool", system: "x86_64-linux", urls, sha256: "aa", size: 3, obtained: Computed, served, witness: "" }
+	before = [entry(["https://example.test/a"], ["example.test"])]
+	after = [entry(["https://example.test/b", "https://mirror.example.net/b"], ["example.test"]), entry(["https://github.com/o/r/releases/download/1/t", "https://mirror.example.net/t"], [])]
 	Lock.hosts(after) == ["example.test", "mirror.example.net", "github.com"]
 		and Lock.new_hosts(before, after) == ["mirror.example.net", "github.com"]
 		and Lock.new_hosts([], after) == ["example.test", "mirror.example.net", "github.com"]
 		and Lock.new_hosts(after, after) == []
 		and Lock.new_hosts(after, before) == []
+		and Lock.redirected(after) == []
 }
 
-# A Lock blueprint 0.5 wrote is known by the source every project had then.
+# A redirect to a host the lock did not know is a new host, though every URL
+# the lock declares is one it knew; a host it knew only as one a redirect led
+# to is not new when a URL declares it.
 expect {
-	old = Lock.parse("((format ((major 1) (minor 0))) (intent ((build_sources ()) (inputs ()) (overlays ()) (sources (((name \"default\") (provider Auto)))))))")
-	old.map_ok(Lock.from_before_explicit_sources) == Ok(True) and !Lock.from_before_explicit_sources(sample)
+	release = "https://github.com/o/r/releases/download/1/t"
+	entry = |urls, served| { name: "tool", system: "x86_64-linux", urls, sha256: "aa", size: 3, obtained: Both, served, witness: "https://api.github.com/repos/o/r/releases/tags/1" }
+	before = [entry([release], ["github.com"])]
+	moved = [entry([release], ["release-assets.githubusercontent.com"])]
+	declared = [entry(["https://release-assets.githubusercontent.com/t"], ["release-assets.githubusercontent.com"])]
+	Lock.hosts(moved) == ["github.com", "release-assets.githubusercontent.com"]
+		and Lock.new_hosts(before, moved) == ["release-assets.githubusercontent.com"]
+		and Lock.redirected(moved) == ["release-assets.githubusercontent.com"]
+		and Lock.redirected(before) == []
+		and Lock.new_hosts(moved, before) == []
+		and Lock.new_hosts(moved, declared) == []
+		and Lock.redirected(declared) == []
 }
 
 expect {
@@ -434,4 +500,19 @@ expect {
 		and lock.stale({ ..spec, source_files: [{ ..file, url: "https://mirror.test/release.tar.gz" }] }).is_err()
 		and lock.stale({ ..spec, source_files: [] }).is_err()
 		and { ..lock, sources: [] }.stale(spec).is_err()
+}
+
+# Updating one original-file pin must not resolve unrelated provider inputs or
+# authorize changing another file. Native intent still has to match exactly.
+expect {
+	first = { name: "first", url: "https://example.test/first", sha256: "a".repeat(64) }
+	second = { name: "second", url: "https://example.test/second", sha256: "b".repeat(64) }
+	before = { ..Spec.empty("files"), requires_: ["source-files"], source_files: [first] }
+	lock = Lock.{ format: Lock.current_format, intent: Lock.intent_of(before), sources: [Lock.file_pin(first)], hints: [], fetched: [] }
+	after = { ..before, source_files: [first, second] }
+	Lock.stale_except_files(lock, after, ["second"]) == Ok({})
+		and Lock.stale(lock, after).is_err()
+		and Lock.stale_except_files(lock, { ..after, source_files: [{ ..first, sha256: "c".repeat(64) }, second] }, ["second"]).is_err()
+		and Lock.stale_except_files(lock, { ..after, inputs: [{ name: "unexpected", url: "github:example/input" }] }, ["second"]).is_err()
+		and lock.sources == [Lock.file_pin(first)]
 }

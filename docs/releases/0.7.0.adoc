@@ -19,7 +19,44 @@ app [config] { pf: platform "{platform-url}" }
 Binaries are attached for x86_64 Linux, arm64 Linux, Apple Silicon macOS and
 x86_64 Windows, with SHA-256 sums in `blueprint.sha256`. Use this release's
 binary with its platform URL. The importable core package is `{core-url}`.
-Existing 0.6 configurations and lock files remain supported.
+This is an intentionally breaking pre-1.0 release: Spec major 3, Lock 2, lock
+report format 2 and build result schema 2 replace their predecessors without
+aliases or conversion. Upgrade the CLI, the platform, imported packages and
+report consumers together.
+
+== Adopt 0.7.0
+
+Change the configuration, then let one update replace the lock:
+
+* Declare each build's executor and select it: `Executor("native", Nix("pkgs"))`
+  names the package source the executor bootstraps from, and every `Build`
+  gets `Execute("native")`. A Nix executor without a package source is refused
+  by `blueprint check`. The executor no longer follows whichever package
+  source was declared first.
+* Declare every flake input with `Input(name, ref)`; `Overlay(name, ref)` is
+  gone. An environment that lists an input in `Overlays` applies it as an
+  overlay, and that use gives the input its role.
+* Drop `Resolver(...)` lines that only name Nix-typed inputs, overlays,
+  sources or Roc bundles: those belong to Nix without one. Keep a `Resolver`
+  only to assign such a name to another provider.
+* Run `blueprint check`, then a full `blueprint update`. Every other command
+  refuses a lock in an earlier format; the full update replaces it in place.
+  Keep the old lock in history to diff its pins against the new ones, and
+  review the result as a dependency change. A named update,
+  `blueprint update NAME`, needs a current lock first.
+* Remove the project's generated `.blueprint/` state. The next successful
+  build starts a fresh `explain` baseline.
+* Consumers of reports read `content_identity` in lock reports and
+  `build_identity` in build results; `LockSnapshot.source_content_identity`
+  replaces `source_identity`, and `lock-snapshot-v2.schema.json` validates the
+  report.
+
+Two changes to existing behavior are easy to miss. `blueprint update` refuses
+a project that declares a package source for a provider this CLI does not
+register, such as a Guix source, instead of resolving around it. An
+environment with no tools of its own takes its bootstrap package set from a
+Nix executor a build selects, when one does, and otherwise from the first
+declared Nix source.
 
 == Compiler available on first use
 
@@ -69,7 +106,7 @@ own installation; matching the version alone does not share that executable.
 
 `blueprint lock show --json [NAME...]` exposes the entries in `Blueprint.lock`
 without evaluating `Blueprint.roc`, starting a provider, accessing the network
-or creating cache state. Its documented JSON format 1 includes exact remote
+or creating cache state. Its documented JSON format 2 includes exact remote
 Nix `fetchTree` attributes and per-entry content identities, so external
 scripts can use the locked revision and `narHash` without parsing the lock's
 internal representation or maintaining a second pin.
@@ -111,17 +148,85 @@ See xref:builds.adoc#original-files-with-published-hashes[Original file sources]
 
 `blueprint build NAME --rebuild` checks an existing output by rebuilding the
 same derivation and failing when the bytes differ. `--json` reports versioned
-provenance with the provider, opaque `recipe_identity`, outputs and locked
-sources used by the build. Nix uses the actual derivation path as its recipe
-identity and exposes it in `metadata.nix.derivation` too. Other providers can
-describe their own recipe identities and native metadata without imitating
+provenance with the provider, opaque `build_identity`, outputs, locked
+sources used by the build and the digest of its captured input snapshot. Nix
+uses the actual derivation path as its build identity and exposes it in
+`metadata.nix.derivation` too. Other providers can
+describe their own build identities and native metadata without imitating
 Nix. `BLUEPRINT_TOOLS` exposes full roots of declared packages, so recipes
 can reach libraries and loaders as well as executables. See
 xref:builds.adoc#check-reproducibility-and-record-provenance[Build checks and provenance].
 
-The platform writes Spec format 2.8. Configurations that do not select new
-features retain their existing meaning; older consumers reject unsupported
-required features explicitly.
+The platform writes Spec major 3. Sources have explicit resolver ownership and
+builds select named executors. `Executor("native", Nix("pkgs"))` declares a
+Nix executor and its bootstrap package source. The platform assigns `Input`,
+`Overlay`, `Source` and Roc bundle sources to Nix, so `Resolver` is needed only
+to assign one to another provider. This breaks older configuration and core
+APIs; there are no deprecated identity-field aliases. Package versions, Spec/Lock
+formats and report versions are separate compatibility contracts.
+
+== Integrated build planning and explanations
+
+Tasks remain common command runners. Optional Builds declare artifact inputs,
+dependencies, execution capabilities and output while retaining repository-owned
+compilation and packaging scripts. Providers own native caches; Blueprint
+tracks and explains the declared execution relationships.
+
+`blueprint plan build NAME` inspects the request. `--prepare` obtains the exact
+build identity, allowing pinned fetches and cache writes but executing no builds.
+`blueprint explain build NAME` compares against the last successful local build;
+`--prepare` additionally compares exact build identities. Both support optional
+JSON from shared typed objects. A failed build never replaces the successful
+baseline. Portable arbitrary historical comparison remains deferred.
+`blueprint check` validates executor declarations through their provider and
+refuses a Nix executor without a bootstrap package source.
+
+Public lock reports call pinned input content `content_identity`; build results
+call fully prepared requests `build_identity`.
+
+Two behaviors change. `blueprint update` refuses a project that declares a
+package source for a provider this CLI does not register, such as a Guix
+source, with `no registered resolver for guix`. An environment with no tools
+takes its bootstrap package set from the source of a Nix executor that a Build
+selects, when any Build selects one, and otherwise from the first declared Nix
+source.
+
+== Enter an environment from anywhere
+
+`blueprint env NAME` prints what entering the shell `NAME` would export,
+without entering it: `eval "$(blueprint env dev)"` in a shell, `--github-path`
+and `--github-env` for a GitHub Actions step, `--json` for an editor or agent.
+The core describes the programs it fetched itself; a provider is asked for
+its shell as data, which Nix answers with `nix print-dev-env`. An entered
+environment is a value of the core's `Activation` type; only a presenter
+turns it into shell syntax.
+
+== A neutral core, a verified store and a fuller trust record
+
+The Spec carries no provider-specific input kind: `Input(name, ref)` declares
+every flake input, and an environment's `Overlays` gives one its role. A
+reference's grammar is checked by the resolver that owns it, through the
+provider contract, not by the core.
+
+Every tree the store unpacks is recorded with its digest and verified against
+it on each use, and rebuilt from its verified archive when it differs, without
+a download. Programs are exposed through symbolic links, or copies on Windows;
+there are no hard links into the store. `blueprint store verify [--repair]
+[--json]` goes further on request: it re-hashes every archive, unpacks each
+one again and compares the fresh tree with its record and with the tree in
+use, so a tree and record rewritten together are found; `--repair` replaces
+such a tree from its archive. It needs no project and no network.
+
+Nix evaluation is pure. The host measures the selected project files and
+every original file with `nix hash path`, and the generated flake takes them
+through a locked `builtins.fetchTree`, so `--impure` is gone from every
+command Blueprint runs; a build identity is a function of the Spec, the Lock
+and the captured files alone.
+
+Each fetched entry of the lock records the hosts that served its bytes after
+redirects and the address a published digest was read from. A host the lock
+did not name before is reported before the lock is written, and the report
+says whether the host was declared or reached by a redirect.
 
 == Describe your software's supply chain with SBOMs
 

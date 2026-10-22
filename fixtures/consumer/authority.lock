@@ -1,8 +1,8 @@
 (
 	(fetched ())
 	(format (
-		(major 1)
-		(minor 1)))
+		(major 2)
+		(minor 0)))
 	(hints ((
 		(provider "nix")
 		(value (Attrs ((
@@ -28,8 +28,6 @@
 						(value (Bool true))))))))))) (
 				(name "overlays")
 				(value (Attrs ((
-					(name "base")
-					(value (List ()))) (
 					(name "dev")
 					(value (List ((Str "roc"))))))))))))) (
 			(name "graph")
@@ -160,6 +158,7 @@
 		(build_sources ())
 		(inputs ())
 		(overlays ())
+		(resolvers ())
 		(sources ())))
 	(sources ((
 		(digest "sha256:c49f97e2106d39c00518139ee6700cc8c51e17d7e82419883aedcd8c1a81c9c5")

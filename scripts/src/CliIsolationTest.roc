@@ -3,6 +3,8 @@ import cli.OsStr
 import cli.Path
 import cli.Stdout
 import core.Project
+import core.Spec
+import core.BuildModel
 import CliHarness
 import Integrity
 import Script
@@ -30,12 +32,14 @@ CliIsolationTest := [].{
 	## The Spec the stub compiler prints: one build, `app`.
 	wire : Str
 	wire =
-		\\((format ((major 2) (minor 1))) (name "wire")
+		\\((format ((major 3) (minor 1))) (name "wire")
 		\\(requires ("explicit-sources" "builds"))
 		\\(systems ("x86_64-linux"))
-		\\(sources (((name "default") (provider (NixPackages "github:NixOS/nixpkgs/nixos-unstable")))))
+		\\(sources (((name "default") (provider ((name "nix") (ref "github:NixOS/nixpkgs/nixos-unstable") (version 1))))))
 		\\(environments (((name "ci") (parents ()) (tools ()) (overlays ()))))
 		\\(shells (((name "default") (environment "ci"))))
+		\\(executors (((name "native") (provider "nix") (source "default"))))
+		\\(build_executors (((build "app") (executor "native"))))
 		\\(builds (((name "app") (environment "ci") (inputs ()) (needs ())
 		\\          (run ("true")) (output "result")))))
 
@@ -43,17 +47,26 @@ CliIsolationTest := [].{
 	store : Str
 	store = "/nix/store/00000000000000000000000000000000-blueprint-app"
 
-	## Stable recipe bytes refer to the project and a versioned provider runner.
-	staged : Str -> List(Str)
-	staged = |root| [
+	## Stable recipe bytes refer to a versioned provider runner, and read the
+	## project and the compiler as locked paths through records beside the
+	## flake, never by a path of the caller's.
+	staged : List(Str)
+	staged = [
 		"runnerSource = ",
 		"blueprint-build-runner-v1",
 		"builder = runner;",
-		"path = /. + \"${root}\";",
-		"|| builtins.elem path [ \"${root}/.blueprint\" \"${root}/Blueprint.lock\" ])",
-		"throw \"snapshot refuses symlink: \${path}\"",
-		"throw \"snapshot refuses special file: \${path}\"",
+		"project = projectFor ./project-app.json;",
+		"projectFor = record: let project = builtins.fromJSON (builtins.readFile record); in (builtins.fetchTree { type = \"path\"; path = project.path; narHash = project.narHash; }).outPath;",
+		"compilerArchive = (let record = builtins.fromJSON (builtins.readFile ./source-file-",
 	]
+
+	## The SRI hash the stub Nix prints for a path whose last component is
+	## `name`.
+	stub_hash : Str -> Str
+	stub_hash = |name| "sha256-${Str.from_utf8(Integrity.digest(name.to_utf8()).to_utf8().take_first(43)) ?? ""}="
+
+	## A record of a locked path, as the CLI writes it beside the flake.
+	Record : { path : Str, narHash : Str }
 
 }
 
@@ -65,7 +78,7 @@ run! = |test, root, args, extra|
 
 ## How many times the provider was asked to build in this project.
 builds! : Str => Try(U64, _)
-builds! = |root| Ok(CliHarness.calls!("${root}/nix-calls")?.keep_if(|call| call.first() == Ok("build")).len())
+builds! = |root| Ok(CliHarness.calls!("${root}/.blueprint/nix-calls")?.keep_if(|call| call.first() == Ok("build")).len())
 
 ## A project with a resolved lock.
 project! : Test, Str => Try(Str, _)
@@ -151,8 +164,10 @@ cases! = |bench| {
 				("STUB_NIX_OUT", CliIsolationTest.store),
 				("STUB_NIX_FIXTURE", "${bench.root}/blueprint-nix/tests/local.nix-lock.json"),
 				("STUB_NIX_MODE", "local"),
+				("STUB_NIX_CALLS", ".blueprint/nix-calls"),
 				("STUB_PYTHON_LOG", python_log),
 				("STUB_NIX_ISOLATION_LOG", "${bench.work}/runtime-witness.json"),
+				("STUB_NIX_HASH_COPY", "${bench.work}/hashed"),
 			],
 		),
 	}
@@ -174,34 +189,73 @@ cases! = |bench| {
 	}
 	Path.write_utf8!(Path.utf8("${root}/.blueprint/excluded-secret"), "workspace excluded\n")?
 	before = builds!(root)?
+	planned = run!(test, root, ["plan", "build", "app", "--prepare", "--json"], [])?
+	CliHarness.exited!(planned, 0, "prepare build without execution")?
+	prepared : BuildModel.Inspection
+	prepared = Json.parse(planned.stdout).map_err(|_| ScriptFailed)?
+	CliHarness.check!(prepared.prepared and prepared.build_identity.ends_with(".drv") and prepared.baseline == "unavailable" and prepared.outputs == [{ name: "out", path: CliIsolationTest.store }] and builds!(root)? == before, "native preparation built an artifact or advanced the baseline")?
+	CliHarness.check!(!CliHarness.present!("${bench.work}/runtime-witness.json"), "preparation observed runtime execution namespaces")?
+	# Nix has read the copy of the project into its store by then, so none
+	# stays to be read again with the generated root.
+	CliHarness.check!(!CliHarness.present!("${root}/.blueprint/snapshots"), "preparation left a copy of the project behind")?
 	built = run!(test, root, ["build", "app"], [])?
 	CliHarness.exited!(built, 0, "blueprint build app")?
 	CliHarness.check!(built.stdout == "${CliIsolationTest.store}\n", "build app printed ${Str.inspect(built.stdout)}, not the artifact")?
 	CliHarness.check!(builds!(root)? == before + 1, "build app did not run exactly one provider build")?
 	flake = Path.read_utf8!(Path.utf8("${root}/.blueprint/flake.nix"))?
 	caller = { mnt: namespace!(readlink, "mnt")?, net: namespace!(readlink, "net")? }
-	for expected in CliIsolationTest.staged(root) {
+	for expected in CliIsolationTest.staged {
 		CliHarness.contains!(flake, expected, "the staged flake")?
 	}
 	CliHarness.check!(!flake.contains("@blueprint-caller"), "the staged flake still holds a placeholder:\n${flake}")?
+	CliHarness.check!(!flake.contains(root) and !flake.contains("builtins.path"), "the staged flake reads a caller path itself:\n${flake}")?
 	CliHarness.check!(!flake.contains(caller.mnt) and !flake.contains(caller.net) and !flake.contains(bench.blueprint), "caller or executable identity entered the derivation")?
 	observed = captured!(test)?
 	CliHarness.check!(observed.witness == "${caller.mnt}\n${caller.net}\n", "runtime witness did not capture caller namespaces")?
 	CliHarness.check!(observed.directory.starts_with("/tmp/blueprint-isolation-") and !CliHarness.present!(observed.directory), "runtime witness was not private and cleaned after the command")?
-	# The CLI copies no project snapshot or executable; runtime witnesses are temporary.
+	# The CLI copies the build's selected files into the workspace for Nix to
+	# read as a locked path, and no executable; the copy and runtime
+	# witnesses last only while the build does.
 	generated = CliHarness.names!("${root}/.blueprint")?.sort_with(Project.bytewise)
 	source_files = generated.keep_if(|name| name.starts_with("source-file-") and name.ends_with(".json"))
 	CliHarness.check!(source_files.len() == 1, "the runner compiler needs exactly one original-file path record")?
-	CliHarness.check!(generated.keep_if(|name| !source_files.contains(name)) == [".gitignore", "excluded-secret", "flake.lock", "flake.nix"], "the generated root holds ${Str.join_with(generated, " ")}")?
+	CliHarness.check!(generated.keep_if(|name| !source_files.contains(name)) == [".gitignore", "build-records", "excluded-secret", "flake.lock", "flake.nix", "nix-calls", "project-app.json"], "the generated root holds ${Str.join_with(generated, " ")}")?
 	for source in sources {
 		kept = CliHarness.stat!("%a %h", "${root}/${source.file}")?
 		CliHarness.check!(kept == "${source.mode} 1", "${source.file} now has mode and link count ${kept}, not ${source.mode} 1")?
 	}
+	# Each record names where the host put the content and the NAR hash Nix
+	# printed for it there; evaluation needs nothing else of the caller.
+	copy = "${root}/.blueprint/snapshots/app"
+	project_text = Path.read_utf8!(Path.utf8("${root}/.blueprint/project-app.json"))?
+	project_record : CliIsolationTest.Record
+	project_record = Json.parse(project_text).map_err(|_| ScriptFailed)?
+	CliHarness.check!(project_record == { path: copy, narHash: CliIsolationTest.stub_hash("app") }, "the project record is ${project_text}")?
+	compiler_text = Path.read_utf8!(Path.utf8("${root}/.blueprint/${source_files.first() ?? ""}"))?
+	compiler_record : CliIsolationTest.Record
+	compiler_record = Json.parse(compiler_text).map_err(|_| ScriptFailed)?
+	CliHarness.check!(compiler_record.narHash == CliIsolationTest.stub_hash(compiler_record.path.split_on("/").last() ?? "") and Path.is_file!(Path.utf8(compiler_record.path)) ?? False, "the compiler record is ${compiler_text}")?
+	nix_calls = CliHarness.calls!("${root}/.blueprint/nix-calls")?
+	CliHarness.check!(nix_calls.contains(["hash", "path", copy]) and nix_calls.contains(["hash", "path", compiler_record.path]), "Nix did not hash what the records name: ${Str.inspect(nix_calls)}")?
+	CliHarness.check!(!nix_calls.any(|call| call.contains("--impure")), "Nix was asked to evaluate impurely: ${Str.inspect(nix_calls)}")?
+	# The stub Nix kept what it was asked to hash.
+	hashed = "${bench.work}/hashed/app"
+	snapshot = CliHarness.names!(hashed)?.sort_with(Project.bytewise)
+	CliHarness.check!(snapshot == ["Blueprint.roc", "nested", "odd", "plain", "setuid", "tool", "wire.scm"], "the copy of the project held ${Str.join_with(snapshot, " ")}")?
+	for source in sources {
+		original = Path.read_bytes!(Path.utf8("${root}/${source.file}"))?
+		executable = Path.is_executable!(Path.utf8("${root}/${source.file}"))?
+		CliHarness.check!(Path.read_bytes!(Path.utf8("${hashed}/${source.file}"))? == original and Path.is_executable!(Path.utf8("${hashed}/${source.file}"))? == executable, "the copy of ${source.file} differed in bytes or in whether it is executable")?
+	}
 	# An unchanged caller stages identical bytes, so Nix can reuse the build.
 	CliHarness.exited!(run!(test, root, ["build", "app"], [])?, 0, "a second blueprint build app")?
-	CliHarness.check!(Path.read_utf8!(Path.utf8("${root}/.blueprint/flake.nix"))? == flake, "a second build staged a different flake")?
+	CliHarness.check!(Path.read_utf8!(Path.utf8("${root}/.blueprint/flake.nix"))? == flake and Path.read_utf8!(Path.utf8("${root}/.blueprint/project-app.json"))? == project_text, "a second build staged a different flake or project record")?
 	second = captured!(test)?
 	CliHarness.check!(second.directory != observed.directory and !CliHarness.present!(second.directory), "two builds reused a mutable witness or left it behind")?
+	baseline_path = "${root}/.blueprint/build-records/x86_64-linux/app.scm"
+	baseline_before = Path.read_bytes!(Path.utf8(baseline_path))?
+	invalid_result = run!(test, root, ["build", "app"], [("STUB_NIX_RESULT_DRV", "/nix/store/wrong-recipe.drv")])?
+	CliHarness.check!(invalid_result.code == 1 and invalid_result.stderr.contains("does not match the prepared build") and Path.read_bytes!(Path.utf8(baseline_path))? == baseline_before, "invalid provider result advanced successful build evidence")?
 	Script.pass!("build app: private caller witness is cleaned; derivation excludes namespace/CLI identity and stays unchanged across invocations")?
 
 	# Isolation that cannot be observed or is malformed stops before staging.
@@ -231,6 +285,27 @@ cases! = |bench| {
 	}
 	Script.pass!("quotes, dollars and backslashes in the CLI executable's path do not enter the derivation")?
 
+	# A name that is not UTF-8, in a directory whose name is not either, is
+	# copied as it is. A symlink is refused before the provider runs.
+	bytes = project!(test, "bytes")?
+	odd_directory = "${bytes}/".to_utf8().concat(['d', 0xfe])
+	Path.create_dir!(Path.unix_bytes(odd_directory))?
+	Path.write_bytes!(Path.unix_bytes(odd_directory.append('/').concat(['f', 0xff])), [1, 2, 3])?
+	CliHarness.exited!(run!(test, bytes, ["build", "app"], [])?, 0, "build app with names that are not UTF-8")?
+	copied = Path.read_bytes!(Path.unix_bytes("${bench.work}/hashed/app/".to_utf8().concat(['d', 0xfe, '/', 'f', 0xff])))?
+	CliHarness.check!(copied == [1, 2, 3] and !CliHarness.present!("${bytes}/.blueprint/snapshots"), "a file whose name is not UTF-8 was copied as ${Str.inspect(copied)}, or the copy stayed")?
+	CliHarness.tool!(["ln", "-s", "--", "absent", "${bytes}/dangling"])?
+	bytes_before = builds!(bytes)?
+	linked_entry = run!(test, bytes, ["build", "app"], [])?
+	CliHarness.check!(linked_entry.code == 1 and linked_entry.stderr.contains("snapshot refuses symlink: ${bytes}/dangling") and builds!(bytes)? == bytes_before and !CliHarness.present!("${bytes}/.blueprint/snapshots"), "a project symlink was not refused before the provider, or a partial copy stayed:\n${linked_entry.stderr}")?
+	# What an interrupted run left is removed before anything is staged.
+	Path.delete!(Path.utf8("${bytes}/dangling"))?
+	Path.create_all!(Path.utf8("${bytes}/.blueprint/snapshots/stale"))?
+	CliHarness.exited!(run!(test, bytes, ["build", "app"], [])?, 0, "build app after an interrupted one")?
+	flake_source = CliHarness.names!("${bytes}/.blueprint")?
+	CliHarness.check!(!flake_source.contains("snapshots"), "a leftover copy stayed in the generated root: ${Str.join_with(flake_source, " ")}")?
+	Script.pass!("selected files are copied with their names' bytes; a symlink is refused before Nix")?
+
 	# A symlinked generated root is refused, not followed.
 	linked = project!(test, "linked-workspace")?
 	real = "${work}/real-workspace"
@@ -257,3 +332,5 @@ captured! = |test| {
 }
 
 expect CliIsolationTest.wire.contains("(builds (((name \"app\")") and CliIsolationTest.wire.contains("(requires (\"explicit-sources\" \"builds\"))")
+
+expect Spec.parse(CliIsolationTest.wire).is_ok()

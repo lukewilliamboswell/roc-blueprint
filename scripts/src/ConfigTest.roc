@@ -41,12 +41,12 @@ ConfigTest := [].{
 	## A new optional field comes with a feature marker for older consumers.
 	markers : List((Str, List(Str)))
 	markers = [
-		("Valid", ["(requires (\"explicit-sources\"))", "(provider (NixPackages \"github:NixOS/nixpkgs/nixos-unstable\"))"]),
-		("Builds", ["(minor 8)", "(requires (\"explicit-sources\" \"sources\" \"builds\"))", "(build_sources ", "(builds "]),
+		("Valid", ["(requires (\"explicit-sources\"))", "(ref \"github:NixOS/nixpkgs/nixos-unstable\")", "(version 1)"]),
+		("Builds", ["(minor 0)", "(requires (\"explicit-sources\" \"sources\" \"builds\"))", "(build_sources ", "(builds "]),
 		(
 			"Workflows",
 			[
-				"(minor 8)",
+				"(minor 0)",
 				"(requires (\"explicit-sources\" \"builds\" \"workflows\"))",
 				"(workflows ",
 				"(RunTask \"check.all\" (\"\" \"two words\" \"\\\"quoted\\\"\" \"\$HOME\" \"line\\nbreak\" \"--flag\"))",
@@ -302,13 +302,13 @@ settings_module = |name, settings|
 	"import pf.Config\n${name} :: [].{\n\tsettings : List(Config.Setting)\n\tsettings = [${settings}]\n}\n"
 
 build_base =
-	\\Name("builds"), Environment("builder", []), Source("assets", "path:./assets")
+	\\Name("builds"), Executor("native", Adapter("fixture", "")), Resolver("fixture", ["assets"]), Environment("builder", []), Source("assets", "path:./assets")
 
 build_settings =
-	\\Build("app", [Use("builder"), Inputs(["assets"]), Needs(["library"]), Run(["python3", "build.py", "", "two words", "$HOME"]), Output("dist/app")]), Build("library", [Use("builder"), Run(["python3", "library.py"]), Output("dist/library")])
+	\\Build("app", [Execute("native"), Use("builder"), Inputs(["assets"]), Needs(["library"]), Run(["python3", "build.py", "", "two words", "$HOME"]), Output("dist/app")]), Build("library", [Execute("native"), Use("builder"), Run(["python3", "library.py"]), Output("dist/library")])
 
 workflow_base =
-	\\Name("workflows"), Environment("dev", []), Task("check.all", [Use("dev"), Run(["true"])]), Build("app", [Use("dev"), Run(["true"]), Output("out")])
+	\\Name("workflows"), Executor("native", Adapter("fixture", "")), Environment("dev", []), Task("check.all", [Use("dev"), Run(["true"])]), Build("app", [Execute("native"), Use("dev"), Run(["true"]), Output("out")])
 
 ## Typed workflow references keep argv and repeated task and build steps.
 workflow_steps =
@@ -340,12 +340,12 @@ valid_fixtures = [
 	),
 	valid(
 		"Commands",
-		\\[Name("commands"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Overlay("roc", "github:roc-lang/roc-overlay"), Environment("base", [Command("vcs", "nix#git"), Command("py", "nix#python3")]), Environment("dev", [Extend("base"), Overlays(["roc"]), Command("py", "nix#python312"), Command("roc-stable", "nix#rocpkgs.nightly")]), Shell("default", [Use("dev")])]
+		\\[Name("commands"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Input("roc", "github:roc-lang/roc-overlay"), Environment("base", [Command("vcs", "nix#git"), Command("py", "nix#python3")]), Environment("dev", [Extend("base"), Overlays(["roc"]), Command("py", "nix#python312"), Command("roc-stable", "nix#rocpkgs.nightly")]), Shell("default", [Use("dev")])]
 		,
 	),
 	valid(
 		"ConfiguredTools",
-		\\[Name("configured"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Overlay("rust", "github:oxalica/rust-overlay"), Environment("base", [Overlays(["rust"]), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("x86_64-unknown-linux-musl")]))])]), Environment("dev", [Extend("base"), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("aarch64-unknown-linux-musl")])), ("extensions", List([Str("rust-src")]))])]), Shell("default", [Use("dev")])]
+		\\[Name("configured"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Input("rust", "github:oxalica/rust-overlay"), Environment("base", [Overlays(["rust"]), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("x86_64-unknown-linux-musl")]))])]), Environment("dev", [Extend("base"), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("aarch64-unknown-linux-musl")])), ("extensions", List([Str("rust-src")]))])]), Shell("default", [Use("dev")])]
 		,
 	),
 	valid(
@@ -508,13 +508,13 @@ lower_fixtures = [
 	rejected(
 		"DuplicateBuildInputs",
 		"DuplicateInputs",
-		\\[Name("bad"), Build("app", [Use("builder"), Inputs([]), Inputs([]), Run(["true"]), Output("out")])]
+		\\[Name("bad"), Build("app", [Execute("native"), Use("builder"), Inputs([]), Inputs([]), Run(["true"]), Output("out")])]
 		,
 	),
 	rejected(
 		"DuplicateBuildNeeds",
 		"DuplicateNeeds",
-		\\[Name("bad"), Build("app", [Use("builder"), Needs([]), Needs([]), Run(["true"]), Output("out")])]
+		\\[Name("bad"), Build("app", [Execute("native"), Use("builder"), Needs([]), Needs([]), Run(["true"]), Output("out")])]
 		,
 	),
 ]
@@ -575,7 +575,7 @@ quote_fixtures = [
 	bad_quote(
 		"BadFlakeRef",
 		"is not a flake reference",
-		\\[Name("bad"), Overlay("tools", "roc-lang/roc-overlay")]
+		\\[Name("bad"), Input("tools", "roc-lang/roc-overlay")]
 		,
 	),
 	bad_quote(
@@ -590,9 +590,9 @@ quote_fixtures = [
 ## rule, one graph rule, one argv rule, and two bounds on generated graphs.
 core_fixtures : List(ConfigTest.Fixture)
 core_fixtures = [
-	rejected(
+	refused(
 		"AutoSource",
-		"Packages(\"default\", Auto): the Auto source",
+		"type mismatch",
 		\\[Name("invalid"), Packages("default", Auto), Environment("dev", [])]
 		,
 	),
@@ -605,7 +605,7 @@ core_fixtures = [
 	rejected(
 		"BuildCycle",
 		"build cycle",
-		\\[Name("bad"), Environment("builder", []), Build("app", [Use("builder"), Needs(["library"]), Run(["true"]), Output("out")]), Build("library", [Use("builder"), Needs(["app"]), Run(["true"]), Output("out")])]
+		\\[Name("bad"), Executor("native", Adapter("fixture", "")), Environment("builder", []), Build("app", [Execute("native"), Use("builder"), Needs(["library"]), Run(["true"]), Output("out")]), Build("library", [Execute("native"), Use("builder"), Needs(["app"]), Run(["true"]), Output("out")])]
 		,
 	),
 	rejected("WorkflowNul", "NUL in argv", "[${workflow_base}, Workflow(\"ci\", [RunTask(\"check.all\", [Str.from_utf8([0]) ?? \"\"])])]"),
@@ -616,11 +616,11 @@ core_fixtures = [
 ## `count` builds, each needing the one before it.
 build_chain : U64 -> Str
 build_chain = |count| {
-	var $items = ["Name(\"deep\")", "Environment(\"builder\", [])"]
+	var $items = ["Name(\"deep\")", "Environment(\"builder\", [])", "Executor(\"native\", Adapter(\"fixture\", \"\"))"]
 	var $index = 0
 	while $index < count {
 		needs = if $index == 0 "" else "Needs([\"b${($index - 1).to_str()}\"]), "
-		$items = $items.append("Build(\"b${$index.to_str()}\", [Use(\"builder\"), ${needs}Run([\"true\"]), Output(\"out\")])")
+		$items = $items.append("Build(\"b${$index.to_str()}\", [Execute(\"native\"), Use(\"builder\"), ${needs}Run([\"true\"]), Output(\"out\")])")
 		$index = $index + 1
 	}
 	"[${Str.join_with($items, ", ")}]"
@@ -685,7 +685,7 @@ expect ConfigTest.problem(rejected("A", "MissingName", ""), { ..crashed("compile
 expect ConfigTest.problem(bad_quote("A", "is not a system", ""), crashed("invalid string: \"linux\" is not a system")) == ""
 expect ConfigTest.problem(bad_quote("A", "is not a system", ""), crashed("\"linux\" is not a system")) == "expected checked-name rejection for A, got exit 1"
 
-expect build_chain(2) == "[Name(\"deep\"), Environment(\"builder\", []), Build(\"b0\", [Use(\"builder\"), Run([\"true\"]), Output(\"out\")]), Build(\"b1\", [Use(\"builder\"), Needs([\"b0\"]), Run([\"true\"]), Output(\"out\")])]"
+expect build_chain(2) == "[Name(\"deep\"), Environment(\"builder\", []), Executor(\"native\", Adapter(\"fixture\", \"\")), Build(\"b0\", [Execute(\"native\"), Use(\"builder\"), Run([\"true\"]), Output(\"out\")]), Build(\"b1\", [Execute(\"native\"), Use(\"builder\"), Needs([\"b0\"]), Run([\"true\"]), Output(\"out\")])]"
 expect doubling_workflows(2).ends_with("Workflow(\"w0\", [RunTask(\"check\", [])]), Workflow(\"w1\", [RunWorkflow(\"w0\"), RunWorkflow(\"w0\")])]")
 
 expect missing_marker("Builds", "(builds (a))", ["(builds "]) == Err(NoneMissing)

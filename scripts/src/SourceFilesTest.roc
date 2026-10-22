@@ -37,7 +37,7 @@ config! = |bench, root, source, builds| {
 	Path.create_all!(Path.utf8(root))?
 	platform_path = RocPackagesTest.relative(root, "${bench.root}/blueprint-platform/main.roc")
 	extra = if builds {
-		"Packages(\"nixpkgs\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))), Overlay(\"roc\", \"github:roc-lang/roc-overlay\"), Environment(\"base\", [Tools([\"nixpkgs#python3\"])]), Environment(\"dev\", [Overlays([\"roc\"])]), Build(\"copy\", [Use(\"base\"), Inputs([\"upstream\"]), Run([\"python3\", \"-c\", \"import hashlib, os; from pathlib import Path; data = (Path(os.environ[\\\"BLUEPRINT_INPUTS\\\"]) / \\\"upstream\\\").read_bytes(); Path(\\\"out\\\").write_text(hashlib.sha256(data).hexdigest())\"]), Output(\"out\")]),"
+		"Packages(\"nixpkgs\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))), Input(\"roc\", \"github:roc-lang/roc-overlay\"), Environment(\"base\", [Tools([\"nixpkgs#python3\"])]), Environment(\"dev\", [Overlays([\"roc\"])]), Executor(\"native\", Nix(\"nixpkgs\")), Build(\"copy\", [Execute(\"native\"), Use(\"base\"), Inputs([\"upstream\"]), Run([\"python3\", \"-c\", \"import hashlib, os; from pathlib import Path; data = (Path(os.environ[\\\"BLUEPRINT_INPUTS\\\"]) / \\\"upstream\\\").read_bytes(); Path(\\\"out\\\").write_text(hashlib.sha256(data).hexdigest())\"]), Output(\"out\")]),"
 	} else ""
 	Path.write_utf8!(Path.utf8("${root}/Blueprint.roc"), "app [config] { pf: platform \"${platform_path}\" }\nconfig = [Name(\"source-files\"), Systems([\"x86_64-linux\"]), SourceFile(\"upstream\", \"${source.url}\", \"${source.sha256}\"), ${extra}]\n")
 }
@@ -79,7 +79,11 @@ cases! = |bench, idle, real_build| {
 	cold = invoke!(bench, server, build_root, ["gen"], cache)?
 	CliHarness.check!(cold.code == 0, "cold Generate failed: ${cold.stderr}")?
 	flake = Path.read_utf8!(Path.utf8("${build_root}/.blueprint/flake.nix"))?
-	CliHarness.check!(flake.contains("source-file-${source.sha256}.json") and Path.read_utf8!(Path.utf8("${build_root}/.blueprint/source-file-${source.sha256}.json"))? == Json.to_str(artifact) and flake.contains("recursive = false") and flake.contains("sha256 = \"${source.sha256}\"") and Path.read_bytes!(Path.utf8(artifact))? == bytes, "generated build did not expose original checked file")?
+	# Generation measures nothing: the record says only where the file is. A
+	# build adds the NAR hash Nix's locked read checks, then the flat SHA-256.
+	generated_record : { path : Str }
+	generated_record = Json.parse(Path.read_utf8!(Path.utf8("${build_root}/.blueprint/source-file-${source.sha256}.json"))?).map_err(|_| ScriptFailed)?
+	CliHarness.check!(flake.contains("builtins.readFile ./source-file-${source.sha256}.json") and generated_record.path == artifact and flake.contains("builtins.fetchTree { type = \"path\"; path = record.path; narHash = record.narHash; }") and flake.contains("builtins.hashFile \"sha256\" file == \"${source.sha256}\"") and !flake.contains("builtins.path") and Path.read_bytes!(Path.utf8(artifact))? == bytes, "generated build did not expose original checked file")?
 	named_with_nix = invoke!(bench, idle.emptied(), build_root, ["update", "upstream"], cache)?
 	CliHarness.check!(named_with_nix.code == 0 and Path.read_utf8!(Path.utf8("${build_root}/Blueprint.lock"))? == committed, "named SourceFile update moved unrelated Nix pins")?
 	warm = invoke!(bench, idle.emptied(), build_root, ["gen"], cache)?
@@ -88,20 +92,20 @@ cases! = |bench, idle, real_build| {
 	quoted = invoke!(bench, server, build_root, ["gen"], quoted_cache)?
 	CliHarness.check!(quoted.code == 0, "cache path quoting failed: ${quoted.stderr}")?
 	encoded_path = Path.read_utf8!(Path.utf8("${build_root}/.blueprint/source-file-${source.sha256}.json"))?
-	decoded_path : Str
+	decoded_path : { path : Str }
 	decoded_path = Json.parse(encoded_path).map_err(|_| ScriptFailed)?
-	CliHarness.check!(decoded_path == "${quoted_cache}/blueprint/v1/artifacts/sha256/${source.sha256}", "cache path was interpreted as executable syntax")?
+	CliHarness.check!(decoded_path.path == "${quoted_cache}/blueprint/v1/artifacts/sha256/${source.sha256}", "cache path was interpreted as executable syntax")?
 	if real_build {
 		first = invoke!(bench, server, build_root, ["build", "copy", "--json"], cache)?
 		CliHarness.check!(first.code == 0, "original-file build failed: ${first.stderr}")?
-		built : { provider : Str, recipe_identity : Str, metadata : { nix : { derivation : Str } }, outputs : List({ path : Str }) }
+		built : { provider : Str, build_identity : Str, metadata : { nix : { derivation : Str } }, outputs : List({ path : Str }) }
 		built = Json.parse(first.stdout).map_err(|_| ScriptFailed)?
-		CliHarness.check!(built.provider == "nix" and built.recipe_identity == built.metadata.nix.derivation and built.recipe_identity.ends_with(".drv"), "build did not report actual provider recipe identity")?
+		CliHarness.check!(built.provider == "nix" and built.build_identity == built.metadata.nix.derivation and built.build_identity.ends_with(".drv"), "build did not report actual provider recipe identity")?
 		CliHarness.check!(Path.read_utf8!(Path.utf8(built.outputs.first()?.path))? == source.sha256, "build did not receive the exact original file")?
 		second_cache = "${bench.work}/other-cache-location"
 		second = invoke!(bench, server, build_root, ["build", "copy", "--json"], second_cache)?
 		CliHarness.check!(second.code == 0, "fresh-cache source build failed: ${second.stderr}")?
-		rebuilt : { provider : Str, recipe_identity : Str, metadata : { nix : { derivation : Str } }, outputs : List({ path : Str }) }
+		rebuilt : { provider : Str, build_identity : Str, metadata : { nix : { derivation : Str } }, outputs : List({ path : Str }) }
 		rebuilt = Json.parse(second.stdout).map_err(|_| ScriptFailed)?
 		CliHarness.check!(rebuilt == built, "source-file cache location changed derivation or output identity")?
 	}

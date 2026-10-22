@@ -4,11 +4,11 @@ import core.JsonData
 import core.Project
 import Process
 import Script
-import "../../blueprint-core/lock-snapshot-v1.schema.json" as schema_text : Str
+import "../../blueprint-core/lock-snapshot-v2.schema.json" as schema_text : Str
 
 ## The lock snapshot's published contract, checked without the code that
 ## implements it: `conforms` evaluates the vendored
-## `blueprint-core/lock-snapshot-v1.schema.json` itself, then the profile rules
+## `blueprint-core/lock-snapshot-v2.schema.json` itself, then the profile rules
 ## the schema cannot state. `run!` holds the official consumer in
 ## `fixtures/lock-snapshot` to the same verdicts, case by case, and to keeping
 ## metadata number lexemes exactly.
@@ -18,7 +18,7 @@ import "../../blueprint-core/lock-snapshot-v1.schema.json" as schema_text : Str
 ## bound cases still hold that reader to the contract.
 LockSnapshotTest := [].{
 
-	## Whether `text` is a format-1 lock snapshot: the schema, then the profile.
+	## Whether `text` is a format-2 lock snapshot: the schema, then the profile.
 	conforms : Str -> Try({}, Str)
 	conforms = |text| {
 		data = JsonData.decode(text).map_err(JsonData.message)?
@@ -67,22 +67,22 @@ consume! = |consumer, work| {
 
 lexemes = ["-1.2300e+99999", "340282366920938463463374607431768211455", "9".repeat(10000)]
 
-## Each candidate document and whether the format-1 contract accepts it.
+## Each candidate document and whether the format-2 contract accepts it.
 cases : Str -> List((Str, Bool))
 cases = |raw| {
 	fetched = raw.split_first("\"fetched\":[").map_ok(|parts| parts.after.drop_suffix("\n").drop_suffix("]}")) ?? ""
-	file = "{\"format\":1,\"sources\":{\"archive\":{\"name\":\"archive\",\"provider\":\"file\",\"ref\":\"https://example.test/source.tar.gz\",\"rev\":\"\",\"digest\":\"sha256:${file_hash}\",\"identity\":\"sha256:${file_hash}\",\"digestKind\":\"file\",\"flatSha256\":\"${file_hash}\",\"metadata\":{}}},\"fetched\":[]}"
+	file = "{\"format\":2,\"sources\":{\"archive\":{\"name\":\"archive\",\"provider\":\"file\",\"ref\":\"https://example.test/source.tar.gz\",\"rev\":\"\",\"digest\":\"sha256:${file_hash}\",\"content_identity\":\"sha256:${file_hash}\",\"digestKind\":\"file\",\"flatSha256\":\"${file_hash}\",\"metadata\":{}}},\"fetched\":[]}"
 	[
 		(raw, True),
-		(raw.replace_each("\"format\":1", "\"format\":2"), False),
-		(raw.replace_each("\"format\":1", "\"format\":1.0"), False),
-		(raw.replace_each("\"format\":1", "\"format\":1,\"format\":1"), False),
+		(raw.replace_each("\"format\":2", "\"format\":3"), False),
+		(raw.replace_each("\"format\":2", "\"format\":2.0"), False),
+		(raw.replace_each("\"format\":2", "\"format\":2,\"format\":2"), False),
 		(raw.concat("{}"), False),
 		(raw.replace_each("18446744073709551615", "18446744073709551616"), False),
 		(replace_first(raw, "\"nix\":{", "\"different\":{"), False),
 		(raw.replace_each("\"flatSha256\":null", "\"flatSha256\":\"${"a".repeat(64)}\""), False),
 		(raw.replace_each("\"published\"", "\"future-state\"").replace_each("\"tree\"", "\"future-kind\""), True),
-		(raw.replace_each("\"format\":1", "\"additional\":{\"nested\":[null,2.5]},\"format\":1"), True),
+		(raw.replace_each("\"format\":2", "\"additional\":{\"nested\":[null,2.5]},\"format\":2"), True),
 		(raw.replace_each("\"fetched\":[${fetched}]", "\"fetched\":[${fetched},${fetched}]"), False),
 		(raw.replace_each("340282366920938463463374607431768211455", "9".repeat(10000)), True),
 		(raw.replace_each("-1.2300e+99999", "1e+${"9".repeat(10000)}"), True),
@@ -90,7 +90,17 @@ cases = |raw| {
 		(file, True),
 		(file.replace_each("\"rev\":\"\"", "\"rev\":\"wrong\""), False),
 		(file.replace_each("\"flatSha256\":\"${file_hash}\"", "\"flatSha256\":null"), False),
-		(file.replace_each("\"identity\":\"sha256:${file_hash}", "\"identity\":\"sha256:${"a".repeat(64)}"), False),
+		(file.replace_each("\"content_identity\":\"sha256:${file_hash}", "\"content_identity\":\"sha256:${"a".repeat(64)}"), False),
+		# Where the bytes came from and where a published digest was read:
+		# hosts that are nonempty strings, an address that is a string, even
+		# an empty one, and an entry that says both.
+		(raw.replace_each("\"served\":[]", "\"served\":[\"objects.example.test\",\"mirror.example.test\"]"), True),
+		(raw.replace_each("\"witness\":\"", "\"witness\":\"\",\"was\":\""), True),
+		(raw.replace_each("\"served\":[]", "\"served\":[\"\"]"), False),
+		(raw.replace_each("\"served\":[]", "\"served\":\"objects.example.test\""), False),
+		(raw.replace_each("\"served\":[]", "\"unserved\":[]"), False),
+		(raw.replace_each("\"witness\":\"", "\"witness\":null,\"was\":\""), False),
+		(raw.replace_each("\"witness\":\"", "\"unwitnessed\":\""), False),
 	]
 }
 
@@ -116,9 +126,9 @@ profile = |data| {
 			return Err("source key/name mismatch")
 		}
 		if text(source.value, "provider")? == "file" {
-			identity = "sha256:${text(source.value, "flatSha256")?}"
-			if text(source.value, "identity")? != identity or text(source.value, "digest")? != identity {
-				return Err("flat digest/identity mismatch")
+			content_identity = "sha256:${text(source.value, "flatSha256")?}"
+			if text(source.value, "content_identity")? != content_identity or text(source.value, "digest")? != content_identity {
+				return Err("flat digest/content_identity mismatch")
 			}
 		}
 	}
@@ -132,8 +142,8 @@ profile = |data| {
 		if !integral(member(entry, "size")?) {
 			return Err("size must use an integer JSON lexeme")
 		}
-		if text(entry, "identity")? != "sha256:${text(entry, "sha256")?}" {
-			return Err("program digest/identity mismatch")
+		if text(entry, "content_identity")? != "sha256:${text(entry, "sha256")?}" {
+			return Err("program digest/content_identity mismatch")
 		}
 	}
 	Ok({})
@@ -393,11 +403,11 @@ is_string = |value| JsonData.string(value).is_ok()
 
 encoded = |value| JsonData.encode(value) ?? "a value"
 
-sample = "{\"format\":1,\"sources\":{\"nix\":{\"name\":\"nix\",\"provider\":\"nix\",\"ref\":\"github:example/packages\",\"rev\":\"abc\",\"digest\":\"opaque-tree\",\"identity\":\"opaque-content\",\"digestKind\":\"tree\",\"flatSha256\":null,\"metadata\":{\"nix\":{\"fetchTree\":{\"type\":\"git\",\"url\":\"https://example.test/packages.git\",\"rev\":\"abc\"},\"future\":[null,340282366920938463463374607431768211455,-1.2300e+99999]}}}},\"fetched\":[{\"name\":\"roc-stable\",\"system\":\"x86_64-linux\",\"urls\":[\"https://example.test/roc.tar.gz\"],\"sha256\":\"${"a".repeat(64)}\",\"identity\":\"sha256:${"a".repeat(64)}\",\"size\":18446744073709551615,\"obtained\":\"published\"}]}\n"
+sample = "{\"format\":2,\"sources\":{\"nix\":{\"name\":\"nix\",\"provider\":\"nix\",\"ref\":\"github:example/packages\",\"rev\":\"abc\",\"digest\":\"opaque-tree\",\"content_identity\":\"opaque-content\",\"digestKind\":\"tree\",\"flatSha256\":null,\"metadata\":{\"nix\":{\"fetchTree\":{\"type\":\"git\",\"url\":\"https://example.test/packages.git\",\"rev\":\"abc\"},\"future\":[null,340282366920938463463374607431768211455,-1.2300e+99999]}}}},\"fetched\":[{\"name\":\"roc-stable\",\"system\":\"x86_64-linux\",\"urls\":[\"https://example.test/roc.tar.gz\"],\"sha256\":\"${"a".repeat(64)}\",\"content_identity\":\"sha256:${"a".repeat(64)}\",\"size\":18446744073709551615,\"obtained\":\"published\",\"served\":[],\"witness\":\"https://api.example.test/repos/example/roc/releases/tags/1.0\"}]}\n"
 
 expect JsonData.decode(schema_text).map_ok(supported) == Ok(True)
 expect cases(sample).all(|(candidate, expected)| LockSnapshotTest.conforms(candidate).is_ok() == expected)
-expect cases(sample).len() == 18 and cases(sample).drop_first(1).all(|(candidate, _)| candidate != sample)
+expect cases(sample).len() == 25 and cases(sample).drop_first(1).all(|(candidate, _)| candidate != sample)
 expect LockSnapshotTest.conforms(sample.replace_each("\"urls\":[\"https://example.test/roc.tar.gz\"]", "\"urls\":[]")).is_err()
 expect LockSnapshotTest.conforms(sample.replace_each("\"obtained\":\"published\"", "\"obtained\":\" \"")).is_err()
 expect LockSnapshotTest.conforms(sample.replace_each("\"size\":18446744073709551615", "\"size\":-1")).is_err()

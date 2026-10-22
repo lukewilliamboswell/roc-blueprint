@@ -60,18 +60,8 @@ expect {
 	encoded == authority
 }
 
-# The lock blueprint 0.5 wrote for the same project, in Lock format 1.0, is
-# still read. It also pins the `default` source that 0.5 implied and nothing
-# declares now, so it is not this project's authority: planning from it is
-# refused, and the pins it shares are the same.
-expect {
-	old = Locks.decode(authority_0_5)?
-	current = Locks.decode(authority)?
-	authority_0_5.contains("(minor 0)")
-		and Locks.sources(old).map(|source| source.name) == ["default", "nixpkgs", "roc"]
-		and Locks.sources(old).drop_first(1) == Locks.sources(current)
-		and NixProvider.plan(project(wire)?, Request.Generate, "x86_64-linux", layout, old).map_ok(|steps| steps.steps.len()) == Err("lock input or ordered-overlay identity changed; run blueprint update")
-}
+# Unsupported Blueprint authority formats are rejected.
+expect Locks.decode(authority_0_5).is_err()
 
 # Inspection preserves the B1 golden; plans add stable, explicit input kinds.
 expect NixProvider.render(project(wire)?) == Ok(golden)
@@ -117,7 +107,7 @@ expect match plan(project(wire)?, Request.Generate, "x86_64-linux", layout) {
 
 # Native locks and malformed authorities cannot bypass the decoding protocol.
 expect Locks.decode(native_lock).is_err()
-	and Locks.decode(authority.replace_each("(major 1)", "(major 9)"))
+	and Locks.decode(authority.replace_each("(major 2)", "(major 9)"))
 		.is_err()
 
 # Caller-selected requests render only their environment and its shell aliases.

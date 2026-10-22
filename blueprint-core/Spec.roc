@@ -3,7 +3,7 @@ import Sexpr
 import Value
 
 ## Versioned semantic configuration, independent of provider selection or host.
-## Major 2 replaces shell packages with reusable environments and source intent.
+## Major 3 gives sources versioned adapter intent and builds named executors.
 ## Tool names remain provider-native strings, not translated package names.
 ## Parents are resolved by Project.validate, parent first with first-occurrence
 ## deduplication. Shells and tasks refer directly to environment identities.
@@ -14,8 +14,11 @@ Spec := {
 	name : Str,
 	requires_ : List(Str),
 	systems : List(Str),
-	sources : List({ name : Str, provider : [Auto, NixPackages(Str), GuixPackages(Str)] }),
-	inputs : List({ name : Str, url : Str, kind : [Overlay, Flake] }),
+	sources : List(Source),
+	resolvers : List(Resolver),
+	executors : List(Executor),
+	build_executors : List(BuildExecutor),
+	inputs : List({ name : Str, url : Str }),
 	environments : List({ name : Str, parents : List(Str), tools : List({ source : Str, name : Str }), overlays : List(Str) }),
 	system_tools : List({ environment : Str, system : Str, tools : List({ source : Str, name : Str }) }),
 	commands : List({ environment : Str, name : Str, tool : { source : Str, name : Str } }),
@@ -50,12 +53,17 @@ Spec := {
 
 	Format : { major : U64, minor : U64 }
 
-	## Which package set a source is. `Auto` is read and never written: a
-	## Spec or a Lock from before sources were explicit holds it, and
-	## `Project.validate` refuses a Spec that does.
-	Provider : [Auto, NixPackages(Str), GuixPackages(Str)]
+	## A provider-owned source declaration. The adapter validates its version
+	## and native reference; the Core never interprets ecosystem grammar.
+	Provider : { name : Str, version : U64, ref : Str }
+	Resolver : { provider : Str, inputs : List(Str) }
+	Executor : { name : Str, provider : Str, source : Str }
+	BuildExecutor : { build : Str, executor : Str }
 	Source : { name : Str, provider : Provider }
-	Input : { name : Str, url : Str, kind : [Overlay, Flake] }
+
+	## An input the owning resolver fetches; an environment that lists it in
+	## `overlays` applies it to its package set as that provider defines.
+	Input : { name : Str, url : Str }
 	Tool : { source : Str, name : Str }
 	Environment : { name : Str, parents : List(Str), tools : List(Tool), overlays : List(Str) }
 	SystemTools : { environment : Str, system : Str, tools : List(Tool) }
@@ -120,7 +128,7 @@ Spec := {
 	Raw : { backend : Str, target : Str, value : Value }
 
 	current_format : Format
-	current_format = { major: 2, minor: 8 }
+	current_format = { major: 3, minor: 0 }
 
 	empty : Str -> Spec
 	empty = |name| Spec.{
@@ -130,6 +138,9 @@ Spec := {
 		requires_: [],
 		systems: [],
 		sources: [],
+		resolvers: [],
+		executors: [],
+		build_executors: [],
 		inputs: [],
 		environments: [],
 		system_tools: [],
@@ -170,6 +181,9 @@ Spec := {
 				requires_: wire.requires_ ?? [],
 				systems: wire.systems ?? [],
 				sources: wire.sources ?? [],
+				resolvers: wire.resolvers ?? [],
+				executors: wire.executors ?? [],
+				build_executors: wire.build_executors ?? [],
 				inputs: wire.inputs ?? [],
 				environments: wire.environments ?? [],
 				system_tools: wire.system_tools ?? [],
@@ -201,6 +215,9 @@ Wire : {
 	requires_ : Try(List(Str), [Missing]),
 	systems : Try(List(Str), [Missing]),
 	sources : Try(List(Spec.Source), [Missing]),
+	resolvers : Try(List(Spec.Resolver), [Missing]),
+	executors : Try(List(Spec.Executor), [Missing]),
+	build_executors : Try(List(Spec.BuildExecutor), [Missing]),
 	inputs : Try(List(Spec.Input), [Missing]),
 	environments : Try(List(Spec.Environment), [Missing]),
 	system_tools : Try(List(Spec.SystemTools), [Missing]),
@@ -244,8 +261,8 @@ expect {
 	Spec.parse(spec.to_str()) == Ok(spec)
 }
 
-# A 2.5 record has no configured tools.
-expect Spec.parse("((format ((major 2) (minor 5))) (name \"x\"))").map_ok(|spec| spec.configured_tools) == Ok([])
+# Configured tools are optional: a record without them parses with none.
+expect Spec.parse("((format ((major 3) (minor 5))) (name \"x\"))").map_ok(|spec| spec.configured_tools) == Ok([])
 
 # Fetched programs, one entry per System, with what selects and expects them.
 expect {
@@ -261,49 +278,50 @@ expect {
 		environment_programs: [{ environment: "dev", programs: ["roc-stable", "tool"] }],
 		expects: [{ environment: "dev", programs: ["gh", "git"] }],
 	}
-	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 2, minor: 8 }
+	Spec.parse(spec.to_str()) == Ok(spec) and Spec.current_format == { major: 3, minor: 0 }
 }
 
-# A 2.6 record, as blueprint 0.5 printed it, has none of them.
-expect match Spec.parse("((format ((major 2) (minor 6))) (name \"x\") (requires (\"commands\")) (commands (((environment \"dev\") (name \"roc-stable\") (tool ((source \"default\") (name \"rocpkgs.nightly\")))))))") {
-	Ok(spec) => spec.format == { major: 2, minor: 6 } and spec.programs == [] and spec.environment_programs == [] and spec.expects == [] and spec.commands.len() == 1
+# Programs, environment programs and expects are optional: a record that names
+# only commands parses with none of them and keeps the minor it was written with.
+expect match Spec.parse("((format ((major 3) (minor 6))) (name \"x\") (requires (\"commands\")) (commands (((environment \"dev\") (name \"roc-stable\") (tool ((source \"default\") (name \"rocpkgs.nightly\")))))))") {
+	Ok(spec) => spec.format == { major: 3, minor: 6 } and spec.programs == [] and spec.environment_programs == [] and spec.expects == [] and spec.commands.len() == 1
 	Err(_) => False
 }
 
 # A consumer that predates them refuses the Spec by the features' names.
-expect match Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (requires (\"programs\" \"expects\")))") {
+expect match Spec.parse("((format ((major 3) (minor 7))) (name \"x\") (requires (\"programs\" \"expects\")))") {
 	Ok(spec) => Spec.unsupported_features(spec, ["raw", "sources", "commands"]) == ["programs", "expects"]
 	Err(_) => False
 }
 
 # An unpacking the consumer does not know is not dropped as optional data.
-expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a.7z\")) (unpack SevenZip) (path \"a\")))))").is_err()
-expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (unpack File) (path \"\")))))").is_err()
+expect Spec.parse("((format ((major 3) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a.7z\")) (unpack SevenZip) (path \"a\")))))").is_err()
+expect Spec.parse("((format ((major 3) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (unpack File) (path \"\")))))").is_err()
 expect Spec.parse("((format ((major 1) (minor 0))) (shells 42))") == Err(UnsupportedFormat({ major: 1, minor: 0 }))
-expect Spec.parse("((format ((major 3) (minor 0))))") == Err(UnsupportedFormat({ major: 3, minor: 0 }))
-# Earlier minor records omit newer optional build and workflow fields.
-expect match Spec.parse("((format ((major 2) (minor 0))) (name \"x\"))") {
-	Ok(spec) => spec.format == { major: 2, minor: 0 } and
+expect Spec.parse("((format ((major 4) (minor 0))))") == Err(UnsupportedFormat({ major: 4, minor: 0 }))
+# Omitted optional build and workflow fields default to empty.
+expect match Spec.parse("((format ((major 3) (minor 0))) (name \"x\"))") {
+	Ok(spec) => spec.format == { major: 3, minor: 0 } and
 		spec.build_sources.is_empty() and spec.builds.is_empty() and
 			spec.workflows.is_empty()
 	Err(_) => False
 }
-expect Spec.parse("((format ((major 2) (minor 0))))").is_err()
+expect Spec.parse("((format ((major 3) (minor 0))))").is_err()
 expect Spec.parse("((name \"x\"))").is_err()
-expect Spec.parse("((format ((major 2) (minor 1))) (name \"x\") (build_sources (((name \"assets\")))))").is_err()
-expect Spec.parse("((format ((major 2) (minor 1))) (name \"x\") (builds (((name \"app\") (environment \"dev\") (inputs ()) (needs ()) (run (\"true\"))))))").is_err()
-expect match Spec.parse("((format ((major 2) (minor 99))) (name \"x\") (requires (\"sources\" \"builds\" \"future\")))") {
+expect Spec.parse("((format ((major 3) (minor 1))) (name \"x\") (build_sources (((name \"assets\")))))").is_err()
+expect Spec.parse("((format ((major 3) (minor 1))) (name \"x\") (builds (((name \"app\") (environment \"dev\") (inputs ()) (needs ()) (run (\"true\"))))))").is_err()
+expect match Spec.parse("((format ((major 3) (minor 99))) (name \"x\") (requires (\"sources\" \"builds\" \"future\")))") {
 	Ok(spec) => Spec.unsupported_features(spec, ["sources", "builds"]) == ["future"] and Spec.unsupported_features(spec, []) == ["sources", "builds", "future"]
 	Err(_) => False
 }
-expect match Spec.parse("((future (Tag 1)) (format ((major 2) (minor 99))) (name \"x\") (shells (((name \"s\") (environment \"dev\") (future 1)))))") {
+expect match Spec.parse("((future (Tag 1)) (format ((major 3) (minor 99))) (name \"x\") (shells (((name \"s\") (environment \"dev\") (future 1)))))") {
 	Ok(spec) => spec.format.minor == 99 and spec.shells == [{ name: "s", environment: "dev" }]
 	Err(_) => False
 }
 
 # An older consumer must reject workflows via the required-feature marker.
 expect match Spec.parse(
-	\\((format ((major 2) (minor 2))) (name "x")
+	\\((format ((major 3) (minor 2))) (name "x")
 	\\ (requires ("workflows")) (workflows (((name "ci") (steps ())))))
 ) {
 	Ok(spec) => spec.workflows == [{ name: "ci", steps: [] }] and
@@ -311,10 +329,10 @@ expect match Spec.parse(
 	Err(_) => False
 }
 
-# Omitted workflow fields remain compatible with both earlier minor versions.
+# Omitted workflows default to empty whatever the minor.
 expect ["0", "1"].all(
 	|minor|
-		match Spec.parse("((format ((major 2) (minor ${minor}))) (name \"x\"))") {
+		match Spec.parse("((format ((major 3) (minor ${minor}))) (name \"x\"))") {
 			Ok(spec) => spec.workflows == []
 			Err(_) => False
 		},
@@ -322,25 +340,25 @@ expect ["0", "1"].all(
 
 # Unknown step tags cannot be silently dropped as optional top-level data.
 expect Spec.parse(
-	\\((format ((major 2) (minor 2))) (name "x")
+	\\((format ((major 3) (minor 2))) (name "x")
 	\\ (workflows (((name "ci") (steps ((FutureStep "check")))))))
 ).is_err()
 
 # Task extra argv is required in every RunTask record on the wire.
 expect Spec.parse(
-	\\((format ((major 2) (minor 2))) (name "x")
+	\\((format ((major 3) (minor 2))) (name "x")
 	\\ (workflows (((name "ci") (steps ((RunTask "check")))))))
 ).is_err()
 
 # A workflow must contain a typed steps list, even when intentionally empty.
 expect Spec.parse(
-	\\((format ((major 2) (minor 2))) (name "x")
+	\\((format ((major 3) (minor 2))) (name "x")
 	\\ (workflows (((name "ci")))))
 ).is_err()
 
-# A 2.7 program entry names its URLs as a list; one bare `url` is not it.
-expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (url \"https://example.test/a\") (unpack File) (path \"\")))))").is_err()
-expect Spec.parse("((format ((major 2) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a\" \"https://mirror.example.test/a\")) (unpack File) (path \"\")))))").map_ok(|spec| spec.programs.map(|program| program.urls)) == Ok([["https://example.test/a", "https://mirror.example.test/a"]])
+# A program entry names its URLs as a list; a bare `url` is not accepted.
+expect Spec.parse("((format ((major 3) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (url \"https://example.test/a\") (unpack File) (path \"\")))))").is_err()
+expect Spec.parse("((format ((major 3) (minor 7))) (name \"x\") (programs (((name \"a\") (system \"x86_64-linux\") (urls (\"https://example.test/a\" \"https://mirror.example.test/a\")) (unpack File) (path \"\")))))").map_ok(|spec| spec.programs.map(|program| program.urls)) == Ok([["https://example.test/a", "https://mirror.example.test/a"]])
 
 expect {
 	spec = { ..Spec.empty("selected"), requires_: ["build-files"], build_files: [{ build: "app", paths: [] }] }

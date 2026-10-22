@@ -18,20 +18,17 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	## package providers stay outside Nix, not silently rewritten as nixpkgs,
 	## and so does a source that names no package set: nothing is resolved
 	## that the project did not declare.
+	## The inputs some environment applies to its package set as overlays.
+	## Nix learns an input's role from that use; the Spec declares none.
+	overlay_names : Spec -> List(Str)
+	overlay_names = |spec| Project.unique(spec.environments.fold([], |names, env| names.concat(env.overlays)))
+
 	inputs : Spec -> Try(List(Input), Str)
 	inputs = |spec| {
 		var $inputs = []
 		for source in spec.sources {
-			match source.provider {
-				GuixPackages(_) | Auto => {}
-				NixPackages(ref) => {
-					$inputs = $inputs.append({
-						name: source.name,
-						ref: normalize_ref(ref)?,
-						kind: "packages",
-						flake: True,
-					})
-				}
+			if source.provider.name == "nix" and source.provider.version == 1 {
+				$inputs = $inputs.append({ name: source.name, ref: normalize_ref(source.provider.ref)?, kind: "packages", flake: True })
 			}
 		}
 		for input in spec.inputs {
@@ -39,7 +36,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 				name: input.name,
 				ref: normalize_ref(input.url)?,
 				flake: True,
-				kind: if (input.kind == Overlay) "overlay" else "flake",
+				kind: if (overlay_names(spec).contains(input.name)) "overlay" else "flake",
 			})
 		}
 		# The bundle of a Roc package no build uses is the Core's to fetch.
@@ -160,7 +157,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 				{
 					name: "overlays",
 					value: LockJson.Object(
-						spec.environments.map(
+						spec.environments.keep_if(|env| !env.overlays.is_empty()).map(
 							|env| {
 								name: env.name,
 								value: LockJson.Array(env.overlays.map(|name| LockJson.String(name))),
@@ -233,6 +230,16 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 
 	encode : Locks -> Str
 	encode = |locks| Lock.to_str(to_lock(locks))
+
+	## Preserve field order because authoritative source entries retain it.
+	replace_existing : LockJson, Str, LockJson -> Try(LockJson, Str)
+	replace_existing = |object, name, value| {
+		fields = LockJson.object(object)?
+		if !fields.any(|field| field.name == name) {
+			return Err("missing declaration field: ${name}")
+		}
+		Ok(LockJson.Object(fields.map(|field| if (field.name == name) { name, value } else field)))
+	}
 
 	## The Nix pins as a Lock. Its intent is left empty: the Core records it.
 	to_lock : Locks -> Lock
@@ -474,9 +481,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 		root = root_inputs(locks.graph)?
 		nodes = LockJson.object(LockJson.field(locks.graph, "nodes")?)?
 		declared = inputs(project)?
-		# The staged flake always declares the alias, so the working lock always
-		# has its edge. A Lock written before the alias existed lacks it; adding
-		# it here changes no pin, and Nix is never left to add it itself.
+		# Reconstruct the alias already validated against the current declaration.
 		root_name = LockJson.string(LockJson.field(locks.graph, "root")?)?
 		alias = shell_source(declared.map(|input| { name: input.name, kind: input.kind }))
 		aliased = match alias {
@@ -530,7 +535,7 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 			}
 			_ = original(ref)?
 			kind = LockJson.string(LockJson.field(input.value, "kind")?)?
-			if !["auto", "packages", "overlay", "flake", "source"].contains(kind) {
+			if !["packages", "overlay", "flake", "source"].contains(kind) {
 				return Err("unsupported lock input kind")
 			}
 			if LockJson.field(
@@ -545,8 +550,12 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 			if !Project.valid_name(env.name) {
 				return Err("invalid lock environment")
 			}
+			items = LockJson.array(env.value)?
+			if items.is_empty() {
+				return Err("empty overlay scope is not canonical lock intent")
+			}
 			var $seen = []
-			for item in LockJson.array(env.value)? {
+			for item in items {
 				name = LockJson.string(item)?
 				input = inputs_.find_first(|i| i.name == name)
 					.map_err(|_| "unknown lock overlay: ${name}")?
@@ -849,13 +858,11 @@ Locks := { identity : LockJson, graph : LockJson, locals : List({ name : Str, di
 	validate_binding = |identity, graph| {
 		inputs_ = LockJson.object(LockJson.field(identity, "inputs")?)?
 		root = root_inputs(graph)?
-		# Beside the declared inputs the root may hold the alias, exactly as the
-		# declarations determine it. A Lock from before the alias has none.
-		aliased = !inputs_.any(|input| input.name == shell_alias)
-			and LockJson.object(root)?.any(|edge| edge.name == shell_alias)
+		# The current writer emits exactly the alias selected by the declarations.
+		expected_alias = shell_source(declared_kinds(identity)?)
+		aliased = expected_alias.is_ok()
 		if aliased {
-			expected = shell_source(declared_kinds(identity)?).map_ok(alias_edge)
-			if LockJson.field(root, shell_alias).map_err(|_| NoAlias) != expected {
+			if LockJson.field(root, shell_alias).map_err(|_| NoAlias) != expected_alias.map_ok(alias_edge) {
 				return Err("Nix root input ${shell_alias} does not follow the source lock identity selects")
 			}
 		}
@@ -1073,59 +1080,49 @@ expect match locked_fixture {
 	Err(_) => False
 }
 
-# What Nix writes since the generated flake gives its first Nix source the
-# name `nixpkgs` as well: one more root edge, which follows it.
-aliased_fixture : Str
-aliased_fixture = native_fixture.replace_each("\"default\": \"default\"", "\"default\": \"default\", \"nixpkgs\": [\"default\"]")
-
-aliased_locks : Try(Locks, Str)
-aliased_locks = with_assets(Locks.from_nix(TestData.project(TestData.data), TestData.layout, aliased_fixture))
-
-# An update records that edge with the rest of the native graph and it
-# round-trips. It is no Source: the pins shown to reviewers are the same.
-expect match (aliased_locks, locked_fixture) {
-	(Ok(locks), Ok(before)) => Locks.decode(Locks.encode(locks)) == Ok(locks)
+# Current generated flakes include the follows edge beside their declared inputs.
+expect match locked_fixture {
+	Ok(locks) => Locks.decode(Locks.encode(locks)) == Ok(locks)
 		and Locks.encode(locks).contains("(name \"nixpkgs\")")
-		and !Locks.encode(before).contains("(name \"nixpkgs\")")
-		and locks != before
-		and Locks.sources(locks) == Locks.sources(before)
-	_ => False
+	Err(_) => False
 }
 
 expect Locks.path_reference("/tmp/a [b]#%/雪") == "path:/tmp/a%20%5Bb%5D%23%25/%E9%9B%AA"
 expect Locks.path_reference("/tmp/unchanged-a_b.c~d/123") == "path:/tmp/unchanged-a_b.c~d/123"
 
-# A Lock written before the alias existed is still authority, unchanged. Its
-# working lock gains the edge, so it is byte for byte the one a new Lock
-# derives and Nix has nothing to add under --no-update-lock-file.
-expect match (aliased_locks, locked_fixture) {
-	(Ok(locks), Ok(before)) => {
-		project = TestData.project(TestData.data)
-		match (Locks.derive(locks, project, TestData.layout), Locks.derive(before, project, TestData.layout)) {
-			(Ok(new), Ok(old)) => new == old
-				and old.contents.contains("\"inputs\":{\"assets\":\"assets\",\"default\":\"default\",\"nixpkgs\":[\"default\"]}")
-				and Locks.decode(Locks.encode(before)) == Ok(before)
-			_ => False
-		}
-	}
-	_ => False
+# A missing generated alias is refused during seed ingestion and authority decoding.
+expect Locks.from_nix(TestData.project(TestData.data), TestData.layout, native_fixture.replace_each(", \"nixpkgs\": [\"default\"]", "")).is_err()
+expect {
+	locks = locked_fixture?
+	nodes = LockJson.field(locks.graph, "nodes")?
+	root = LockJson.field(nodes, "root")?
+	edges = LockJson.object(LockJson.field(root, "inputs")?)?.keep_if(|edge| edge.name != "nixpkgs")
+	graph = LockJson.set(locks.graph, "nodes", LockJson.set(nodes, "root", LockJson.set(root, "inputs", LockJson.Object(edges))?)?)?
+	Locks.from_lock(Locks.to_lock({ ..locks, graph })).is_err()
+}
+
+# Empty environments are absent from canonical resolution intent.
+expect {
+	locks = locked_fixture?
+	invalid = Locks.replace_existing(locks.identity, "overlays", LockJson.Object([{ name: "empty", value: LockJson.Array([]) }]))?
+	Locks.from_lock(Locks.to_lock({ ..locks, identity: invalid })).is_err()
 }
 
 # The edge is the one the declarations determine, or the Lock is refused: it
 # cannot follow another input, be a pin of its own, or stand beside nothing.
 expect {
 	accepts = |text| Locks.from_nix(TestData.project(TestData.data), TestData.layout, text).is_ok()
-	retargeted = |edge| aliased_fixture.replace_each("\"nixpkgs\": [\"default\"]", "\"nixpkgs\": ${edge}")
-	accepts(aliased_fixture)
+	retargeted = |edge| native_fixture.replace_each("\"nixpkgs\": [\"default\"]", "\"nixpkgs\": ${edge}")
+	accepts(native_fixture)
 		and !accepts(retargeted("[\"assets\"]"))
 		and !accepts(retargeted("\"default\""))
 		and !accepts(retargeted("[\"default\", \"default\"]"))
 		and !accepts(retargeted("[]"))
-		and !accepts(aliased_fixture.replace_each("\"nixpkgs\": [", "\"other\": ["))
+		and !accepts(native_fixture.replace_each("\"nixpkgs\": [", "\"other\": ["))
 }
 
 # Tampering with the recorded edge is caught when the Lock is read back.
-expect match aliased_locks {
+expect match locked_fixture {
 	Ok(locks) => {
 		text = Locks.encode(locks)
 		edge = "(List ((Str \"default\")))"
@@ -1137,18 +1134,18 @@ expect match aliased_locks {
 # Only what the project declares for Nix is an input: a Guix channel is not,
 # and neither is a source that names no package set. Nothing stands in for a
 # source that is not declared.
-expect Locks.inputs({ ..TestData.project(TestData.data), sources: [{ name: "channel", provider: GuixPackages("channels") }, { name: "unnamed", provider: Auto }] }).map_ok(|inputs| inputs.map(|input| input.name)) == Ok(["assets"])
+expect Locks.inputs({ ..TestData.project(TestData.data), sources: [{ name: "channel", provider: { name: "guix", version: 1, ref: "channels" } }, { name: "unnamed", provider: { name: "", version: 0, ref: "" } }] }).map_ok(|inputs| inputs.map(|input| input.name)) == Ok(["assets"])
 expect Locks.inputs(TestData.project(TestData.data)).map_ok(|inputs| inputs.map(|input| (input.name, input.kind))) == Ok([("default", "packages"), ("assets", "source")])
 
 # A project with an input of its own called nixpkgs has an ordinary pinned
 # edge of that name. Nothing follows, and a follows edge there is refused.
 expect {
-	project = TestData.project({ ..TestData.data, sources: [{ name: "default", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }, { name: "nixpkgs", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }] })
-	own = native_fixture.replace_each("\"default\": \"default\"", "\"default\": \"default\", \"nixpkgs\": \"default\"")
+	project = TestData.project({ ..TestData.data, sources: [{ name: "default", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }, { name: "nixpkgs", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }] })
+	own = native_fixture.replace_each("\"nixpkgs\": [\"default\"]", "\"nixpkgs\": \"default\"")
 	match with_assets(Locks.from_nix(project, TestData.layout, own)) {
 		Ok(locks) => match Locks.derive(locks, project, TestData.layout) {
 			Ok(derived) => derived.contents.contains("\"nixpkgs\":\"default\"") and !derived.contents.contains("[\"default\"]")
-				and Locks.from_nix(project, TestData.layout, aliased_fixture).is_err()
+				and Locks.from_nix(project, TestData.layout, native_fixture).is_err()
 			Err(_) => False
 		}
 		Err(_) => False
@@ -1160,13 +1157,13 @@ expect {
 expect {
 	project = TestData.project({
 		..TestData.data,
-		sources: [{ name: "default", provider: GuixPackages("channels") }],
+		sources: [{ name: "default", provider: { name: "guix", version: 1, ref: "channels" } }],
 		environments: [{ ..TestData.builder, tools: [] }],
 		tasks: [],
 		builds: [],
 		shells: [],
 	})
-	native = native_fixture.replace_each("\"assets\": \"assets\", \"default\": \"default\"", "\"assets\": \"assets\"")
+	native = native_fixture.replace_each("\"assets\": \"assets\", \"default\": \"default\", \"nixpkgs\": [\"default\"]", "\"assets\": \"assets\"")
 	match with_assets(Locks.from_nix(project, TestData.layout, native)) {
 		Ok(locks) => match Locks.derive(locks, project, TestData.layout) {
 			Ok(derived) => !derived.contents.contains("nixpkgs\":")
@@ -1265,7 +1262,7 @@ expect [
 	|(kind, host)| {
 		project = TestData.project({
 			..TestData.data,
-			sources: [{ name: "default", provider: NixPackages("${kind}:NixOS/nixpkgs/nixos-unstable") }],
+			sources: [{ name: "default", provider: { name: "nix", version: 1, ref: "${kind}:NixOS/nixpkgs/nixos-unstable" } }],
 		})
 		native = native_fixture.replace_each("github", kind)
 		with_host = |value| native.replace_each(
@@ -1469,7 +1466,7 @@ expect {
 		sources: [
 			{
 				name: "default",
-				provider: NixPackages("flake:nixpkgs/nixos-unstable"),
+				provider: { name: "nix", version: 1, ref: "flake:nixpkgs/nixos-unstable" },
 			},
 		],
 	})
@@ -1492,7 +1489,7 @@ expect match locked_fixture {
 	Err(_) => False
 }
 
-# The pre-Lock JSON authority is refused with an update hint, not migrated.
+# The pre-Lock JSON authority is refused with an update hint, not authority.
 expect Locks.decode("{\"version\":1,\"identity\":{},\"nix\":{}}") == Err("unsupported Blueprint lock format; run blueprint update")
 
 # Nix's SRI hashes become Blueprint's `sha256:<hex>` digests.
@@ -1521,9 +1518,27 @@ expect match locked_fixture {
 	Err(_) => False
 }
 
-# Native graph aliases introduced by a different writer are not consumer
-# identities: inspecting either committed representation yields the same pins.
-expect match (aliased_locks, locked_fixture) {
-	(Ok(aliased), Ok(original_)) => Locks.inspect(Locks.to_lock(aliased)) == Locks.inspect(Locks.to_lock(original_))
-	_ => False
+# Adding an artifact producer and its flat-file source preserves package and
+# overlay pins. A new empty overlay scope does not change resolution intent.
+import "tests/empty-overlay-scopes.authority.scm" as overlay_scopes_authority : Str
+
+expect {
+	original = { ..Spec.empty("roc-gui"), systems: ["x86_64-linux", "aarch64-darwin"], sources: [{ name: "default", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/6774f7bc253789b113a4f39285dc0fa100abeacc" } }], inputs: [{ name: "roc", url: "github:roc-lang/roc-overlay" }], resolvers: [{ provider: "nix", inputs: ["roc"] }], environments: [{ name: "dev", parents: [], tools: [], overlays: ["roc"] }] }
+	authority = Lock.parse(overlay_scopes_authority).map_err(|_| "invalid current authority fixture")?
+	before = Locks.from_lock(authority)?
+	file = { name: "freetype-source", url: "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz", sha256: "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f" }
+	producer = { name: "freetype-producer", parents: [], tools: [{ source: "default", name: "python3" }], overlays: [] }
+	full = { ..original, requires_: ["builds", "source-files"], source_files: [file], environments: original.environments.append(producer), executors: [{ name: "freetype-native", provider: "nix", source: "default" }], build_executors: [{ build: "freetype", executor: "freetype-native" }], builds: [{ name: "freetype", environment: producer.name, inputs: [file.name], needs: [], run: ["python3", "scripts/build_freetype.py"], output: "dist" }] }
+	selected = { ..authority, sources: authority.sources.append(Lock.file_pin(file)) }
+	after = Locks.from_lock(selected)?
+	Lock.stale_except_files(authority, full, [file.name]) == Ok({}) and Lock.stale(selected, full) == Ok({}) and selected.hints == authority.hints and after.graph == before.graph and after.identity == before.identity and after.sources() == before.sources() and before.sources().map(|pin| pin.rev) == ["6774f7bc253789b113a4f39285dc0fa100abeacc", "2ef187164e6856a73a53424dd453acb9b4e484c9"] and Locks.derive(after, full, TestData.layout).is_ok() and Locks.derive(after, { ..full, environments: original.environments.append({ ..producer, overlays: ["roc"] }) }, TestData.layout).is_err() and Locks.derive(after, { ..full, environments: [producer, { name: "dev", parents: [], tools: [], overlays: [] }] }, TestData.layout).is_err()
+}
+
+# An obsolete Blueprint input kind is not a current Nix hint declaration.
+expect {
+	locks = locked_fixture?
+	inputs_ = LockJson.field(locks.identity, "inputs")?
+	declaration = LockJson.field(inputs_, "default")?
+	invalid = Locks.replace_existing(locks.identity, "inputs", Locks.replace_existing(inputs_, "default", Locks.replace_existing(declaration, "kind", LockJson.String("auto"))?)?)?
+	Locks.from_lock(Locks.to_lock({ ..locks, identity: invalid })).is_err()
 }

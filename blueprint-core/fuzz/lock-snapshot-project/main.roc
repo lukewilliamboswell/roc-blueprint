@@ -16,7 +16,7 @@ import core.Value
 Case : { lock : Lock, pins : List(Provider.LockedSource), names : List(Str), fault : [None, UnknownName, UnownedPin, DuplicatePin] }
 
 ## With no fault, `project` must keep exactly the entries asked for, take a
-## pinned source's identity from its pin and an unpinned one's from its digest,
+## pinned source's content_identity from its pin and an unpinned one's from its digest,
 ## and give a snapshot that survives `to_json` then `parse_json`. With a fault,
 ## it must refuse.
 test : Case -> Fuzz.Outcome
@@ -35,9 +35,9 @@ test = |case|
 				if entry.provider != locked.provider or entry.ref != locked.ref or entry.rev != locked.rev or entry.digest != locked.digest {
 					crash "projected source ${entry.name} does not match its Lock entry"
 				}
-				expected = case.pins.find_first(|pin| pin.name == entry.name).map_ok(|pin| pin.identity) ?? locked.digest
-				if entry.identity != expected {
-					crash "projected source ${entry.name} has the wrong identity"
+				expected = case.pins.find_first(|pin| pin.name == entry.name).map_ok(|pin| pin.content_identity) ?? locked.digest
+				if entry.content_identity != expected {
+					crash "projected source ${entry.name} has the wrong content_identity"
 				}
 			}
 			match LockSnapshot.to_json(snapshot) {
@@ -56,6 +56,12 @@ test = |case|
 ## A pure provider named "guix" whose Lock inspection reports `pins`.
 provider : List(Provider.LockedSource) -> Provider
 provider = |pins| Provider.{
+	validate_source: |_source| Ok({}),
+	validate_tool: |_name| Ok({}),
+	validate_executor: |_executor| Ok({}),
+	validate_reference: |_reference| Ok({}),
+	activation_argv: |_step| Err("not entered here"),
+	activation: |_text| Err("not entered here"),
 	name: "guix",
 	features: [],
 	realises: |_source| False,
@@ -63,8 +69,15 @@ provider = |pins| Provider.{
 	inspect_lock: |_lock| Ok(pins),
 	preflight: |_spec, _request, _system, _layout| Ok({}),
 	realise: |_spec, _request, _system, _layout, _lock| Err(Unrealisable("not realised here")),
-	build_argv: |step, _options| Ok(step.argv),
+	build_prepare_argv: |step| Ok(step.argv),
+	build_prepared: |_text| Err("not prepared here"),
+	build_execute_argv: |step, _prepared, _options| Ok(step.argv),
 	build_result: |_text| Err("not built here"),
+	build_exclusions: |_spec, _layout| Ok([]),
+	build_local_inputs: |_spec, _name, _layout, _lock| Ok([]),
+	build_capabilities: [],
+	build_guarantees: [],
+	build_inputs: |_spec, _name| Ok([]),
 	build_sources: |_spec, _name| Ok([]),
 	resolve: |_spec, _system, _layout, _update| Err("not resolved here"),
 	lock_from_native: |_spec, _layout, _text, _trees| Err("not resolved here"),
@@ -113,7 +126,7 @@ Entry : { source : Lock.Source, pin : Try(Provider.LockedSource, [Unpinned]) }
 
 entry : Fuzz.Generator(Entry)
 entry = Fuzz.map(
-	{ provider: Fuzz.u8_in(0, 2), name: Fuzz.str, other: Fuzz.str, ref: Fuzz.str, rev: Fuzz.str, digest: Fuzz.str, hash: Fuzz.list(Fuzz.u8, 32), pinned: Fuzz.u8_in(0, 2), identity: Fuzz.str, kind: Fuzz.u8_in(0, 2), metadata: Fuzz.list({ name: Fuzz.str, value: value(3) }.Fuzz, 3) }.Fuzz,
+	{ provider: Fuzz.u8_in(0, 2), name: Fuzz.str, other: Fuzz.str, ref: Fuzz.str, rev: Fuzz.str, digest: Fuzz.str, hash: Fuzz.list(Fuzz.u8, 32), pinned: Fuzz.u8_in(0, 2), content_identity: Fuzz.str, kind: Fuzz.u8_in(0, 2), metadata: Fuzz.list({ name: Fuzz.str, value: value(3) }.Fuzz, 3) }.Fuzz,
 	|r| {
 		name = nonblank(r.name)
 		match r.provider {
@@ -128,7 +141,7 @@ entry = Fuzz.map(
 						1 => Tree
 						_ => Unknown
 					}
-					{ source, pin: Ok({ name, identity: nonblank(r.identity), digest_kind, metadata: unique_by(r.metadata, |attr| attr.name) }) }
+					{ source, pin: Ok({ name, content_identity: nonblank(r.content_identity), digest_kind, metadata: unique_by(r.metadata, |attr| attr.name) }) }
 				}
 			}
 			_ => {
@@ -151,7 +164,7 @@ fetched = Fuzz.map(
 			2 => Both
 			_ => Unstated
 		}
-		{ name: nonblank(r.name), system: nonblank(r.system), urls, sha256: hex_of(r.hash), size: r.size, obtained }
+		{ name: nonblank(r.name), system: nonblank(r.system), urls, sha256: hex_of(r.hash), size: r.size, obtained, served: [], witness: "" }
 	},
 )
 
@@ -173,7 +186,7 @@ case_generator = Fuzz.map(
 		owns = sources.any(|item| item.provider == "guix")
 		match (r.fault, pins.first()) {
 			(4, _) => { lock, pins, names: names.append(stranger), fault: UnknownName }
-			(5, _) if owns => { lock, pins: pins.append({ name: stranger, identity: "guix:unowned", digest_kind: Unknown, metadata: [] }), names, fault: UnownedPin }
+			(5, _) if owns => { lock, pins: pins.append({ name: stranger, content_identity: "guix:unowned", digest_kind: Unknown, metadata: [] }), names, fault: UnownedPin }
 			(6, Ok(pin)) => { lock, pins: pins.append(pin), names, fault: DuplicatePin }
 			_ => { lock, pins, names, fault: None }
 		}
@@ -184,5 +197,5 @@ target = Fuzz.target_with({
 	name: "lock-snapshot-project",
 	generator: case_generator,
 	test,
-	show: |case| "${Str.inspect(case.lock.sources)}\npins: ${Str.inspect(case.pins.map(|pin| { name: pin.name, identity: pin.identity }))}\nnames: ${Str.inspect(case.names)}\nfault: ${Str.inspect(case.fault)}",
+	show: |case| "${Str.inspect(case.lock.sources)}\npins: ${Str.inspect(case.pins.map(|pin| { name: pin.name, content_identity: pin.content_identity }))}\nnames: ${Str.inspect(case.names)}\nfault: ${Str.inspect(case.fault)}",
 })

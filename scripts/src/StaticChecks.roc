@@ -19,7 +19,7 @@ StaticChecks := [].{
 	tracked_binaries_problem : Str -> Str
 	tracked_binaries_problem = |listed| {
 		tracked = listed.split_on("\n").keep_if(|line| !line.is_empty())
-		if tracked.is_empty() "" else "object files, archives and import libraries must not be committed:\n${Str.join_with(tracked, "\n")}"
+		if (tracked.is_empty()) "" else "object files, archives and import libraries must not be committed:\n${Str.join_with(tracked, "\n")}"
 	}
 
 	## docs/architecture.adoc invariant 7: the CLI reaches a provider through
@@ -49,10 +49,37 @@ StaticChecks := [].{
 		} else ""
 	}
 
+	## The platform validates native authoring grammar through
+	## blueprint-nix/Native.roc, and the release bundle copies that one file
+	## into the platform (scripts/src/Bundle.roc). That holds only while
+	## Native.roc needs nothing but core modules and Lower.roc takes nothing
+	## else from the nix package.
+	native_grammar_problem : Str, Str -> Str
+	native_grammar_problem = |native_source, lower_source| {
+		foreign = native_source.split_on("\n").keep_if(|line| line.starts_with("import ") and !line.starts_with("import core."))
+		other = lower_source.split_on("\n").keep_if(|line| line.starts_with("import nix.") and line != "import nix.Native")
+		if !foreign.is_empty() {
+			"blueprint-nix/Native.roc must import only core modules, because the platform bundle copies it: ${Str.join_with(foreign, ", ")}"
+		} else if !other.is_empty() {
+			"blueprint-platform/Lower.roc may take only Native from the nix package: ${Str.join_with(other, ", ")}"
+		} else {
+			""
+		}
+	}
+
+	## docs/architecture.adoc invariant 10: nothing authoritative is read from
+	## JSON. The modules that hold authority and the store decode none; a
+	## JSON reader in the CLI is a report or a native tool's output.
+	json_authority_problem : List((Str, Str)) -> Str
+	json_authority_problem = |modules| {
+		offenders = modules.keep_if(|(_, source)| source.split_on("\n").any(|line| !line.trim().starts_with("#") and (line.contains("Json.parse") or line.contains("JsonData.decode") or line.contains("Json.to_str") or line.contains("JsonData.encode")))).map(|(name, _)| name)
+		if (offenders.is_empty()) "" else "authority and store modules must not encode or decode JSON: ${Str.join_with(offenders, ", ")}"
+	}
+
 	## Exported report codecs stay in the pure core package; no adapter or IO.
 	core_report_contract_problem : Str -> Str
 	core_report_contract_problem = |source| {
-		allowed = ["import Lock", "import Provider", "import Value", "import JsonData", "import Project"]
+		allowed = ["import Lock", "import Provider", "import Value", "import JsonData", "import Project", "import Spec", "import Sexpr", "import Tree"]
 		if source.split_on("\n").any(|line| line.starts_with("import ") and !allowed.contains(line)) {
 			"core report modules must use only pure protocol modules"
 		} else ""
@@ -90,7 +117,7 @@ StaticChecks := [].{
 	bootstrap_problem = |compiler_version, bootstrap_source| {
 		tag = compiler_version.trim()
 		missing = host_systems.keep_if(|system| !bootstrap_source.contains("\t\t\ttag: \"${tag}\",\n\t\t\tsystem: \"${system}\",\n"))
-		if missing.is_empty() "" else "record the download of the ${tag} compiler for ${Str.join_with(missing, ", ")} in compilers in blueprint-cli/Bootstrap.roc"
+		if (missing.is_empty()) "" else "record the download of the ${tag} compiler for ${Str.join_with(missing, ", ")} in compilers in blueprint-cli/Bootstrap.roc"
 	}
 
 	## The scripts run on `roc-stable`, which the flake names as `rocStableTag`.
@@ -120,7 +147,7 @@ StaticChecks := [].{
 				Err(NoConstant) => "flake.nix does not name rocStableTag"
 				Ok(tag) => {
 					wrong = pinned.keep_if(|script| found.keep_if(|(file, _)| file == script).map(|(_, pin)| pin) != [tag])
-					if wrong.is_empty() "" else "scripts must pin rocStableTag in their header, as roc: \"${tag}\": ${Str.join_with(wrong, " ")}"
+					if (wrong.is_empty()) "" else "scripts must pin rocStableTag in their header, as roc: \"${tag}\": ${Str.join_with(wrong, " ")}"
 				}
 			}
 		}
@@ -210,7 +237,7 @@ StaticChecks := [].{
 	version_problem : Str, Str -> Str
 	version_problem = |flake, cli_source|
 		match (constant(flake, "version"), constant(cli_source, "version")) {
-			(Ok(packaged), Ok(reported)) => if packaged == reported "" else "flake.nix packages version ${packaged}, but blueprint-cli/main.roc reports ${reported}"
+			(Ok(packaged), Ok(reported)) => if (packaged == reported) "" else "flake.nix packages version ${packaged}, but blueprint-cli/main.roc reports ${reported}"
 			_ => "flake.nix and blueprint-cli/main.roc must each set version"
 		}
 }
@@ -320,3 +347,10 @@ expect !StaticChecks.lock_inspector_contract_problem("import Store\n").is_empty(
 expect StaticChecks.core_report_contract_problem("import Lock\nimport JsonData\n") == ""
 expect !StaticChecks.core_report_contract_problem("import nix.NixProvider\n").is_empty()
 expect !StaticChecks.core_report_contract_problem("import pf.Path\n").is_empty()
+
+expect StaticChecks.native_grammar_problem("import core.Spec\nimport core.Project\n", "import Config\nimport nix.Native\n") == ""
+expect StaticChecks.native_grammar_problem("import core.Spec\nimport Locks\n", "import nix.Native\n").contains("import Locks")
+expect StaticChecks.native_grammar_problem("import core.Spec\n", "import nix.Native\nimport nix.NixProvider\n").contains("import nix.NixProvider")
+
+expect StaticChecks.json_authority_problem([("blueprint-cli/Store.roc", "import core.Sexpr\nrecord = Sexpr.to_str(tree)\n")]) == ""
+expect StaticChecks.json_authority_problem([("blueprint-cli/Store.roc", "manifest = Json.parse(text)\n"), ("blueprint-core/Lock.roc", "# Json.parse is mentioned here only\n")]).contains("blueprint-cli/Store.roc")

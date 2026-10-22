@@ -1,4 +1,4 @@
-((format ((major 2) (minor 2)))
+((format ((major 3) (minor 2)))
  (name "workflow-graph")
  (requires ("builds" "workflows"))
  (systems ("x86_64-linux"))
@@ -10,4 +10,6 @@
    ((name "ci") (steps ((RunWorkflow "leaf") (BuildArtifact "app")
      (RunWorkflow "leaf") (BuildArtifact "app"))))
    ((name "leaf") (steps ((RunTask "check.all"
-     ("" "two words" "\"quoted\"" "$HOME" "line\nbreak" "--flag"))))))))
+     ("" "two words" "\"quoted\"" "$HOME" "line\nbreak" "--flag")))))))
+ (executors (((name "native") (provider "fixture") (source ""))))
+ (build_executors (((build "app") (executor "native")))))

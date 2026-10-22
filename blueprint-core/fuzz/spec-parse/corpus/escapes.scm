@@ -1,6 +1,6 @@
-((format ((major 2) (minor 0))) (name "q\"b\\s\nn\tt")
+((format ((major 3) (minor 0))) (name "q\"b\\s\nn\tt")
  (systems ("a\\b"))
- (sources (((name "\\n") (provider (GuixPackages "q\"\\\n\t")))))
+ (sources (((name "\\n") (provider ((name "guix") (version 1) (ref "q\"\\\n\t"))))))
  (environments (((name "\"") (parents ("\t")) (overlays ("\\"))
    (tools (((source "\\n") (name "\t")))))))
  (shells (((name "\"") (environment "\t")))))

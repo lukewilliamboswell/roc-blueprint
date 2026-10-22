@@ -4,6 +4,7 @@ import FlakeRef
 import InputName
 import Member
 import ProgramName
+import ProviderSource
 import System
 import TaskName
 import Tool
@@ -23,8 +24,9 @@ Config :: [].{
 		Name(Str),
 		Systems(List(System)),
 		Packages(InputName, PackageSource),
+		Resolver(Str, List(InputName)),
+		Executor(InputName, ExecutorProvider),
 		Input(InputName, FlakeRef),
-		Overlay(InputName, FlakeRef),
 		Environment(EnvName, List(EnvironmentSetting)),
 		Shell(EnvName, List(ShellSetting)),
 		Task(TaskName, List(TaskSetting)),
@@ -76,11 +78,15 @@ Config :: [].{
 		RunWorkflow(WorkflowName),
 	]
 
-	## Which package set a source is. `Auto`, which left that to the
-	## consumer, was removed in 0.6: the tag remains for one release so that
-	## lowering can say what to write instead.
-	PackageSource : [Auto, From(Provider)]
-	Provider : [NixPackages(FlakeRef), GuixPackages(Str)]
+	## The declared package source and its provider.
+	PackageSource : [From(Provider)]
+	Provider : [NixPackages(FlakeRef), GuixPackages(Str), Adapter(ProviderSource)]
+
+	## A build executor carries its provider's own settings, as a package
+	## source does. `Nix` bootstraps the runner and sandbox from the named
+	## Nix package source; `Adapter(provider, source)` declares another
+	## provider's executor, whose bootstrap source may be "".
+	ExecutorProvider : [Nix(InputName), Adapter(Str, Str)]
 
 	## A tool is written `<source>#<name>` for a declared source, in Tools,
 	## ToolsFor, Command and ToolWith alike. Tools and Overlays occur at most
@@ -111,5 +117,5 @@ Config :: [].{
 	## Builds require Use, Run and one relative Output. Optional Inputs select
 	## locked non-flake Sources; Needs selects build artifacts, not task names.
 	## Sources and artifacts remain separate read-only inputs, never merged.
-	BuildSetting : [Files(List(Str)), Use(EnvName), Inputs(List(InputName)), Needs(List(InputName)), Run(List(Str)), Output(Str)]
+	BuildSetting : [Execute(InputName), Files(List(Str)), Use(EnvName), Inputs(List(InputName)), Needs(List(InputName)), Run(List(Str)), Output(Str)]
 }

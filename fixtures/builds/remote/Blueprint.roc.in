@@ -5,11 +5,12 @@ app [config] {
 }
 
 config = [
+	Executor("native", Nix("default")),
 	Name("remote-source-policy"),
 	Systems(["x86_64-linux"]),
 	Packages("default", From(NixPackages("@PACKAGES@"))),
-	Overlay("roc", "@ROC_OVERLAY@"),
+	Input("roc", "@ROC_OVERLAY@"),
 	Environment("builder", [Overlays(["roc"]), Command("roc-stable", "default#rocpkgs.@ROC_COMPILER@"), RocPackages([@ROC_PACKAGES@])]),
 	Source("remote", "@SOURCE@"),
-	Build("remote", [Use("builder"), Inputs(["remote"]), Run(["roc-stable", "run.roc", "--", "@NONCE@"]), Output("output")]),
+	Build("remote", [Execute("native"), Use("builder"), Inputs(["remote"]), Run(["roc-stable", "run.roc", "--", "@NONCE@"]), Output("output")]),
 ]

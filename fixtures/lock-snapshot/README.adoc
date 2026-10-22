@@ -29,7 +29,7 @@ roc test fixtures/lock-snapshot/pure.roc
 ----
 
 Replace `/absolute/path/to/project` with a project containing a committed
-`Blueprint.lock`, and use a Blueprint version that emits report format 1.
+`Blueprint.lock`, and use a Blueprint version that emits report format 2.
 The lock export does not evaluate `Blueprint.roc`, run providers or fetch.
 The executable accepts exactly one file argument, validates and re-encodes the
 snapshot, then writes JSON. Invalid input exits unsuccessfully. No arguments

@@ -1,76 +1,352 @@
+[#what-blueprint-is]
 = What Blueprint is
 
 image::images/blueprint-illustration.png[Blueprint illustration of robotic arms,560,align=center]
 
-A project's `Blueprint.roc` is a Roc program that describes:
+Everyone who works on a project needs the same tools at the same versions:
+each contributor on their own machine, and the CI service that tests every
+change. A release needs a build that someone else can repeat. A reviewer
+needs a record of what was used, written so that a person can read it.
 
-* *environments*: named sets of programs and tools, which may extend one
-  another;
-* *shells* and *tasks*: an environment to enter, or an exact command to run
-  in one;
-* *builds*: sandboxed commands that produce an artifact from declared inputs;
-* *workflows*: ordered sequences of tasks and builds.
+Without that, each machine drifts. One laptop has a newer compiler than
+another, CI has a third, and a test passes on one and fails on the next. A
+tool changes version and nobody notices until something breaks. When a
+release goes wrong, nobody can say what it was built with.
 
-The `blueprint` command reads that file and carries it out. Everything an
-environment has comes from a place the file names:
+Blueprint solves this with two files that a project commits, and one command,
+`blueprint`, that carries them out.
 
-[cols="2,3",options="header"]
+[#what-blueprint-gives-you]
+== What Blueprint gives you
+
+* *One typed file, `Blueprint.roc`, that says where every tool comes from.*
+  A tool is downloaded from a URL, installed by a package provider, or
+  expected to be on the machine already. Roc checks the file as you write it:
+  a task that names an environment that does not exist is an error before
+  anything runs.
+* *A reviewed `Blueprint.lock` that pins exactly what was chosen.* It holds
+  the fingerprint of every download and the exact revision of every package
+  source. Only `blueprint update` changes it, and you review that change
+  like any other.
+* *The same environment on a laptop and in CI.* On Linux and macOS, a shell
+  or a task gets the same pinned tools on every machine. On Windows, tasks
+  run with the same downloaded programs.
+* *Tasks and workflows that run your own scripts.* Your scripts keep the
+  work of compiling, testing and releasing. Blueprint runs them with the
+  right tools, one at a time or as an ordered workflow.
+* *Builds whose inputs are declared.* A build lists the files and sources it
+  reads, so `blueprint explain build` can say what changed since its last
+  successful build on that machine. `blueprint build --rebuild` builds it
+  again and fails if the output differs.
+* *No dependence on one package ecosystem.* Nix is the provider that ships,
+  and `blueprint` starts it only for what a project takes from Nix.
+  Downloads, Roc packages and the tools a machine is expected to have are
+  handled by Blueprint itself, with no provider installed.
+
+[#a-small-blueprint-roc]
+== A small Blueprint.roc, line by line
+
+`Blueprint.roc` is a short program in the Roc language. You do not need to
+know Roc to read or write one: it is a list of settings. This one gives a
+project one environment with a Roc compiler and `git`, a shell, and one task:
+
+[source,roc]
+----
+app [config] { pf: platform "<the platform URL of a release>" }
+
+import pf.Recipes
+
+config = [
+	Name("my-project"),
+	Environment("dev", [
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-18-1df370f"))]),
+		Expect(["git"]),
+	]),
+	Shell("default", [Use("dev")]),
+	Task("check", [Use("dev"), Run(["roc-stable", "scripts/check.roc"])]),
+]
+----
+
+`app [config] { pf: platform "..." }`::
+The file is a Roc program built on the roc-blueprint platform. The URL names
+a release of that platform.
+xref:getting-started.adoc#write-a-first-blueprint-roc[Get started] has the
+current one.
+
+`import pf.Recipes`::
+Recipes say where a program is downloaded from on each system.
+The platform provides some, and you can write your own.
+
+`Name("my-project")`::
+The project's name.
+
+`Environment("dev", [...])`::
+A named set of tools, here called `dev`. Everything inside the brackets is
+what `dev` has.
+
+`Programs([Fetch("roc-stable", ...)])`::
+Download the Roc compiler of this nightly release and call it `roc-stable`.
+`blueprint update` records a fingerprint of each download in
+`Blueprint.lock`, and every later use is checked against it.
+
+`Expect(["git"])`::
+The machine must already have `git`. Blueprint checks that it is there. It
+does not install it or pin its version.
+
+`Shell("default", [Use("dev")])`::
+`blueprint shell` opens your own shell with the tools of `dev` first on
+`PATH`.
+
+`Task("check", [Use("dev"), Run([...])])`::
+`blueprint run check` runs exactly this command in `dev`: your script
+`scripts/check.roc`, with the downloaded compiler.
+
+Nothing in this file needs Nix. Four commands put it to work:
+
+[source,sh]
+----
+blueprint check        # is Blueprint.roc valid?
+blueprint update       # download, fingerprint and write Blueprint.lock
+blueprint run check    # run the task in dev
+blueprint shell        # open a shell in dev
+----
+
+[#how-it-works]
+== How it works at a glance
+
+.From Blueprint.roc to the same tools on each machine
+[mermaid]
+....
+---
+config:
+  theme: neutral
+  themeVariables:
+    lineColor: "#777777"
+  flowchart:
+    minNodeWidth: 70
+    wrappingWidth: 220
+---
+flowchart TD
+    W["You write <b>Blueprint.roc</b>"]
+    L["You review <b>Blueprint.lock</b>"]
+    W -->|"blueprint check<br/>blueprint update"| L
+    L -->|"blueprint run · shell<br/>env · build"| U
+    subgraph U["The same tools on each machine"]
+        C["CI"]
+        B["A colleague's<br/>laptop"]
+        A["Your laptop"]
+    end
+....
+
+. You write `Blueprint.roc`. It says what each environment has and where
+  each tool comes from.
+. `blueprint check` checks the file and needs no lock. `blueprint update` is
+  the one command that decides anything: it records the fingerprint of every
+  download for every system the project lists, pins each package source,
+  and writes all of it to `Blueprint.lock`. You review that file and commit it.
+. `blueprint run`, `shell`, `env` and `build` follow the lock. They fetch what
+  it names, check every download against it before use, and stop when the
+  lock no longer matches `Blueprint.roc`.
+
+Because every machine reads the same two committed files, every machine gets
+the same pinned tools. Only the tools you expect of the machine can differ.
+
+[#who-does-what]
+=== Who does what
+
+.What each part is responsible for
+[mermaid]
+....
+---
+config:
+  theme: neutral
+  themeVariables:
+    lineColor: "#777777"
+  flowchart:
+    minNodeWidth: 70
+    wrappingWidth: 220
+---
+flowchart TD
+    B["<b>Blueprint</b><br/>environments · pins<br/>tasks · builds<br/>workflows · evidence"]
+    R["<b>Your repository</b><br/>scripts<br/>compile and<br/>release logic"]
+    P["<b>A provider</b><br/>such as Nix<br/>packages · caches<br/>sandboxed builds"]
+    M["<b>The machine</b><br/>tools you<br/>say you expect"]
+    B -->|runs| R
+    B -->|asks| P
+    B -->|checks| M
+....
+
+Your repository::
+Keeps the work: the scripts that compile, test, package and release.
+Blueprint runs them and never replaces them. Adding a build runs the same
+script with declared inputs; it does not move its logic into Blueprint.
+
+Blueprint::
+Decides which tools each command runs with, pins them in the lock, runs
+tasks, builds and workflows, and records what a build used.
+
+A provider::
+Supplies packages, runs builds in a sandbox, and keeps its own cache. Nix is
+the provider that ships. Blueprint asks it only for what `Blueprint.roc`
+takes from it.
+
+The machine::
+Supplies the tools you say it already has. Blueprint checks that they are
+there before it runs anything.
+
+[#what-each-reader-gets]
+=== What each person gets
+
+.What the committed files give each reader
+[mermaid]
+....
+---
+config:
+  theme: neutral
+  themeVariables:
+    lineColor: "#777777"
+  flowchart:
+    minNodeWidth: 70
+    wrappingWidth: 220
+---
+flowchart TD
+    F["<b>Blueprint.roc</b> and <b>Blueprint.lock</b><br/>committed together"]
+    C["<b>A contributor</b><br/>gets the project's<br/>tools in one step"]
+    I["<b>CI</b><br/>runs with the same<br/>pinned tools"]
+    R["<b>A reviewer</b><br/>sees each pin and<br/>download change"]
+    F -->|"blueprint shell"| C
+    F -->|"blueprint run"| I
+    F -->|"the lock diff"| R
+....
+
+A contributor::
+Installs `blueprint`, runs `blueprint shell`, and has the project's tools at
+the versions in the lock. If the machine lacks a tool the project expects,
+one message names it.
+
+CI::
+Runs the same tasks with the same pins. `blueprint requirements` says
+whether a job needs Nix at all, so a job that does not can skip installing
+it.
+
+A reviewer::
+Reads a change to `Blueprint.lock` like any other diff: each new version,
+each download's fingerprint and the hosts that served it. `blueprint update`
+also names any download host the lock did not name before.
+
+[#the-words-this-manual-uses]
+== The words this manual uses
+
+The rest of the manual uses a few words in an exact sense. Each row gives the
+everyday meaning first, then the word, with the setting that writes it in
+`Blueprint.roc` where there is one.
+
+[cols="4,2",options="header"]
 |===
-| Written as
-| Source and version pin
+| What it means
+| The word
 
-| `Programs([Fetch(name, recipe)])`
-| A download, from the URL the recipe gives for each system. Its SHA-256 is recorded in `Blueprint.lock`.
+| A named set of tools that a command runs with, such as `dev`.
+| *Environment* (`Environment`)
 
-| `Expect([name])`
-| The machine. `blueprint` checks that it is on `PATH` and installs nothing. Its version is the machine's; Blueprint does not pin it.
+| A named collection of packages to install tools from, such as one revision of Nixpkgs.
+| *Package source* (`Packages`)
 
-| `Tools(["<source>#<name>"])`
-| A Nix package source the project declares with `Packages`. The source's revision and digest are recorded in `Blueprint.lock`.
+| A program installed from a package source, written with the source's name, as `"nix#zig"` is `zig` from the source `nix`.
+| *Tool* (`Tools`)
+
+| One program downloaded from a URL and checked against a recorded fingerprint.
+| *Fetched program* (`Fetch`)
+
+| A program the machine must already have. Blueprint looks for it by name and installs nothing.
+| *Expected tool* (`Expect`)
+
+| One exact command, run in an environment by `blueprint run`.
+| *Task* (`Task`)
+
+| Your own interactive shell, with an environment's tools first on `PATH`.
+| *Shell* (`Shell`)
+
+| A command that produces a file or directory from declared inputs, in a sandbox.
+| *Build* (`Build`)
+
+| A list of tasks and builds that run in order and stop at the first failure.
+| *Workflow* (`Workflow`)
+
+| A fingerprint of a file's exact bytes, such as its SHA-256. Any change to the file changes it.
+| *Digest*
+
+| The exact version chosen for a download or a package source.
+| *Pin*
+
+| The committed file `Blueprint.lock`, which records every pin and digest. Only `blueprint update` changes it.
+| *Lock*
+
+| A per-user folder that keeps downloads, checks them before every use, and can be deleted at any time.
+| *Store*
+
+| A package ecosystem that Blueprint asks for tools and builds. Nix is the one that ships.
+| *Provider*
+
+| The part of a provider that chooses versions and records them in the lock, during `blueprint update`.
+| *Resolver*
+
+| The part of a provider that runs a build and states what it guarantees, such as a sandbox with no network. A build chooses one with `Execute`.
+| *Executor* (`Executor`)
+
+| The list of changes that entering an environment makes: the folders put first on `PATH` and the variables set. A shell, CI or an editor can apply it, and `blueprint env` prints it.
+| *Activation*
+
+| The checked, complete description that `Blueprint.roc` produces, which is what `blueprint` reads. `blueprint spec` prints it.
+| *Spec*
 |===
 
-The project commits `Blueprint.lock`, so a contributor's machine and a CI
-runner get the same downloads and the same packages. Nix is started only for
-an environment that has a tool from a Nix source, and for a build. A project
-that fetches its programs and expects the rest runs with no Nix installed;
-see xref:without-nix.adoc#a-project-that-never-starts-nix[Work without Nix].
+xref:architecture.adoc#terms[The architecture chapter] defines these terms
+exactly, with the stages they pass through.
 
-== What you write and what checks it
+[#where-to-go-next]
+== Where to go next
 
-`Blueprint.roc` is an ordinary Roc application on the roc-blueprint platform.
-Its one value, `config`, is a list of settings, so configurations compose
-with ordinary Roc lists, functions and imports.
+You want to try it::
+xref:getting-started.adoc#install-blueprint[Get started] installs
+`blueprint` and runs a first project.
 
-Roc checks quoted values and whole-configuration rules during
-`roc check Blueprint.roc`: missing names, duplicate declarations, unknown
-references and inheritance cycles are compile-time errors. An editor shows
-them as you type. Checking needs a Roc nightly the platform release was built
-for; each release's notes name it. A download's URL, the path of a program
-inside an archive and the name of a system are each checked where they are
-written. Every tool names the package source it comes from, and its name is
-checked against that source's grammar. Whether a package exists is decided
-by Nix, and whether a URL serves anything by `blueprint update`, not by Roc.
+You are writing or changing a configuration::
+xref:configuration.adoc#top-level-settings[Write Blueprint.roc] describes
+every setting.
 
-== How it works
+You want builds and ordered workflows::
+xref:builds.adoc#declare-a-build[Build artifacts and run workflows] covers
+sandboxed builds, their inputs and explanations.
 
-The platform lowers and validates the whole configuration, then prints it as
-a *Spec*, a provider-neutral S-expression (format 2.8). The `blueprint`
-command runs Roc to get that Spec, validates it again through the same shared
-rules, plans the request, and owns every download, file write, the lock and
-execution. It fetches programs into a per-user store itself, and asks the Nix
-provider only for the environments that have a tool from a Nix source. The
-core package and the Nix renderer are pure: they discover nothing about the
-host and perform no effects.
-xref:architecture.adoc#purpose[The architecture chapter] explains the model
-and the rules that keep it independent of any one package ecosystem.
+You need a command or an environment variable::
+xref:commands.adoc#run-blueprint[Run blueprint] lists every command.
 
+Your machine or CI has no Nix::
+xref:no-provider.adoc#a-project-that-never-starts-a-provider[Work without a provider]
+says what a project can do with Blueprint alone.
+
+You learn best from a complete project::
+xref:examples.adoc#run-an-example[The examples] are four projects to copy
+and run.
+
+You are writing a provider or judging a design change::
+xref:architecture.adoc#goals[Understand the architecture] gives the model,
+the goals and the rules that keep Blueprint independent of any one
+ecosystem.
+
+You want to change roc-blueprint itself::
+xref:contributing.adoc#find-your-way-around[Contribute] explains the
+repository and its tests.
+
+[#where-it-runs]
 == Where it runs
 
 [cols="3,3,3,3",options="header"]
 |===
 | System
-| Fetched programs, expected tools, tasks and shells
-| Tools from a Nix source
+| Tasks, shells, downloads and expected tools
+| Tools from Nix
 | Sandboxed builds
 
 | x86_64 Linux
@@ -99,32 +375,37 @@ and the rules that keep it independent of any one package ecosystem.
 | Not supported
 |===
 
-A `blueprint` binary is released for x86_64 Linux, arm64 Linux, Apple
-Silicon macOS and x86_64 Windows. It needs no Roc and no Python: it embeds the Roc compiler
-that reads `Blueprint.roc` and installs it into its cache on first use. It needs https://nixos.org/download[Nix] with
-flakes enabled where the table's last two columns apply. Linux and macOS
-use `tar`, `ln` and `chmod` to unpack and link fetched programs. Windows
-uses its `tar` and exposes programs with hard links or copies.
+Each release has a `blueprint` binary for the first four systems. It carries
+the Roc compiler that reads `Blueprint.roc`, so you do not need Roc
+installed. It needs https://nixos.org/download[Nix], with flakes enabled,
+only for tools from Nix and for builds. On Linux and macOS it uses `tar`,
+`ln` and `chmod` to unpack and link downloads. On Intel macOS it stops with a
+message naming the supported systems.
 
-On Intel macOS `blueprint` stops with a message naming the supported systems.
-On Windows, tasks can use fetched programs and expected tools without Nix.
-Scripts must name their interpreter explicitly. The smoke-test job targets
-Windows Server; Windows 10 and 11 desktop installations have not been
-verified here. See xref:without-nix.adoc#windows[Windows] for setup and the
-pinned Roc compiler's cache workaround.
+On Windows, tasks use downloaded programs and expected tools, without Nix. A
+task names its script's interpreter, because Windows does not use the `#!`
+line at the top of a script. CI checks Windows Server; Windows 10 and 11 desktops have
+not been checked. See xref:no-provider.adoc#windows[Windows].
 
-`Systems` in a configuration declares the systems a project is for: a
-fetched program gets a digest for each, and the generated Nix outputs have
-each. It installs nothing and is not evidence that a target runs:
-`x86_64-darwin` may still be listed there.
+`Systems` in `Blueprint.roc` lists the systems a project is for, so that the
+lock holds a digest for each. Listing a system does not make it supported.
 
+[#what-it-does-not-do]
 == What it does not do
 
-* Nix is the only package provider. A source may state Guix intent, and its
-  compatibility is validated, but there is no Guix renderer or executor.
-* An expected tool is looked for by name. No version is asked of it.
+* It does not compile, test or package your project. Your scripts do that,
+  and Blueprint runs them.
+* It does not install, pin or ask the version of an expected tool. It looks
+  for the name on `PATH`.
+* It does not sandbox tasks, or the Roc program that reads `Blueprint.roc`.
+  Only a build runs in a sandbox, through Nix on x86_64 Linux. A build's
+  sandbox has none of the machine's tools.
+* It does not find what a script reads by itself. A build declares its
+  inputs.
+* It has no provider other than Nix, and does not choose one for you or
+  translate package names between ecosystems. A Guix package source can be
+  written, but `blueprint` refuses to resolve or use it.
+* It keeps no cache of build results of its own. The provider does that.
 * A fetched program is one file, or one file inside an archive that is
-  unpacked whole. An archive gives one command name.
-* There is no parallel workflow scheduler: steps run in order.
-* Tasks and the evaluation of `Blueprint.roc` are not sandboxed; only builds
-  are, and a build cannot use fetched programs or expected tools.
+  unpacked whole.
+* It runs workflow steps one at a time, in order.

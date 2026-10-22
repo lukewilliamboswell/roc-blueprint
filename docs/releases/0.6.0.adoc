@@ -49,7 +49,7 @@ On Windows, declare the system and fetch `roc-stable` with
 `Recipes.roc_nightly`. Name the interpreter in each script task, for example
 `Run(["roc-stable", "scripts/check_all.roc"])`. The binary is
 `blueprint-x86_64-windows.exe`; the shared setup action currently installs
-only the Linux and macOS binaries. See xref:without-nix.adoc#windows[Windows]
+only the Linux and macOS binaries. See xref:no-provider.adoc#windows[Windows]
 for the supported behavior and limits.
 
 == Fetch a program
@@ -59,7 +59,7 @@ for the supported behavior and limits.
 comes from; `Blueprint.lock` holds its SHA-256 and length for every declared
 system.
 
-[source,roc]
+[source,roc,snippet=unchecked]
 ----
 app [config] { pf: platform "{platform-url}" }
 
@@ -98,7 +98,7 @@ and the command is a link into it.
 them on `PATH` before it downloads or runs anything, names every one that is
 missing in one message, and installs nothing.
 
-[source,roc]
+[source,roc,snippet=unchecked]
 ----
 Environment("dev", [
 	Expect(["git", "gh"]),
@@ -110,7 +110,7 @@ Environment("dev", [
 A tool from a package source is written `"<source>#<name>"`, and the source is
 declared. There is no default source:
 
-[source,roc]
+[source,roc,snippet=unchecked]
 ----
 Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 Environment("host", [Tools(["nix#zig", "nix#pkg-config"])]),
@@ -197,7 +197,7 @@ config = [
 
 After. Nothing in it is Nix's, so no command starts Nix:
 
-[source,roc]
+[source,roc,snippet=unchecked]
 ----
 app [config] { pf: platform "{platform-url}" }
 
@@ -240,7 +240,7 @@ config = [
 After. The scripts' environment needs no Nix; the environment that builds the
 host extends it and takes Zig from a declared source:
 
-[source,roc]
+[source,roc,snippet=unchecked]
 ----
 app [config] { pf: platform "{platform-url}" }
 

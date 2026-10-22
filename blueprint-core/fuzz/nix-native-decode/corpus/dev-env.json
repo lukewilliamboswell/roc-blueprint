@@ -1,0 +1,1 @@
+{"variables":{"PATH":{"type":"exported","value":"/nix/store/a-git/bin:/nix/store/b-zig/bin"},"NIX_CFLAGS":{"type":"exported","value":"-O2"},"HOME":{"type":"exported","value":"/homeless"},"local":{"type":"var","value":"x"},"fn":{"type":"function"}}}

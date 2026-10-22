@@ -1,0 +1,1 @@
+[{"drvPath":"/nix/store/a.drv","outputs":{"out":"/nix/store/a"}},{"drvPath":"/nix/store/b.drv","outputs":{"out":"/nix/store/b"}}]

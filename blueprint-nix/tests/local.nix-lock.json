@@ -24,7 +24,7 @@
         "repo": "nixpkgs", "type": "github"
       }
     },
-    "root": { "inputs": { "assets": "assets", "default": "default" } }
+    "root": { "inputs": { "assets": "assets", "default": "default", "nixpkgs": ["default"] } }
   },
   "root": "root",
   "version": 7

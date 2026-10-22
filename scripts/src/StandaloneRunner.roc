@@ -14,7 +14,7 @@ StandaloneRunner := [].{
 	Outcome : { code : I32, stdout : Str, stderr : Str, top : Str }
 
 	locate! : Str, Str => Try(Str, _)
-	locate! = |generated, name| Cmd.new("nix").args(["eval", "--raw", "--impure", "--offline", "${Locks.path_reference(generated)}#packages.x86_64-linux.${name}.builder"].map(OsStr.from_str)).capture!().map_ok(Str.trim)
+	locate! = |generated, name| Cmd.new("nix").args(["eval", "--raw", "--offline", "${Locks.path_reference(generated)}#packages.x86_64-linux.${name}.builder"].map(OsStr.from_str)).capture!().map_ok(Str.trim)
 
 	bridge! : { root : Str, work : Str } => Try(Str, _)
 	bridge! = |context| {

@@ -97,14 +97,6 @@ write! = |file, data| Path.write_bytes!(Path.utf8(file), data)
 remove! : Str => Try({}, _)
 remove! = |file| Path.delete!(Path.utf8(file))
 
-## How many times `part` occurs in `whole`.
-count : Str, Str -> U64
-count = |whole, part| whole.split_on(part).len() - 1
-
-## Where `part` first occurs in `whole`, in bytes.
-position : Str, Str -> U64
-position = |whole, part| (whole.split_on(part).first() ?? "").to_utf8().len()
-
 gates! : BuildHarness.Suite => Try({}, _)
 gates! = |suite| {
 	BuildHarness.warm!(suite)?
@@ -299,14 +291,25 @@ graph! = |suite, state| {
 	project = state.place.project
 	task = if BuildHarness.exists!("${project}/task-produced.txt") read!("${project}/task-produced.txt")? else "<absent>".to_utf8()
 	wanted = BuildGates.expected(read!("${project}/untracked.txt")?, task, read!("${project}/assets/message.txt")?)
+	# The typed plan owns dependency metadata; the native executor builds the
+	# whole closure in one prepared request and reports only the selected result.
+	planned : { schema_version : U64, name : Str, snapshot : { nodes : List({ name : Str, dependencies : List(Str) }) } }
+	planned = Json.parse(BuildHarness.ok!(suite, state.place, ["plan", "build", "app", "--json"])?.out)?
+	BuildHarness.require!(
+		planned.schema_version == 1 and planned.name == "app" and planned.snapshot.nodes.map(|node| (node.name, node.dependencies)) == [
+			("library", []),
+			("bundle", ["library"]),
+			("app", ["library", "bundle"]),
+		],
+		"the build plan is not the dependency-first diamond with one shared library",
+	)?
+	before_build = BuildHarness.events!(suite)?.len()
 	ran = BuildHarness.ok!(suite, state.place, ["build", "app"])?
 	output = ran.out.drop_suffix("\n")
 	BuildHarness.require!(output.starts_with("/nix/store/") and ran.err.contains(" -> ${output}"), "build app printed: ${ran.out}")?
 	BuildHarness.require!((Path.is_file!(Path.utf8(output)) ?? Bool.False) and read!(output)? == wanted.application, "the app artifact holds other bytes: ${output}")?
-	labels = ["building library:", "building bundle:", "building app:"]
-	places = labels.map(|label| position(ran.err, label))
-	BuildHarness.require!(places == places.sort(), "metadata is not dependency-first")?
-	BuildHarness.require!(labels.all(|label| count(ran.err, label) == 1), "shared dependency was duplicated")?
+	native_builds = BuildHarness.events!(suite)?.drop_first(before_build).keep_if(|event| event.kind == "nix" and event.argv.contains("build"))
+	BuildHarness.require!(native_builds.len() == 1, "the native executor did not receive exactly one prepared build for the diamond")?
 	library = build!(suite, state.place, "library", NoService)?
 	BuildHarness.require!((Path.is_file!(Path.utf8(library)) ?? Bool.False) and read!(library)? == wanted.library, "the library artifact holds other bytes: ${library}")?
 	directory = build!(suite, state.place, "bundle", NoService)?
@@ -448,7 +451,8 @@ reject_unsandboxed_runner! = |suite, state, base| {
 	Script.pass!("exact standalone runner fails closed before effects: missing, malformed and shared witnesses")
 }
 
-## Unsafe project entries remain rejected by real Nix snapshots.
+## Unsafe project entries are refused when the host copies the selected
+## files for Nix, before Nix runs.
 reject_unsafe_project_entries! : BuildHarness.Suite, BuildHarness.Layout => Try({}, _)
 reject_unsafe_project_entries! = |suite, place| {
 	project = place.project
@@ -565,8 +569,6 @@ reject_remote_symlink_build! = |suite| {
 }
 
 expect BuildGates.arguments_json == Json.to_str(BuildGates.arguments)
-expect count("a building x: b building x:", "building x:") == 2 and count("none", "building x:") == 0
-expect position("ab building x:", "building x:") == 3
 
 expect {
 	ledger = BuildGates.with_file(BuildGates.with_file([], "b", [1]), "a", [255, 0]).append({ name: [255], data: [], executable: Bool.True })

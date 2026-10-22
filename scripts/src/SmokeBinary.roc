@@ -177,7 +177,7 @@ SmokeBinary := [].{
 			["app [config] { pf: platform \"${platform_path}\" }", "", "import pf.Recipes", "", "config = [", "	Name(\"smoke\"),"]
 				.concat([
 					"	Packages(\"default\", From(NixPackages(\"${inputs.source}\"))),",
-					"	Overlay(\"roc\", \"${inputs.overlay}\"),",
+					"	Input(\"roc\", \"${inputs.overlay}\"),",
 					"	Environment(\"dev\", [Tools([\"default#git\"]), Overlays([\"roc\"]), Command(\"roc-stable\", \"default#${inputs.compiler}\")]),",
 					"	Shell(\"default\", [Use(\"dev\")]),",
 					"	Environment(\"compiler-probe\", [Programs([Fetch(\"roc-stable\", Recipes.roc_nightly(\"${roc_version.trim()}\"))])]),",
@@ -420,14 +420,14 @@ expect SmokeBinary.is_python("python3") and SmokeBinary.is_python("/tmp/work/no-
 expect !SmokeBinary.is_python("smoke-x86_64-linux") and !SmokeBinary.is_python("dist/smoke-aarch64-darwin") and !SmokeBinary.is_python("")
 # The floating project is what a new user's holds: a branch of nixpkgs, the
 # overlay's default branch and its newest nightly.
-expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),\n\tOverlay(\"roc\", \"github:roc-lang/roc-overlay\"),\n")
+expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),\n\tInput(\"roc\", \"github:roc-lang/roc-overlay\"),\n")
 expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly\")")
 
 sample_pins : SmokeBinary.References
 sample_pins = { source: "github:NixOS/nixpkgs/abc", overlay: "github:roc-lang/roc-overlay/def", compiler: "rocpkgs.nightly-2026-10-18-1df370f" }
 
 # The pinned project names a revision or tag for everything it resolves.
-expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\"))),\n\tOverlay(\"roc\", \"github:roc-lang/roc-overlay/def\"),\n")
+expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\"))),\n\tInput(\"roc\", \"github:roc-lang/roc-overlay/def\"),\n")
 expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly-2026-10-18-1df370f\")")
 
 lock_sample : Str, Str, Str -> Str
@@ -461,7 +461,7 @@ expect [[], ["--floating"], ["--no-nix"], ["--pinned", "blueprint"], ["blueprint
 expect {
 	text = SmokeBinary.no_nix_roc("../pf/main.roc", "nightly-2026-10-18-1df370f", False)
 	text.starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tSystems([\"x86_64-linux\", \"aarch64-linux\", \"aarch64-darwin\", \"x86_64-windows\"]),\n\tEnvironment(\"dev\", [\n\t\tPrograms([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-10-18-1df370f\"))]),\n\t\tExpect([\"git\"]),\n\t\tRocPackages([\"https://github.com/roc-lang/basic-cli/")
-		and ["NixPackages", "Overlay(", "Tools(", "Command(", "#"].all(|part| !text.contains(part))
+		and ["NixPackages", "Input(", "Tools(", "Command(", "#"].all(|part| !text.contains(part))
 }
 expect SmokeBinary.linked_script.starts_with("#!/usr/bin/env roc-stable\napp [main!] { cli: platform \"https://github.com/roc-lang/basic-cli/releases/download/")
 

@@ -1,0 +1,6 @@
+{
+  "source": "overview.adoc",
+  "source_sha256": "1a772859fed24c80e1de70783c3e31f8ffe28c4fccb9ea81ee754b06167968d8",
+  "preparation": "mermaid-cli 12.0.0 (/nix/store/2lm7crl2vwcy1rb3nk54mhp6c3pwflp4-mermaid-cli-12.0.0) with Chromium 155.0.8059.84; the block's text, with a final newline, written to overview-outcomes.mmd; mmdc -p puppeteer.json -i overview-outcomes.mmd -o overview-outcomes.png -b transparent -s 1, where puppeteer.json is {\"args\":[\"--no-sandbox\"]}",
+  "png_sha256": "b68e515bafd268d2beefd29bb43dca0bb435910963ebe2acb6dfebb6931e9711"
+}

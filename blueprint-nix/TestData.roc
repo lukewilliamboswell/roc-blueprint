@@ -56,7 +56,7 @@ TestData :: [].{
 	data : Data
 	data = {
 		systems: ["x86_64-linux"],
-		sources: [{ name: "default", provider: NixPackages("github:NixOS/nixpkgs/nixos-unstable") }],
+		sources: [{ name: "default", provider: { name: "nix", version: 1, ref: "github:NixOS/nixpkgs/nixos-unstable" } }],
 		inputs: [],
 		environments: [builder],
 		shells: [{ name: "default", environment: "builder" }],
@@ -109,6 +109,9 @@ TestData :: [].{
 
 	project : Data -> Spec
 	project = |t| Spec.{
+		resolvers: [{ provider: "nix", inputs: t.inputs.map(|input| input.name).concat(t.build_sources.map(|source| source.name)) }],
+		executors: [{ name: "native", provider: "nix", source: t.sources.keep_if(|source| source.provider.name == "nix").first().map_ok(|source| source.name) ?? "" }],
+		build_executors: t.builds.map(|build| { build: build.name, executor: "native" }),
 		source_files: [],
 		build_files: [],
 		format: Spec.current_format,

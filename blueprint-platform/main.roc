@@ -40,9 +40,10 @@ platform ""
 	requires {
 		config : List(Config.Setting)
 	}
-	exposes [Config, EnvName, FlakeRef, InputName, Member, NightlyTag, ProgramName, Recipes, System, TaskName, Tool, Url, UrlTemplate, Val, WorkflowName]
+	exposes [Config, EnvName, FlakeRef, InputName, Member, NightlyTag, ProgramName, ProviderSource, Recipes, System, TaskName, Tool, Url, UrlTemplate, Val, WorkflowName]
 	packages {
 		core: "../blueprint-core/main.roc",
+		nix: "../blueprint-nix/main.roc",
 	}
 	provides { "roc_main": main_for_host! }
 	hosted {
@@ -67,6 +68,7 @@ import EnvName
 import InputName
 import Member
 import NightlyTag
+import ProviderSource
 import ProgramName
 import Recipes
 import System

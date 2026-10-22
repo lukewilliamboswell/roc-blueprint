@@ -11,7 +11,7 @@ config = [
 	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 	Packages("stable", From(NixPackages("github:NixOS/nixpkgs/nixos-24.05"))),
 	Input("utils", "github:numtide/flake-utils"),
-	Overlay("roc", "github:roc-lang/roc-overlay"),
+	Input("roc", "github:roc-lang/roc-overlay"),
 	Environment("base", [Tools(["nix#git"])]),
 	Environment(
 		"dev",
