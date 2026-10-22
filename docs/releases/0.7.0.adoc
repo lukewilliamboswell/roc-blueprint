@@ -178,7 +178,17 @@ provider contract, not by the core.
 Every tree the store unpacks is recorded with its digest and verified against
 it on each use, and rebuilt from its verified archive when it differs, without
 a download. Programs are exposed through symbolic links, or copies on Windows;
-there are no hard links into the store.
+there are no hard links into the store. `blueprint store verify [--repair]
+[--json]` goes further on request: it re-hashes every archive, unpacks each
+one again and compares the fresh tree with its record and with the tree in
+use, so a tree and record rewritten together are found; `--repair` replaces
+such a tree from its archive. It needs no project and no network.
+
+Nix evaluation is pure. The host measures the selected project files and
+every original file with `nix hash path`, and the generated flake takes them
+through a locked `builtins.fetchTree`, so `--impure` is gone from every
+command Blueprint runs; a build identity is a function of the Spec, the Lock
+and the captured files alone.
 
 Each fetched entry of the lock records the hosts that served its bytes after
 redirects and the address a published digest was read from. A host the lock

@@ -85,6 +85,10 @@ Spec records inputs as `{ name, url }` with no provider-specific kind.
   symbolic links, or copies on Windows, never hard links. Clear the store if
   an older one holds trees without records; they are rebuilt once.
 * `blueprint env NAME` prints what entering a shell exports, as data.
+* `blueprint store verify` checks the whole store on request; `--repair`
+  rebuilds what differs from its archive.
+* Nix evaluation runs in pure mode. A `Raw` expression that relied on
+  `--impure`, such as reading an environment variable, fails now.
 
 == Use current report and library contracts
 
