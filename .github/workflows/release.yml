@@ -142,9 +142,11 @@ jobs:
         run: nix develop -c scripts/release_notes.roc "$VERSION" dist/notes.md
 
       # Generate in the read-only build job from final bytes: SPDX 3.0.1, and
-      # SPDX 2.3 and CycloneDX 1.7 of the same inventory. The separate offline check holds each
-      # to its version and the declared inventory; shared publication policy
-      # belongs to roc-automation.
+      # SPDX 2.3 and CycloneDX 1.7 of the same inventory, with an evidence
+      # manifest per subject listing them by digest and size. The separate
+      # offline check holds each to its version, the declared inventory and
+      # the manifest beside it; shared publication policy belongs to
+      # roc-automation.
       - name: Describe the final binaries and source bundles with SPDX
         run: nix develop -c scripts/release_sbom.roc "$VERSION"
 
@@ -248,7 +250,7 @@ jobs:
           for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-windows.exe blueprint.sha256; do
             test -f "$name"
           done
-          test "$(find . -type f -name 'blueprint*' ! -name '*.spdx.json' ! -name '*.spdx-2.3.json' ! -name '*.cdx.json' | wc -l)" = 5
+          test "$(find . -type f -name 'blueprint*' ! -name '*.spdx.json' ! -name '*.spdx-2.3.json' ! -name '*.cdx.json' ! -name '*.sbom-manifest.json' | wc -l)" = 5
           sha256sum -c blueprint.sha256
           test "$(LC_ALL=C ls)" = "$(cat ../release-assets.txt)"
 

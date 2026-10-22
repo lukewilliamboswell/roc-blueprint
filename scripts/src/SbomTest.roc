@@ -4,6 +4,7 @@ import core.Project
 import core.JsonData
 import core.Sbom
 import core.Sidecar
+import core.Manifest
 import core.Spdx2
 import core.Spdx3
 import core.CycloneDx
@@ -706,3 +707,75 @@ expect Sbom.member_input(member("message.txt", "hello\n")) == message_input
 # Binding inputs must track the current public Spec and Lock wire contracts.
 expect Spec.parse(fixture_input_spec) == Ok(SbomTest.spec)
 expect Lock.parse(fixture_input_lock) == Ok(SbomTest.lock)
+
+# An evidence manifest renders deterministically, reads back, and is held to
+# what a checker measured: the subject, each listed sidecar and the inventory.
+manifest_digest = |text| Crypto.SHA256.hash(text.to_utf8()).to_hex()
+
+manifest_sample : Manifest.Manifest
+manifest_sample = {
+	profile: Sbom.profile,
+	subject: { filename: "sample-artifact", version: "1.0.0", target: "x86_64-linux", sha256: SbomTest.subject.sha256, size: 16 },
+	inventory_sha256: manifest_digest("inventory"),
+	context: { namespace: SbomTest.context.namespace, revision: SbomTest.context.revision, created: SbomTest.context.created, generator: SbomTest.context.generator },
+	sidecars: [
+		{ filename: "sample-artifact.spdx.json", format: "spdx-3.0.1", sha256: manifest_digest("three"), size: 3 },
+		{ filename: "sample-artifact.cdx.json", format: "cyclonedx-1.7", sha256: manifest_digest("bom"), size: 4 },
+	],
+}
+
+manifest_listed = { ..manifest_sample, sidecars: manifest_sample.sidecars.sort_with(|a, b| Project.bytewise(a.filename, b.filename)) }
+
+manifest_text = Manifest.render(manifest_sample) ?? crash "manifest"
+
+manifest_observed : Manifest.Observed
+manifest_observed = { subject: { sha256: SbomTest.subject.sha256, size: 16 }, inventory: Measured(manifest_digest("inventory")), sidecars: manifest_sample.sidecars.map(|entry| { filename: entry.filename, sha256: entry.sha256, size: entry.size }) }
+
+expect manifest_text == "{\"profile\":\"${Sbom.profile}\",\"subject\":{\"filename\":\"sample-artifact\",\"version\":\"1.0.0\",\"target\":\"x86_64-linux\",\"sha256\":\"${SbomTest.subject.sha256}\",\"size\":16},\"inventory_sha256\":\"${manifest_digest("inventory")}\",\"context\":{\"namespace\":\"${SbomTest.context.namespace}\",\"revision\":\"1\",\"created\":\"${SbomTest.context.created}\",\"generator\":\"${SbomTest.context.generator}\"},\"sidecars\":[{\"filename\":\"sample-artifact.cdx.json\",\"format\":\"cyclonedx-1.7\",\"sha256\":\"${manifest_digest("bom")}\",\"size\":4},{\"filename\":\"sample-artifact.spdx.json\",\"format\":\"spdx-3.0.1\",\"sha256\":\"${manifest_digest("three")}\",\"size\":3}]}\n"
+expect Manifest.render(manifest_listed) == Ok(manifest_text)
+expect Manifest.read(manifest_text) == Ok(manifest_listed)
+expect Manifest.check(manifest_text, manifest_observed) == Ok(manifest_listed)
+expect Manifest.check(manifest_text, { ..manifest_observed, inventory: Unmeasured }) == Ok(manifest_listed)
+expect Manifest.check(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.prepend({ filename: "sample-artifact.spdx-2.3.json", sha256: manifest_digest("two"), size: 9 }) }) == Ok(manifest_listed)
+expect Manifest.formats == ["spdx-3.0.1", "spdx-2.3", "cyclonedx-1.7"] and Manifest.suffix == ".sbom-manifest.json"
+expect Manifest.format_of("SPDX-3.0.1") == Ok("spdx-3.0.1") and Manifest.format_of("SPDX-2.3") == Ok("spdx-2.3") and Manifest.format_of("CycloneDX-1.7") == Ok("cyclonedx-1.7") and Manifest.format_of("SPDX-2.2").is_err()
+
+# Each refusal names what differs: the profile, the subject's digest or size,
+# a sidecar's digest or size, a listed sidecar that is absent, and the
+# inventory's digest.
+expect Manifest.read(manifest_text.replace_each(Sbom.profile, "blueprint-spdx-2.3-v1")) == Err("the manifest names profile blueprint-spdx-2.3-v1, not ${Sbom.profile}")
+expect Manifest.check(manifest_text, { ..manifest_observed, subject: { ..manifest_observed.subject, sha256: manifest_digest("other bytes") } }) == Err("the subject's bytes differ from what the manifest states")
+expect Manifest.check(manifest_text, { ..manifest_observed, subject: { ..manifest_observed.subject, size: 17 } }) == Err("the subject's size differs from what the manifest states")
+expect Manifest.check(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.map(|entry| if (entry.filename == "sample-artifact.cdx.json") { ..entry, sha256: manifest_digest("tampered") } else entry) }) == Err("sample-artifact.cdx.json differs from what the manifest states")
+expect Manifest.check(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.map(|entry| if (entry.filename == "sample-artifact.spdx.json") { ..entry, size: 30 } else entry) }) == Err("the size of sample-artifact.spdx.json differs from what the manifest states")
+expect Manifest.check(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.drop_if(|entry| entry.filename == "sample-artifact.cdx.json") }) == Err("the manifest lists sample-artifact.cdx.json, which is absent")
+expect Manifest.check(manifest_text, { ..manifest_observed, inventory: Measured(manifest_digest("another inventory")) }) == Err("the inventory differs from the one the manifest states")
+
+# A manifest names files by name alone and holds no developer path or
+# credential; a rendered one lists each known-format sidecar once, with
+# lowercase digests, apart from its subject.
+expect Manifest.render({ ..manifest_sample, subject: { ..manifest_sample.subject, filename: "dist/sample-artifact" } }) == Err("the manifest must name its subject by file name alone")
+expect ["out/sample-artifact.spdx.json", "..\\sample-artifact.spdx.json", "..", "", "sample-artifact"].all(|filename| Manifest.render({ ..manifest_sample, sidecars: [{ ..manifest_sample.sidecars.first() ?? crash "sample", filename }] }) == Err("the manifest must name each sidecar by file name alone, apart from its subject"))
+expect Manifest.read(manifest_text.replace_each("\"sample-artifact.cdx.json\"", "\"../sample-artifact.cdx.json\"")) == Err("the manifest must name each sidecar by file name alone, apart from its subject")
+expect Manifest.render({ ..manifest_sample, context: { ..manifest_sample.context, namespace: "https://example.org/Users/someone/revision-1" } }) == Err("the manifest holds a developer path or credential")
+expect Manifest.read(manifest_text.replace_each(SbomTest.context.generator, "Tool: built in /home/someone")) == Err("the manifest holds a developer path or credential")
+expect Manifest.render({ ..manifest_sample, sidecars: [] }) == Err("the manifest lists no sidecar")
+expect Manifest.render({ ..manifest_sample, sidecars: manifest_sample.sidecars.concat(manifest_sample.sidecars) }) == Err("the manifest lists a sidecar twice")
+expect Manifest.render({ ..manifest_sample, sidecars: manifest_sample.sidecars.map(|entry| { ..entry, format: "spdx-2.2" }) }).is_err()
+expect Manifest.render({ ..manifest_sample, sidecars: manifest_sample.sidecars.map(|entry| { ..entry, sha256: Str.join_with(List.repeat("A", 64), "") }) }) == Err("sample-artifact.spdx.json needs a lowercase SHA-256")
+expect Manifest.render({ ..manifest_sample, inventory_sha256: "" }) == Err("the inventory digest must be a lowercase SHA-256")
+expect Manifest.render({ ..manifest_sample, subject: { ..manifest_sample.subject, target: "" } }) == Err("the subject needs a version, a target and a lowercase SHA-256")
+expect Manifest.render({ ..manifest_sample, context: { ..manifest_sample.context, revision: "2" } }) == Err("namespace does not end with its revision")
+expect Manifest.read("{\"profile\":\"${Sbom.profile}\"}").is_err() and Manifest.read("not json").is_err()
+
+# A checked sidecar describes the manifest's subject, in the listed format.
+expect {
+	checked = Sidecar.check(fixture_native_linux_3) ?? crash "fixture"
+	bom = Sidecar.check(fixture_native_linux_cdx) ?? crash "fixture"
+	Manifest.describes(manifest_sample, "", checked) == Ok({})
+		and Manifest.describes(manifest_sample, "sample-artifact.spdx.json", checked) == Ok({})
+			and Manifest.describes(manifest_sample, "sample-artifact.cdx.json", bom) == Ok({})
+				and Manifest.describes(manifest_sample, "sample-artifact.cdx.json", checked) == Err("sample-artifact.cdx.json is a SPDX-3.0.1 document, not the cyclonedx-1.7 sidecar the manifest lists")
+					and Manifest.describes({ ..manifest_sample, subject: { ..manifest_sample.subject, version: "2.0.0" } }, "", checked) == Err("the sidecar describes sample-artifact 1.0.0, not the manifest's sample-artifact 2.0.0")
+						and Manifest.describes({ ..manifest_sample, subject: { ..manifest_sample.subject, sha256: manifest_digest("other") } }, "", bom).is_err()
+}

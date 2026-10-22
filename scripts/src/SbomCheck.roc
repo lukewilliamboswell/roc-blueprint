@@ -1,4 +1,5 @@
 import cli.Path
+import core.Manifest
 import core.Sbom
 import core.Project
 import core.Sidecar
@@ -12,9 +13,9 @@ import "../../tests/sbom/fixtures/native-linux.cdx.json" as fixture_cdx : Str
 import "../../tests/sbom/fixtures/input/inventory.json" as inventory_json : Str
 
 ## The checks `scripts/check_sbom.roc` runs: the general ones of
-## `core.Sidecar`, which the standalone tool's `check` runs too, and
-## `release!`, which holds Blueprint's own release sidecars to the release
-## authorities committed in this repository.
+## `core.Sidecar` and `core.Manifest`, which the standalone tool's `check`
+## runs too, and `release!`, which holds Blueprint's own release sidecars to
+## the release authorities committed in this repository.
 SbomCheck := [].{
 	Evidence : Sidecar.Evidence
 
@@ -29,6 +30,32 @@ SbomCheck := [].{
 
 	same_graph : Checked, Checked -> Bool
 	same_graph = Sidecar.same_graph
+
+	## The evidence manifest at `path`, held to the files it names: its
+	## subject in `artifacts` (or beside the manifest), each listed sidecar
+	## beside it, and the inventory at `inventory`, or else the
+	## `<subject>.inventory.json` the release recipe leaves beside the
+	## manifest, when there is one.
+	manifest! : Str, Str, Str => Try(Manifest.Manifest, _)
+	manifest! = |path, artifacts, inventory| {
+		text = Path.read_utf8!(Path.utf8(path))?
+		listed = Manifest.read(text).map_err(|problem| Invalid("${path}: ${problem}"))?
+		subject_path = if (artifacts.is_empty()) Manifest.beside(path, listed.subject.filename) else "${artifacts}/${listed.subject.filename}"
+		subject_bytes = Path.read_bytes!(Path.utf8(subject_path)).map_err(|_| Invalid("${path}: no subject ${subject_path}"))?
+		var $sidecars = []
+		for entry in listed.sidecars {
+			match Path.read_bytes!(Path.utf8(Manifest.beside(path, entry.filename))) {
+				Ok(bytes) => {
+					$sidecars = $sidecars.append({ filename: entry.filename, sha256: Integrity.digest(bytes), size: bytes.len() })
+				}
+				Err(_) => {}
+			}
+		}
+		left_behind = Manifest.beside(path, "${listed.subject.filename}.inventory.json")
+		inventory_path = if !inventory.is_empty() inventory else if (Path.is_file!(Path.utf8(left_behind)) ?? False) left_behind else ""
+		measured = if inventory_path.is_empty() Unmeasured else Measured(Integrity.digest(Path.read_bytes!(Path.utf8(inventory_path))?))
+		Manifest.check(text, { subject: { sha256: Integrity.digest(subject_bytes), size: subject_bytes.len() }, inventory: measured, sidecars: $sidecars }).map_err(|problem| Invalid("${path}: ${problem}"))
+	}
 
 	## A release sidecar against the release authorities committed at `root`.
 	release! : Checked, Str => Try({}, _)

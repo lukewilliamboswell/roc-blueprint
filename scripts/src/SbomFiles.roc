@@ -5,8 +5,8 @@ import cli.OsStr
 import cli.Path
 
 ## The only filesystem boundary in SBOM reporting: regular inputs, bounded
-## metadata reads, streaming final-byte SHA256, exclusive new sidecars, and
-## the members of a produced archive.
+## metadata reads, streaming final-byte SHA256 and size, exclusive new
+## sidecars and manifests, and the members of a produced archive.
 SbomFiles := [].{
 	read! : Str => Try(Str, _)
 	read! = |name| {
@@ -36,18 +36,25 @@ SbomFiles := [].{
 	}
 
 	digest! : Str => Try(Str, _)
-	digest! = |name| {
+	digest! = |name| measure!(name).map_ok(|measured| measured.sha256)
+
+	## The SHA-256 and size of a regular file's bytes, in one pass: what an
+	## evidence manifest states about a subject or sidecar.
+	measure! : Str => Try({ sha256 : Str, size : U64 }, _)
+	measure! = |name| {
 		path = Path.utf8(name)
 		if !Path.is_file!(path)? {
 			return Err(NotRegularFile)
 		}
 		reader = File.open_reader!(path)?
 		var $hasher = Crypto.SHA256.Hasher.empty()
+		var $size = 0.U64
 		var $done = False
 		while !$done {
 			match reader.read_up_to!(65536) {
 				Ok(bytes) => {
 					$hasher = $hasher.write(bytes)
+					$size = $size + bytes.len()
 				}
 				Err(EndOfInput) => {
 					$done = True
@@ -55,7 +62,7 @@ SbomFiles := [].{
 				Err(error) => return Err(error)
 			}
 		}
-		Ok($hasher.finish().to_hex())
+		Ok({ sha256: $hasher.finish().to_hex(), size: $size })
 	}
 
 	write_new! : Str, Str => Try({}, _)

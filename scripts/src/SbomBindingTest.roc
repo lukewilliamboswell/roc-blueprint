@@ -1,5 +1,6 @@
 import cli.Env
 import cli.Path
+import core.Manifest
 import core.Sbom
 import core.Spdx3
 import Process
@@ -8,8 +9,10 @@ import Script
 ## The native `scripts/sbom.roc` tool against read-only copies of
 ## `tests/sbom/fixtures/input`: `inspect` reproduces the committed inventory,
 ## `bind` writes SPDX 3.0.1, SPDX 2.3 and CycloneDX 1.7 that read back to one
-## package graph, both default sidecars beside the artifact when no output is
-## named, and every refusal the tool promises holds. Inputs are never changed.
+## package graph, both default sidecars and the evidence manifest beside the
+## artifact when no output is named, `check --manifest` holds that manifest to
+## the files, and every refusal the tool promises holds. Inputs are never
+## changed.
 ##
 ## `chmod`, `ln -s` and `mkfifo` set up the cases basic-cli cannot create; the
 ## checks themselves are Roc.
@@ -47,6 +50,13 @@ cases! = |tool, fixtures, work| {
 		}
 		Ok({})
 	}
+	refused! = |args, reason| {
+		result = Process.traced!(Process.command(tool, args, work))?
+		if result.code == 0 or !result.stderr.contains(reason) {
+			return Script.fail!("sbom ${Str.join_with(args, " ")} did not refuse with \"${reason}\": ${result.stderr}")
+		}
+		Ok({})
+	}
 	call!(["inspect", "Spec", "Lock", "composition.json", "x86_64-linux", "inspected.json"], True)?
 	inspected : Try(Sbom.Inventory, _)
 	inspected = Json.parse(Path.read_utf8!(Path.utf8("${work}/inspected.json"))?)
@@ -77,6 +87,61 @@ cases! = |tool, fixtures, work| {
 				return Script.fail!("the SPDX 3.0.1, SPDX 2.3 and CycloneDX sidecars state different package graphs")
 			}
 		_ => return Script.fail!("a bound sidecar does not read back")
+	}
+
+	# `bind` also writes the evidence manifest beside the sidecars: the subject,
+	# both sidecars and the inventory by digest and size, files by name alone.
+	manifest_name = "sample-artifact${Manifest.suffix}"
+	manifest_text = Path.read_utf8!(Path.utf8("${work}/${manifest_name}"))?
+	manifest = match Manifest.read(manifest_text) {
+		Ok(read) => read
+		Err(problem) => return Script.fail!("bind wrote a manifest that does not read back: ${problem}")
+	}
+	sha = |text| Crypto.SHA256.hash(text.to_utf8()).to_hex()
+	listed = manifest.sidecars.map(|entry| (entry.filename, entry.format, entry.sha256, entry.size))
+	if manifest.subject != { filename: "sample-artifact", version: "1.0.0", target: "x86_64-linux", sha256: sha("fixture subject\n"), size: 16 } or manifest.inventory_sha256 != sha(Path.read_utf8!(Path.utf8("${work}/inventory.json"))?) or listed != [("sample-artifact.cdx.json", "cyclonedx-1.7", sha(bom), bom.to_utf8().len()), ("sample-artifact.spdx.json", "spdx-3.0.1", sha(beside), beside.to_utf8().len())] {
+		return Script.fail!("the manifest does not state the subject, sidecars and inventory bind used")
+	}
+	if manifest_text.contains(work) or manifest.sidecars.map(|entry| entry.filename).append(manifest.subject.filename).any(|name| name.contains("/") or name.contains("\\")) {
+		return Script.fail!("the manifest names a path rather than a file name")
+	}
+	# `check --manifest` checks the listed sidecars as documents and rehashes
+	# the subject, each sidecar and the inventory; staged copies show each
+	# refusal: a tampered sidecar, an edited inventory digest, other subject
+	# bytes, and a listed sidecar that is absent.
+	call!(["check", "--manifest", manifest_name, "--artifacts", ".", "--inventory", "inventory.json"], True)?
+	call!(["check", "--manifest", manifest_name, "--artifacts", ".", "--inventory", "inventory.json", "new.spdx-2.3.json"], True)?
+	call!(["check", "--manifest", manifest_name], True)?
+	staged! = |name, artifact_text, bom_text, body| {
+		Path.create_all!(Path.utf8("${work}/${name}"))?
+		for (file, text) in [("sample-artifact", artifact_text), ("sample-artifact.spdx.json", three), ("sample-artifact.cdx.json", bom_text), (manifest_name, body)] {
+			Path.write_utf8!(Path.utf8("${work}/${name}/${file}"), text)?
+		}
+		Ok("${name}/${manifest_name}")
+	}
+	tampered = staged!("tampered", "fixture subject\n", "${bom}\n", manifest_text)?
+	refused!(["check", "--manifest", tampered, "--artifacts", "tampered", "--inventory", "inventory.json"], "sample-artifact.cdx.json differs")?
+	edited = staged!("edited", "fixture subject\n", bom, manifest_text.replace_each(manifest.inventory_sha256, Str.join_with(List.repeat("b", 64), "")))?
+	refused!(["check", "--manifest", edited, "--artifacts", "edited", "--inventory", "inventory.json"], "the inventory differs")?
+	call!(["check", "--manifest", edited, "--artifacts", "edited"], True)?
+	other = staged!("other", "other bytes\n", bom, manifest_text)?
+	refused!(["check", "--manifest", other, "--artifacts", "other"], "subject's bytes differ")?
+	missing = staged!("missing", "fixture subject\n", bom, manifest_text)?
+	Path.delete!(Path.utf8("${work}/missing/sample-artifact.cdx.json"))?
+	refused!(["check", "--manifest", missing, "--artifacts", "missing"], "which is absent")?
+	# A named output takes `--manifest` for a manifest of that one sidecar,
+	# beside it, which never overwrites the subject or a sidecar.
+	call!(base.concat(["explicit.spdx-2.3.json", "--spdx-2.3", "--manifest", "explicit${Manifest.suffix}"]), True)?
+	explicit = Manifest.read(Path.read_utf8!(Path.utf8("${work}/explicit${Manifest.suffix}"))?)
+	if explicit.map_ok(|read| read.sidecars.map(|entry| (entry.filename, entry.format))) != Ok([("explicit.spdx-2.3.json", "spdx-2.3")]) {
+		return Script.fail!("the manifest of a named output does not list exactly that sidecar")
+	}
+	call!(["check", "--manifest", "explicit${Manifest.suffix}", "--artifacts", ".", "--inventory", "inventory.json"], True)?
+	refused!(base.concat(["refused.cdx.json", "--cyclonedx", "--manifest", "sample-artifact"]), "overwrite subject")?
+	refused!(base.concat(["refused.cdx.json", "--cyclonedx", "--manifest", "refused.cdx.json"]), "overwrite a sidecar")?
+	refused!(base.concat(["refused.cdx.json", "--cyclonedx", "--manifest", "other/refused${Manifest.suffix}"]), "beside")?
+	if Path.is_file!(Path.utf8("${work}/refused.cdx.json"))? {
+		return Script.fail!("a refused bind wrote a sidecar")
 	}
 	call!(base, False)?
 	call!(base.concat(["new.cdx.json", "--cyclonedx"]), True)?
@@ -175,7 +240,7 @@ cases! = |tool, fixtures, work| {
 	_ = Process.succeed!(Process.command("tar", ["--zstd", "-P", "-cf", "../absolute.tar.zst", "${bundle}/main.roc"], bundle))?
 	call!(["members", "absolute.tar.zst", "absolute.json"], False)?
 	call!(["members", "sample-artifact", "not-an-archive.json"], False)?
-	Script.pass!("SPDX binding: read-only inputs, exclusive sidecars, regular-file subjects, bounds, hash, target and archive members")
+	Script.pass!("SPDX binding: read-only inputs, exclusive sidecars and manifests, regular-file subjects, bounds, hash, target and archive members")
 }
 
 ## A source bundle: a module that imports a text file, and a LICENSE, which

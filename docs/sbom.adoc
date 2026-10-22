@@ -360,6 +360,13 @@ An SBOM is only useful if it is accurate. Before you publish, check:
   records, and may ask for it again later.
 * *Anyone* can compare the SBOM's SHA-256 with the file they have, to be sure
   the SBOM describes it.
+* *Publishers and signers* that rehash every asset before signing read the
+  evidence manifest beside the sidecars, `<artifact>.sbom-manifest.json`,
+  for the mapping they would otherwise reconstruct by hand: the subject's
+  name, version, target, SHA-256 and size, each sidecar's name, format,
+  SHA-256 and size, and the SHA-256 of the inventory they were bound from.
+  `check --manifest` confirms that mapping against the files (see
+  <<bind-the-final-bytes-separately>>).
 
 [#what-an-sbom-does-not-prove]
 === What an SBOM does not prove
@@ -450,12 +457,15 @@ roc run <immutable-tool-bundle-url> -- inspect Spec Blueprint.lock composition.j
 roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary
 roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx-2.3.json --spdx-2.3
 roc run <immutable-tool-bundle-url> -- check --inventory inventory.json --artifacts dist dist/my-binary.spdx.json dist/my-binary.cdx.json dist/my-binary.spdx-2.3.json
+roc run <immutable-tool-bundle-url> -- check --manifest dist/my-binary.sbom-manifest.json --inventory inventory.json --artifacts dist
 ----
 
-The first `bind` writes `dist/my-binary.spdx.json` and `dist/my-binary.cdx.json`;
-the second adds the SPDX 2.3 rendering, and `check` checks all three. See
-<<bind-the-final-bytes-separately>>. `members` and `inspect --members`
-inventory a source archive from its own contents; see
+The first `bind` writes `dist/my-binary.spdx.json`, `dist/my-binary.cdx.json`
+and the evidence manifest `dist/my-binary.sbom-manifest.json`; the second
+adds the SPDX 2.3 rendering, and the first `check` checks all three. The
+second `check` holds the manifest to the files it lists, and checks those
+sidecars. See <<bind-the-final-bytes-separately>>. `members` and
+`inspect --members` inventory a source archive from its own contents; see
 <<inventory-a-source-bundle-from-its-archive>>. They need only a `tar` that
 reads zstd on `PATH`.
 
@@ -836,21 +846,70 @@ hashes a regular final file in 64 KiB chunks:
 nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary
 ----
 
-Without an output path, `bind` writes `ARTIFACT.spdx.json` (SPDX 3.0.1) and
-`ARTIFACT.cdx.json` (CycloneDX 1.7) beside the artifact. It renders both
-before writing either, so an inventory, subject or context that one format
-refuses leaves no sidecar behind. To write a single document to a path of
-your choice, name it, with a flag for a format other than SPDX 3.0.1:
+Without an output path, `bind` writes `ARTIFACT.spdx.json` (SPDX 3.0.1),
+`ARTIFACT.cdx.json` (CycloneDX 1.7) and `ARTIFACT.sbom-manifest.json`, the
+evidence manifest listing both, beside the artifact. It renders all three
+before writing any, so an inventory, subject or context that one format
+refuses leaves no file behind. To write a single document to a path of your
+choice, name it, with a flag for a format other than SPDX 3.0.1, and
+`--manifest` for the manifest of that one sidecar, which must sit beside it:
 
 [source,console]
 ----
 nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary out/my-binary.spdx.json
 nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary out/my-binary.spdx-2.3.json --spdx-2.3
-nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary out/my-binary.cdx.json --cyclonedx
+nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary out/my-binary.cdx.json --cyclonedx --manifest out/my-binary.sbom-manifest.json
 ----
 
 Bind every format from the same inventory, subject and context: they are then
 renderings of one document, and `check` requires them to agree (see <<read-the-cyclonedx-rendering>>).
+
+[#the-evidence-manifest]
+=== The evidence manifest
+
+A publisher that rehashes every asset before signing needs, per release
+file, the subject's SHA-256, size, version and target, each sidecar's name,
+SHA-256 and size, the digest of the inventory they came from, and the
+generator. `bind` has all of these when it writes the sidecars, so it states
+them once, in one JSON document rendered from the shared types:
+
+[source,json]
+----
+{"profile":"blueprint-spdx-3.0-v1",
+ "subject":{"filename":"my-binary","version":"1.0.0","target":"x86_64-linux","sha256":"<sha256>","size":1234},
+ "inventory_sha256":"<sha256 of inventory.json>",
+ "context":{"namespace":"https://example.org/sbom/my-binary/revision-1","revision":"1","created":"2026-10-21T00:00:00Z","generator":"Tool: blueprint-sbom-0.7.0"},
+ "sidecars":[{"filename":"my-binary.cdx.json","format":"cyclonedx-1.7","sha256":"<sha256>","size":5678},
+             {"filename":"my-binary.spdx.json","format":"spdx-3.0.1","sha256":"<sha256>","size":6789}]}
+----
+
+The manifest is evidence about files, not a fourth rendering of the SBOM: it
+holds no package, and nothing in it is read as composition. Files are named
+by name alone, resolved beside the manifest (the sidecars) or in the artifact
+directory (the subject); it never holds a path, an absolute developer path or
+a credential, and `bind` refuses to write one that would. The text is one
+line with a fixed key order and the sidecars by name, so the same evidence is
+the same bytes. The formats are `spdx-3.0.1`, `spdx-2.3` and
+`cyclonedx-1.7`; the inventory digest is the SHA-256 of the inventory file as
+`bind` read it.
+
+`check --manifest` holds a manifest to the files it names and checks the
+sidecars it lists as documents, so no document need be named:
+
+[source,console]
+----
+nix develop -c scripts/sbom.roc check --manifest dist/my-binary.sbom-manifest.json --artifacts dist --inventory inventory.json
+----
+
+It rehashes the subject in `--artifacts` (or beside the manifest), each
+listed sidecar beside the manifest, and the inventory, and refuses a manifest
+of another profile, a subject whose digest or size differs, a sidecar whose
+digest or size differs or that is absent, an inventory digest that differs
+from `--inventory`, or any file named with a path separator. Each listed
+sidecar must also describe the manifest's subject, in the listed format, and
+passes the same profile, subject, inventory and one-graph checks as any
+named document. Without `--inventory` the inventory digest is recorded but
+not measured.
 
 `subject.json` contains `filename`, `version`, `target`, `sha256` and `url`.
 An empty SHA-256 asks the binder to compute it; a supplied digest must match.
@@ -863,9 +922,10 @@ while retaining the unchanged software digest at a new immutable location.
 In CycloneDX the namespace determines the BOM's `serialNumber` (a UUID URN
 derived from it) and the revision its `version`.
 
-Metadata inputs and final subjects must be regular files. Sidecars use
-exclusive creation, in every format: an existing file, symlink, hardlink or `../` alias is
-rejected, preserving all inputs. Generate into a fresh staging directory.
+Metadata inputs and final subjects must be regular files. Sidecars and
+manifests use exclusive creation, in every format: an existing file, symlink,
+hardlink or `../` alias is rejected, preserving all inputs. Generate into a
+fresh staging directory.
 Metadata reads are bounded before parsing; credentials and absolute developer
 paths are rejected. Generation needs no publication credentials or advisory
 service. Ordinary task outputs and sandboxed build outputs use this same
@@ -966,15 +1026,22 @@ Unclassified Cargo feature/target/build candidates are explicit `other` edges;
 they do not claim all resolved crates ship in every target. Unknown license
 and optimized native/compiler closure scopes retain explicit gaps.
 
-Every release subject has all three sidecars: `.spdx.json`, `.spdx-2.3.json`
-and `.cdx.json`. `scripts/check_sbom.roc` runs the same checks as the tool's
-`check`, plus checks against this repository's release authorities, offline before the
-release job gathers them into the same tested asset set: each must be valid
-SPDX or CycloneDX of its version, meet the profile, describe the actual
-artifact bytes, account for the release's observed inputs, and state the same
-package graph as every other rendering of the same document (the same
-namespace). Conformance is Roc throughout: `core.Spdx3`, `core.Spdx2` and
-`core.CycloneDx` hold the classes or objects, properties, cardinalities,
+Every release subject has all three sidecars, `.spdx.json`, `.spdx-2.3.json`
+and `.cdx.json`, and the evidence manifest `.sbom-manifest.json` that lists
+them with the subject by digest and size (see <<the-evidence-manifest>>).
+The inventory each was bound from is written beside them in `dist/` as
+`<subject>.inventory.json` for the check, and is not published.
+`scripts/check_sbom.roc` runs the same checks as the tool's `check`, plus
+checks against this repository's release authorities, offline before the
+release job gathers the sidecars and manifests into the same tested and
+attested asset set: each document must be valid SPDX or CycloneDX of its
+version, meet the profile, describe the actual artifact bytes, account for
+the release's observed inputs, and state the same package graph as every
+other rendering of the same document (the same namespace); the manifest
+found beside it, or named with `--manifest`, must be what the subject, the
+sidecars and that inventory file hash to, and each document must describe
+the manifest's subject. Conformance is Roc throughout: `core.Spdx3`,
+`core.Spdx2` and `core.CycloneDx` hold the classes or objects, properties, cardinalities,
 enumerations and references of each format, and the test suite holds them to
 the published SPDX 3.0.1 JSON schema, the SPDX 2.3.1 schema and the CycloneDX
 1.7 schema, vendored in `tests/sbom/schema/` and pinned by SHA-256. It

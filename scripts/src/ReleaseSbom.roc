@@ -3,6 +3,7 @@ import SbomFiles
 import cli.Stdout
 import cli.Utc
 import Process
+import core.Manifest
 import core.Sbom
 import compilers.Bootstrap
 import Bundle
@@ -269,7 +270,8 @@ write! = |root, filename, version, target, composition, created, commit, revisio
 		Sbom.members_accounted(members, { ..composition, components: $delivered_components, inputs: $inputs }).map_err(|message| Invalid(message))?
 	}
 	inventory = Sbom.inspect_declared(target, { ..composition, components: $delivered_components.concat($tool_components), relationships: $delivered_edges.concat($tool_edges), inputs: $inputs }, $inputs.map(|entry| entry.input)).map_err(|message| Invalid(message))?
-	digest = SbomFiles.digest!("${root}/dist/${filename}")?
+	measured = SbomFiles.measure!("${root}/dist/${filename}")?
+	digest = measured.sha256
 	subject = { filename, version, target, sha256: digest, url: Bundle.release_url(Bundle.default_repository, version, filename) }
 	context = { namespace: "https://github.com/${Bundle.default_repository}/sbom/${commit}/${filename}/revision-${revision}", revision, created, author: "Organization: Roc Blueprint contributors", generator: "Tool: blueprint-sbom-0.7.0" }
 	text = Sbom.render(inventory, subject, context).map_err(|message| Invalid(message))?
@@ -282,7 +284,22 @@ write! = |root, filename, version, target, composition, created, commit, revisio
 	# And for security tooling that reads CycloneDX.
 	bom = Sbom.render_cyclonedx(inventory, subject, context).map_err(|message| Invalid(message))?
 	SbomFiles.write_new!("${root}/dist/${filename}.cdx.json", bom)?
-	Stdout.line!("${filename}.cdx.json")
+	Stdout.line!("${filename}.cdx.json")?
+	# The inventory the sidecars were bound from, as `inspect` would write it,
+	# stays in dist/ for the independent check; the evidence manifest beside
+	# the sidecars ties them to it and to the subject by digest and size.
+	inventory_text = "${Json.to_str(inventory)}\n"
+	SbomFiles.write_new!("${root}/dist/${filename}.inventory.json", inventory_text)?
+	listed = |name, format, content| { filename: "${filename}${name}", format, sha256: Integrity.digest(content.to_utf8()), size: content.to_utf8().len() }
+	manifest = Manifest.render({
+		profile: Sbom.profile,
+		subject: { filename, version, target, sha256: digest, size: measured.size },
+		inventory_sha256: Integrity.digest(inventory_text.to_utf8()),
+		context: { namespace: context.namespace, revision, created, generator: context.generator },
+		sidecars: [listed(".spdx.json", "spdx-3.0.1", text), listed(".spdx-2.3.json", "spdx-2.3", text_2), listed(".cdx.json", "cyclonedx-1.7", bom)],
+	}).map_err(|message| Invalid(message))?
+	SbomFiles.write_new!("${root}/dist/${filename}${Manifest.suffix}", manifest)?
+	Stdout.line!("${filename}${Manifest.suffix}")
 }
 
 # Fail closed on new or changed imports: availability/composition changes must
