@@ -383,8 +383,9 @@ and the verified Windows linker inputs. `scripts/build_release.roc` builds
 `blueprint-x86_64-windows.exe` and its smoke program. The `no-nix` CI job runs
 that program on `windows-latest`, fetching the compiler, updating a lock,
 reporting requirements and building and running a basic-cli program twice.
-Windows skips `chmod` and exposes fetched programs with hard links, falling
-back to a copy across volumes. Archives use the machine's bsdtar.
+Windows skips `chmod` and exposes fetched programs as copies, since a
+symbolic link needs a privilege there and a hard link would let a consumer
+write into the store. Archives use the machine's bsdtar.
 
 The full Nix suites remain Linux-only. Windows 10 and 11 desktop execution
 has not been verified here; the CI runner checks Windows Server. Tasks must

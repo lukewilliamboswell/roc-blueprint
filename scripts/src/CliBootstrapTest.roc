@@ -117,7 +117,8 @@ bootstrap! = |bench| {
 	CliHarness.exited!(CliHarness.finish!(one, "first concurrent bootstrap")?, 0, "first concurrent bootstrap")?
 	CliHarness.exited!(CliHarness.finish!(two, "second concurrent bootstrap")?, 0, "second concurrent bootstrap")?
 	CliHarness.check!(CliHarness.names!("${store}/v1/artifacts/sha256")? == [program.sha256], "concurrent bootstrap did not keep one compiler artifact")?
-	CliHarness.check!(CliHarness.names!("${store}/v1/trees/sha256")? == ["${program.sha256}.tar.gz"], "concurrent bootstrap left an incomplete tree")?
+	trees = CliHarness.names!("${store}/v1/trees/sha256")?
+	CliHarness.check!(trees.len() == 2 and trees.contains("${program.sha256}.tar.gz") and trees.contains("${program.sha256}.tar.gz.digest"), "concurrent bootstrap left an incomplete tree, or one without its digest record: ${Str.inspect(trees)}")?
 	# The Nix-enabled release fixture also includes a fetched compiler probe;
 	# validate that mixed configuration without needing Nix on this machine.
 	release_project = "${bench.work}/release-smoke"

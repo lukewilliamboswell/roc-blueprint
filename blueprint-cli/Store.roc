@@ -4,26 +4,32 @@ import pf.File
 import pf.OsStr
 import pf.Path
 import pf.Stderr
+import core.Project
+import core.Sexpr
 import core.Steps
+import core.Tree
 import Download
 import Paths
 
 ## The per-user store of what Blueprint downloads, named by content:
 ##
-##     <store>/v1/artifacts/sha256/<hex>          the downloaded bytes
-##     <store>/v1/trees/sha256/<hex>.<kind>/      those bytes, made usable
+##     <store>/v1/artifacts/sha256/<hex>                the downloaded bytes
+##     <store>/v1/trees/sha256/<hex>.<kind>/            those bytes, made usable
+##     <store>/v1/trees/sha256/<hex>.<kind>.digest      what that tree held when made
 ##
-## An artifact is never trusted. It is hashed again before every use,
-## wherever it came from: a download, an earlier run, a restored cache or a
-## hand that put it there. One that does not have its name's digest is
+## Nothing in the store is trusted. An artifact is hashed again before every
+## use, wherever it came from: a download, an earlier run, a restored cache or
+## a hand that put it there. One that does not have its name's digest is
 ## removed and fetched again.
 ##
 ## A tree is derived state: an archive unpacked whole, or a single file made
-## executable. It is checked once, when it is made from an artifact that has
-## just been verified, and is NOT verified again on later uses. Whoever can
-## write to the store can change a tree. So a tree is used only beside its
-## verified artifact, and a cache that outlives the machine, such as a CI
-## cache, should hold `v1/artifacts` alone: trees are rebuilt from it.
+## executable. When it is made from an artifact that has just been verified,
+## its core `Tree` digest is written beside it as S-expression text, never
+## inside it. Before every use, after its artifact, the tree is hashed again
+## and compared with that record, which only reads it. One that differs, or
+## has no record, is removed and made again from the verified artifact, with
+## no download. A cache that outlives the machine, such as a CI cache, should
+## still hold `v1/artifacts` alone: trees are rebuilt from it.
 ##
 ## Everything is written under a fresh name in its final directory and then
 ## renamed, so no half-written file or tree is ever seen under its final
@@ -67,6 +73,58 @@ Store := [].{
 		"${store}/v1/trees/sha256/${sha256}.${kind}"
 	}
 
+	## The record of a tree, beside it and never inside it.
+	record_path : Str, Str, [File, TarGz, TarXz, Zip] -> Str
+	record_path = |store, sha256, unpack| "${tree_path(store, sha256, unpack)}.digest"
+
+	## What a tree held when it was made: its core `Tree` digest, which covers
+	## its directories, files and executable bits, and where each symbolic link
+	## in it leads, which that digest cannot say. A link's target is a path
+	## within the tree, or what it reaches outside it, or empty when it reaches
+	## nothing.
+	TreeRecord : { format : U64, digest : Str, links : List({ path : Str, target : Str }) }
+
+	record_format : U64
+	record_format = 1
+
+	record_text : TreeRecord -> Str
+	record_text = |record| Str.concat(Sexpr.to_str(record), "\n")
+
+	read_record : Str -> Try(TreeRecord, [InvalidSexpr(Str), MissingRequiredField(Str), UnsupportedFormat(U64)])
+	read_record = |text| {
+		record : TreeRecord
+		record = Sexpr.parse(text)?
+		if (record.format == record_format) Ok(record) else Err(UnsupportedFormat(record.format))
+	}
+
+	## A program's tree, hashed now and compared with its record. It only
+	## reads: nothing in the tree is opened for writing or changed.
+	## `Absent`: there is no tree to verify.
+	intact! : Str, Steps.Program => Try({}, [Absent, Damaged(Str)])
+	intact! = |store, program| {
+		tree = tree_path(store, program.sha256, program.unpack)
+		match Path.utf8(tree).type!() {
+			Ok(IsDir) => {}
+			Ok(_) => return Err(Damaged("is not a directory"))
+			Err(_) => return Err(Absent)
+		}
+		text = Path.utf8(record_path(store, program.sha256, program.unpack)).read_utf8!().map_err(|_| Damaged("has no digest record"))?
+		recorded = read_record(text).map_err(|_| Damaged("has a digest record that cannot be read"))?
+		found = observed!(tree).map_err(|reason| Damaged("cannot be read: ${reason}"))?
+		if (found == recorded) Ok({}) else Err(Damaged("is not what was recorded when it was made"))
+	}
+
+	## What a tree holds now, as its record says it. Each file is streamed
+	## through SHA-256 once; a link is resolved, never written through.
+	observed! : Str => Try(TreeRecord, Str)
+	observed! = |tree| {
+		root = Path.utf8(tree).canonicalize!().map_err(|_| "${tree} cannot be read")?
+		root_text = Paths.portable(root.to_str().map_err(|_| "${tree} is not text")?)
+		found = walked!(tree, root_text, "")?
+		digest = Tree.digest(found.entries)?
+		Ok({ format: record_format, digest, links: found.links.sort_with(|a, b| Project.bytewise(a.path, b.path)) })
+	}
+
 	## The program inside its tree. A `File` has one name there.
 	program_path : Str, Steps.Program -> Str
 	program_path = |store, program| {
@@ -100,6 +158,18 @@ Store := [].{
 		}
 		True
 	}
+
+	## A canonical path as a link's target in a record: relative to the
+	## tree's canonical `root` when it is in the tree, else itself.
+	within : Str, Str -> Str
+	within = |root, reached|
+		if reached == root {
+			"."
+		} else if reached.starts_with("${root}/") {
+			reached.drop_prefix("${root}/")
+		} else {
+			reached
+		}
 
 	## What is wrong with an archive, from its two listings: the names alone
 	## (`tar -tf`) and the long form (`tar -tvf`), line for line. Nothing is
@@ -231,34 +301,16 @@ Store := [].{
 		}
 		artifact!(store, program, origin, embedded)?
 		file = program_path(store, program)
-		if regular!(file) {
-			return Ok(file)
+		match intact!(store, program) {
+			Ok({}) => return if (regular!(file)) Ok(file) else Err("the archive for ${program.name} holds no ${program.path}")
+			Err(Absent) => {}
+			Err(Damaged(reason)) => {
+				_ = Stderr.line!("blueprint: the stored tree of ${program.name} ${reason}; making it again from its download")
+				discard_tree!(store, program.sha256, program.unpack)
+			}
 		}
 		tree!(store, program)?
 		if (regular!(file)) Ok(file) else Err("the store has no ${file} after making it; delete ${tree_path(store, program.sha256, program.unpack)} and run again")
-	}
-
-	## What a program's URLs serve now, with its SHA-256 and length, for an
-	## update that records them: the first URL that answers. Nothing is
-	## compared here, because there is nothing yet to compare with; the
-	## caller decides what the digest is worth and whether to keep the bytes.
-	hashed! : Str, List(Str) => Try({ sha256 : Str, size : U64, bytes : List(U8) }, Str)
-	hashed! = |what, urls| {
-		var $failures = []
-		for url in urls {
-			_ = Stderr.line!("blueprint: fetching ${what} from ${url} to record its digest")
-			match Download.get!(url) {
-				Ok(bytes) => return Ok({ sha256: Crypto.SHA256.hash(bytes).to_hex(), size: bytes.len(), bytes })
-				Err(reason) => {
-					$failures = $failures.append("could not download ${what} from ${url}: ${reason}")
-				}
-			}
-		}
-		match $failures {
-			[] => Err("${what} has no URL to download it from")
-			[only] => Err(only)
-			_ => Err("no URL of ${what} served it:\n  ${Str.join_with($failures, "\n  ")}")
-		}
 	}
 
 	## Keep bytes an update has just hashed as the artifact of that digest,
@@ -296,20 +348,22 @@ Store := [].{
 	executable_name = |name| if (name.ends_with(".exe")) name else "${name}.exe"
 
 	## Put `target` on a run's PATH as `name`: a symbolic link in `bin`, so
-	## that a program finds what is beside its real path.
+	## that a program finds what is beside its real path. On Windows, where a
+	## symbolic link needs a privilege, and wherever `ln` cannot make one, it
+	## is a copy with the same mode. Never a hard link: that is the store's own
+	## file under a second name, so a step that writes to it or changes its
+	## mode changes the store, under a name no verification looks at.
 	expose! : Str, Str, Str => Try({}, Str)
 	expose! = |bin, name, target| {
+		copy! = |destination|
+			Path.utf8(target).copy!(Path.utf8(destination)).map_err(|_| "could not expose ${name} from ${target} in ${bin}")
 		if Env.platform!().os == WINDOWS {
-			# A hard link needs no symlink privileges. Copy across volumes.
-			source = Path.utf8(target)
-			destination = Path.utf8("${bin}/${executable_name(name)}")
-			match source.hard_link!(destination) {
-				Ok({}) => Ok({})
-				Err(_) => source.copy!(destination).map_err(|_| "could not expose ${name} from ${target} in ${bin}")
-			}
+			copy!("${bin}/${executable_name(name)}")
 		} else {
-			Cmd.new("ln").args(["-s", target, "${bin}/${name}"].map(OsStr.from_str)).exec!()
-				.map_err(|_| "could not link ${name} to ${target} in ${bin}")
+			match Cmd.new("ln").args(["-s", target, "${bin}/${name}"].map(OsStr.from_str)).exec!() {
+				Ok({}) => Ok({})
+				Err(_) => copy!("${bin}/${name}")
+			}
 		}
 	}
 }
@@ -341,11 +395,23 @@ regular! = |file|
 		_ => False
 	}
 
-## Remove a file or tree. One that is not there is already removed.
+## Remove a file or tree. One that is not there is already removed. A link
+## is removed itself, never what it leads to.
 discard! : Str => {}
 discard! = |target| {
-	_ = if (regular!(target)) Path.utf8(target).delete!() else Path.utf8(target).delete_all!()
+	_ = match Path.utf8(target).type!() {
+		Ok(IsDir) => Path.utf8(target).delete_all!()
+		Ok(_) => Path.utf8(target).delete!()
+		Err(_) => Ok({})
+	}
 	{}
+}
+
+## Remove a tree and its record.
+discard_tree! : Str, Str, [File, TarGz, TarXz, Zip] => {}
+discard_tree! = |store, sha256, unpack| {
+	discard!(Store.tree_path(store, sha256, unpack))
+	discard!(Store.record_path(store, sha256, unpack))
 }
 
 ## A fresh directory in `directory`, which is created if need be. What is
@@ -371,7 +437,7 @@ artifact! = |store, program, origin, embedded| {
 				_ = Stderr.line!("blueprint: the stored download of ${program.name} is not what its name says; ${action}")
 				discard!(file)
 				for kind in [File, TarGz, TarXz, Zip] {
-					discard!(Store.tree_path(store, program.sha256, kind))
+					discard_tree!(store, program.sha256, kind)
 				}
 			}
 		}
@@ -447,14 +513,17 @@ keep! = |directory, file, bytes| {
 }
 
 ## Make a program's tree from its verified artifact, in a fresh directory
-## that is renamed into place once it is whole.
+## that is renamed into place once it is whole. It is hashed there, once, and
+## its record is renamed into place first, so that a tree under its final
+## name has one.
 tree! : Str, Steps.Program => Try({}, Str)
 tree! = |store, program| {
 	artifact = Store.artifact_path(store, program.sha256)
 	destination = Store.tree_path(store, program.sha256, program.unpack)
 	temporary = fresh!(Paths.parent(destination))?
 	make! = || {
-		tree = "${Paths.portable(temporary.to_str().map_err(|_| "the store's path is not text")?)}/tree"
+		staged = Paths.portable(temporary.to_str().map_err(|_| "the store's path is not text")?)
+		tree = "${staged}/tree"
 		Path.utf8(tree).create_dir!().map_err(|_| "cannot write in ${store}")?
 		match program.unpack {
 			File => {
@@ -479,11 +548,19 @@ tree! = |store, program| {
 				}
 			}
 		}
+		made = Store.observed!(tree).map_err(|reason| "the archive for ${program.name} unpacked to a tree that cannot be recorded: ${reason}")?
+		record = Path.utf8("${staged}/digest")
+		record.write_utf8!(Store.record_text(made)).map_err(|_| "cannot write in ${store}")?
+		record.rename!(Path.utf8(Store.record_path(store, program.sha256, program.unpack))).map_err(|_| "cannot record the tree of ${program.name} beside ${destination}")?
 		match Path.utf8(tree).rename!(Path.utf8(destination)) {
 			Ok({}) => Ok({})
-			# Losing the rename to another process costs nothing: its tree
-			# was made from the same bytes.
-			Err(_) => if (regular!(Store.program_path(store, program))) Ok({}) else Err("cannot place ${program.name} at ${destination}; delete what is there")
+			# Another process made the same tree first, from the same bytes.
+			# It is used only if it holds what this one does.
+			Err(_) =>
+				match (Path.utf8(destination).type!(), Store.observed!(destination)) {
+					(Ok(IsDir), Ok(found)) if found == made => Ok({})
+					_ => Err("cannot place ${program.name} at ${destination}; delete what is there")
+				}
 		}
 	}
 	result = make!()
@@ -521,6 +598,47 @@ regular_files! = |directory| {
 	}
 	Ok($files)
 }
+
+## The entries of a tree below `prefix`, for its core `Tree` digest, and its
+## symbolic links. Anything that is not a file, a directory or a link is
+## named as the error.
+walked! : Str, Str, Str => Try({ entries : List(Tree.Entry), links : List({ path : Str, target : Str }) }, Str)
+walked! = |tree, root, prefix| {
+	directory = if (prefix == "") tree else "${tree}/${prefix}"
+	var $entries = []
+	var $links = []
+	for child in Path.utf8(directory).list!().map_err(|_| "${directory} cannot be read")? {
+		full = Paths.portable(child.to_str().map_err(|_| "a name in ${directory} is not text")?)
+		name = full.split_on("/").last() ?? full
+		relative = if (prefix == "") name else "${prefix}/${name}"
+		match child.type!() {
+			Ok(IsDir) => {
+				below = walked!(tree, root, relative)?
+				$entries = $entries.append({ path: relative, kind: Dir }).concat(below.entries)
+				$links = $links.concat(below.links)
+			}
+			Ok(IsFile) => {
+				executable = child.is_executable!().map_err(|_| "${full} cannot be read")?
+				content = Store.file_digest!(full).map_err(|_| "${full} cannot be read")?
+				$entries = $entries.append({ path: relative, kind: File({ executable, digest: content }) })
+			}
+			Ok(IsSymLink) => {
+				$links = $links.append({ path: relative, target: resolved!(full, root) })
+			}
+			_ => return Err("it holds ${relative}, which is not a file, a directory or a link")
+		}
+	}
+	Ok({ entries: $entries, links: $links })
+}
+
+## Where a link leads: a path within the tree whose canonical path is
+## `root`, or the canonical path it reaches outside it, or nothing.
+resolved! : Str, Str => Str
+resolved! = |link, root|
+	match Path.utf8(link).canonicalize!() {
+		Ok(reached) => Store.within(root, Paths.portable(reached.to_str() ?? ""))
+		Err(_) => ""
+	}
 
 unix : { xdg_cache_home : Try(Str, [Unset]), home : Try(Str, [Unset]), local_app_data : Try(Str, [Unset]), windows : Bool }
 unix = { xdg_cache_home: Err(Unset), home: Ok("/home/me"), local_app_data: Err(Unset), windows: False }
@@ -598,3 +716,17 @@ expect digest(sha) and !digest("sha256:${sha}") and !digest(sha.replace_each("8"
 
 expect Store.executable_name("roc-stable") == "roc-stable.exe"
 expect Store.executable_name("tool.exe") == "tool.exe"
+
+# A tree's record is beside the tree, and reads back as itself. One of
+# another format, or that is not S-expression text, is not a record.
+expect Store.record_path("/s", sha, TarGz) == "/s/v1/trees/sha256/${sha}.tar.gz.digest"
+expect {
+	record = { format: Store.record_format, digest: "sha256:${sha}", links: [{ path: "roc/bin", target: "roc/roc" }] }
+	Store.read_record(Store.record_text(record)) == Ok(record)
+}
+expect Store.record_text({ format: 1, digest: "sha256:${sha}", links: [] }) == "(\n\t(digest \"sha256:${sha}\")\n\t(format 1)\n\t(links ()))\n"
+expect Store.read_record("((format 2) (digest \"sha256:00\") (links ()))") == Err(UnsupportedFormat(2))
+expect Store.read_record("{\"format\":1,\"digest\":\"sha256:00\",\"links\":[]}").is_err()
+
+# A link is recorded by where it leads: within the tree, or outside it.
+expect Store.within("/s/t", "/s/t/roc/roc") == "roc/roc" and Store.within("/s/t", "/s/t") == "." and Store.within("/s/t", "/s/tx/roc") == "/s/tx/roc"

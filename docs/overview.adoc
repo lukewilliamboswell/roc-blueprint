@@ -104,7 +104,7 @@ Silicon macOS and x86_64 Windows. It needs no Roc and no Python: it embeds the R
 that reads `Blueprint.roc` and installs it into its cache on first use. It needs https://nixos.org/download[Nix] with
 flakes enabled where the table's last two columns apply. Linux and macOS
 use `tar`, `ln` and `chmod` to unpack and link fetched programs. Windows
-uses its `tar` and exposes programs with hard links or copies.
+uses its `tar` and exposes programs as copies.
 
 On Intel macOS `blueprint` stops with a message naming the supported systems.
 On Windows, tasks can use fetched programs and expected tools without Nix.

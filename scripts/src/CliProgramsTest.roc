@@ -114,7 +114,7 @@ lock! = |test, server, cwd, downloads| {
 	for program in spec.programs {
 		match downloads.find_first(|download| program.urls.first() == Ok(download.url)) {
 			Ok(download) => {
-				$fetched = $fetched.append({ name: program.name, system: program.system, urls: program.urls, sha256: Integrity.digest(download.bytes), size: download.bytes.len(), obtained: Computed })
+				$fetched = $fetched.append({ name: program.name, system: program.system, urls: program.urls, sha256: Integrity.digest(download.bytes), size: download.bytes.len(), obtained: Computed, served: [Lock.host(download.url)], witness: "" })
 			}
 			Err(_) => {}
 		}
@@ -148,12 +148,15 @@ empty_store! = |test| {
 	Ok({})
 }
 
-## The names in the store's two directories, with nothing half-made beside them.
+## The names in the store's two directories, with nothing half-made beside
+## them, and each tree with its digest record and no record without its tree.
 kept! : Test => Try({ artifacts : List(Str), trees : List(Str) }, _)
 kept! = |test| {
 	artifacts = Process.sorted(CliHarness.names!("${test.store}/v1/artifacts/sha256")?)
-	trees = Process.sorted(CliHarness.names!("${test.store}/v1/trees/sha256")?)
-	CliHarness.check!(!artifacts.concat(trees).any(|name| name.starts_with(".tmp-")), "the store holds something half-made: ${Str.inspect(artifacts.concat(trees))}")?
+	listed = Process.sorted(CliHarness.names!("${test.store}/v1/trees/sha256")?)
+	CliHarness.check!(!artifacts.concat(listed).any(|name| name.starts_with(".tmp-")), "the store holds something half-made: ${Str.inspect(artifacts.concat(listed))}")?
+	trees = listed.keep_if(|name| !name.ends_with(".digest"))
+	CliHarness.check!(Process.sorted(trees.map(|name| "${name}.digest")) == listed.keep_if(|name| name.ends_with(".digest")), "the store's trees and their digest records do not pair up: ${Str.inspect(listed)}")?
 	Ok({ artifacts, trees })
 }
 
@@ -271,6 +274,49 @@ cases! = |bench, idle| {
 	CliHarness.check!(replaced.stdout == "exe: ${roc_file}\nstub roc-stable: configured\n" and Integrity.digest(Path.read_bytes!(Path.utf8(kept))?) == roc_sha, "a corrupted artifact was not replaced:\n${replaced.stdout}${replaced.stderr}")?
 	Script.pass!("a stored artifact that is not its digest is removed with its tree and fetched again; nothing runs from it")?
 
+	# A tree is hashed again on every use and compared with the record made
+	# beside it. One whose file was changed is made again from its stored
+	# artifact before anything runs, with no request: the server refuses all.
+	tree = "${test.store}/v1/trees/sha256/${roc_sha}.tar.gz"
+	record = "${tree}.digest"
+	archived = CliHarness.identity!(kept)?
+	CliHarness.contains!(Path.read_utf8!(Path.utf8(record))?, "(digest \"sha256:", "the record beside the tree of roc-stable")?
+	CliHarness.tool!(["chmod", "u+w", "--", roc_file])?
+	Path.write_utf8!(Path.utf8(roc_file), "#!/bin/sh\necho tampered\n")?
+	CliHarness.tool!(["chmod", "0555", "--", roc_file])?
+	mended = run!(test, refusing, first, ["run", "say"], 0, [])?
+	CliHarness.check!(
+		mended.stdout == "exe: ${roc_file}\nstub roc-stable: configured\n"
+			and mended.stderr == "blueprint: the stored tree of roc-stable is not what was recorded when it was made; making it again from its download\n",
+		"a tree whose program was changed was not made again before the run, or was fetched:\n${mended.stdout}${mended.stderr}",
+	)?
+	CliHarness.check!(Integrity.digest(Path.read_bytes!(Path.utf8(roc_file))?) == Integrity.digest(stub) and CliHarness.stat!("%a", roc_file)? == "555", "the tree made again does not hold the program as its archive does")?
+	# A tree with no record is not trusted either: it is made again, and its
+	# record with it.
+	Path.delete!(Path.utf8(record))?
+	unmade = CliHarness.identity!(roc_file)?
+	unrecorded = run!(test, refusing, first, ["run", "say"], 0, [])?
+	CliHarness.check!(
+		unrecorded.stdout == "exe: ${roc_file}\nstub roc-stable: configured\n"
+			and unrecorded.stderr == "blueprint: the stored tree of roc-stable has no digest record; making it again from its download\n",
+		"a tree with no digest record was used as it was, or fetched:\n${unrecorded.stdout}${unrecorded.stderr}",
+	)?
+	CliHarness.check!(CliHarness.identity!(roc_file)? != unmade and CliHarness.present!(record), "a tree with no digest record was not made again with one")?
+	CliHarness.check!(CliHarness.identity!(kept)? == archived, "the archive was written again while its tree was made again")?
+	quiet = run!(test, refusing, first, ["run", "say"], 0, [])?
+	CliHarness.check!(quiet.stderr == "", "a tree made again was not taken as it is on the next run:\n${quiet.stderr}")?
+	Script.pass!("a tree that was changed, or has no digest record, is made again from its stored archive before use, with no download")?
+
+	# A program is on a step's PATH as a symbolic link into the store, never a
+	# hard link: the step finds a link, and the store's file has one name.
+	probing = project!(test, "probing", plain.append("Task(\"exposed\", [Use(\"dev\"), Run([\"sh\", \"-c\", \"p=`command -v roc-stable`; cp -P $p exposed; stat -L -c %h $p > links\"])]),"))?
+	lock!(test, server, probing, both)?
+	_ = run!(test, refusing, probing, ["run", "exposed"], 0, [])?
+	CliHarness.check!(Path.is_sym_link!(Path.utf8("${probing}/exposed"))?, "the program on a step's PATH is not a symbolic link")?
+	CliHarness.check!(Path.read_utf8!(Path.utf8("${probing}/links"))? == "1\n", "the store's program had another name while a step ran: ${Path.read_utf8!(Path.utf8("${probing}/links"))?}")?
+	no_run_left!(probing)?
+	Script.pass!("a fetched program is on a step's PATH as a symbolic link, and its file in the store has no second name")?
+
 	# Two runs at once, from an empty store, both succeed and leave one of each.
 	empty_store!(test)?
 	together = server.drive!([job(test, first, ["run", "say", "--", "one"], []), job(test, first, ["run", "say", "--", "two"], [])])?
@@ -348,7 +394,31 @@ cases! = |bench, idle| {
 	redirected = project!(test, "redirected", CliProgramsTest.fetching({ roc: [idle.url("moved/roc.tar.gz")], tool: tool_url, expects: [], extra: "" }))?
 	lock!(test, server, redirected, [{ url: idle.url("moved/roc.tar.gz"), bytes: archive }, { url: tool_url, bytes: stub }])?
 	CliHarness.check!(run!(test, server, redirected, ["run", "say"], 0, [])?.stdout == "exe: ${roc_file}\nstub roc-stable: configured\n", "a redirect on the loopback address was not followed")?
-	Script.pass!("URLs are tried in order and a redirect is followed; a refusal, a busy server and a redirect out of HTTPS are each reported")?
+	# An update through the redirect records the host that served the bytes,
+	# for every system it downloaded, and no witness: nothing is published
+	# for them. The host is the loopback address, which the lock names
+	# already, so nothing new is said.
+	CliHarness.tool!(["chmod", "0644", "--", "${redirected}/Blueprint.lock"])?
+	resolved = command!(test, server, redirected, ["update", "roc-stable"], [])?
+	resolved_lock = locked!(redirected)?
+	served_by = resolved_lock.fetched.keep_if(|entry| entry.name == "roc-stable").map(|entry| (entry.urls, entry.served, entry.witness, entry.obtained))
+	CliHarness.check!(
+		resolved.code == 0 and resolved.stdout == "" and served_by.len() == 4
+			and served_by.all(|found| found == ([idle.url("moved/roc.tar.gz")], ["127.0.0.1"], "", Computed)),
+		"an update through a redirect did not record the host that served the bytes (code ${resolved.code.to_str()}):\n${resolved.stdout}${resolved.stderr}${resolved_lock.text}",
+	)?
+	# What a new lock will name is said before it is written: an update whose
+	# lock cannot be written has said it, and wrote nothing.
+	unwritten = project!(test, "unwritten", CliProgramsTest.fetching({ roc: [idle.url("moved/roc.tar.gz")], tool: tool_url, expects: [], extra: "" }))?
+	Path.create_dir!(Path.utf8("${unwritten}/locks"))?
+	CliHarness.tool!(["chmod", "a-w", "--", "${unwritten}/locks"])?
+	blocked = command!(test, server, unwritten, ["update"], [("BLUEPRINT_LOCK", "locks/Blueprint.lock")])?
+	CliHarness.tool!(["chmod", "u+w", "--", "${unwritten}/locks"])?
+	CliHarness.check!(
+		blocked.code != 0 and blocked.stdout == "Blueprint.lock will name download hosts it did not name before:\n  127.0.0.1, declared in Blueprint.roc\n" and CliHarness.names!("${unwritten}/locks")? == [],
+		"an update that could not write its lock did not say first what it would name, or wrote something (code ${blocked.code.to_str()}):\n${blocked.stdout}${blocked.stderr}",
+	)?
+	Script.pass!("URLs are tried in order and a redirect is followed; a refusal, a busy server and a redirect out of HTTPS are each reported; an update records the host a redirect led to, and says a new host before it writes the lock")?
 
 	# An archive is listed before it is unpacked: one with a link out of its
 	# tree leaves no tree at all.
@@ -520,7 +590,7 @@ updating! = |test, idle, given| {
 		.with_route("mirror/roc.tar.gz", given.archive)
 	refusing = Serve.emptied(server)
 	roc_file = "${test.store}/v1/trees/sha256/${roc_sha}.tar.gz/pkg/roc-stable"
-	heading = "Blueprint.lock now names download hosts it did not name before:\n"
+	heading = "Blueprint.lock will name download hosts it did not name before:\n"
 
 	# A PATH with the stub compiler and nothing else: no `nix`, real or stub.
 	bare_bin = "${bench.work}/bare-path"
@@ -535,7 +605,7 @@ updating! = |test, idle, given| {
 	empty_store!(test)?
 	solo = project!(test, "solo", CliProgramsTest.fetching({ roc: [roc_url], tool: tool_url, expects: ["tar", "ln"], extra: "" }))?
 	first = command!(test, server, solo, ["update"], bare)?
-	CliHarness.check!(first.code == 0 and first.stdout == "${heading}  127.0.0.1\n", "update of a project that only fetches, with no nix on PATH, exited with code ${first.code.to_str()}:\n${first.stdout}${first.stderr}")?
+	CliHarness.check!(first.code == 0 and first.stdout == "${heading}  127.0.0.1, declared in Blueprint.roc\n", "update of a project that only fetches, with no nix on PATH, exited with code ${first.code.to_str()}:\n${first.stdout}${first.stderr}")?
 	CliHarness.contains!(first.stderr, "blueprint: fetching roc-stable for ${system} from ${roc_url} to record its digest", "the first update")?
 	solo_lock = locked!(solo)?
 	CliHarness.check!(
@@ -586,7 +656,7 @@ updating! = |test, idle, given| {
 	moved = command!(test, replaced, solo, ["update"], bare)?
 	moved_lock = locked!(solo)?
 	CliHarness.check!(
-		moved.code == 0 and moved.stdout == "${heading}  mirror.example.invalid\n" and !moved.stderr.contains("fetching tool") and !moved.stderr.contains("mirror.example.invalid")
+		moved.code == 0 and moved.stdout == "${heading}  mirror.example.invalid, declared in Blueprint.roc\n" and !moved.stderr.contains("fetching tool") and !moved.stderr.contains("mirror.example.invalid")
 			and moved_lock.fetched.keep_if(|entry| entry.name == "roc-stable").all(|entry| entry.urls == [mirror_url, "https://mirror.example.invalid/roc.tar.gz"] and entry.sha256 == roc_sha)
 				and recorded(moved_lock.fetched, "tool") == recorded(named_lock.fetched, "tool"),
 		"an update after one program's URLs changed did not resolve that program alone and report its new host (code ${moved.code.to_str()}):\n${moved.stdout}${moved.stderr}",
@@ -627,6 +697,13 @@ updating! = |test, idle, given| {
 		Process.sorted(recorded(released_lock.fetched, "tool").map(|(declared, sha256, size, obtained)| "${declared} ${sha256} ${size.to_str()} ${Str.inspect(obtained)}"))
 			== Process.sorted(["${system} ${tool_sha} ${given.stub.len().to_str()} Both", "${far} ${far_sha} 11 Published", "${bare_asset} ${page_sha} ${given.page.len().to_str()} Computed"]),
 		"the lock does not say how each digest of a release asset was obtained:\n${released_lock.text}",
+	)?
+	# A digest the release published names the address it was read from; one
+	# that was hashed names the host that served the bytes.
+	CliHarness.check!(
+		Process.sorted(released_lock.fetched.keep_if(|entry| entry.name == "tool").map(|entry| "${entry.system} [${Str.join_with(entry.served, " ")}] ${entry.witness}"))
+			== Process.sorted(["${system} [127.0.0.1] ${api}", "${far} [] ${api}", "${bare_asset} [127.0.0.1] "]),
+		"the lock does not say where each digest of a release asset came from:\n${released_lock.text}",
 	)?
 	CliHarness.check!(occurrences(published.stderr, "blueprint: asking ${api} what owner/tool publishes for its release 1.0") == 1 and !published.stderr.contains("tool-${far}"), "the release was not asked once, or a system with a published digest was fetched:\n${published.stderr}")?
 	CliHarness.check!(kept!(test)? == { artifacts: [tool_sha], trees: [] }, "update kept something other than this machine's download: ${Str.inspect(kept!(test)?)}")?
@@ -699,7 +776,7 @@ updating! = |test, idle, given| {
 	mixed = command!(test, server, both, ["update"], [])?
 	mixed_lock = locked!(both)?
 	CliHarness.check!(
-		mixed.code == 0 and mixed.stdout == "${heading}  127.0.0.1\n" and mixed_lock.pinned
+		mixed.code == 0 and mixed.stdout == "${heading}  127.0.0.1, declared in Blueprint.roc\n" and mixed_lock.pinned
 			and recorded(mixed_lock.fetched, "roc-stable") == every(roc_sha, given.archive.len(), Computed) and recorded(mixed_lock.fetched, "tool") == every(tool_sha, given.stub.len(), Computed),
 		"update of a project with a Nix source and programs did not write both into one lock (code ${mixed.code.to_str()}):\n${mixed.stderr}${mixed_lock.text}",
 	)?
@@ -735,4 +812,4 @@ expect system_of({ arch: X64, os: LINUX }) == "x86_64-linux" and system_of({ arc
 
 expect occurrences("a, b, a", "a") == 2 and occurrences("b", "a") == 0
 expect described([{ name: "tool", size: 3, sha256: "ab" }, { name: "old", size: 4, sha256: "" }]) == "{\n  \"tag_name\": \"1.0\",\n  \"body\": null,\n  \"assets\": [\n    { \"name\": \"tool\", \"label\": null, \"size\": 3, \"digest\": \"sha256:ab\" },\n    { \"name\": \"old\", \"label\": null, \"size\": 4, \"digest\": null }\n  ]\n}\n"
-expect recorded([{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool"], sha256: "ab", size: 3, obtained: Both }, { name: "other", system: "x86_64-linux", urls: ["https://example.test/other"], sha256: "cd", size: 4, obtained: Computed }], "tool") == [("x86_64-linux", "ab", 3, Both)]
+expect recorded([{ name: "tool", system: "x86_64-linux", urls: ["https://example.test/tool"], sha256: "ab", size: 3, obtained: Both, served: ["example.test"], witness: "https://api.example.test/tool" }, { name: "other", system: "x86_64-linux", urls: ["https://example.test/other"], sha256: "cd", size: 4, obtained: Computed, served: ["example.test"], witness: "" }], "tool") == [("x86_64-linux", "ab", 3, Both)]

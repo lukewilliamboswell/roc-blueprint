@@ -123,8 +123,9 @@ directory, named by content:
 
 [source]
 ----
-<store>/v1/artifacts/sha256/<hex>            the downloaded bytes
-<store>/v1/trees/sha256/<hex>.<kind>/        those bytes, made usable
+<store>/v1/artifacts/sha256/<hex>                  the downloaded bytes
+<store>/v1/trees/sha256/<hex>.<kind>/              those bytes, made usable
+<store>/v1/trees/sha256/<hex>.<kind>.digest        what that tree held when made
 ----
 
 `<store>` is `blueprint` under `XDG_CACHE_HOME`, or under `.cache` in `HOME`
@@ -140,11 +141,16 @@ are not those its name says is removed, with every tree made from it, and
 downloaded again. A download that does not have the length and the SHA-256
 in `Blueprint.lock` is not kept and nothing is unpacked from it.
 
-A tree is derived state::
-It is checked once, when it is made from an artifact that has just been
-verified, and is not verified again. Whoever can write to the store can
-change a tree. In CI, cache `v1/artifacts` alone, keyed on `Blueprint.lock`:
-trees are rebuilt from it, and a cached artifact is re-hashed like any other.
+A tree is never trusted either::
+When a tree is made from an artifact that has just been verified, its digest
+is recorded beside it as S-expression text, never inside it: the content
+digest `blueprint` uses for local sources, over every file, directory and
+executable bit, with where each symbolic link leads. Before every use, after
+its artifact, the tree is hashed again and compared with that record, which
+only reads it. A tree that differs, or has no record, is removed and made
+again from the verified artifact, with no download. In CI, cache
+`v1/artifacts` alone, keyed on `Blueprint.lock`: trees are rebuilt from it,
+and a cached artifact is re-hashed like any other.
 
 An archive is listed before it is unpacked::
 An archive that holds an absolute name, a `..` segment, a name that is not
@@ -156,13 +162,13 @@ Two runs at once are safe::
 Each file and tree is written under a fresh name beside its final one and
 renamed into place, so no half-written file is ever seen and two processes
 that fetch the same thing both succeed. There is one gap: a run that finds
-an artifact with the wrong bytes removes its trees, and another process that
-is running a program from such a tree at that moment loses it.
+an artifact or a tree that is not what was recorded removes the tree, and
+another process that is running a program from it at that moment loses it.
 
 The store may be deleted at any time; the next run fetches what it needs
 again. The files of a tree are read-only and its directories are not, so an
 ordinary `rm -r` removes it. A Roc nightly is about 67 MB as an artifact and
-about 220 MB unpacked.
+about 220 MB unpacked, and both are hashed on every use.
 
 == How a download is made
 
@@ -183,10 +189,13 @@ xref:configuration.adoc#roc-packages[Lock the Roc packages scripts use].
 For each step, `blueprint` makes a directory `run/run-<random>/bin` under the
 generated directory (`.blueprint/` unless you moved it), holding one symbolic
 link for each fetched program, named as `Fetch` names it and pointing at the
-program inside its tree. That directory is put first on the step's `PATH`,
-ahead of everything the caller had, and is removed when the step ends,
-however it ends. A task whose command is the name of a fetched program is
-started from that link whatever else is on `PATH`.
+program inside its tree. On Windows, and wherever a symbolic link cannot be
+made, the program is copied there with its mode instead. Nothing is exposed
+through a hard link, which would be the store's own file under a second name
+that a step could write through. That directory is put first on the step's
+`PATH`, ahead of everything the caller had, and is removed when the step
+ends, however it ends. A task whose command is the name of a fetched program
+is started from that link whatever else is on `PATH`.
 
 Expected programs are not put anywhere: they are found on the caller's
 `PATH`, which the step inherits after the links. In an environment that also
@@ -234,8 +243,8 @@ lock, reporting requirements, and building and running a basic-cli program.
 
 The store uses `LOCALAPPDATA` when `XDG_CACHE_HOME` is unset.
 `Recipes.roc_nightly` selects the nightly's zip and `roc.exe`; the Windows
-`tar` reads zip archives. Fetched programs are exposed with hard links, or
-copies when the store is on another drive, and need no `ln` or `chmod`.
+`tar` reads zip archives. Fetched programs are copied into a step's `bin`
+directory with their mode, never hard-linked, and need no `ln` or `chmod`.
 
 Include `"x86_64-windows"` in the project's `Systems`: the default list
 contains Linux and macOS only, and fetched programs are locked for the
