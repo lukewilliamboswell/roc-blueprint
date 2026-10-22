@@ -137,7 +137,7 @@ validation and execution boundary:
   programs first on `PATH`.
 
 Nothing is downloaded, generated or run for a request that fails an earlier
-check. xref:without-nix.adoc#the-store-of-downloads[Work without Nix]
+check. xref:no-provider.adoc#the-store-of-downloads[Work without a provider]
 describes the store and the `PATH` of a step.
 
 == What each command validates

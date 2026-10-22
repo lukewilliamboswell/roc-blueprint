@@ -49,7 +49,7 @@ On Windows, declare the system and fetch `roc-stable` with
 `Recipes.roc_nightly`. Name the interpreter in each script task, for example
 `Run(["roc-stable", "scripts/check_all.roc"])`. The binary is
 `blueprint-x86_64-windows.exe`; the shared setup action currently installs
-only the Linux and macOS binaries. See xref:without-nix.adoc#windows[Windows]
+only the Linux and macOS binaries. See xref:no-provider.adoc#windows[Windows]
 for the supported behavior and limits.
 
 == Fetch a program

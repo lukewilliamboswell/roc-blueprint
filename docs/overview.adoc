@@ -33,7 +33,7 @@ The project commits `Blueprint.lock`, so a contributor's machine and a CI
 runner get the same downloads and the same packages. Nix is started only for
 an environment that has a tool from a Nix source, and for a build. A project
 that fetches its programs and expects the rest runs with no Nix installed;
-see xref:without-nix.adoc#a-project-that-never-starts-nix[Work without Nix].
+see xref:no-provider.adoc#a-project-that-never-starts-a-provider[Work without a provider].
 
 == What you write and what checks it
 
@@ -110,7 +110,7 @@ On Intel macOS `blueprint` stops with a message naming the supported systems.
 On Windows, tasks can use fetched programs and expected tools without Nix.
 Scripts must name their interpreter explicitly. The smoke-test job targets
 Windows Server; Windows 10 and 11 desktop installations have not been
-verified here. See xref:without-nix.adoc#windows[Windows] for setup and the
+verified here. See xref:no-provider.adoc#windows[Windows] for setup and the
 pinned Roc compiler's cache workaround.
 
 `Systems` in a configuration declares the systems a project is for: a

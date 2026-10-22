@@ -56,7 +56,7 @@ Only an explicit `update` creates or changes `Blueprint.lock`. `gen`, `shell`,
 `run`, `build` and `workflow` require a lock that matches and leave it as it
 is; the generated `.blueprint/flake.lock` is derived from it. Every example
 declares a Nix package source, so `blueprint update` needs Nix in each;
-xref:without-nix.adoc#a-project-that-never-starts-nix[Work without Nix] has a
+xref:no-provider.adoc#a-project-that-never-starts-a-provider[Work without a provider] has a
 project that needs none.
 
 In a checkout of the repository the examples need the platform host built

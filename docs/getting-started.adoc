@@ -131,7 +131,7 @@ git rm -r --cached .blueprint
 
 * xref:configuration.adoc#top-level-settings[Write Blueprint.roc] describes
   every setting.
-* xref:without-nix.adoc#the-store-of-downloads[Work without Nix] says where
+* xref:no-provider.adoc#the-store-of-downloads[Work without a provider] says where
   downloads are kept and what a project without Nix can do.
 * xref:builds.adoc#declare-a-build[Build artifacts and run workflows]
   covers sandboxed builds.

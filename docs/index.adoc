@@ -32,7 +32,7 @@ Writing a configuration:: <<write-blueprint-roc>> describes every setting, and
 Looking up a command or variable:: See <<run-blueprint>>.
 Reading an inspection report in pure Roc:: See <<consume-lock-inspection-in-roc>>.
 Describing release composition:: See <<artifact-bound-software-bills-of-materials>>.
-Running a project where Nix is not installed:: Read <<work-without-nix>>.
+Running a project where no package provider is installed:: Read <<work-without-a-provider>>.
 Looking for a project to adapt:: Browse <<learn-from-the-examples>>.
 Writing a provider or judging a design change:: Read
 <<understand-the-architecture>> and <<the-spec-the-lock-and-providers>>.
@@ -55,7 +55,7 @@ include::lock-snapshot.adoc[leveloffset=+1]
 
 include::sbom.adoc[leveloffset=+1]
 
-include::without-nix.adoc[leveloffset=+1]
+include::no-provider.adoc[leveloffset=+1]
 
 include::examples.adoc[leveloffset=+1]
 
@@ -66,7 +66,5 @@ include::spec.adoc[leveloffset=+1]
 include::contributing.adoc[leveloffset=+1]
 
 include::maintaining.adoc[leveloffset=+1]
-
-include::migrating-0.7.adoc[leveloffset=+1]
 
 include::releases.adoc[leveloffset=+1]

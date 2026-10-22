@@ -19,11 +19,44 @@ app [config] { pf: platform "{platform-url}" }
 Binaries are attached for x86_64 Linux, arm64 Linux, Apple Silicon macOS and
 x86_64 Windows, with SHA-256 sums in `blueprint.sha256`. Use this release's
 binary with its platform URL. The importable core package is `{core-url}`.
-This is an intentionally breaking pre-1.0 release. Upgrade configurations and
-report consumers together. Adopt current configuration, then resolve and review
-a current Lock 2 authority with `blueprint update`. Earlier lock formats are
-unsupported; there is no product migration path. See
-xref:migrating-0.7.adoc[Adopt 0.7.0].
+This is an intentionally breaking pre-1.0 release: Spec major 3, Lock 2, lock
+report format 2 and build result schema 2 replace their predecessors without
+aliases or conversion. Upgrade the CLI, the platform, imported packages and
+report consumers together.
+
+== Adopt 0.7.0
+
+Change the configuration, then let one update replace the lock:
+
+* Declare each build's executor and select it: `Executor("native", Nix("pkgs"))`
+  names the package source the executor bootstraps from, and every `Build`
+  gets `Execute("native")`. A Nix executor without a package source is refused
+  by `blueprint check`. The executor no longer follows whichever package
+  source was declared first.
+* Declare every flake input with `Input(name, ref)`; `Overlay(name, ref)` is
+  gone. An environment that lists an input in `Overlays` applies it as an
+  overlay, and that use gives the input its role.
+* Drop `Resolver(...)` lines that only name Nix-typed inputs, overlays,
+  sources or Roc bundles: those belong to Nix without one. Keep a `Resolver`
+  only to assign such a name to another provider.
+* Run `blueprint check`, then a full `blueprint update`. Every other command
+  refuses a lock in an earlier format; the full update replaces it in place.
+  Keep the old lock in history to diff its pins against the new ones, and
+  review the result as a dependency change. A named update,
+  `blueprint update NAME`, needs a current lock first.
+* Remove the project's generated `.blueprint/` state. The next successful
+  build starts a fresh `explain` baseline.
+* Consumers of reports read `content_identity` in lock reports and
+  `build_identity` in build results; `LockSnapshot.source_content_identity`
+  replaces `source_identity`, and `lock-snapshot-v2.schema.json` validates the
+  report.
+
+Two changes to existing behavior are easy to miss. `blueprint update` refuses
+a project that declares a package source for a provider this CLI does not
+register, such as a Guix source, instead of resolving around it. An
+environment with no tools of its own takes its bootstrap package set from a
+Nix executor a build selects, when one does, and otherwise from the first
+declared Nix source.
 
 == Compiler available on first use
 
