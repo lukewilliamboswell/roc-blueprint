@@ -507,6 +507,9 @@ A component's `origin` is `reviewed`, `source:<locked-name>`, or
 `program:<locked-name>:<system>`. Locked origins populate `version`,
 `identity`, `download`, `sha256` and, for a program, `target` from the Lock when
 the corresponding field is empty. Supplied pin-derived values must agree.
+A component's `target` is `source` for an architecture-independent archive,
+the system its native code was built for, or empty when it states nothing;
+see <<import-inert-verified-upstream-graphs>> for what each may enter.
 A source revision is the version where available; otherwise its documented
 content identity is used. A fetched program with no reviewed upstream version
 uses `sha256-<digest>` as a byte identity, without inventing a release version.
@@ -641,6 +644,23 @@ coverage says the subject is not bound to a resolved artifact and its claims
 are unverified. An unbound subject may state no SHA-256, as a supplier's SBOM
 of a source tree often does; a bound one must.
 
+The entry's `target` is what the supplier's document says of its subject:
+`source` for an architecture-independent archive, or the system its native
+code was built for. A `source` import, and a `source` component, belong in
+an inventory of any target, because each consumer's compiler builds a source
+archive for the consumer's own target: a Roc package bundle a Linux
+executable was built from keeps its `source` identity in that executable's
+`x86_64-linux` inventory, and is never relabelled as native code. A native
+import or component must have the inventory's target, so an `aarch64-linux`
+library cannot enter an `x86_64-linux` inventory. A `source` inventory, such
+as a platform bundle that carries a linker member for each of its targets,
+admits either. The relationship still says what the archive is to the
+subject: a build-scoped `dependsOn` from the subject to a source archive
+states that the archive went into compilation, not that its files, which
+may include the fonts, data and notices its modules import, ship unchanged
+in the executable. Nor does importing a source SBOM establish the
+executable's native closure; state what remains unknown in coverage.
+
 The importer is tested against what Syft and Trivy write, in both CycloneDX and
 SPDX (`tests/sbom/fixtures/upstream/`), and the `sbom-read` fuzz target requires
 that every document Blueprint can read also imports.
@@ -683,16 +703,16 @@ platform that uses a package published as
     {"id": "dep", "name": "dep-abc.tar.zst", "version": "1.2.0",
      "producer": "Organization: Example", "license": "MIT", "license_url": "",
      "identity": "", "download": "", "sha256": "", "modified": "",
-     "target": "", "origin": "source:dep"}
+     "target": "source", "origin": "source:dep"}
   ],
   "relationships": [
-    {"from": "Subject", "to": "dep", "relation": "dependsOn", "scope": "",
+    {"from": "Subject", "to": "dep", "relation": "dependsOn", "scope": "build",
      "basis": "Imported by the platform's Roc modules"}
   ],
   "imported_documents": [
     {"id": "dep-sbom", "url": "https://example.org/releases/1.2.0/dep-abc.tar.zst.spdx.json",
      "sha256": "<SHA-256 of that SBOM file>", "namespace": "<its namespace>",
-     "target": "x86_64-linux", "document": "<the SBOM file's contents>",
+     "target": "source", "document": "<the SBOM file's contents>",
      "relation": "dependsOn", "basis": "Supplier's published SBOM",
      "contact": "https://example.org/security",
      "subject": {"component": "dep", "filename": "dep-abc.tar.zst",
@@ -704,13 +724,15 @@ platform that uses a package published as
 
 The `source:dep` origin takes the download location and SHA-256 from the
 Lock, so the composition never repeats a pin. The reviewed `version` is the
-release the supplier's SBOM names. `inspect` then requires the SBOM's
-described file to have exactly the locked SHA-256 and that version, and
-records a `copiedTo` relationship from the supplier's subject to your
-component. The supplier's components and relationships join your inventory
-under the `dep-sbom-` prefix, so your SBOM states what the package contains
-without you inventorying it again. Because the supplier's SBOM already holds
-whatever it imported, the chain is transitive.
+release the supplier's SBOM names, and the `source` target is what the
+supplier's SBOM says of the bundle, whichever target your own inventory is
+for. `inspect` then requires the SBOM's described file to have exactly the
+locked SHA-256, that version and that target, and records a `copiedTo`
+relationship from the supplier's subject to your component. The supplier's
+components and relationships join your inventory under the `dep-sbom-`
+prefix, so your SBOM states what the package contains without you
+inventorying it again. Because the supplier's SBOM already holds whatever it
+imported, the chain is transitive.
 
 *Requiring SBOMs is the default.* `inspect` refuses an inventory in which a
 locked dependency, a component with a `source:` or `program:` origin, has

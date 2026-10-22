@@ -3,6 +3,7 @@ import core.Lock
 import core.Project
 import core.JsonData
 import core.Sbom
+import core.Sidecar
 import core.Spdx2
 import core.Spdx3
 import core.CycloneDx
@@ -19,6 +20,7 @@ import "../../tests/sbom/fixtures/verified-import.cdx.json" as fixture_verified_
 import "../../tests/sbom/fixtures/native-linux.cdx.json" as fixture_native_linux_cdx : Str
 import "../../tests/sbom/fixtures/native-arm64.cdx.json" as fixture_native_arm64_cdx : Str
 import "../../tests/sbom/fixtures/source-bundle.cdx.json" as fixture_source_bundle_cdx : Str
+import "../../tests/sbom/fixtures/native-source-import.cdx.json" as fixture_native_source_import_cdx : Str
 import "../../tests/sbom/fixtures/verified-empty.cdx.json" as fixture_verified_empty_cdx : Str
 import "../../tests/sbom/fixtures/unknown-closure.cdx.json" as fixture_unknown_closure_cdx : Str
 import "../../tests/sbom/fixtures/verified-import.spdx.json" as fixture_verified_import_3 : Str
@@ -29,6 +31,8 @@ import "../../tests/sbom/fixtures/native-arm64.spdx.json" as fixture_native_arm6
 import "../../tests/sbom/fixtures/native-arm64.spdx-2.3.json" as fixture_native_arm64_2 : Str
 import "../../tests/sbom/fixtures/source-bundle.spdx.json" as fixture_source_bundle_3 : Str
 import "../../tests/sbom/fixtures/source-bundle.spdx-2.3.json" as fixture_source_bundle_2 : Str
+import "../../tests/sbom/fixtures/native-source-import.spdx.json" as fixture_native_source_import_3 : Str
+import "../../tests/sbom/fixtures/native-source-import.spdx-2.3.json" as fixture_native_source_import_2 : Str
 import "../../tests/sbom/fixtures/verified-empty.spdx.json" as fixture_verified_empty_3 : Str
 import "../../tests/sbom/fixtures/verified-empty.spdx-2.3.json" as fixture_verified_empty_2 : Str
 import "../../tests/sbom/fixtures/unknown-closure.spdx.json" as fixture_unknown_closure_3 : Str
@@ -87,8 +91,6 @@ SbomTest := [].{
 		linux = inventory ?? crash "invalid fixture"
 		arm_composition = { ..composition, components: composition.components.map(|entry| { ..entry, target: "aarch64-linux" }) }
 		arm_inventory = Sbom.inspect(spec, lock, "aarch64-linux", arm_composition) ?? crash "invalid arm fixture"
-		source_composition = { ..composition, components: composition.components.map(|entry| { ..entry, target: "" }) }
-		source_inventory = Sbom.inspect(spec, lock, "source", source_composition) ?? crash "invalid source fixture"
 		empty = { ..composition, components: [], relationships: [], coverage: [{ scope: "all", status: "verified-empty", reason: "Reviewed generated text contains no third-party components", contact: "https://example.org/support" }] }
 		empty_inventory = Sbom.inspect(spec, lock, subject.target, empty) ?? crash "invalid empty fixture"
 		unknown = { ..empty, coverage: [{ scope: "all", status: "incomplete", reason: "Opaque task exposes no component closure", contact: "https://example.org/support" }] }
@@ -101,7 +103,8 @@ SbomTest := [].{
 			{ name: "verified-import", inventory: import_inventory, subject: { ..subject, filename: "consumer-artifact", sha256: Crypto.SHA256.hash("consumer of fixture\n".to_utf8()).to_hex() }, context: { ..context, namespace: "https://example.org/sbom/fixture/imported/revision-1" } },
 			{ name: "native-linux", inventory: linux, subject, context },
 			{ name: "native-arm64", inventory: arm_inventory, subject: { ..subject, target: "aarch64-linux" }, context: { ..context, namespace: "https://example.org/sbom/fixture/arm64/revision-1" } },
-			{ name: "source-bundle", inventory: source_inventory, subject: { ..subject, filename: "sample-source-bundle", target: "source", sha256: Crypto.SHA256.hash("fixture source bundle\n".to_utf8()).to_hex() }, context: { ..context, namespace: "https://example.org/sbom/fixture/source/revision-1" } },
+			{ name: "source-bundle", inventory: source_bundle_inventory, subject: { ..subject, filename: "sample-source-bundle", target: "source", sha256: Crypto.SHA256.hash("fixture source bundle\n".to_utf8()).to_hex() }, context: { ..context, namespace: "https://example.org/sbom/fixture/source/revision-1" } },
+			{ name: "native-source-import", inventory: native_from_source ?? crash "invalid source import fixture", subject: { ..subject, filename: "consumer-artifact", sha256: Crypto.SHA256.hash("consumer of fixture\n".to_utf8()).to_hex() }, context: { ..context, namespace: "https://example.org/sbom/fixture/source-import/revision-1" } },
 			{ name: "verified-empty", inventory: empty_inventory, subject, context: { ..context, namespace: "https://example.org/sbom/fixture/empty/revision-1" } },
 			{ name: "unknown-closure", inventory: unknown_inventory, subject, context: { ..context, namespace: "https://example.org/sbom/fixture/unknown/revision-1" } },
 		]
@@ -355,7 +358,7 @@ expect inspect({ ..SbomTest.composition, components: SbomTest.composition.compon
 
 # The committed fixtures are what the renderers write now; regenerate them
 # with `scripts/test_sbom.roc fixtures tests/sbom/fixtures`.
-committed_fixtures = [{ name: "verified-import.cdx.json", text: fixture_verified_import_cdx }, { name: "native-linux.cdx.json", text: fixture_native_linux_cdx }, { name: "native-arm64.cdx.json", text: fixture_native_arm64_cdx }, { name: "source-bundle.cdx.json", text: fixture_source_bundle_cdx }, { name: "verified-empty.cdx.json", text: fixture_verified_empty_cdx }, { name: "unknown-closure.cdx.json", text: fixture_unknown_closure_cdx }, { name: "verified-import.spdx.json", text: fixture_verified_import_3 }, { name: "verified-import.spdx-2.3.json", text: fixture_verified_import_2 }, { name: "native-linux.spdx.json", text: fixture_native_linux_3 }, { name: "native-linux.spdx-2.3.json", text: fixture_native_linux_2 }, { name: "native-arm64.spdx.json", text: fixture_native_arm64_3 }, { name: "native-arm64.spdx-2.3.json", text: fixture_native_arm64_2 }, { name: "source-bundle.spdx.json", text: fixture_source_bundle_3 }, { name: "source-bundle.spdx-2.3.json", text: fixture_source_bundle_2 }, { name: "verified-empty.spdx.json", text: fixture_verified_empty_3 }, { name: "verified-empty.spdx-2.3.json", text: fixture_verified_empty_2 }, { name: "unknown-closure.spdx.json", text: fixture_unknown_closure_3 }, { name: "unknown-closure.spdx-2.3.json", text: fixture_unknown_closure_2 }]
+committed_fixtures = [{ name: "native-source-import.cdx.json", text: fixture_native_source_import_cdx }, { name: "native-source-import.spdx.json", text: fixture_native_source_import_3 }, { name: "native-source-import.spdx-2.3.json", text: fixture_native_source_import_2 }, { name: "verified-import.cdx.json", text: fixture_verified_import_cdx }, { name: "native-linux.cdx.json", text: fixture_native_linux_cdx }, { name: "native-arm64.cdx.json", text: fixture_native_arm64_cdx }, { name: "source-bundle.cdx.json", text: fixture_source_bundle_cdx }, { name: "verified-empty.cdx.json", text: fixture_verified_empty_cdx }, { name: "unknown-closure.cdx.json", text: fixture_unknown_closure_cdx }, { name: "verified-import.spdx.json", text: fixture_verified_import_3 }, { name: "verified-import.spdx-2.3.json", text: fixture_verified_import_2 }, { name: "native-linux.spdx.json", text: fixture_native_linux_3 }, { name: "native-linux.spdx-2.3.json", text: fixture_native_linux_2 }, { name: "native-arm64.spdx.json", text: fixture_native_arm64_3 }, { name: "native-arm64.spdx-2.3.json", text: fixture_native_arm64_2 }, { name: "source-bundle.spdx.json", text: fixture_source_bundle_3 }, { name: "source-bundle.spdx-2.3.json", text: fixture_source_bundle_2 }, { name: "verified-empty.spdx.json", text: fixture_verified_empty_3 }, { name: "verified-empty.spdx-2.3.json", text: fixture_verified_empty_2 }, { name: "unknown-closure.spdx.json", text: fixture_unknown_closure_3 }, { name: "unknown-closure.spdx-2.3.json", text: fixture_unknown_closure_2 }]
 expect SbomTest.outputs.sort_with(|a, b| Project.bytewise(a.name, b.name)) == committed_fixtures.sort_with(|a, b| Project.bytewise(a.name, b.name))
 
 # What a consumer asks of the native fixture, in either version: the native
@@ -560,6 +563,72 @@ expect {
 # The pin stays the authority: a supplier SBOM for other bytes does not bind.
 expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..consumer, imported_documents: [{ ..supplier_import, subject: { ..supplier_import.subject, sha256: digest } }] }).is_err()
 expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..consumer, components: [{ ..dependency, sha256: digest }] }).is_err()
+
+# A source archive is architecture-independent: its consumer's compiler builds
+# it for the consumer's target. So a supplier's SBOM for one, such as a Roc
+# package bundle's, imports into a native executable's inventory with its
+# `source` target kept, never relabelled as native code, while the archive
+# digest, version and namespace bind exactly as a native supplier's do.
+source_bundle_inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, target: "" }) }) ?? crash "invalid source fixture"
+
+source_supplier_sbom = Sbom.render(source_bundle_inventory, { filename: "dep-abc.tar.zst", version: "1.2.0", target: "source", sha256: bundle_digest, url: bundle_url }, { ..SbomTest.context, namespace: "https://example.org/sbom/dep-source/revision-1" }) ?? crash "source supplier SBOM"
+
+source_supplier_import = { ..supplier_import, namespace: "https://example.org/sbom/dep-source/revision-1", target: "source", document: source_supplier_sbom, sha256: Crypto.SHA256.hash(source_supplier_sbom.to_utf8()).to_hex() }
+
+source_consumer = { ..consumer, components: [{ ..dependency, target: "source" }], relationships: [{ ..edge("Subject", "dep", "dependsOn"), scope: "build" }], imported_documents: [source_supplier_import] }
+
+native_from_source : Try(Sbom.Inventory, Str)
+native_from_source = Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", source_consumer)
+
+expect
+	match native_from_source {
+		Ok(inventory) =>
+			inventory.target == "x86_64-linux"
+				and inventory.components.all(|entry| entry.target == "source")
+					and inventory.components.any(|entry| entry.id == "dep" and entry.sha256 == bundle_digest and entry.version == "1.2.0")
+						and inventory.relationships.any(|relation| relation.from == "dep-sbom-Subject" and relation.to == "dep" and relation.relation == "copiedTo")
+							and inventory.coverage.any(|scope| scope.scope == "import:dep-sbom" and scope.reason.starts_with("Document digest and upstream subject artifact identity match"))
+		Err(_) => False
+	}
+expect Sbom.inspect(consumer_spec, consumer_lock, "source", source_consumer).is_ok()
+expect Sbom.inspect(consumer_spec, consumer_lock, "aarch64-linux", source_consumer).is_ok()
+expect Sbom.admits_target("x86_64-linux", "source") and Sbom.admits_target("x86_64-linux", "") and Sbom.admits_target("source", "x86_64-linux") and !Sbom.admits_target("x86_64-linux", "aarch64-linux")
+
+# The supplier's artifact binds exactly: other bytes, another version or
+# another target than the supplier states do not.
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, imported_documents: [{ ..source_supplier_import, subject: { ..source_supplier_import.subject, sha256: digest } }] }) == Err("import subject filename/version/SHA256 mismatch")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, imported_documents: [{ ..source_supplier_import, subject: { ..source_supplier_import.subject, version: "1.2.1" } }] }) == Err("import subject filename/version/SHA256 mismatch")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, imported_documents: [{ ..source_supplier_import, target: "x86_64-linux" }] }) == Err("imported document subject target mismatch")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, components: [{ ..dependency, target: "x86_64-linux" }] }) == Err("imported subject conflicts with authoritative component artifact")
+
+# A native supplier still has to match the inventory's target, and an import
+# has to state one.
+expect Sbom.inspect(consumer_spec, consumer_lock, "aarch64-linux", consumer) == Err("import target differs from subject")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, imported_documents: [{ ..source_supplier_import, target: "aarch64-linux" }] }) == Err("import target differs from subject")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, imported_documents: [{ ..source_supplier_import, target: "" }] }) == Err("import target differs from subject")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, components: [{ ..dependency, target: "aarch64-linux" }], imported_documents: [{ ..source_supplier_import, target: "aarch64-linux" }] }) == Err("import target differs from subject")
+
+# Every rendering keeps the source identity through check and readback, and
+# a build-scoped source dependency ships nothing: it is excluded, and no
+# `contains` reaches it from the subject.
+expect [fixture_native_source_import_3, fixture_native_source_import_2, fixture_native_source_import_cdx].all(
+	|text|
+		match Sidecar.check(text) {
+			Ok(checked) =>
+				checked.evidence.target == "x86_64-linux"
+					and checked.subject.comment.contains("\"target\":\"x86_64-linux\"")
+						and checked.document.packages_.keep_if(|entry| entry.id != "Subject").all(|entry| entry.comment.contains("\"target\":\"source\""))
+							and !containers(checked.document, "dep").contains("Subject")
+								and checked.document.relationships.any(|relation| relation.from == "Subject" and relation.to == "dep" and relation.relation == "dependsOn" and relation.scope == "build")
+			Err(_) => False
+		},
+)
+expect {
+	bom = JsonData.decode_with(fixture_native_source_import_cdx, JsonData.documents) ?? crash "fixture"
+	components = (bom.field("components") ?? JsonData.Null).array() ?? []
+	scope = |ref| components.find_first(|entry| entry.field("bom-ref") == Ok(JsonData.String(ref))).map_ok(|entry| (entry.field("scope") ?? JsonData.Null).string() ?? "") ?? ""
+	scope("dep") == "excluded" and components.all(|entry| (entry.field("scope") ?? JsonData.Null).string() != Ok("required"))
+}
 
 # Binding inputs must track the current public Spec and Lock wire contracts.
 expect Spec.parse(fixture_input_spec) == Ok(SbomTest.spec)

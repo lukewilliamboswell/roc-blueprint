@@ -110,6 +110,17 @@ Sbom := [].{
 	scopes : List(Str)
 	scopes = ["build", "test", "development", "runtime"]
 
+	## Whether a component or import of `target` belongs in an inventory for
+	## `subject`. An unstated target claims nothing. `source` is
+	## architecture-independent: a source archive, such as a Roc package
+	## bundle, is built by each consumer for the consumer's target, so it keeps
+	## that identity in a native inventory rather than being relabelled as
+	## native code. A native target must be the subject's. A `source` subject
+	## carries anything, as a platform source bundle carries members for each
+	## of its targets.
+	admits_target : Str, Str -> Bool
+	admits_target = |subject, target| subject == "source" or target.is_empty() or target == "source" or target == subject
+
 	## Stable names for authoritative inputs; every known input needs a reviewed
 	## disposition, even when it is excluded from this particular deliverable.
 	known_inputs : Spec, Lock, Str -> List(Str)
@@ -226,7 +237,7 @@ Sbom := [].{
 			if component.id.to_utf8().len() > 256 or Json.to_str(component).to_utf8().len() > 16384 {
 				return Err("component metadata exceeds profile bounds")
 			}
-			if target != "source" and !resolved.target.is_empty() and resolved.target != target {
+			if !admits_target(target, resolved.target) {
 				return Err("component target differs from subject target")
 			}
 			if !supplier(component.producer) or !license(component.license) {
@@ -436,7 +447,7 @@ bindable = |inventory, subject, context| {
 	if !context.namespace.starts_with("https://") or !context.namespace.ends_with("revision-${context.revision}") or context.revision.is_empty() or !Spdx3.timestamp(context.created) or !agent(context.author) or !context.generator.starts_with("Tool: ") or context.generator == "Tool: " {
 		return Err("explicit namespace/revision/time/author/generator required")
 	}
-	if inventory.components.any(|component| subject.target != "source" and !component.target.is_empty() and component.target != subject.target) {
+	if inventory.components.any(|component| !Sbom.admits_target(subject.target, component.target)) {
 		return Err("subject target differs from inspected inventory")
 	}
 	Ok({})
@@ -915,7 +926,9 @@ expand_import = |imported, target, binding| {
 	if !valid_id(imported.id) or !uri(imported.url) or !namespace_identity(imported.namespace) or !hex(imported.sha256) or !Sbom.json_within_bounds(imported.document) or imported.contact.is_empty() or imported.basis.is_empty() or !Sbom.relations.contains(imported.relation) {
 		return Err("invalid or oversized imported reference")
 	}
-	if target != "source" and imported.target != target {
+	# An import states its subject's target: `source` for an
+	# architecture-independent archive, otherwise the inventory's own.
+	if (imported.target.is_empty() and target != "source") or !Sbom.admits_target(target, imported.target) {
 		return Err("import target differs from subject")
 	}
 	if Crypto.SHA256.hash(imported.document.to_utf8()).to_hex() != imported.sha256 {
