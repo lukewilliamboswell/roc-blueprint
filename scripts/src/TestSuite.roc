@@ -217,10 +217,15 @@ static! = |context| {
 		problem!(StaticChecks.lock_inspector_contract_problem(read!(context, report)?))?
 	}
 
-	for report in ["blueprint-core/LockSnapshot.roc", "blueprint-core/JsonData.roc", "blueprint-core/BuildModel.roc"] {
+	for report in ["blueprint-core/LockSnapshot.roc", "blueprint-core/JsonData.roc", "blueprint-core/BuildModel.roc", "blueprint-core/Activation.roc"] {
 		problem!(StaticChecks.core_report_contract_problem(read!(context, report)?))?
 	}
 	problem!(StaticChecks.native_grammar_problem(read!(context, "blueprint-nix/Native.roc")?, read!(context, "blueprint-platform/Lower.roc")?))?
+	var $authority = []
+	for file in ["blueprint-cli/Store.roc", "blueprint-cli/Bootstrap.roc", "blueprint-core/Lock.roc", "blueprint-core/Spec.roc", "blueprint-core/BuildModel.roc", "blueprint-core/Sexpr.roc"] {
+		$authority = $authority.append((file, read!(context, file)?))
+	}
+	problem!(StaticChecks.json_authority_problem($authority))?
 
 	step!("The CLI records a download of its compiler for every system it runs on")?
 	problem!(StaticChecks.bootstrap_problem(read!(context, "blueprint-cli/compiler-version")?, read!(context, "blueprint-cli/Bootstrap.roc")?))?

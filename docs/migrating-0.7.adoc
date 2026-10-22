@@ -58,6 +58,13 @@ Generated state is disposable. Clear the project's generated `.blueprint/`
 state when adopting 0.7.0. The next successful build establishes a fresh local
 explanation baseline.
 
+== Declare inputs with one setting
+
+`Overlay(name, ref)` is gone. Declare every flake input with
+`Input(name, ref)`; an environment that lists it in `Overlays` applies it as
+an overlay, and the Nix resolver learns the input's role from that use. The
+Spec records inputs as `{ name, url }` with no provider-specific kind.
+
 == Behavior changes to check
 
 * `blueprint update` refuses a project that declares a package source for a
@@ -70,6 +77,14 @@ explanation baseline.
   `Resolver`, as it owns `Input`, `Overlay` and `Source` declarations.
 * `blueprint check` asks each executor's provider to validate its declaration.
   A Nix executor needs a non-empty bootstrap package source.
+* Every fetched entry of the lock records the hosts that served its bytes and
+  the address a published digest was read from. A host the lock did not name,
+  declared or reached by a redirect, is reported before the lock is written.
+* A tree in the store is verified against its recorded digest on every use
+  and rebuilt from its archive when it differs. Programs are exposed through
+  symbolic links, or copies on Windows, never hard links. Clear the store if
+  an older one holds trees without records; they are rebuilt once.
+* `blueprint env NAME` prints what entering a shell exports, as data.
 
 == Use current report and library contracts
 

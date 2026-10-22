@@ -67,6 +67,15 @@ StaticChecks := [].{
 		}
 	}
 
+	## docs/architecture.adoc invariant 10: nothing authoritative is read from
+	## JSON. The modules that hold authority and the store decode none; a
+	## JSON reader in the CLI is a report or a native tool's output.
+	json_authority_problem : List((Str, Str)) -> Str
+	json_authority_problem = |modules| {
+		offenders = modules.keep_if(|(_, source)| source.split_on("\n").any(|line| !line.trim().starts_with("#") and (line.contains("Json.parse") or line.contains("JsonData.decode") or line.contains("Json.to_str") or line.contains("JsonData.encode")))).map(|(name, _)| name)
+		if (offenders.is_empty()) "" else "authority and store modules must not encode or decode JSON: ${Str.join_with(offenders, ", ")}"
+	}
+
 	## Exported report codecs stay in the pure core package; no adapter or IO.
 	core_report_contract_problem : Str -> Str
 	core_report_contract_problem = |source| {
@@ -342,3 +351,6 @@ expect !StaticChecks.core_report_contract_problem("import pf.Path\n").is_empty()
 expect StaticChecks.native_grammar_problem("import core.Spec\nimport core.Project\n", "import Config\nimport nix.Native\n") == ""
 expect StaticChecks.native_grammar_problem("import core.Spec\nimport Locks\n", "import nix.Native\n").contains("import Locks")
 expect StaticChecks.native_grammar_problem("import core.Spec\n", "import nix.Native\nimport nix.NixProvider\n").contains("import nix.NixProvider")
+
+expect StaticChecks.json_authority_problem([("blueprint-cli/Store.roc", "import core.Sexpr\nrecord = Sexpr.to_str(tree)\n")]) == ""
+expect StaticChecks.json_authority_problem([("blueprint-cli/Store.roc", "manifest = Json.parse(text)\n"), ("blueprint-core/Lock.roc", "# Json.parse is mentioned here only\n")]).contains("blueprint-cli/Store.roc")

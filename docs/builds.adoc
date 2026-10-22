@@ -421,7 +421,7 @@ on itself.
 
 == Override packages in a producer
 
-`Overlay("producer-overrides", "path:./producer-overrides")` may name a local
+`Input("producer-overrides", "path:./producer-overrides")` may name a local
 flake with an `overlays.default` output. Select it with
 `Overlays(["producer-overrides"])` in the producer's environment. For example,
 that flake can define:

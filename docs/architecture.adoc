@@ -117,11 +117,12 @@ artifact cache or infer a cache hit from a successful command.
 | Term | Definition
 | Blueprint | The authored `Blueprint.roc` configuration.
 | Spec | Its normalized, validated, versioned description of intent.
-| Source | A declared external content origin, with explicit resolver ownership.
+| Source | A declared external content origin, with explicit resolver ownership. Its reference is text the owning provider validates; the core reads no provider grammar.
 | Component | A requested package within a source's native package universe.
 | Execution system | The operating system, architecture and platform on which an operation executes. `Systems` and `BLUEPRINT_TARGET` select it.
 | Artifact target | The platform an artifact runs on, when it differs from the execution system. Cross-compilation settings belong to the script.
-| Lock | Committed dependency authority: exact pins, declared resolution intent and recorded verification evidence.
+| Lock | Committed dependency authority: exact pins, declared resolution intent and the trust record of every download.
+| Trust record | For each fetched program and system: the declared URLs, the hosts that actually served the bytes, the digest, how it was obtained (computed, published, both) and the witness it was read from.
 | Artifact | A produced or fetched file or tree. Its role is stated; a location alone does not identify its content.
 | Store | Disposable local materialization of pinned or produced content.
 | Host facts | Explicitly observed machine requirements that Blueprint does not supply or pin.
@@ -200,6 +201,11 @@ The Lock is dependency authority, not a complete build description. A build
 also consumes its command, selected project files, tool options and declared
 dependency builds. Captured inputs can include untracked or task-generated
 files; the Lock alone cannot reconstruct them.
+
+Every download the Lock records carries its trust record, so a reviewer of
+the lock diff sees where bytes came from and who vouched for their digest.
+A host the lock did not name before, whether declared or reached by redirect,
+is reported before the lock is written.
 
 Successful-build evidence records what was prepared and obtained. It is
 disposable operational state, not a replacement lock. A failed build, planning
@@ -287,18 +293,22 @@ supplied for comparison.
 == Invariants
 
 [[inv-1]]
-=== Invariant 1: Shared capabilities are provider neutral
+=== Invariant 1: The core is provider neutral
 
-A shared capability has one meaning. Native details stay scoped to their
-provider. Explicit source ownership and executor selection determine routing;
-nothing ambient selects a provider.
+A shared capability has one meaning. The Spec, the Lock and the core carry no
+provider concept outside namespaced hints and opaque provider-validated text:
+a reference, a package name and an executor's settings are the owning
+provider's to read. Explicit source ownership and executor selection determine
+routing; nothing ambient selects a provider.
 
 [[inv-2]]
-=== Invariant 2: Only Resolve chooses pins
+=== Invariant 2: Every stage after Resolve is a pure function of named upstream facts
 
-Planning, preparation and execution preserve the Lock. They consume declared
-commands, settings, selected files and host requirements, but they never
-choose a dependency.
+Only Resolve chooses pins. Every later stage is a function of the Spec, the
+Lock, the execution system, the declared host facts and the captured project
+inputs, and of nothing else: no environment variable, installed tool or file
+that is not one of those. Two machines with the same upstream facts plan the
+same steps, prepare the same build and produce the same activation.
 
 [[inv-3]]
 === Invariant 3: Authority and evidence are separate
@@ -308,9 +318,12 @@ build inputs, results and measured outputs are execution evidence. Neither
 silently expands or rewrites the other.
 
 [[inv-4]]
-=== Invariant 4: Pinned content is verified before use
+=== Invariant 4: Pinned content is verified before every use
 
-Fetched bytes are checked against their declared authority. Native build
+Fetched bytes are checked against the Lock, and a tree unpacked from them is
+checked against its recorded digest, on every use. A damaged tree is rebuilt
+from its verified archive without a network request. Nothing in the store is
+exposed through a hard link, so no consumer can write into it. Native build
 caches use the provider's own integrity contract.
 
 [[inv-5]]
@@ -334,10 +347,13 @@ Unsupported capabilities and invalid selected relationships fail before
 effects.
 
 [[inv-8]]
-=== Invariant 8: Rendering happens at the edge
+=== Invariant 8: Activation is data, and rendering happens at the edge
 
-Activation is data. Presenters own escaping. Machine and human presentations
-share one typed result; native process output is decoded first.
+An entered environment is an Activation value: search-path directories and
+variables, each naming what supplies it. The core produces it for what it
+realises, a provider for what it realises, and only a presenter turns it into
+shell syntax, CI files or JSON. Presenters own escaping. Machine and human
+presentations share one typed result; native process output is decoded first.
 
 [[inv-9]]
 === Invariant 9: Inspection declares what it reads
@@ -348,12 +364,15 @@ evidence it is given. Missing coverage is explicit; an inspector never invents
 a complete graph from reports.
 
 [[inv-10]]
-=== Invariant 10: Formats have explicit compatibility contracts
+=== Invariant 10: One authoritative codec; JSON is interchange
 
-Spec, Lock, build records and public reports version their own semantics.
-S-expressions serve authority and local records; JSON is presentation. A
-package version, a wire format and a compiler version are distinct. A format
-a consumer does not read is refused by name, never converted at runtime.
+The Spec, the Lock, build records and every other authoritative or locally
+kept record are S-expressions with their own major and minor versions. JSON
+is for interchange and presentation only: reports a program reads, the output
+of a native tool the host decodes, and files written for another tool to
+consume. Nothing authoritative is read from JSON. A package version, a wire
+format and a compiler version are distinct. A format a consumer does not read
+is refused by name, never converted at runtime.
 
 [[coupling-test]]
 == The coupling test
@@ -379,6 +398,8 @@ another provider's native data.
 * Core-managed downloads, Roc packages, expected host tools, tasks and
   workflows of tasks run on every supported system, including Windows,
   without any provider.
+* `blueprint env` renders an environment's Activation for a shell, for
+  GitHub Actions or as JSON. No other presenter ships.
 * Blueprint's own store holds verified downloads; it is not yet an executor.
-* Remote execution, presenters beyond the shell and JSON, and comparison
-  against arbitrary historical records are not implemented.
+* Remote execution and comparison against arbitrary historical records are
+  not implemented.

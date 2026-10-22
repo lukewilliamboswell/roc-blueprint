@@ -158,6 +158,33 @@ takes its bootstrap package set from the source of a Nix executor that a Build
 selects, when any Build selects one, and otherwise from the first declared Nix
 source.
 
+== Enter an environment from anywhere
+
+`blueprint env NAME` prints what entering the shell `NAME` would export,
+without entering it: `eval "$(blueprint env dev)"` in a shell, `--github-path`
+and `--github-env` for a GitHub Actions step, `--json` for an editor or agent.
+The core describes the programs it fetched itself; a provider is asked for
+its shell as data, which Nix answers with `nix print-dev-env`. An entered
+environment is a value of the core's `Activation` type; only a presenter
+turns it into shell syntax.
+
+== A neutral core, a verified store and a fuller trust record
+
+The Spec carries no provider-specific input kind: `Input(name, ref)` declares
+every flake input, and an environment's `Overlays` gives one its role. A
+reference's grammar is checked by the resolver that owns it, through the
+provider contract, not by the core.
+
+Every tree the store unpacks is recorded with its digest and verified against
+it on each use, and rebuilt from its verified archive when it differs, without
+a download. Programs are exposed through symbolic links, or copies on Windows;
+there are no hard links into the store.
+
+Each fetched entry of the lock records the hosts that served its bytes after
+redirects and the address a published digest was read from. A host the lock
+did not name before is reported before the lock is written, and the report
+says whether the host was declared or reached by a redirect.
+
 == Describe your software's supply chain with SBOMs
 
 The new public `core.Sbom` API turns resolved Lock identities and a reviewed

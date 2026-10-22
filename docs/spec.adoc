@@ -25,7 +25,9 @@ In outline:
 * `executors` — `{ name, provider, source }`: a named executor, its provider
   and its bootstrap package source, empty for an executor that needs none.
 * `build_executors` — explicit executor selection for each Build.
-* `inputs` — `{ name, url, kind }`, where kind is `Overlay` or `Flake`.
+* `inputs` — `{ name, url }`: inputs a resolver fetches. An environment that
+  lists one in `overlays` applies it to its package set as that provider
+  defines; the Spec records no provider-specific kind.
 * `environments` — `{ name, parents, tools, overlays }`; tools are
   `{ source, name }`, where `source` is a declared source, and overlays are
   ordered input names. Validation resolves a
@@ -228,6 +230,15 @@ only this record: `scripts/src/StaticChecks.roc` fails if
 
 | `validate_executor`
 | Check an executor declaration it owns, such as a required bootstrap source. `blueprint check`, `plan build` and `explain build` without `--prepare`, and request planning call it.
+
+| `validate_reference`
+| Check the reference of an input or build source its resolver owns against the provider's grammar. The core requires only readable text.
+
+| `activation_argv`
+| The argv that prints what the provider's shell for a step would export, without entering it.
+
+| `activation`
+| Decode that output into an `Activation`: search-path directories and exported variables, each marked as the provider's.
 
 | `render`
 | The files it would generate for the whole Spec, for inspection.
