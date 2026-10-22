@@ -10,12 +10,12 @@
 :source-highlighter: rouge
 
 [.lead]
-roc-blueprint lets a project describe its development environments, the
-commands that run in them, its sandboxed builds and its ordered workflows in
-one typed file, `Blueprint.roc`. The file says where every program comes
-from: a download checked against a digest the project commits, the machine
-itself, or a pinned Nix package source. The `blueprint` command carries it
-out, and starts Nix only for what a project takes from Nix.
+roc-blueprint gives everyone who works on a project, and its CI, the same
+tools at the same versions. A project describes its tools, the commands that
+use them, its builds and its workflows in one typed file, `Blueprint.roc`,
+and commits a reviewed `Blueprint.lock` that pins exactly what was chosen.
+The `blueprint` command carries both out on Linux and macOS, runs tasks on
+Windows, and starts Nix only for what a project takes from Nix.
 
 ifdef::backend-html5[]
 link:roc-blueprint.pdf[Download this manual as a PDF] ·
@@ -25,7 +25,9 @@ endif::[]
 
 .How to use this manual
 ****
-Deciding whether to use Blueprint:: Start with <<what-blueprint-is>>.
+New to Blueprint, or deciding whether to use it:: Start with
+<<what-blueprint-is>>. It explains the idea in plain words, and
+<<the-words-this-manual-uses>> defines the terms the later chapters use.
 Using it for the first time:: Follow <<get-started>>.
 Writing a configuration:: <<write-blueprint-roc>> describes every setting, and
 <<build-artifacts-and-run-workflows>> the sandboxed builds.

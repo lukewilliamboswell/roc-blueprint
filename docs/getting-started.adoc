@@ -1,8 +1,10 @@
 = Get started
 
-This chapter installs `blueprint`, writes a first `Blueprint.roc` that needs
-nothing but the binary, runs a task in the environment it describes, and then
-adds a tool from Nix.
+xref:overview.adoc#a-small-blueprint-roc[What Blueprint is] showed what a
+`Blueprint.roc` says. This chapter makes one work on your machine. It
+installs `blueprint`, writes a first `Blueprint.roc` that needs nothing but
+the binary, locks its download, runs a task in the environment it
+describes, and then adds a tool from Nix.
 
 == Install blueprint
 
