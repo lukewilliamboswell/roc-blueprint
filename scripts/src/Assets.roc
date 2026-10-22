@@ -4,6 +4,7 @@ import Examples
 import Integrity
 import Process
 import Release
+import SbomFixtures
 import Script
 
 ## The files a release publishes, gathered into one directory so the job that
@@ -41,6 +42,7 @@ Assets := [].{
 				release.core_bundle,
 				release.tool_bundle,
 				"${Examples.archive_name(release.version)}.zip",
+				"${SbomFixtures.archive_name(release.version)}.zip",
 				docs_archive(release.version),
 				manual(release.version),
 			]),
@@ -133,7 +135,7 @@ sums_sample = Str.join_with(Assets.binaries.map(|name| Release.checksum_line(nam
 
 names_sample = Assets.inventory({ version: "0.5.0", platform_bundle: "Abc.tar.zst", core_bundle: "roc-blueprint-core-Def.tar.zst", tool_bundle: "roc-blueprint-sbom-Tool.tar.zst" })
 
-expect names_sample == ["Abc.tar.zst", "Abc.tar.zst.cdx.json", "Abc.tar.zst.sbom-manifest.json", "Abc.tar.zst.spdx-2.3.json", "Abc.tar.zst.spdx.json", "blueprint-aarch64-darwin", "blueprint-aarch64-darwin.cdx.json", "blueprint-aarch64-darwin.sbom-manifest.json", "blueprint-aarch64-darwin.spdx-2.3.json", "blueprint-aarch64-darwin.spdx.json", "blueprint-aarch64-linux", "blueprint-aarch64-linux.cdx.json", "blueprint-aarch64-linux.sbom-manifest.json", "blueprint-aarch64-linux.spdx-2.3.json", "blueprint-aarch64-linux.spdx.json", "blueprint-x86_64-linux", "blueprint-x86_64-linux.cdx.json", "blueprint-x86_64-linux.sbom-manifest.json", "blueprint-x86_64-linux.spdx-2.3.json", "blueprint-x86_64-linux.spdx.json", "blueprint-x86_64-windows.exe", "blueprint-x86_64-windows.exe.cdx.json", "blueprint-x86_64-windows.exe.sbom-manifest.json", "blueprint-x86_64-windows.exe.spdx-2.3.json", "blueprint-x86_64-windows.exe.spdx.json", "blueprint.sha256", "roc-blueprint-0.5.0.pdf", "roc-blueprint-core-Def.tar.zst", "roc-blueprint-core-Def.tar.zst.cdx.json", "roc-blueprint-core-Def.tar.zst.sbom-manifest.json", "roc-blueprint-core-Def.tar.zst.spdx-2.3.json", "roc-blueprint-core-Def.tar.zst.spdx.json", "roc-blueprint-docs-0.5.0.zip", "roc-blueprint-examples-0.5.0.zip", "roc-blueprint-sbom-Tool.tar.zst", "roc-blueprint-sbom-Tool.tar.zst.cdx.json", "roc-blueprint-sbom-Tool.tar.zst.sbom-manifest.json", "roc-blueprint-sbom-Tool.tar.zst.spdx-2.3.json", "roc-blueprint-sbom-Tool.tar.zst.spdx.json"]
+expect names_sample == ["Abc.tar.zst", "Abc.tar.zst.cdx.json", "Abc.tar.zst.sbom-manifest.json", "Abc.tar.zst.spdx-2.3.json", "Abc.tar.zst.spdx.json", "blueprint-aarch64-darwin", "blueprint-aarch64-darwin.cdx.json", "blueprint-aarch64-darwin.sbom-manifest.json", "blueprint-aarch64-darwin.spdx-2.3.json", "blueprint-aarch64-darwin.spdx.json", "blueprint-aarch64-linux", "blueprint-aarch64-linux.cdx.json", "blueprint-aarch64-linux.sbom-manifest.json", "blueprint-aarch64-linux.spdx-2.3.json", "blueprint-aarch64-linux.spdx.json", "blueprint-x86_64-linux", "blueprint-x86_64-linux.cdx.json", "blueprint-x86_64-linux.sbom-manifest.json", "blueprint-x86_64-linux.spdx-2.3.json", "blueprint-x86_64-linux.spdx.json", "blueprint-x86_64-windows.exe", "blueprint-x86_64-windows.exe.cdx.json", "blueprint-x86_64-windows.exe.sbom-manifest.json", "blueprint-x86_64-windows.exe.spdx-2.3.json", "blueprint-x86_64-windows.exe.spdx.json", "blueprint.sha256", "roc-blueprint-0.5.0.pdf", "roc-blueprint-core-Def.tar.zst", "roc-blueprint-core-Def.tar.zst.cdx.json", "roc-blueprint-core-Def.tar.zst.sbom-manifest.json", "roc-blueprint-core-Def.tar.zst.spdx-2.3.json", "roc-blueprint-core-Def.tar.zst.spdx.json", "roc-blueprint-docs-0.5.0.zip", "roc-blueprint-examples-0.5.0.zip", "roc-blueprint-sbom-Tool.tar.zst", "roc-blueprint-sbom-Tool.tar.zst.cdx.json", "roc-blueprint-sbom-Tool.tar.zst.sbom-manifest.json", "roc-blueprint-sbom-Tool.tar.zst.spdx-2.3.json", "roc-blueprint-sbom-Tool.tar.zst.spdx.json", "roc-blueprint-sbom-fixtures-0.5.0.zip"]
 
 # The contract is these names, whatever systems the build script lists.
 expect Assets.binaries == Release.systems.map(|released| Release.binary_name("blueprint", released.system))

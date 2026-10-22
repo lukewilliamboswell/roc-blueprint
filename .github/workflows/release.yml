@@ -109,6 +109,11 @@ jobs:
       - name: Archive the examples with this release's platform
         run: nix develop -c scripts/package_examples.roc "$VERSION"
 
+      # The SBOM cases the test suite asserts, with their contract, for
+      # consumers that test the standalone tool without a checkout.
+      - name: Archive the SBOM fixture set with its case contract
+        run: nix develop -c scripts/package_sbom_fixtures.roc "$VERSION"
+
       # The manual attached to a release names that release's bundle.
       - name: Write the part of the manual that names the release
         run: nix develop -c scripts/docs_snippet.roc "$VERSION"

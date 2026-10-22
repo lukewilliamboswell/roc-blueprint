@@ -1,0 +1,18 @@
+(
+	(fetched ())
+	(format (
+		(major 2)
+		(minor 0)))
+	(hints ())
+	(intent (
+		(build_sources ())
+		(inputs ())
+		(overlays ())
+		(resolvers ())
+		(sources ())))
+	(sources ((
+		(digest "sha256:3945bb64314f2f25732bb36f3bc7f52a2087cfde17439086cf3acd785e3fdfca")
+		(name "dep")
+		(provider "file")
+		(ref "https://example.org/releases/1.2.0/dep-abc.tar.zst")
+		(rev "")))))

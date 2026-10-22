@@ -282,7 +282,7 @@ unit! = |context| {
 	step!("Read-only SPDX binding with the native SBOM tool")?
 	Path.create_all!(Path.utf8("${context.root}/.cache/sbom-validation"))?
 	Process.passthrough!(Process.command(stable, ["build", "scripts/sbom.roc", "--output=.cache/sbom-validation/sbom"], context.root))?
-	Process.passthrough!(Process.command(stable, ["scripts/test_sbom.roc", "binding", "${context.root}/.cache/sbom-validation/sbom", "tests/sbom/fixtures/input"], context.root))?
+	Process.passthrough!(Process.command(stable, ["scripts/test_sbom.roc", "binding", "${context.root}/.cache/sbom-validation/sbom", "tests/sbom/fixtures/input", "tests/sbom/fixtures/source-import"], context.root))?
 
 	# The schema and profile are evaluated in Roc (scripts/src/LockSnapshotTest.roc),
 	# independently of core.LockSnapshot, which the consumer uses.
@@ -411,6 +411,9 @@ packaged! = |context| {
 
 	step!("Bundle core and the platform against it, as one release holds them")?
 	script!(context, "bundle", [])?
+
+	step!("Archive the SBOM fixture set with its case contract")?
+	script!(context, "package_sbom_fixtures", [])?
 
 	step!("Archive the examples against those bundles and test the archive")?
 	script!(context, "package_examples", [])?

@@ -49,6 +49,7 @@ scripts/                 Roc scripts, run from the repository root; their module
   fuzz.roc               replay or fuzz the roc-fuzz targets
   release_notes.roc      render a release's notes from docs/releases/
   package_examples.roc   archive the examples with a release's platform URL
+  package_sbom_fixtures.roc  archive the SBOM fixture set with its case contract
   test_release.roc       test that archive against the bundles, served from localhost
   docs_snippet.roc       write the part of the manual that names the latest release
   check_version.roc      check a release's version before building and against the public API after
@@ -250,9 +251,16 @@ SPDX 3.0.1 JSON schema, the SPDX 2.3 schema and the CycloneDX 1.7 schema):
 every class, member and enumeration the validators accept is the schema's own.
 The same expects require that each committed fixture in `tests/sbom/fixtures/`
 is what the renderers write now (regenerate them with
-`scripts/test_sbom.roc fixtures tests/sbom/fixtures`) and that all three
-renderings of a fixture read back to one package graph. `scripts/test_sbom.roc binding`
-then runs the built `scripts/sbom.roc` against read-only inputs. The
+`scripts/test_sbom.roc fixtures tests/sbom/fixtures`), that all three
+renderings of a fixture read back to one package graph, and that the
+standalone tool's committed inputs (`input/`, `source-import/`), the case
+contract (`CONTRACT.md`) and the file list of the release asset
+(`scripts/src/SbomFixtures.roc`) are what the suite states (regenerate the
+first three with `scripts/test_sbom.roc inputs`, `source-import` and
+`contract`). `scripts/test_sbom.roc binding`
+then runs the built `scripts/sbom.roc` against read-only inputs: the native
+case, and the source supplier import's accepted targets, bound renderings
+and refusals as `source-import/expected.json` states them. The
 `sbom-render` fuzz target generates inventories with arbitrary text and
 graphs: each must render to valid, canonical SPDX 3.0.1, SPDX 2.3 and
 CycloneDX 1.7, read back from each to exactly its own packages and

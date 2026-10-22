@@ -4,55 +4,83 @@ import core.Manifest
 import core.Sbom
 import core.Spdx3
 import Process
+import SbomTest
 import Script
 
 ## The native `scripts/sbom.roc` tool against read-only copies of
 ## `tests/sbom/fixtures/input`: `inspect` reproduces the committed inventory,
 ## `bind` writes SPDX 3.0.1, SPDX 2.3 and CycloneDX 1.7 that read back to one
-## package graph, both default sidecars and the evidence manifest beside the
-## artifact when no output is named, `check --manifest` holds that manifest to
-## the files, and every refusal the tool promises holds. Inputs are never
-## changed.
+## package graph and are the committed `native-linux` renderings, both
+## default sidecars and the evidence manifest beside the artifact when no
+## output is named, `check --manifest` holds that manifest to the files, and
+## every refusal the tool promises holds. Then against read-only copies of
+## `tests/sbom/fixtures/source-import`, as its `expected.json` states: each
+## accepted consumer target's inventory, the `native-source-import`
+## renderings from `bind`, and each refusal with its exact message. Inputs
+## are never changed.
 ##
 ## `chmod`, `ln -s` and `mkfifo` set up the cases basic-cli cannot create; the
 ## checks themselves are Roc.
 SbomBindingTest := [].{
-	run! : Str, Str => Try({}, _)
-	run! = |tool, fixtures| {
+	run! : Str, Str, Str => Try({}, _)
+	run! = |tool, fixtures, source_import| {
 		work = Path.to_str(Env.create_temp_dir_with_prefix!("blueprint-sbom-binding-")?)?
 		result = cases!(tool, fixtures, work)
 		_ = Path.delete_all!(Path.utf8(work))
-		result
+		result?
+		imported = Path.to_str(Env.create_temp_dir_with_prefix!("blueprint-sbom-source-import-")?)?
+		outcome = source_import!(tool, source_import, imported)
+		_ = Path.delete_all!(Path.utf8(imported))
+		outcome
 	}
 }
 
 inputs = ["Spec", "Lock", "composition.json", "inventory.json", "subject.json", "context.json", "sample-artifact"]
 
-cases! = |tool, fixtures, work| {
-	for name in inputs {
-		Path.write_utf8!(Path.utf8("${work}/${name}"), Path.read_utf8!(Path.utf8("${fixtures}/${name}"))?)?
-	}
+## Copy `names` from `fixtures` into `work`, read-only, and return each with
+## its text, for `guarded!` to hold unchanged.
+staged! : Str, Str, List(Str) => Try(List((Str, Str)), _)
+staged! = |fixtures, work, names| {
 	var $original = []
-	for name in inputs {
-		$original = $original.append((name, Path.read_utf8!(Path.utf8("${work}/${name}"))?))
+	for name in names {
+		text = Path.read_utf8!(Path.utf8("${fixtures}/${name}"))?
+		Path.write_utf8!(Path.utf8("${work}/${name}"), text)?
+		$original = $original.append((name, text))
 	}
-	original = $original
-	_ = Process.succeed!(Process.command("chmod", ["0444"].concat(inputs), work))?
-	call! = |args, success| {
-		result = Process.traced!(Process.command(tool, args, work))?
-		if (result.code == 0) != success {
-			return Script.fail!("sbom ${Str.join_with(args, " ")} ${if (success) "failed" else "succeeded"}: ${result.stderr}")
-		}
-		for (name, text) in original {
-			if Path.read_utf8!(Path.utf8("${work}/${name}")) != Ok(text) {
-				return Script.fail!("sbom ${Str.join_with(args, " ")} changed its input ${name}")
-			}
-		}
-		Ok({})
+	_ = Process.succeed!(Process.command("chmod", ["0444"].concat(names), work))?
+	Ok($original)
+}
+
+## Run the tool in `work`, require the exit it must have, and require every
+## staged input to be as it was.
+guarded! : Str, List(Str), Str, List((Str, Str)), Bool => Try(Process.Outcome, _)
+guarded! = |tool, args, work, original, success| {
+	result = Process.traced!(Process.command(tool, args, work))?
+	if (result.code == 0) != success {
+		return Script.fail!("sbom ${Str.join_with(args, " ")} ${if (success) "failed" else "succeeded"}: ${result.stderr}")
 	}
+	for (name, text) in original {
+		if Path.read_utf8!(Path.utf8("${work}/${name}")) != Ok(text) {
+			return Script.fail!("sbom ${Str.join_with(args, " ")} changed its input ${name}")
+		}
+	}
+	Ok(result)
+}
+
+## The committed rendering `name` of the suite's own cases.
+rendering! : Str => Try(Str, _)
+rendering! = |name|
+	match SbomTest.outputs.find_first(|file| file.name == name) {
+		Ok(file) => Ok(file.text)
+		Err(_) => Script.fail!("the suite renders no ${name}")
+	}
+
+cases! = |tool, fixtures, work| {
+	original = staged!(fixtures, work, inputs)?
+	call! = |args, success| guarded!(tool, args, work, original, success).map_ok(|_| {})
 	refused! = |args, reason| {
-		result = Process.traced!(Process.command(tool, args, work))?
-		if result.code == 0 or !result.stderr.contains(reason) {
+		result = guarded!(tool, args, work, original, False)?
+		if !result.stderr.contains(reason) {
 			return Script.fail!("sbom ${Str.join_with(args, " ")} did not refuse with \"${reason}\": ${result.stderr}")
 		}
 		Ok({})
@@ -74,12 +102,19 @@ cases! = |tool, fixtures, work| {
 	if Spdx3.validate(three).is_err() {
 		return Script.fail!("bind wrote SPDX 3.0.1 the model rejects")
 	}
+	# What the tool binds from the committed inputs is the committed case.
+	if three != rendering!("native-linux.spdx.json")? or two != rendering!("native-linux.spdx-2.3.json")? {
+		return Script.fail!("bind of tests/sbom/fixtures/input does not write the committed native-linux renderings")
+	}
 	# Without an output, bind writes SPDX 3.0.1 and CycloneDX beside the artifact.
 	call!(base, True)?
 	beside = Path.read_utf8!(Path.utf8("${work}/sample-artifact.spdx.json"))?
 	bom = Path.read_utf8!(Path.utf8("${work}/sample-artifact.cdx.json"))?
 	if beside != three {
 		return Script.fail!("the default SPDX sidecar differs from an explicit one")
+	}
+	if bom != rendering!("native-linux.cdx.json")? {
+		return Script.fail!("bind of tests/sbom/fixtures/input does not write the committed native-linux CycloneDX rendering")
 	}
 	match (Sbom.read(three), Sbom.read(two), Sbom.read_cyclonedx(bom)) {
 		(Ok(from_three), Ok(from_two), Ok(from_bom)) =>
@@ -112,21 +147,21 @@ cases! = |tool, fixtures, work| {
 	call!(["check", "--manifest", manifest_name, "--artifacts", ".", "--inventory", "inventory.json"], True)?
 	call!(["check", "--manifest", manifest_name, "--artifacts", ".", "--inventory", "inventory.json", "new.spdx-2.3.json"], True)?
 	call!(["check", "--manifest", manifest_name], True)?
-	staged! = |name, artifact_text, bom_text, body| {
+	variant! = |name, artifact_text, bom_text, body| {
 		Path.create_all!(Path.utf8("${work}/${name}"))?
 		for (file, text) in [("sample-artifact", artifact_text), ("sample-artifact.spdx.json", three), ("sample-artifact.cdx.json", bom_text), (manifest_name, body)] {
 			Path.write_utf8!(Path.utf8("${work}/${name}/${file}"), text)?
 		}
 		Ok("${name}/${manifest_name}")
 	}
-	tampered = staged!("tampered", "fixture subject\n", "${bom}\n", manifest_text)?
+	tampered = variant!("tampered", "fixture subject\n", "${bom}\n", manifest_text)?
 	refused!(["check", "--manifest", tampered, "--artifacts", "tampered", "--inventory", "inventory.json"], "sample-artifact.cdx.json differs")?
-	edited = staged!("edited", "fixture subject\n", bom, manifest_text.replace_each(manifest.inventory_sha256, Str.join_with(List.repeat("b", 64), "")))?
+	edited = variant!("edited", "fixture subject\n", bom, manifest_text.replace_each(manifest.inventory_sha256, Str.join_with(List.repeat("b", 64), "")))?
 	refused!(["check", "--manifest", edited, "--artifacts", "edited", "--inventory", "inventory.json"], "the inventory differs")?
 	call!(["check", "--manifest", edited, "--artifacts", "edited"], True)?
-	other = staged!("other", "other bytes\n", bom, manifest_text)?
+	other = variant!("other", "other bytes\n", bom, manifest_text)?
 	refused!(["check", "--manifest", other, "--artifacts", "other"], "subject's bytes differ")?
-	missing = staged!("missing", "fixture subject\n", bom, manifest_text)?
+	missing = variant!("missing", "fixture subject\n", bom, manifest_text)?
 	Path.delete!(Path.utf8("${work}/missing/sample-artifact.cdx.json"))?
 	refused!(["check", "--manifest", missing, "--artifacts", "missing"], "which is absent")?
 	# A named output takes `--manifest` for a manifest of that one sidecar,
@@ -246,3 +281,74 @@ cases! = |tool, fixtures, work| {
 ## A source bundle: a module that imports a text file, and a LICENSE, which
 ## `roc bundle` packs without being told to.
 bundle_files = [("main.roc", "module [hello]\n"), ("Example.roc", "import \"message.txt\" as message : Str\n"), ("LICENSE", "UPL-1.0\n"), ("message.txt", "hello\n")]
+
+## The source supplier import as `expected.json` states it: every accepted
+## consumer target's inventory byte for byte with target `source` kept on
+## each component, the bound renderings equal to the committed case with
+## the dependency build-only, and every refusal with its exact message.
+source_import! = |tool, fixtures, work| {
+	stated : Try(SbomTest.SourceImport, _)
+	stated = Json.parse(Path.read_utf8!(Path.utf8("${fixtures}/expected.json"))?)
+	expected = match stated {
+		Ok(value) => value
+		Err(_) => return Script.fail!("${fixtures}/expected.json does not state the source import contract")
+	}
+	names = [expected.inputs.spec, expected.inputs.lock, expected.inputs.composition, expected.bound.subject, expected.bound.context, expected.bound.artifact].concat(expected.accepted.map(|accepted| accepted.inventory)).concat(expected.refused.map(|refused| refused.composition))
+	original = staged!(fixtures, work, names)?
+	call! = |args, success| guarded!(tool, args, work, original, success)
+
+	# Source into source and native consumers.
+	for accepted in expected.accepted {
+		output = "inspected-${accepted.target}.json"
+		_ = call!(["inspect", expected.inputs.spec, expected.inputs.lock, expected.inputs.composition, accepted.target, output], True)?
+		written = Path.read_utf8!(Path.utf8("${work}/${output}"))?
+		if written != Path.read_utf8!(Path.utf8("${work}/${accepted.inventory}"))? {
+			return Script.fail!("inspect for ${accepted.target} does not reproduce ${accepted.inventory}")
+		}
+		inventory : Try(Sbom.Inventory, _)
+		inventory = Json.parse(written)
+		match inventory {
+			Ok(value) =>
+				if value.target != accepted.target or !value.components.all(|entry| entry.target == "source") {
+					return Script.fail!("the ${accepted.target} inventory does not keep target source on every component")
+				}
+			Err(_) => return Script.fail!("inspect for ${accepted.target} wrote no inventory")
+		}
+	}
+
+	# The bound renderings are the committed case, and the build-only
+	# dependency ships nothing.
+	bound = expected.bound
+	_ = call!(["bind", bound.inventory, bound.subject, bound.context, bound.artifact], True)?
+	_ = call!(["bind", bound.inventory, bound.subject, bound.context, bound.artifact, "bound.spdx-2.3.json", "--spdx-2.3"], True)?
+	for (written, name) in [("${bound.artifact}.spdx.json", "${bound.renderings}.spdx.json"), ("${bound.artifact}.cdx.json", "${bound.renderings}.cdx.json"), ("bound.spdx-2.3.json", "${bound.renderings}.spdx-2.3.json")] {
+		if Path.read_utf8!(Path.utf8("${work}/${written}"))? != rendering!(name)? {
+			return Script.fail!("bind of ${bound.inventory} does not write the committed ${name}")
+		}
+	}
+	_ = call!(["check", "--artifacts", ".", "--inventory", bound.inventory, "${bound.artifact}.spdx.json", "${bound.artifact}.cdx.json", "bound.spdx-2.3.json"], True)?
+	bom = Path.read_utf8!(Path.utf8("${work}/${bound.artifact}.cdx.json"))?
+	document = match Sbom.read_cyclonedx(bom) {
+		Ok(value) => value
+		Err(_) => return Script.fail!("the bound CycloneDX sidecar does not read back")
+	}
+	build_only = document.relationships.any(|relation| relation.from == "Subject" and relation.to == "dep" and relation.relation == "dependsOn" and relation.scope == "build")
+		and !document.relationships.any(|relation| relation.relation == "contains" and relation.to == "dep")
+	if !build_only or !bom.contains("\"scope\":\"excluded\"") or bom.contains("\"scope\":\"required\"") {
+		return Script.fail!("the bound CycloneDX sidecar does not keep the source dependency build-only")
+	}
+
+	# Each refusal, with its exact message and nothing written.
+	for refused in expected.refused {
+		output = "refused-${refused.composition}"
+		result = call!(["inspect", expected.inputs.spec, expected.inputs.lock, refused.composition, refused.target, output], False)?
+		message = Str.concat("SBOM: Invalid(\"", Str.concat(refused.refusal, "\")"))
+		if !result.stderr.contains(message) {
+			return Script.fail!("inspect of ${refused.composition} was expected to refuse with ${message}, got: ${result.stderr}")
+		}
+		if Path.exists!(Path.utf8("${work}/${output}"))? {
+			return Script.fail!("inspect of ${refused.composition} wrote ${output} although it refused")
+		}
+	}
+	Script.pass!("source supplier import: ${expected.accepted.len().to_str()} consumer targets accepted with source kept, the bound renderings committed, ${expected.refused.len().to_str()} refusals exact")
+}

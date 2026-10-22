@@ -133,7 +133,8 @@ Cross-builds the binaries (`scripts/build_release.roc`), runs the whole test
 suite on them, bundles the core, platform and reporting app for the version
 (`scripts/bundle.roc`), checks the version against the public API
 (`scripts/check_version.roc bump`), archives the examples
-(`scripts/package_examples.roc`), renders the manual with the release's
+(`scripts/package_examples.roc`) and the SBOM fixture set with its case
+contract (`scripts/package_sbom_fixtures.roc`), renders the manual with the release's
 platform URL and archives the site (`scripts/docs_snippet.roc`,
 `scripts/package_docs.roc`), renders the notes
 (`scripts/release_notes.roc`), generates artifact-bound SPDX and CycloneDX
@@ -297,6 +298,17 @@ uploads. A binary for another system is an addition; it does not change these.
 The platform bundle is the one `.tar.zst` asset named by its hash alone, and
 the core bundle the one that starts `roc-blueprint-core-`. The manual and the
 version check find the previous release's bundles that way.
+
+`roc-blueprint-sbom-fixtures-<version>.zip` is the SBOM fixture set of
+`tests/sbom/fixtures/` with its `CONTRACT.md`, which states what each case
+proves and the exact refusal each tampered input earns. roc-automation tests
+its SBOM actions against it with the release's standalone tool
+(`roc-blueprint-sbom-<hash>.tar.zst`), so a case may be added but not
+renamed or removed without a note in the release's notes.
+`scripts/package_sbom_fixtures.roc` fails unless the archive holds exactly
+the files the SBOM suite asserts, and the suite fails when the contract,
+the committed inputs or the asset's file list drift from the cases. See
+xref:sbom.adoc#exercise-the-stable-consumer-contract[Exercise the stable consumer contract].
 
 [#verify-release-provenance]
 === Verify release provenance
