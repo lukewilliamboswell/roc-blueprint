@@ -1,0 +1,279 @@
+= roc-blueprint 0.8.0
+
+An executable's SBOM can now chain into the SBOM of a Roc package bundle it
+was built from. The standalone SBOM tool ships as a native binary for each
+released system, so CI runs it with no Roc compiler and compiles nothing. A
+source bundle is inventoried from the archive `roc bundle` produced, member
+by member. `bind` writes an evidence manifest beside its sidecars, and
+`check` holds that manifest to the files it names. The fixture set the test
+suite asserts is a release asset, with a contract stating what each case
+proves. Together these are what the downstream automation in
+https://github.com/lukewilliamboswell/roc-automation/issues/66[roc-automation#66]
+needs from Blueprint's side; they close issues #61, #63, #64, #65 and #66.
+
+Nothing changes for a project: the Spec, the Lock and every `blueprint`
+command are as in 0.7.0.
+
+== Use 0.8.0
+
+[source,roc,snippet=unchecked]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+`blueprint` and `blueprint-sbom` binaries are attached for x86_64 Linux,
+arm64 Linux, Apple Silicon macOS and x86_64 Windows, with SHA-256 sums in
+`blueprint.sha256`: the four `blueprint` lines first, then the four
+`blueprint-sbom` lines. Use this release's binary with its platform URL. The
+importable core package is `{core-url}`.
+
+Spec major 3 and Lock 2 are unchanged, so a `Blueprint.roc` and
+`Blueprint.lock` written for 0.7.0 are read as they are, and no CLI command
+changes. The bundled compiler is unchanged too: `blueprint compiler-version`
+reports `nightly-2026-10-21-5349569`, as 0.7.0 did.
+
+== Run the SBOM tool without Roc
+
+`blueprint-sbom-<system>` is the standalone reporting tool, cross-built
+beside the CLI for the same four systems: `blueprint-sbom-x86_64-linux`,
+`blueprint-sbom-aarch64-linux`, `blueprint-sbom-aarch64-darwin` and
+`blueprint-sbom-x86_64-windows.exe`. It is the recommended way for CI to
+run the tool. The core and the native platform host are compiled in, it
+embeds no compiler archive, and it fetches nothing at run time. A
+downstream project measured the app bundle's cold compile at 88 seconds and
+about 2.1 GiB of memory on every fresh runner; the binary removes that
+stage.
+
+[source,sh]
+----
+curl -fsSLO https://github.com/lukewilliamboswell/roc-blueprint/releases/download/<version>/blueprint-sbom-x86_64-linux
+curl -fsSLO https://github.com/lukewilliamboswell/roc-blueprint/releases/download/<version>/blueprint.sha256
+sha256sum --ignore-missing -c blueprint.sha256
+chmod +x blueprint-sbom-x86_64-linux
+./blueprint-sbom-x86_64-linux inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
+----
+
+Each binary is smoke-tested on its own kind of machine with no Roc on it:
+`inspect` must reproduce the committed inventory from the fixture Spec and
+Lock, `bind` writes the sample artifact's sidecars and `check` holds them.
+Each has its own SBOM sidecars, which name the wrapper, the core modules and
+the basic-cli host compiled in and record that no compiler archive is
+embedded, and the release attestation covers it. Pin the release and the
+reviewed digest in automation, as roc-automation's `setup-blueprint` does
+for the CLI. That action never parses `blueprint.sha256`; it admits
+`blueprint-<system>` by its own `releases.json`, so the lines added after
+the CLI's do not affect it.
+
+The app bundle, `roc-blueprint-sbom-<hash>.tar.zst`, remains for a machine
+that has the matching compiler and wants the tool as source. The published
+release notes link its immutable URL, and `roc run <url> -- <command>` takes
+the same arguments as the binary. Its prefixed file name is one
+`roc unbundle` refuses, so `RocPackages` cannot prefetch it, as #65 reports.
+
+== Chain a package's SBOM into the executables built from it
+
+A Roc package is distributed as the `.tar.zst` that `roc bundle` wrote, and
+each consumer's compiler builds it for the consumer's own target, so its
+SBOM describes a subject of target `source`. In 0.7.0 that SBOM could not
+be imported into an `x86_64-linux` inventory: `inspect` refused with
+`SBOM: Invalid("import target differs from subject")`, and relabelling the
+import as native contradicted the supplier's document and failed the
+supplier metadata check instead.
+
+One rule, `Sbom.admits_target`, now decides which target may enter an
+inventory, at the component gate, the import gate, the binding of the final
+subject and the readback of a sidecar. An unstated target claims nothing.
+`source` is architecture-independent and belongs in an inventory of any
+target. A native target must be the inventory's own, so an `aarch64-linux`
+library still cannot enter an `x86_64-linux` inventory. A `source`
+inventory, such as a platform bundle carrying a linker member for each of
+its targets, admits either. The supplier's document digest, the bound
+archive's SHA-256, its version and the target the document states for its
+own subject must still match exactly. The package keeps its `source`
+identity in the executable's inventory and is never relabelled as native
+code.
+
+In `composition.json`, the component with origin `source:dep` and the
+`imported_documents` entry bound to it both take `"target": "source"`, and
+the `dependsOn` relationship from the subject takes `"scope": "build"`. A
+build-scoped dependency on a source archive states that the archive went
+into compilation, not that its files, which may include the fonts, data and
+notices its modules import, ship unchanged in the executable; and importing
+a source SBOM does not establish the executable's native closure. State
+what remains unknown in coverage. A document with other bytes, another
+archive digest, another version, a `source` document imported as native, a
+native component for a `source` supplier and a native target that is not
+the consumer's are each still refused, with the exact messages the fixture
+contract below lists. See
+xref:sbom.adoc#import-inert-verified-upstream-graphs[Import inert verified upstream graphs].
+
+== Inventory a source bundle from its archive
+
+`roc bundle` packs the files a module imports as `Str` or `List(U8)`, a
+font, a lookup table or a licence notice, whether or not they were named on
+its command line. The archive, not the argument list, is the authority on
+what a source bundle holds, and the tool now reads it:
+
+[source,sh]
+----
+./blueprint-sbom-x86_64-linux members dist/<hash>.tar.zst members.json
+./blueprint-sbom-x86_64-linux inspect Spec Lock composition.json source inventory.json --members members.json
+----
+
+`members ARCHIVE OUTPUT` runs the system `tar`, which must read zstd, lists
+the archive, refuses a member that is a symbolic or hard link, a device or
+a fifo, or whose name has an empty, `.` or `..` part or a leading `/`, and
+only then extracts the members into a fresh private temporary directory,
+hashes each one and deletes the directory. Nothing from the archive is
+executed. The listing names the archive, its SHA-256, and each member's
+name, size and SHA-256 in archive order. It needs no Nix and no Blueprint
+project.
+
+`inspect SPEC LOCK COMPOSITION TARGET OUTPUT --members LISTING` is for a
+`source` target; a native target with a listing is refused. With a listing,
+`inspect` refuses a composition that does not account for every member:
+each must be stated by a component whose `sha256` is the member's, or by an
+input disposition `archive-member:NAME:SHA256` with a reason. The refusal
+names every member that has neither. The usual way is one component per
+member and a `contains` relationship from the bundle's component to each,
+as `Sbom.archive_members` in the core generates them: the member's name,
+`sha256-<digest>` as its version,
+`urn:blueprint:archive-member:<name>:<digest>` as its identity, and
+`NOASSERTION` for the supplier, download and licence until a reviewer
+replaces the component with a fuller one that states the same SHA-256.
+Without `--members`, nothing checks the archive against the composition.
+
+Blueprint's own release inventories its core, platform and tool bundles this
+way: each bundle's sidecars state every archive member by digest, contained
+by the bundle's source component, and `scripts/check_sbom.roc
+--release-root` refuses a bundle sidecar that omits a member. See
+xref:sbom.adoc#inventory-a-source-bundle-from-its-archive[Inventory a source bundle from its archive].
+
+== An evidence manifest beside the sidecars
+
+A publisher that rehashes every asset before signing needs, per file, the
+subject's SHA-256, size, version and target, each sidecar's name, SHA-256
+and size, and the digest of the inventory they came from. In 0.7.0 `bind`
+had all of these and printed only the output paths, so the mapping was
+reconstructed by hand and nothing tied the sidecars to their inventory.
+
+`bind` without an output path now writes `ARTIFACT.sbom-manifest.json`
+beside `ARTIFACT.spdx.json` and `ARTIFACT.cdx.json`, and renders all three
+before writing any. With an output path, `--manifest MANIFEST` writes the
+manifest of that one sidecar, which must sit beside it. The manifest is one
+line of JSON in a fixed key order, from the new core module `Manifest`: the
+profile, the subject's filename, version, target, SHA-256 and size,
+`inventory_sha256`, the context's namespace, revision, creation time and
+generator, and the sidecars by name with their format (`spdx-3.0.1`,
+`spdx-2.3` or `cyclonedx-1.7`), SHA-256 and size. It is evidence about
+files, not a fourth rendering: it holds no package, names files by name
+alone and never by path, and `bind` refuses to write one that would hold a
+developer path or a credential.
+
+[source,sh]
+----
+./blueprint-sbom-x86_64-linux check --manifest dist/my-binary.sbom-manifest.json --artifacts dist --inventory inventory.json
+----
+
+`check --manifest` holds the manifest to the files before reading any
+document, then checks the sidecars it lists, so no document need be named.
+It rehashes the subject in `--artifacts` or beside the manifest, each
+listed sidecar beside the manifest, and the inventory, and refuses a
+manifest of another profile, a subject whose digest or size differs, a
+sidecar that differs or is absent, an inventory digest that differs from
+`--inventory`, or a file named with a path separator. Each listed sidecar
+must describe the manifest's subject in the listed format. Without
+`--inventory` the inventory digest is recorded but not measured. See
+xref:sbom.adoc#the-evidence-manifest[The evidence manifest].
+
+Every release asset that has sidecars, the eight binaries and the three
+source bundles, now has its `.sbom-manifest.json` beside them, checked by
+`scripts/check_sbom.roc` against the subject, the sidecars and the inventory
+it was bound from, and covered by the release attestation.
+
+== Test against the fixture set
+
+`roc-blueprint-sbom-fixtures-<version>.zip` is `tests/sbom/fixtures/` as a
+release asset, so automation can test its SBOM actions against the cases
+the test suite asserts, with the released tool and no checkout. It unpacks
+to one directory, `roc-blueprint-sbom-fixtures-<version>`, holding:
+
+* `CONTRACT.md`, which states for every case its inputs, its expected
+  outputs or exact refusal, and what it proves.
+* The seven rendered cases, each as `.spdx.json`, `.spdx-2.3.json` and
+  `.cdx.json`: `native-linux`, `native-arm64`, `source-bundle`,
+  `verified-import`, `verified-empty`, `unknown-closure` and the new
+  `native-source-import`, the `source-bundle` document imported into an
+  `x86_64-linux` consumer.
+* `input/`, the standalone tool's inputs for the `native-linux` case.
+* `source-import/`, the inputs of the source supplier import: Spec, Lock,
+  composition, subject, context and artifact; the inventory `inspect` must
+  write byte for byte for each of the `source`, `x86_64-linux` and
+  `aarch64-linux` consumer targets; six tampered compositions with the
+  message each is refused with; and `expected.json`, which states all of
+  it for automation.
+* `upstream/`, what Syft and Trivy wrote for one Cargo project.
+
+[source,sh]
+----
+unzip -q roc-blueprint-sbom-fixtures-<version>.zip
+cd roc-blueprint-sbom-fixtures-<version>
+blueprint-sbom-x86_64-linux inspect source-import/Spec source-import/Lock source-import/composition.json x86_64-linux out.json
+cmp out.json source-import/inventory-x86_64-linux.json
+blueprint-sbom-x86_64-linux inspect source-import/Spec source-import/Lock source-import/tamper-subject-digest.json x86_64-linux refused.json
+----
+
+The last command exits 1 and prints
+`SBOM: Invalid("import subject filename/version/SHA256 mismatch")`. The
+suite writes the inputs, the contract and the asset's file list from the
+same values it asserts and fails when a committed file differs, so none can
+drift from the cases. The set is a contract: a case may be added, but not
+renamed or removed without a note in that release's notes. The asset is
+covered by the release attestation. See
+xref:sbom.adoc#exercise-the-stable-consumer-contract[Exercise the stable consumer contract].
+
+== For programs that import the core package
+
+[source,roc,snippet=unchecked]
+----
+core: "{core-url}"
+----
+
+* `Manifest` is a new public module: `render`, `read`, `check` and
+  `describes` for the evidence manifest, with `suffix`, `formats` and the
+  file-name helpers `beside`, `file_name_of` and `directory_of`.
+* `Sbom` gains `admits_target`, the one target rule; `inspect_archive`,
+  which is `inspect` for a `source` subject with its archive's member
+  listing; the `Member` and `Listing` types; `archive_members`, which turns
+  a listing into components and `contains` edges; `members_accounted`, the
+  check `inspect_archive` applies; and `member_identity` and
+  `member_input`.
+* `Sidecar.check` reads back a document whose packages state target
+  `source` in a native inventory, by the same rule.
+
+== Breaking changes
+
+* *`blueprint.sha256` has eight lines.* The four `blueprint-sbom-<system>`
+  lines follow the four `blueprint-<system>` lines, which keep their order
+  and place. A consumer that read the file as exactly four lines must take
+  the line of the binary's name instead.
+* *Every binary and source bundle has a fourth file beside it,*
+  `<asset>.sbom-manifest.json`. A consumer that collected an asset's
+  sidecars by name prefix now sees the manifest among them; it is not an
+  SBOM, and `check` reads it only through `--manifest`.
+* *`bind` without an output path writes three files and prints three
+  paths,* the manifest after the two sidecars, and refuses an existing
+  `ARTIFACT.sbom-manifest.json` as it refuses an existing sidecar.
+* *The source bundle sidecars of Blueprint's own release state one component
+  per archive member,* contained by the bundle's component; the platform's
+  linker members are the same components the archive listing yields. A
+  consumer reading those graphs sees the new components.
+
+== Known limits
+
+* `members` needs a `tar` that reads zstd on `PATH`. Without `--members`,
+  `inspect` does not check an archive against its composition.
+* A member component that `archive_members` generates states `NOASSERTION`
+  for its supplier, download and licence until a reviewer replaces it.
+* The app bundle cannot be prefetched through `RocPackages`; run it with
+  `roc run <url>`, or use the binary.
