@@ -44,7 +44,7 @@ scripts/                 Roc scripts, run from the repository root; their module
   bundle.roc             bundle core, the platform and the reporting app into dist/ and smoke-test them
   embed_compiler.roc     stage and verify one target's compiler archive for embedding
   test_bootstrap.roc     test embedded compiler installation, repair and concurrency
-  build_release.roc      cross-build the CLI and its smoke-test program for each released system
+  build_release.roc      cross-build the CLI, the SBOM tool and the smoke-test program for each released system
   smoke_binary.roc       run a built CLI with no Roc and no Python of its own; with --no-nix, with no Nix either
   fuzz.roc               replay or fuzz the roc-fuzz targets
   release_notes.roc      render a release's notes from docs/releases/
@@ -414,6 +414,12 @@ the `build` job produced and no step that installs anything. It runs
   its archive through the link it is started by;
 * runs the task again and requires that nothing is downloaded, and that no
   flake was generated.
+
+The same job then runs the cross-built SBOM tool of its system,
+`dist/blueprint-sbom-<system>`, over `tests/sbom/fixtures/input`
+(`.github/actions/sbom-tool`): `inspect` must reproduce the committed
+inventory, `bind` writes the sample artifact's sidecars and `check` holds
+them, all with no Roc on the machine.
 
 It reaches GitHub for the nightly and the Roc packages, and asks GitHub's API
 once for the nightly's published digests; a refusal there is a notice, not a

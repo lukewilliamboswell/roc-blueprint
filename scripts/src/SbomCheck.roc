@@ -75,8 +75,12 @@ SbomCheck := [].{
 			}
 			Err(_) => return Err(Invalid("known build compiler omitted"))
 		}
+		# The standalone tool is released twice: as a source app bundle, which
+		# fetches the core bundle, and as a native executable per system, which
+		# compiles the core in.
 		tool_source = document.name.starts_with("roc-blueprint-sbom-")
-		if tool_source {
+		tool_binary = document.name.starts_with("blueprint-sbom-")
+		if tool_source or tool_binary {
 			tool = Path.read_utf8!(Path.utf8("${root}/scripts/sbom.roc"))?
 			if sorted(header_imports(tool, ["roc"])) != sorted(prefixed(evidence.inspected, "tool-import:")) {
 				return Err(Invalid("standalone tool import omitted"))
@@ -87,7 +91,8 @@ SbomCheck := [].{
 					return Err(Invalid("standalone tool source ${name} omitted"))
 				}
 			}
-			if !["basic-cli", "core", "http", "sqlite", "rust-std"].all(|id| ids.contains(id)) or ids.contains("roc-embedded") {
+			fetched = if tool_source ["core"] else []
+			if !["basic-cli", "http", "sqlite", "rust-std"].concat(fetched).all(|id| ids.contains(id)) or ids.contains("roc-embedded") {
 				return Err(Invalid("standalone tool inventory omits a dependency or claims the compiler ships"))
 			}
 		}
@@ -102,7 +107,7 @@ SbomCheck := [].{
 				return Err(Invalid("supplemental Cargo graph omits/conflicts with original upstream lock"))
 			}
 		}
-		if evidence.target != "source" {
+		if evidence.target != "source" and !tool_binary {
 			if !["basic-cli", "http", "weaver", "roc-embedded", "sqlite"].all(|id| ids.contains(id)) {
 				return Err(Invalid("known shipped/native input omitted"))
 			}

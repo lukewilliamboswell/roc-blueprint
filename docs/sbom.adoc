@@ -443,21 +443,35 @@ separate records.
 [#use-the-released-standalone-tool]
 == Use the released standalone tool
 
-Each release includes `roc-blueprint-sbom-<content-hash>.tar.zst`, a supported
-Roc app bundle containing the same wrapper and filesystem boundary used here.
-The release notes link to its exact immutable URL. Pin that URL in automation:
-its release version and Roc content hash identify the source bytes.
-The compiler pin matches `blueprint compiler-version` for that release.
+Each release ships the reporting tool in two forms: a native binary per
+system, `blueprint-sbom-<system>`, beside the `blueprint` binaries, and
+`roc-blueprint-sbom-<content-hash>.tar.zst`, a supported Roc app bundle
+containing the same wrapper and filesystem boundary used here.
+
+The binary is the recommended way for CI to run the tool. A job downloads
+`blueprint-sbom-<system>` from the release (`blueprint-sbom-x86_64-linux`,
+`blueprint-sbom-aarch64-linux`, `blueprint-sbom-aarch64-darwin` or
+`blueprint-sbom-x86_64-windows.exe`), verifies it against the line of that
+name in the release's `blueprint.sha256`, and runs it. It needs no Roc
+compiler and compiles nothing: the core and the native platform host are
+compiled in, and nothing is fetched at run time. Pin the release and the
+reviewed digest in automation, as roc-automation's `setup-blueprint` action
+does for the CLI; the binary's own sidecars and the release attestation cover
+it (see <<blueprints-own-release-evidence>>).
 
 [source,console]
 ----
-roc run <immutable-tool-bundle-url> -- inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
-roc run <immutable-tool-bundle-url> -- members dist/my-package.tar.zst members.json
-roc run <immutable-tool-bundle-url> -- inspect Spec Blueprint.lock composition.json source inventory.json --members members.json
-roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary
-roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx-2.3.json --spdx-2.3
-roc run <immutable-tool-bundle-url> -- check --inventory inventory.json --artifacts dist dist/my-binary.spdx.json dist/my-binary.cdx.json dist/my-binary.spdx-2.3.json
-roc run <immutable-tool-bundle-url> -- check --manifest dist/my-binary.sbom-manifest.json --inventory inventory.json --artifacts dist
+curl -fsSLO https://github.com/lukewilliamboswell/roc-blueprint/releases/download/<version>/blueprint-sbom-x86_64-linux
+curl -fsSLO https://github.com/lukewilliamboswell/roc-blueprint/releases/download/<version>/blueprint.sha256
+sha256sum --ignore-missing -c blueprint.sha256
+chmod +x blueprint-sbom-x86_64-linux
+./blueprint-sbom-x86_64-linux inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
+./blueprint-sbom-x86_64-linux members dist/my-package.tar.zst members.json
+./blueprint-sbom-x86_64-linux inspect Spec Blueprint.lock composition.json source inventory.json --members members.json
+./blueprint-sbom-x86_64-linux bind inventory.json subject.json context.json dist/my-binary
+./blueprint-sbom-x86_64-linux bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx-2.3.json --spdx-2.3
+./blueprint-sbom-x86_64-linux check --inventory inventory.json --artifacts dist dist/my-binary.spdx.json dist/my-binary.cdx.json dist/my-binary.spdx-2.3.json
+./blueprint-sbom-x86_64-linux check --manifest dist/my-binary.sbom-manifest.json --inventory inventory.json --artifacts dist
 ----
 
 The first `bind` writes `dist/my-binary.spdx.json`, `dist/my-binary.cdx.json`
@@ -469,14 +483,22 @@ sidecars. See <<bind-the-final-bytes-separately>>. `members` and
 <<inventory-a-source-bundle-from-its-archive>>. They need only a `tar` that
 reads zstd on `PATH`.
 
-No Blueprint project is required; even an unrelated invalid `Blueprint.roc`
-in the working directory is ignored. Supply the already evaluated Spec and
-Lock paths explicitly. A matching Roc compiler prepares the immutable core
-and native platform dependencies in its package cache before execution;
-materialize those dependencies before taking a release job offline. The report
-itself performs no resolution, provider execution or network request.
-The source app's own sidecar distinguishes its contained wrapper/I/O source
-from the core/platform/compiler dependencies fetched separately.
+The app bundle is the alternative for a machine that has the matching Roc
+compiler and wants the tool as source. The release notes link to its exact
+immutable URL. Pin that URL in automation: its release version and Roc
+content hash identify the source bytes. The compiler pin matches
+`blueprint compiler-version` for that release. The same commands take the
+form `roc run <immutable-tool-bundle-url> -- inspect ...`. A matching Roc
+compiler prepares the immutable core and native platform dependencies in its
+package cache before execution; materialize those dependencies before taking
+a release job offline. The source app's own sidecar distinguishes its
+contained wrapper/I/O source from the core/platform/compiler dependencies
+fetched separately.
+
+In either form no Blueprint project is required; even an unrelated invalid
+`Blueprint.roc` in the working directory is ignored. Supply the already
+evaluated Spec and Lock paths explicitly. The report itself performs no
+resolution, provider execution or network request.
 
 [#inspect-without-executing-a-provider]
 == Inspect without executing a provider
@@ -989,11 +1011,13 @@ CycloneDX BOMs, such as a supplier's, are read by their standard fields (see
 <<import-inert-verified-upstream-graphs>>), and what those cannot carry is
 counted in the import's coverage.
 
+[#blueprints-own-release-evidence]
 == Blueprint's own release evidence
 
 The read-only release build runs `scripts/release_sbom.roc VERSION` after the
-four target executables, both library/platform source bundles and the
-standalone tool app bundle exist. Its generation
+four CLI executables, the four standalone tool executables, both
+library/platform source bundles and the standalone tool app bundle exist. Its
+generation
 time comes from the selected source commit, not the wall clock. The extended
 command `VERSION CREATED SOURCE_COMMIT DOCUMENT_REVISION` supplies an explicit
 context for reproducible local checks or corrections.
@@ -1006,7 +1030,10 @@ no empty project Lock substitutes for release-input knowledge.
 
 The compiler used to build Blueprint is a build input. The target compiler
 archive imported into its executable is a separate contained component with
-its own archive SHA-256. A source bundle does not contain that compiler.
+its own archive SHA-256. A source bundle does not contain that compiler, and
+neither does a standalone tool executable: its sidecar names the wrapper,
+I/O module and core modules compiled in, and the basic-cli host linked, with
+the embedded-archive input of its target explicitly excluded.
 Each source bundle, the core, the platform and the standalone tool, is
 inventoried from the archive in `dist/`, as
 <<inventory-a-source-bundle-from-its-archive>> describes: every member is a

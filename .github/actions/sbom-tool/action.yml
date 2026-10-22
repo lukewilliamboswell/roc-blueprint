@@ -1,0 +1,63 @@
+name: Smoke test the SBOM tool binary
+description: Run a built blueprint-sbom binary over the committed fixtures with no Roc on PATH.
+
+# The binary must inspect, bind and check on its own: `inspect` reproduces
+# the committed inventory from the fixture Spec and Lock, `bind` writes the
+# three sidecars of the sample artifact, and `check` holds them to the
+# profile, the artifact's bytes and the inventory. The steps are the ones
+# `scripts/test_sbom.roc binding` runs first, for machines that have no
+# `roc-stable` to run that script.
+inputs:
+  binary:
+    description: Path of the built blueprint-sbom binary for this machine
+    required: true
+  fixtures:
+    description: Directory of the tool's fixture inputs
+    default: tests/sbom/fixtures/input
+
+runs:
+  using: composite
+  steps:
+    - name: Inspect, bind and check the fixtures
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        BINARY: ${{ inputs.binary }}
+        FIXTURES: ${{ inputs.fixtures }}
+      run: |
+        set -euo pipefail
+        chmod +x "$BINARY"
+        tool=$(cd "$(dirname "$BINARY")" && pwd)/$(basename "$BINARY")
+        work=$(mktemp -d)
+        cp "$FIXTURES"/* "$work"
+        cd "$work"
+        "$tool" inspect Spec Lock composition.json x86_64-linux inspected.json
+        test "$(cat inspected.json)" = "$(cat inventory.json)" || { echo "inspect does not reproduce inventory.json" >&2; exit 1; }
+        "$tool" bind inventory.json subject.json context.json sample-artifact
+        "$tool" bind inventory.json subject.json context.json sample-artifact sample-artifact.spdx-2.3.json --spdx-2.3
+        "$tool" check --artifacts . --inventory inventory.json sample-artifact.spdx.json sample-artifact.spdx-2.3.json sample-artifact.cdx.json
+
+    - name: Inspect, bind and check the fixtures on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        BINARY: ${{ inputs.binary }}
+        FIXTURES: ${{ inputs.fixtures }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $tool = (Resolve-Path $env:BINARY).Path
+        $work = Join-Path $env:RUNNER_TEMP ("blueprint-sbom-" + [System.IO.Path]::GetRandomFileName())
+        New-Item -ItemType Directory -Path $work | Out-Null
+        Copy-Item (Join-Path $env:FIXTURES '*') $work
+        Set-Location $work
+        function Run {
+          & $tool @args
+          if ($LASTEXITCODE -ne 0) { throw "blueprint-sbom $args exited with $LASTEXITCODE" }
+        }
+        Run inspect Spec Lock composition.json x86_64-linux inspected.json
+        if ((Get-Content -Raw inspected.json).TrimEnd() -ne (Get-Content -Raw inventory.json).TrimEnd()) {
+          throw 'inspect does not reproduce inventory.json'
+        }
+        Run bind inventory.json subject.json context.json sample-artifact
+        Run bind inventory.json subject.json context.json sample-artifact sample-artifact.spdx-2.3.json --spdx-2.3
+        Run check --artifacts . --inventory inventory.json sample-artifact.spdx.json sample-artifact.spdx-2.3.json sample-artifact.cdx.json

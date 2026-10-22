@@ -10,12 +10,13 @@ import cli.Path
 import cli.Stderr
 import src/Release
 
-## Cross-build the blueprint CLI for x86_64 Linux, arm64 Linux and Apple
-## Silicon macOS into `dist/blueprint-<system>`, with their SHA-256 sums in
-## `dist/blueprint.sha256`, and the smoke-test program for each as
-## `dist/smoke-<system>`. Run from the repository root on x86_64 Linux, after
-## `scripts/link_inputs.roc fetch`. Needs Nix and Zig; the compiler is the
-## flake's `roc-cross` package.
+## Cross-build the blueprint CLI for x86_64 Linux, arm64 Linux, Apple
+## Silicon macOS and x86_64 Windows into `dist/blueprint-<system>`, the
+## standalone SBOM tool into `dist/blueprint-sbom-<system>`, with the
+## SHA-256 sums of both in `dist/blueprint.sha256`, and the smoke-test
+## program for each system as `dist/smoke-<system>`. Run from the repository
+## root on x86_64 Linux, after `scripts/link_inputs.roc fetch`. Needs Nix and
+## Zig; the compiler is the flake's `roc-cross` package.
 ##
 ##   scripts/build_release.roc
 main! : List(OsStr) => Try({}, [Exit(I32)])

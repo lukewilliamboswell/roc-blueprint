@@ -278,11 +278,21 @@ unit! = |context| {
 	report_tests!(scripts, tested)?
 
 	# SPDX 3.0.1 and 2.3 conformance runs in pure Roc with the script tests
-	# above (scripts/src/SbomTest.roc); this checks the built tool itself.
+	# above (scripts/src/SbomTest.roc); this checks the built tool itself:
+	# the binary the release cross-built for this machine when the caller
+	# put it in dist/ (BLUEPRINT_PREBUILT=1), otherwise one built here.
 	step!("Read-only SPDX binding with the native SBOM tool")?
-	Path.create_all!(Path.utf8("${context.root}/.cache/sbom-validation"))?
-	Process.passthrough!(Process.command(stable, ["build", "scripts/sbom.roc", "--output=.cache/sbom-validation/sbom"], context.root))?
-	Process.passthrough!(Process.command(stable, ["scripts/test_sbom.roc", "binding", "${context.root}/.cache/sbom-validation/sbom", "tests/sbom/fixtures/input", "tests/sbom/fixtures/source-import"], context.root))?
+	released_tool = "${context.root}/dist/${Release.binary_name("blueprint-sbom", host_system!())}"
+	tool = if context.prebuilt and (Path.is_file!(Path.utf8(released_tool)) ?? False) {
+		Process.check!(Path.is_executable!(Path.utf8(released_tool)) ?? False, "BLUEPRINT_PREBUILT=1 but ${released_tool} is not executable")?
+		Script.info!("   ", "the cross-built ${released_tool} (BLUEPRINT_PREBUILT=1)")?
+		released_tool
+	} else {
+		Path.create_all!(Path.utf8("${context.root}/.cache/sbom-validation"))?
+		Process.passthrough!(Process.command(stable, ["build", "scripts/sbom.roc", "--output=.cache/sbom-validation/sbom"], context.root))?
+		"${context.root}/.cache/sbom-validation/sbom"
+	}
+	Process.passthrough!(Process.command(stable, ["scripts/test_sbom.roc", "binding", tool, "tests/sbom/fixtures/input", "tests/sbom/fixtures/source-import"], context.root))?
 
 	# The schema and profile are evaluated in Roc (scripts/src/LockSnapshotTest.roc),
 	# independently of core.LockSnapshot, which the consumer uses.
@@ -307,6 +317,16 @@ unit! = |context| {
 	compiler!(context, ["check", "fixtures/consumer/main.roc"])?
 	compiler!(context, ["test", "fixtures/consumer/main.roc"])
 }
+
+## The released system this machine is, as the binaries in `dist/` are named.
+host_system! : () => Str
+host_system! = ||
+	match Env.platform!() {
+		{ arch: AARCH64, os: LINUX } => "aarch64-linux"
+		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
+		{ arch: X64, os: WINDOWS } => "x86_64-windows"
+		_ => "x86_64-linux"
+	}
 
 report_tests! : List(Str), List(Process.Outcome) => Try({}, _)
 report_tests! = |scripts, outcomes|

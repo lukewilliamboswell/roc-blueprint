@@ -155,11 +155,13 @@ StaticChecks := [].{
 
 	script_shebang = "#!/usr/bin/env roc-stable"
 
-	## The scripts the product compiler builds: the smoke program released
-	## beside each binary, and the tool the stubbed suites stand in for Nix
-	## with. A header that named `roc-stable`'s nightly would stop them the day
-	## the two compilers differ, so they name none.
-	product_built = ["scripts/smoke_binary.roc", "scripts/stubs/tool.roc"]
+	## The scripts the product compiler builds: the smoke program built
+	## beside each binary, the standalone SBOM tool released as one, and the
+	## tool the stubbed suites stand in for Nix with. A header that named
+	## `roc-stable`'s nightly would stop them the day the two compilers
+	## differ, so they name none; the bundled SBOM app gets the product pin
+	## when it is staged (scripts/src/Bundle.roc).
+	product_built = ["scripts/sbom.roc", "scripts/smoke_binary.roc", "scripts/stubs/tool.roc"]
 
 	## Each file and nightly in what `git grep` prints for `roc` header
 	## fields: lines of `<file>:<indent>roc: "<tag>",`.
@@ -308,8 +310,9 @@ expect StaticChecks.compilers_problem("", Err(NoConstant), pin_sample, [("script
 expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) == "scripts must pin rocStableTag in their header, as roc: \"nightly-1\": scripts/test.roc"
 expect StaticChecks.compilers_problem("", Ok("nightly-2"), pin_sample, [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) != ""
 expect StaticChecks.compilers_problem("", Ok("nightly-1"), "${pin_sample}${pin_sample}", [("scripts/test.roc", "#!/usr/bin/env roc-stable")]) != ""
-# The product compiler builds the smoke program, so it pins nothing.
-expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable")]) == ""
+# The product compiler builds the smoke program and the SBOM tool, so they pin nothing.
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable"), ("scripts/sbom.roc", "#!/usr/bin/env roc-stable")]) == ""
+expect StaticChecks.compilers_problem("", Ok("nightly-1"), "scripts/sbom.roc:\troc: \"nightly-1\",\n", [("scripts/sbom.roc", "#!/usr/bin/env roc-stable")]) == "only a script roc-stable runs may pin a compiler with a roc field: scripts/sbom.roc"
 expect StaticChecks.compilers_problem("", Ok("nightly-1"), "scripts/smoke_binary.roc:\troc: \"nightly-1\",\n", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable")]) == "only a script roc-stable runs may pin a compiler with a roc field: scripts/smoke_binary.roc"
 expect StaticChecks.compilers_problem("", Ok("nightly-1"), "examples/a/main.roc:\troc: \"nightly-1\",\n", []) == "only a script roc-stable runs may pin a compiler with a roc field: examples/a/main.roc"
 expect StaticChecks.compilers_problem("", Ok("nightly-1"), "", [("scripts/smoke_binary.roc", "#!/usr/bin/env roc-stable"), ("scripts/b.roc", "#!/usr/bin/env roc"), ("scripts/c.roc", "app [main!] {")]) == "scripts must start with #!/usr/bin/env roc-stable: scripts/b.roc scripts/c.roc"

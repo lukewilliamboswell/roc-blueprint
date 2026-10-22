@@ -56,6 +56,22 @@ Bundle := [].{
 	replacing : Str, Str -> List(Str)
 	replacing = |declared, served| ["--replace-dep", declared, served]
 
+	## An app's source with its header pinning the compiler `tag`: the
+	## `roc` field it has replaced, or one added as the header's last field.
+	## The standalone SBOM tool names no compiler, since the product
+	## compiler builds it as a binary and `roc-stable` builds it for tests;
+	## the bundled app pins the compiler of the release it is staged for.
+	pinned : Str, Str -> Str
+	pinned = |source, tag|
+		match source.split_on("\n}\n") {
+			[header, .. as rest] =>
+				match header.split_on("roc: \"") {
+					[_, after] => source.replace_each("roc: \"${after.split_on("\"").first() ?? ""}\"", "roc: \"${tag}\"")
+					_ => Str.join_with(["${header}\n\troc: \"${tag}\","].concat(rest), "\n}\n")
+				}
+			_ => source
+		}
+
 	## The archive `dist/bundles.txt` lists for a package.
 	archive : Str, Str -> Try(Str, [NotBundled(Str)])
 	archive = |list, name|
@@ -400,6 +416,15 @@ expect Bundle.release_url("owner/repo", "0.5.0", "abc.tar.zst") == "https://gith
 expect Bundle.release_path("owner/repo", "0.5.0-rc1", "roc-blueprint-core-abc.tar.zst") == "owner/repo/releases/download/0.5.0-rc1/roc-blueprint-core-abc.tar.zst"
 expect Bundle.replacing("https://a", "http://127.0.0.1:1/a") == ["--replace-dep", "https://a", "http://127.0.0.1:1/a"]
 
+# A header without a compiler pin gets one as its last field; one with a pin
+# gets the tag replaced. The rest of the file is untouched.
+unpinned_app = "#!/usr/bin/env roc-stable\napp [main!] {\n\tcli: platform \"https://example.test/cli.tar.zst\",\n\tcore: \"https://example.test/core.tar.zst\",\n}\n\nimport cli.Stdout\n\nmain! = |_| {\n\tStdout.line!(\"}\")\n}\n"
+
+pinned_app = "#!/usr/bin/env roc-stable\napp [main!] {\n\tcli: platform \"https://example.test/cli.tar.zst\",\n\tcore: \"https://example.test/core.tar.zst\",\n\troc: \"nightly-2\",\n}\n\nimport cli.Stdout\n\nmain! = |_| {\n\tStdout.line!(\"}\")\n}\n"
+expect Bundle.pinned(unpinned_app, "nightly-2") == pinned_app
+expect Bundle.pinned(pinned_app.replace_each("nightly-2", "nightly-1"), "nightly-2") == pinned_app
+expect Bundle.pinned(pinned_app, "nightly-2") == pinned_app
+
 expect Bundle.archive("roc-blueprint-core roc-blueprint-core-AAA.tar.zst\nroc-blueprint BBB.tar.zst\n", "roc-blueprint") == Ok("BBB.tar.zst")
 expect Bundle.archive("roc-blueprint-core roc-blueprint-core-AAA.tar.zst\n", "roc-blueprint-core") == Ok("roc-blueprint-core-AAA.tar.zst")
 expect Bundle.archive("roc-blueprint-core AAA.tar.zst\n", "roc-blueprint") == Err(NotBundled("roc-blueprint"))
@@ -415,10 +440,9 @@ bundle_sbom! = |root, paths, core_server, release, core, cache| {
 	core_url = Bundle.release_url(release.repository, release.version, core)
 	entry_path = Path.utf8("${staged}/main.roc")
 	entry = Path.read_utf8!(entry_path)?
-	old_tag = entry.split_on("roc: \"").get(1).map_ok(|tail| tail.split_on("\"").first() ?? "") ?? ""
 	product_tag = Path.read_utf8!(Path.utf8("${root}/blueprint-cli/compiler-version"))?.trim()
-	Process.check!(!old_tag.is_empty() and !product_tag.is_empty(), "SBOM app needs explicit development/release compiler pins")?
-	staged_entry = entry.replace_each("\"../blueprint-core/main.roc\"", "\"${core_url}\"").replace_each("roc: \"${old_tag}\"", "roc: \"${product_tag}\"")
+	Process.check!(!product_tag.is_empty(), "SBOM app needs an explicit release compiler pin")?
+	staged_entry = Bundle.pinned(entry.replace_each(Bundle.development_core, "\"${core_url}\""), product_tag)
 	Path.write_utf8!(entry_path, staged_entry)?
 	hashed = bundle!(staged, ["main.roc", "src/SbomFiles.roc"], paths, [("XDG_CACHE_HOME", cache)])?
 	name = "${Bundle.sbom_prefix}${hashed}"

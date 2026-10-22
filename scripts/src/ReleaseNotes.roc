@@ -91,7 +91,7 @@ ReleaseNotes := [].{
 				"- Compiler archives from roc-overlay `${built.overlay_rev}`: ${Str.join_with(archives, ", ")}",
 				"- nixpkgs `${built.nixpkgs_rev}`",
 				"- roc-blueprint-core `${built.core_url}`",
-				"- Standalone SBOM tool: [pinned Roc app bundle](${built.sbom_url}) (same compiler pin; no Blueprint project required)",
+				"- Standalone SBOM tool: `blueprint-sbom-<system>` beside the CLI binaries, listed in `blueprint.sha256`; recommended for CI, which then needs no Roc and compiles nothing. The same tool as a [pinned Roc app bundle](${built.sbom_url}) runs with the compiler (same compiler pin; no Blueprint project required)",
 				"- SBOMs: every binary and source bundle has `<asset>.spdx.json` (SPDX 3.0.1), `<asset>.cdx.json` (CycloneDX 1.7) and `<asset>.spdx-2.3.json` (SPDX 2.3) beside it, checked against the asset's bytes and covered by the release attestation",
 				"- Roc packages in the CLI: ${Str.join_with(built.bundles, ", ")}",
 				"- Linker inputs: roc-platform-template-zig release `${built.link_inputs}` (`link-inputs.lock.json` sha256 `${built.lock_sha256}`)",
@@ -229,7 +229,7 @@ expect ReleaseNotes.built_from(built_sample) ==
 	\\- Compiler archives from roc-overlay `fb02fef7`: x86_64-linux `sha256-iTyG=`, aarch64-darwin `sha256-4BR/=`
 	\\- nixpkgs `4975466d`
 	\\- roc-blueprint-core `https://example.test/core.tar.zst`
-	\\- Standalone SBOM tool: [pinned Roc app bundle](https://example.test/roc-blueprint-sbom-tool.tar.zst) (same compiler pin; no Blueprint project required)
+	\\- Standalone SBOM tool: `blueprint-sbom-<system>` beside the CLI binaries, listed in `blueprint.sha256`; recommended for CI, which then needs no Roc and compiles nothing. The same tool as a [pinned Roc app bundle](https://example.test/roc-blueprint-sbom-tool.tar.zst) runs with the compiler (same compiler pin; no Blueprint project required)
 	\\- SBOMs: every binary and source bundle has `<asset>.spdx.json` (SPDX 3.0.1), `<asset>.cdx.json` (CycloneDX 1.7) and `<asset>.spdx-2.3.json` (SPDX 2.3) beside it, checked against the asset's bytes and covered by the release attestation
 	\\- Roc packages in the CLI: basic-cli 0.24.0 `AEjfyaMF`, http 1.0.0 `6ZUwqYhC`
 	\\- Linker inputs: roc-platform-template-zig release `link-inputs-sha256-2d` (`link-inputs.lock.json` sha256 `ff00`)
