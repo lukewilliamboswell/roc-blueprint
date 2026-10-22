@@ -48,7 +48,7 @@ compiling the consumer may download dependencies; the pure functions do not.
 The library does not install or invoke the Blueprint executable.
 
 This release's consumer is tested with the compiler named by
-`blueprint compiler-version`, `nightly-2026-10-18-1df370f`, and the repository's
+`blueprint compiler-version`, `nightly-2026-10-21-5349569`, and the repository's
 script compiler, `nightly-2026-10-13-b17d287`. Pin the chosen compiler in the
 outer app/toolchain. Matching the Blueprint compiler version does not share
 its embedded executable automatically. Native compiled consumers need no Roc

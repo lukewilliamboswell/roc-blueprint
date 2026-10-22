@@ -21,9 +21,25 @@ SHA-256 `947e6816f7825b2b45027c2c32e7085da9934defa535de4a6a46b10a4d5257fa`,
 matching the committed upstream Cargo.lock. Its Cargo.toml establishes the
 build-only crate edges. The pinned basic-cli Cargo.toml enables `bundled`.
 
-The pinned compiler nightly identifies Roc commit
-`1df370f0660e2086db08e6370b77689594db8928`. Bootstrap archive digests are
-read from the actual compiler table rather than duplicated in this inventory.
+The product compiler nightly `nightly-2026-10-21-5349569` identifies Roc commit
+`534956997e8e5c62888bc14cbc763f60109d0b72`, verified against the
+[official nightly release](https://github.com/roc-lang/nightlies/releases/tag/nightly-2026-10-21-5349569)
+and [upstream commit](https://github.com/roc-lang/roc/commit/534956997e8e5c62888bc14cbc763f60109d0b72).
+Bootstrap archive digests are read from the actual compiler table rather than
+duplicated in this inventory.
+
+The native-dependency review compared that revision with
+`1df370f0660e2086db08e6370b77689594db8928`. Their `build.zig.zon` files are
+byte-identical (SHA-256
+`7031fa50693ca4091e4edf293ce37d05eb362cce17aba718075f7c266df4b138`),
+retaining the declared external dependencies and Zig 0.17.0 minimum. Compiler
+runtime and evaluator implementation changed; reviewed linker configuration
+changes concern WebAssembly target features. This review does not establish a
+complete compiler archive closure: that remains an explicit inventory gap.
+The independently pinned linker-input producer and its supplemental component
+versions above are unchanged. The separately pinned sandbox runner compiler
+and maintenance compiler are also outside this product-compiler update.
+
 Changes to the compiler, CLI imports, or linker-input producer fail closed
 until this metadata and the generation recipe are reviewed together.
 

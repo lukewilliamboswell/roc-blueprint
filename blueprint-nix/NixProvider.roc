@@ -397,6 +397,7 @@ NixProvider :: [].{
 	## own directory it reads as a locked path, through a record the host
 	## writes beside the flake: where the content is and the NAR hash the
 	## host measured with Nix, so that evaluation is pure.
+	materialize_plan : Prepared, Str, Layout, { contents : Str, operations : List(Steps.Operation) } -> Steps.Step
 	materialize_plan = |selected, target, layout, derived| {
 		{ builds, argv, contents, action, needs_nix, .. } = selected
 		base_ref = Locks.path_reference(layout.generated_root)

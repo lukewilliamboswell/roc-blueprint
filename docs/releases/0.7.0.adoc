@@ -78,7 +78,7 @@ for sandboxed builds.
 blueprint compiler-version
 ----
 
-This release reports `nightly-2026-10-18-1df370f`, followed by a newline. The
+This release reports `nightly-2026-10-21-5349569`, followed by a newline. The
 output has no label or colour and always describes the bundled compiler,
 regardless of `ROC` or `PATH`. The command works in any directory, offline,
 without evaluating a project, installing Roc or writing a cache. Native smoke
