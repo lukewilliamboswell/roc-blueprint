@@ -149,7 +149,9 @@ gates! = |suite| {
 
 	reject_capabilities!(suite, state)?
 
-	# Remove only disposable old roots so they cannot become ordinary inputs.
+	# Remove both disposable old roots before changing the active layout.
+	# Old build records otherwise become ordinary project inputs at `work/`.
+	Path.delete_all!(Path.utf8(place.workspace))?
 	Path.delete_all!(Path.utf8(place.generated))?
 	outside = { ..place, workspace: "${suite.work}/outside-work", generated: "${suite.work}/outside-generated" }
 	moved = workflow!(suite, outside, "repeat", repeat, "")?
