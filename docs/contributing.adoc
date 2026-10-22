@@ -232,8 +232,7 @@ attribute, and configured tools: a fixture overlay's package says which
 options it was built with, and rust-overlay evaluates a toolchain with two
 targets and a component. It also runs `nix develop --debug` on a
 staged flake and requires Nix's own report that its bash comes from the locked
-package source, with no registry lookup, and runs a task with the `nixpkgs`
-edge removed from `Blueprint.lock`, as an earlier blueprint wrote it. A project it writes pins its inputs to the
+package source, with no registry lookup,. A project it writes pins its inputs to the
 revisions in `fixtures/consumer/inputs.lock` and `flake.lock`, and its
 `Blueprint.lock` is read-only and compared after every step.
 `fixtures/consumer/main.roc` holds the staged bytes and supplied-lock
@@ -289,8 +288,7 @@ in `fixtures/consumer/inputs.lock` and `fixtures/roc-inputs.lock.json`; one
 first step fetches them and every later Nix call is recorded and run with
 `--offline`. See https://github.com/lukewilliamboswell/roc-blueprint/blob/main/fixtures/builds/README.md[fixtures/builds/README.md].
 `scripts/test_update.roc` checks local-source preflight, authority observation,
-concurrent publication, named updates and what a lock from blueprint 0.5 is
-told. `scripts/test_isolation.roc` checks what a build stages
+concurrent publication, named updates and what an unsupported lock is told. `scripts/test_isolation.roc` checks what a build stages
 about its caller: the namespace identities, the CLI's own path as the runner,
 and the refusals when either cannot be used. Both put a failing
 `python3` on `PATH`: the CLI itself must not use a host Python.

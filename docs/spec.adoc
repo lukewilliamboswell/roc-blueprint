@@ -131,12 +131,10 @@ recipes, output hashes or successful execution records. These belong to their
 own declared evidence types. An SBOM describes artifact composition and is not
 a substitute for the build graph.
 
-Blueprint 0.7.0 consumes the current Lock 2 contract. Earlier authority is
-unsupported. Adopt current configuration and resolve a new lock explicitly with
-`blueprint update`, reviewing the result as a dependency change. Reviewed
-immutable source references can constrain resolution; no lock conversion or
-pin-preservation behavior is provided. See
-xref:migrating-0.7.adoc[Adopt 0.7.0].
+A lock is read only in the current format. `blueprint update` writes it, and
+is the one command that accepts a lock it cannot read, by replacing it. Every
+other command refuses such a lock and names that command. Reviewed immutable
+source references in the configuration constrain what resolution selects.
 
 == Compatibility of the formats
 
