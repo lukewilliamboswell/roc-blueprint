@@ -46,7 +46,7 @@ only a committed lock, and works even when `Blueprint.roc` is absent or invalid.
 | Read committed pins and per-entry content identities without evaluating the project. See <<inspect-committed-pins>>
 
 | `blueprint check`
-| Run the compiler check and validate all shell/task/build environments without requiring a lock
+| Run the compiler check and validate all shell/task/build environments and executor declarations without requiring a lock
 
 | `blueprint spec` / `blueprint flake`
 | Print the Spec or the generated flake

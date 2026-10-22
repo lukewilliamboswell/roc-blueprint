@@ -4,6 +4,53 @@ Blueprint gives repository-owned commands declared environments and, when
 requested, a managed artifact-production contract. This chapter defines its
 responsibilities for contributors, provider authors and downstream consumers.
 
+[[goals]]
+== Goals and non-goals
+
+Many tools turn a description of an environment into a working one for a
+single ecosystem, and tie the project's intent to that ecosystem's formats and
+commands. Blueprint separates the two. Shared contracts state intent,
+dependency authority and execution evidence; every ecosystem-specific concern
+belongs to a replaceable provider.
+
+**The protocol is the product; providers are adapters.**
+
+The protocol is the Spec, the Lock, the provider contract and the versioned
+reports and records. A provider implements part of it for one ecosystem.
+
+=== Goals
+
+* Realise the same Blueprint through different package ecosystems, or through
+  Blueprint's own store, on Linux, macOS and Windows. This is a long-term
+  goal; <<provider-neutrality>> says what ships today. Core-managed
+  downloads, Roc packages, expected host tools and tasks already work
+  without any ecosystem, including on Windows.
+* Pin dependencies in a reviewed Lock that only explicit resolution changes,
+  and verify pinned content before use.
+* Give an artifact an explicit build contract: declared files, inputs,
+  dependencies, executor and output, with capabilities checked before
+  effects.
+* Explain what a build consumed and what changed, from typed evidence rather
+  than from reports reconstructed after the fact.
+* Keep planning pure, so that another host can import the core types and
+  perform the effects itself.
+
+=== Non-goals
+
+* Owning compilation, packaging, validation or release logic. The
+  repository's scripts keep it.
+* Discovering dependencies hidden in arbitrary commands. A build declares
+  what it consumes.
+* Translating package names between ecosystems, or choosing a provider
+  automatically.
+* A second artifact cache. Providers own caching and substitution.
+* Sandboxing tasks or the evaluation of `Blueprint.roc`. Only a managed-build
+  executor enforces isolation, and only the guarantees it advertises.
+* Pinning or versioning tools the machine already has. An expected tool is
+  looked for by name.
+* Arbitrary composition of providers within one request.
+* Running workflow steps in parallel.
+
 [[purpose]]
 == What Blueprint owns
 
@@ -94,7 +141,7 @@ framework or prove that cross-compiled output runs on its intended target.
 |===
 | Term | Comparison domain
 | `content_identity` | Pinned input content, compared together with its provider. Opaque to consumers outside that provider's contract.
-| `build_identity` | A fully prepared executable build, compared together with its provider. Includes the provider's selected inputs and recipe semantics.
+| `build_identity` | A fully prepared executable build, compared together with its provider. Includes the provider's selected inputs and recipe semantics. A changed build identity means the request changed, not that output bytes differ.
 | File digest | Exact original file bytes under a named hashing scheme; an archive's hash includes compression and archive metadata.
 | Tree digest | Directory content under a named tree-hashing scheme. A Nix NAR hash and an archive SHA-256 are different measurements.
 | Output digest | Measured content of a produced artifact under a named scheme.
@@ -102,14 +149,13 @@ framework or prove that cross-compiled output runs on its intended target.
 |===
 
 Equal content identities do not imply equal builds: commands, selected files,
-tools and options also matter. A changed build identity means the request
-changed, not that output bytes differ. Equal build identities do not prove
+tools and options also matter. Equal build identities do not prove
 deterministic execution. A checked rebuild provides evidence about repeated
 execution; it does not prove determinism for every execution.
 
-For Nix, the build identity is its derivation path. The returned output store
-path is a location, not a general output-content digest. Consumers must not
-interpret opaque provider identities or compare them across providers.
+For Nix, the build identity is its derivation path, and the returned output
+store path is a location. Consumers must not interpret opaque provider
+identities or compare them across providers.
 
 [[terms-stages]]
 === Stages
@@ -269,8 +315,7 @@ silently expands or rewrites the other's authority.
 === Invariant 4: Pinned content is verified before use
 
 Fetched bytes are checked against their declared authority. Native build
-caches use the provider's established integrity contract. A build identity is
-not a universal checksum for an output.
+caches use the provider's established integrity contract.
 
 [[inv-5]]
 === Invariant 5: Materialization is disposable
@@ -314,6 +359,25 @@ presentation. A package version, wire format and compiler version are distinct.
 Blueprint 0.7.0 consumes current Spec 3 and Lock 2 contracts. Earlier authority
 is unsupported; adoption uses explicit reviewed resolution, not runtime
 conversion.
+
+[[invariant-changes]]
+=== What changed in 0.7 and why
+
+Two invariants changed in 0.7. Both changes are deliberate.
+
+Invariant 2 used to say that only Resolve makes choices, and that every later
+stage is a pure function of the Lock, the System and the host facts. Managed
+builds made that untrue: a build also consumes its command, selected project
+files and settings, none of which the Lock holds. The invariant now states
+what still holds: only explicit resolution changes pins.
+
+Invariant 9 used to say that inspectors read only committed data, and that a
+Report needing anything else meant the Lock was incomplete. `explain build`
+compares the current request with the last successful local build record,
+which is disposable evidence that does not belong in the Lock. The invariant
+now lets an inspector read such evidence when it declares what it read and
+reports missing evidence as unavailable. Lock inspection still reads only the
+committed Lock.
 
 [[coupling-test]]
 == The coupling test

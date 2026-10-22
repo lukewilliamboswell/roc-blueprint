@@ -51,10 +51,10 @@ complete file with the current URL.
 | Other flake input; not a tool source or overlay.
 
 | `Resolver(Str, List(InputName))`
-| Explicit provider ownership of non-package sources, inputs and overlays. Package-source declarations already identify their provider; core `SourceFile` needs no resolver.
+| Assigns sources, inputs and overlays that are not package sources to a provider. `Input`, `Overlay` and `Source` declarations, and the Roc bundle sources `RocPackages` adds (each named `roc-<bundle file name without .tar.zst>`, see <<roc-packages>>), belong to Nix without one; write `Resolver` only to assign one of them to another provider. Package sources already identify their provider; core `SourceFile` needs no resolver.
 
-| `Executor(InputName, Str, InputName)`
-| Named build executor, provider name and bootstrap package source. Independent executors may require no source and use an empty string.
+| `Executor(InputName, ExecutorProvider)`
+| Named build executor that builds select with `Execute`. `Nix(source)` builds with Nix, taking its bootstrap package set from the declared `Packages` source `source`. `Adapter(provider, source)` names another provider's executor; `source` is its bootstrap package source, or `""` when it needs none. `blueprint check` asks the provider to validate each executor and refuses a Nix executor with an empty bootstrap source.
 
 | `Environment(EnvName, List(EnvironmentSetting))`
 | Named tools and scoped overlays, optionally inherited.
@@ -370,9 +370,12 @@ and Nix is not started for it.
 
 Nix is started only for an environment that has a tool from a Nix source.
 An environment Nix must build although it has no tool of its own, such as
-the sandbox of a build whose environment is empty, is built with the first
-Nix source declared, in the order of `Blueprint.roc`. The bash that
-`nix develop` runs a shell or task with comes from that first source too.
+the sandbox of a build whose environment is empty, is built with the
+bootstrap source of the Nix executor that the project's builds select (the
+first by name when they select several). When no build selects one, it is
+built with the first Nix source declared, in the order of `Blueprint.roc`.
+The bash that `nix develop` runs a shell or task with comes from the first
+Nix source the generated flake declares.
 
 The core does not autodetect a provider or translate package names. Guix
 source intent and pure capability validation exist, but there is *no Guix
@@ -439,7 +442,6 @@ and those options:
 
 [source,roc]
 ----
-Resolver("nix", ["rust", "zig"]),
 Overlay("rust", "github:oxalica/rust-overlay"),
 Overlay("zig", "github:mitchellh/zig-overlay"),
 Environment("host", [
@@ -512,7 +514,6 @@ source: select the attribute, quoting a segment that contains dots.
 
 [source,roc]
 ----
-Resolver("nix", ["zig"]),
 Overlay("zig", "github:mitchellh/zig-overlay"),
 Environment("dev", [Overlays(["zig"]), Tools(["nix#zigpkgs.\"0.16.0\""])]),
 ----
@@ -557,14 +558,14 @@ used by tasks and shells alone has none of them in its lock.
 A sandboxed build cannot download. The bundles of an environment that a build
 runs in, or that it extends, are therefore fetched by Nix as well:
 `blueprint update` records those in `Blueprint.lock` like any other source,
-and Nix checks the bytes against that pin. An environment a build uses takes
+each named `roc-<hash>` and owned by Nix without a `Resolver`, and Nix checks
+the bytes against that pin. An environment a build uses takes
 its compiler from a Nix source, since the Nix executor does not support downloaded programs in managed builds:
 
 [source,roc]
 ----
 Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
-Resolver("nix", ["roc", "roc-Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af", "roc-6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS"]),
-Executor("native", "nix", "nix"),
+Executor("native", Nix("nix")),
 Overlay("roc", "github:roc-lang/roc-overlay/76fdbdc2c34adf35eea5fae1d991ca29591a1a7c"),
 Environment("build-scripts", [
 	Overlays(["roc"]),

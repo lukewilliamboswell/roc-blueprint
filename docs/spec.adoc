@@ -18,8 +18,12 @@ In outline:
   `{ name, version, ref }`. Every source a tool names is declared; validation
   inserts no package source. Checked authoring shorthands such as
   `From(NixPackages(...))` produce these declarations.
-* `resolvers` — explicit provider ownership of non-package source/input names.
-* `executors` — named executor declarations with provider and bootstrap source.
+* `resolvers` — `{ provider, inputs }`, explicit provider ownership of
+  non-package source and input names. The platform writes the Nix entries for
+  `Input`, `Overlay`, `Source` and Roc bundle sources itself; validation
+  refuses an input with no owner or with two.
+* `executors` — `{ name, provider, source }`: a named executor, its provider
+  and its bootstrap package source, empty for an executor that needs none.
 * `build_executors` — explicit executor selection for each Build.
 * `inputs` — `{ name, url, kind }`, where kind is `Overlay` or `Flake`.
 * `environments` — `{ name, parents, tools, overlays }`; tools are
@@ -99,15 +103,23 @@ probes the host or installs/fetches anything.
 == What the Lock holds
 
 `Blueprint.lock` is versioned S-expression dependency authority. Its `intent`
-records resolution declarations, including explicit provider ownership; `sources`
-records selected names, providers, references, revisions and digests. Adapter
-hints preserve checked native authority. `fetched` records program download
-URLs, original-file SHA-256, length and how verification evidence was obtained.
+records resolution declarations, including explicit provider ownership.
+Provider-namespaced `hints` preserve checked native authority, such as the Nix
+lock graph.
 
-A source's recorded digest retains its provider representation. The public
-inspection contract exposes `content_identity` separately, with explicit file,
-tree or unknown digest kind and inert namespaced metadata. Core `SourceFile`
-entries pin unchanged original bytes, not an implicitly unpacked tree.
+Each `sources` entry is `{ name, provider, ref, rev, digest }`, and `digest` is
+`sha256:<hex>`. The Nix adapter converts a remote entry's NAR hash to that
+form; a local entry carries Blueprint's own tree digest from core `Tree`; a
+`SourceFile` entry has provider `"file"` and the flat SHA-256 of the unchanged
+original bytes, not of an unpacked tree. These measure different things. The
+public inspection contract exposes `content_identity` separately, with
+explicit file, tree or unknown digest kind and inert namespaced metadata.
+
+`fetched` holds one `{ name, system, urls, sha256, size, obtained }` per
+declared program and System: the URLs it was declared with, the SHA-256 in hex
+and the length of the download, and in `obtained` whether the digest was
+`Computed` from the downloaded bytes, `Published` by the release that serves
+them, `Both`, or `Unstated`.
 
 Only explicit update changes pins. Ordinary requests validate freshness and
 verify selected materialization without rewriting authority. Local sources use
@@ -142,12 +154,16 @@ adapters that return constrained operations; the CLI or another host performs
 filesystem, network and process effects. Registering a provider grants no
 ambient ownership of shared sources.
 
-A source names its resolver. Package sources carry versioned provider intent;
-`Resolver("nix", ["assets"])` assigns a non-package source to that provider.
-Each build selects a named executor using `Execute("native")`, whose
-`Executor("native", "nix", "pkgs")` declaration identifies its provider and
-bootstrap package source. An independent executor may use an empty bootstrap
-source. A build never infers its executor from the first package source.
+A source names its resolver. Package sources carry versioned provider intent.
+Other sources, inputs and overlays are assigned in `resolvers`: the platform
+writes the Nix entries for `Input`, `Overlay`, `Source` and Roc bundle sources,
+and an explicit `Resolver(provider, names)` assigns one of them to another
+provider instead. Each build selects a named executor with `Execute("native")`.
+`Executor("native", Nix("pkgs"))` declares a Nix executor whose bootstrap
+package source is `pkgs`; `Adapter(provider, source)` declares another
+provider's executor, whose source may be empty. Both write
+`{ name, provider, source }`. A build never infers its executor from the first
+package source.
 
 Adapters validate their own native package/source grammar through the pure
 validation boundary used by both authoring and CLI ingestion. Core validation
@@ -165,21 +181,6 @@ identity. Build execution uses that exact preparation; typed results decode
 provider output before human or JSON presentation. Providers own native caches
 and substitution, not Blueprint's report layer.
 
-The Nix adapter uses locked package sources, ordered selected overlays and
-explicit execution-system tool selections. Managed builds use a versioned
-standalone runner, filtered project files, read-only inputs and artifacts, exact
-argv and validated outputs. They receive declared tools on `PATH` and package
-roots under `BLUEPRINT_TOOLS`; this does not activate `stdenv` setup. Runtime
-namespace authorization witnesses stay outside the derivation identity. Local
-x86_64 Linux is the verified isolation implementation; remote builders are
-disabled for this contract.
-
-Nix preparation disables import-from-derivation and does not execute dependency
-builds. Execution and checked rebuild target the exact prepared derivation.
-Native details stay namespaced in metadata; a derivation path is the Nix build
-identity, not a universal output digest. See xref:builds.adoc[Build artifacts and
-run workflows] for planning, results and local evidence.
-
 `gen`, `shell`, `run`, `build` and `workflow` require existing matching authority. Only
 explicit `update` resolves new pins and publishes authority; normal commands
 stage derivatives and prohibit native lock updates. Named input declarations
@@ -194,3 +195,134 @@ A new feature usually means: a setting in the platform (`Config.roc`,
 `Lower.roc`), then either an `extensions` kind or a new optional Spec field
 (a minor bump), then support in a provider. Prototyping it as `Raw` or `Custom`
 first needs no Spec change at all.
+
+=== The provider contract
+
+`blueprint-core/Provider.roc` defines the contract as one record. The CLI uses
+only this record: `scripts/src/StaticChecks.roc` fails if
+`blueprint-cli/main.roc` reaches into a provider's own modules.
+
+[cols="2,5",options="header"]
+|===
+| Field
+| Purpose
+
+| `name`
+| Short provider name, such as `"nix"`. Spec `raw` entries with this name are for this provider.
+
+| `features`
+| The Spec `requires` features the provider implements.
+
+| `build_capabilities`
+| The build operations it supports; see xref:builds.adoc#capabilities-and-guarantees[Capabilities and guarantees].
+
+| `build_guarantees`
+| What a successful build by it establishes. Neither list is evidence that planning ran or checked a sandbox.
+
+| `realises`
+| Whether it supplies the tools of a package source with a given provider intent.
+
+| `validate_source`
+| Check a package source declaration against its native grammar.
+
+| `validate_tool`
+| Check a tool name against its native grammar.
+
+| `validate_executor`
+| Check an executor declaration it owns, such as a required bootstrap source. `blueprint check`, `plan build` and `explain build` without `--prepare`, and request planning call it.
+
+| `render`
+| The files it would generate for the whole Spec, for inspection.
+
+| `inspect_lock`
+| Project committed authority into per-source content identities and namespaced metadata, without a Spec, host or effects.
+
+| `preflight`
+| Refuse a request it cannot realise, before any effect.
+
+| `realise`
+| The ordered steps for one request, from the validated Spec and Lock. Never resolves or changes pins.
+
+| `build_prepare_argv`
+| The argv that prepares a build step's exact native recipe.
+
+| `build_prepared`
+| Decode that output into a prepared build: its build identity and outputs.
+
+| `build_execute_argv`
+| The argv that executes a prepared build, with options such as a checked rebuild.
+
+| `build_result`
+| Decode the execution output into a build result with namespaced metadata.
+
+| `build_inputs`
+| The locked inputs one build imports directly.
+
+| `build_sources`
+| The lock entries the whole build closure uses, for provenance.
+
+| `build_exclusions`
+| Project paths left out of a captured snapshot.
+
+| `build_local_inputs`
+| Selected local pins with their paths and digests, for the host to verify.
+
+| `resolve`
+| The programs to look for, files to stage and argv to run to produce a native lock, for every input or for named ones.
+
+| `lock_from_native`
+| Convert that native lock into a Lock.
+|===
+
+Every adapter supplies every field, but only the roles it plays need
+meaningful answers. The rest return empty lists, `Ok({})`, or an error that
+refuses the request before effects.
+
+* An environment-only adapter supplies the tools of its package sources. It
+  implements `name`, `realises`, `validate_source`, `validate_tool`,
+  `preflight` and `realise`, and refuses other requests. The test in
+  `blueprint-core/Realise.roc` headed "An environment-only adapter owns its
+  native grammar" is one, with no build support and no bootstrap source.
+* A resolver-only adapter produces pins for what it owns. It implements
+  `name`, `resolve`, `lock_from_native` and `inspect_lock`, and
+  `validate_source` when it owns package sources.
+* An executor adapter runs builds. It implements `build_capabilities`,
+  `build_guarantees`, `validate_executor`, `preflight` and `realise` for build
+  requests, the four `build_*` preparation and result functions,
+  `build_inputs`, `build_sources`, `build_exclusions` and
+  `build_local_inputs`.
+
+`blueprint-cli/ProviderContractTest.roc` is an independent fixture that
+resolves, enters environments and runs builds through the same record
+without any Nix protocol.
+
+=== The Nix adapter
+
+The Nix adapter uses locked package sources, ordered selected overlays and
+explicit execution-system tool selections. Managed builds use a versioned
+standalone runner, filtered project files, read-only inputs and artifacts, exact
+argv and validated outputs. They receive declared tools on `PATH` and package
+roots under `BLUEPRINT_TOOLS`; this does not activate `stdenv` setup. Runtime
+namespace authorization witnesses stay outside the derivation identity. Local
+x86_64 Linux is the verified isolation implementation; remote builders are
+disabled for this contract.
+
+Nix preparation disables import-from-derivation and does not execute dependency
+builds. Execution and checked rebuild target the exact prepared derivation.
+Native details stay namespaced in metadata; the derivation path is the Nix
+build identity. See xref:builds.adoc[Build artifacts and run workflows] for
+planning, results and local evidence.
+
+The generated flake declares a `nixpkgs` input that follows the first package
+source it renders, whatever that source is called, because `nix develop` takes
+the bash it runs from the input of that name. A project that declares its own
+input named `nixpkgs` gets no alias. The Lock's native graph must carry that
+root edge exactly as the declarations determine it; decoding refuses a lock
+whose edge differs.
+
+An environment with no tool of its own, such as the sandbox of a build whose
+environment is empty, is rendered with the bootstrap source of the Nix
+executor the project's builds select, and with the first Nix source declared
+when no build selects one. A Nix executor needs a bootstrap source:
+`Nix(source)` always names one, and `validate_executor` refuses an empty one
+however the Spec was written.

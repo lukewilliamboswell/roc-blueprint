@@ -7,15 +7,14 @@ as a coordinated change. Do not mix the 0.7 platform with an older CLI.
 == Make ownership explicit
 
 Package declarations continue to use checked constructors such as
-`Packages("pkgs", From(NixPackages(...)))`. Assign non-package sources, inputs
-and overlays to their resolver, then declare and select each build's executor:
+`Packages("pkgs", From(NixPackages(...)))`. Declare each build's executor and
+select it:
 
 [source,roc,snippet=unchecked]
 ----
 Packages("pkgs", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
 Source("assets", "path:./assets"),
-Resolver("nix", ["assets"]),
-Executor("native", "nix", "pkgs"),
+Executor("native", Nix("pkgs")),
 Environment("producer", [Tools(["pkgs#bash", "pkgs#coreutils"])]),
 Build("assets", [
     Execute("native"),
@@ -27,21 +26,29 @@ Build("assets", [
 ]),
 ----
 
-The executor no longer follows whichever package source is declared first.
-Core-owned `SourceFile` inputs need no external resolver. Every referenced
-source and executor must be declared; unsupported combinations fail rather than
-guessing an owner. Keep compilation and packaging behavior in your scripts.
+`Nix("pkgs")` names the declared package source the executor bootstraps from.
+`Adapter(provider, source)` declares another provider's executor. The executor
+no longer follows whichever package source is declared first.
+
+`Input`, `Overlay` and `Source` declarations, and the Roc bundle sources that
+`RocPackages` adds, belong to Nix without a `Resolver`. Write
+`Resolver(provider, names)` only to assign one of them to another provider.
+Core-owned `SourceFile` inputs need no resolver. Every referenced source and
+executor must be declared; unsupported combinations fail rather than guessing
+an owner. Keep compilation and packaging behavior in your scripts.
 
 == Resolve current authority explicitly
 
 Blueprint 0.7.0 reads the current Lock 2 contract. Earlier lock formats are
 unsupported; there is no lock-conversion command or automatic upgrade path.
 
-Update configuration and run `blueprint check`. If the project has an
-unsupported lock, retain it in version history for review and remove that file
-before running `blueprint update`. Review and commit the newly resolved lock as
-an explicit dependency change. The update resolves the adopted configuration;
-it does not promise to reproduce an older lock's dependency decisions.
+Update configuration and run `blueprint check`. Commands that read the lock
+refuse an unsupported one, including `blueprint update NAME...`. A full
+`blueprint update`, with no names, replaces it in place. Keep the old lock in
+version history so that you can diff its pins against the new ones. Review and
+commit the newly resolved lock as an explicit dependency change. The update
+resolves the adopted configuration; it does not promise to reproduce an older
+lock's dependency decisions.
 
 Use reviewed immutable source references in configuration when you want to
 constrain what resolution selects. Review the resulting pins and verification
@@ -51,6 +58,19 @@ Generated state is disposable. Clear the project's generated `.blueprint/`
 state when adopting 0.7.0. The next successful build establishes a fresh local
 explanation baseline.
 
+== Behavior changes to check
+
+* `blueprint update` refuses a project that declares a package source for a
+  provider this CLI does not register, such as a Guix source, with
+  `no registered resolver for guix`.
+* An environment with no tools takes its bootstrap package set from the
+  source of a Nix executor that a Build selects, when any Build selects one,
+  and otherwise from the first declared Nix source.
+* Nix owns the `roc-<hash>` sources of Roc packages that builds use without a
+  `Resolver`, as it owns `Input`, `Overlay` and `Source` declarations.
+* `blueprint check` asks each executor's provider to validate its declaration.
+  A Nix executor needs a non-empty bootstrap package source.
+
 == Use current report and library contracts
 
 * Lock report format 2 exposes `content_identity` for pinned input content.
@@ -58,7 +78,9 @@ explanation baseline.
 * `LockSnapshot.source_content_identity` returns the provider-qualified
   `ContentIdentity` value from the current lock projection.
 * Build result schema 2 exposes `build_identity` for the fully prepared native
-  build request. Its comparison domain also includes the provider.
+  build request. Its comparison domain also includes the provider. The result
+  carries `snapshot_digest`; the snapshot itself is in the `plan` and
+  `explain` JSON.
 * Validate current lock projections with `lock-snapshot-v2.schema.json`.
 
 Use the CLI, platform, imported packages and report consumers from the same
