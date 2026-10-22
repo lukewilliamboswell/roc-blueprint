@@ -309,12 +309,21 @@ without any Nix protocol.
 
 The Nix adapter uses locked package sources, ordered selected overlays and
 explicit execution-system tool selections. Managed builds use a versioned
-standalone runner, filtered project files, read-only inputs and artifacts, exact
-argv and validated outputs. They receive declared tools on `PATH` and package
-roots under `BLUEPRINT_TOOLS`; this does not activate `stdenv` setup. Runtime
-namespace authorization witnesses stay outside the derivation identity. Local
-x86_64 Linux is the verified isolation implementation; remote builders are
-disabled for this contract.
+standalone runner, a copy of the selected project files the host makes,
+read-only inputs and artifacts, exact argv and validated outputs. They receive
+declared tools on `PATH` and package roots under `BLUEPRINT_TOOLS`; this does
+not activate `stdenv` setup. Runtime namespace authorization witnesses stay
+outside the derivation identity. Local x86_64 Linux is the verified isolation
+implementation; remote builders are disabled for this contract.
+
+Evaluation is pure: neither a build nor its preparation passes `--impure`.
+Besides its locked flake inputs, everything the flake reads from outside its
+own directory it reads as a `builtins.fetchTree` path locked by NAR hash:
+each build's project copy, the runner's compiler archive and every original
+file. A `Measure` step operation
+has the host locate or make that content and hash it with `nix hash path`,
+then stage a record of its path and hash beside the flake, which reads it from
+there.
 
 Nix preparation disables import-from-derivation and does not execute dependency
 builds. Execution and checked rebuild target the exact prepared derivation.

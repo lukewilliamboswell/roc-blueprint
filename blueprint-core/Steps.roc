@@ -56,9 +56,25 @@ Steps := { steps : List(Step) }.{
 	## the caller's PATH, each under its `name`, and may name one of them; see
 	## `Program`. Fetch what every step needs after all `Present` checks and
 	## before the first step's command.
+	## Measure: the provider's own identity of local content it is to read,
+	## so that it can read that content as a locked input. `Snapshot(build)`
+	## is the project files that build selects: copy them into a directory
+	## of their own in the workspace, emptied first, keeping their names'
+	## bytes and whether each file is executable, and refusing a symlink or a
+	## special file. They are what the host measures as that build's input
+	## evidence. The copy is the provider's only while the step runs: remove
+	## it when the step ends. `SourceFile(sha256)` is the original file with
+	## that digest that a SourceFile operation earlier in the step staged.
+	## Run `argv`
+	## with that path appended, when `argv` is not empty, and take its
+	## trimmed standard output as the identity; otherwise it is empty. Then
+	## replace `marker` in the step's files with `record`, its `@path@` and
+	## `@identity@` replaced by the JSON strings of the path and identity.
+	## Providers put Measure after the step's Isolation and LocalSystem.
 	## Serialize workspace use; stop on any failed materialization operation.
 	Operation : [
 		SourceFile({ name : Str, url : Str, sha256 : Str }),
+		Measure({ target : [Snapshot(Str), SourceFile(Str)], argv : List(Str), marker : Str, record : Str }),
 		VerifyTree({ path : Str, digest : Str }),
 		Isolation({ directory : Str, placeholder : Str }),
 		LocalSystem(Str),

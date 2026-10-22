@@ -79,7 +79,11 @@ cases! = |bench, idle, real_build| {
 	cold = invoke!(bench, server, build_root, ["gen"], cache)?
 	CliHarness.check!(cold.code == 0, "cold Generate failed: ${cold.stderr}")?
 	flake = Path.read_utf8!(Path.utf8("${build_root}/.blueprint/flake.nix"))?
-	CliHarness.check!(flake.contains("source-file-${source.sha256}.json") and Path.read_utf8!(Path.utf8("${build_root}/.blueprint/source-file-${source.sha256}.json"))? == Json.to_str(artifact) and flake.contains("recursive = false") and flake.contains("sha256 = \"${source.sha256}\"") and Path.read_bytes!(Path.utf8(artifact))? == bytes, "generated build did not expose original checked file")?
+	# Generation measures nothing: the record says only where the file is. A
+	# build adds the NAR hash Nix's locked read checks, then the flat SHA-256.
+	generated_record : { path : Str }
+	generated_record = Json.parse(Path.read_utf8!(Path.utf8("${build_root}/.blueprint/source-file-${source.sha256}.json"))?).map_err(|_| ScriptFailed)?
+	CliHarness.check!(flake.contains("builtins.readFile ./source-file-${source.sha256}.json") and generated_record.path == artifact and flake.contains("builtins.fetchTree { type = \"path\"; path = record.path; narHash = record.narHash; }") and flake.contains("builtins.hashFile \"sha256\" file == \"${source.sha256}\"") and !flake.contains("builtins.path") and Path.read_bytes!(Path.utf8(artifact))? == bytes, "generated build did not expose original checked file")?
 	named_with_nix = invoke!(bench, idle.emptied(), build_root, ["update", "upstream"], cache)?
 	CliHarness.check!(named_with_nix.code == 0 and Path.read_utf8!(Path.utf8("${build_root}/Blueprint.lock"))? == committed, "named SourceFile update moved unrelated Nix pins")?
 	warm = invoke!(bench, idle.emptied(), build_root, ["gen"], cache)?
@@ -88,9 +92,9 @@ cases! = |bench, idle, real_build| {
 	quoted = invoke!(bench, server, build_root, ["gen"], quoted_cache)?
 	CliHarness.check!(quoted.code == 0, "cache path quoting failed: ${quoted.stderr}")?
 	encoded_path = Path.read_utf8!(Path.utf8("${build_root}/.blueprint/source-file-${source.sha256}.json"))?
-	decoded_path : Str
+	decoded_path : { path : Str }
 	decoded_path = Json.parse(encoded_path).map_err(|_| ScriptFailed)?
-	CliHarness.check!(decoded_path == "${quoted_cache}/blueprint/v1/artifacts/sha256/${source.sha256}", "cache path was interpreted as executable syntax")?
+	CliHarness.check!(decoded_path.path == "${quoted_cache}/blueprint/v1/artifacts/sha256/${source.sha256}", "cache path was interpreted as executable syntax")?
 	if real_build {
 		first = invoke!(bench, server, build_root, ["build", "copy", "--json"], cache)?
 		CliHarness.check!(first.code == 0, "original-file build failed: ${first.stderr}")?

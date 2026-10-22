@@ -322,7 +322,6 @@ NixProvider :: [].{
 						"--option",
 						"extra-sandbox-paths",
 						"/blueprint-isolation/witness=@blueprint-isolation-source@/witness",
-						"--impure",
 						"${base_ref}#packages.${target}.${name}",
 					])
 			}
@@ -336,7 +335,7 @@ NixProvider :: [].{
 		# Only an explicit build observes its caller; other requests render
 		# builds that refuse to evaluate.
 		source = match $action {
-			Build(_) => Planned({ root: layout.project_root, exclude: excluded(layout, inputs) })
+			Build(_) => Planned
 			_ => Unplanned
 		}
 		contents = render_selected(
@@ -394,38 +393,55 @@ NixProvider :: [].{
 
 	## An isolation observation belongs to one explicit build, never an artifact name.
 	## Recheck supplied local pins on every step, including after source-editing tasks.
+	## Besides its locked inputs, everything the flake reads from outside its
+	## own directory it reads as a locked path, through a record the host
+	## writes beside the flake: where the content is and the NAR hash the
+	## host measured with Nix, so that evaluation is pure.
 	materialize_plan = |selected, target, layout, derived| {
 		{ builds, argv, contents, action, needs_nix, .. } = selected
 		base_ref = Locks.path_reference(layout.generated_root)
+		used = selected.project.source_files.keep_if(|source| builds.any(|build| build.inputs.contains(source.name)))
 		var $operations = derived.operations
-		for source in selected.project.source_files {
-			if builds.any(|build| build.inputs.contains(source.name)) {
-				$operations = $operations.append(SourceFile(source))
-			}
+		for source in used {
+			$operations = $operations.append(SourceFile(source))
 		}
-		match action {
+		(measured, measures) = match action {
 			Build(_) => {
 				# Nix sandbox-paths splits on whitespace and cannot quote paths.
 				# A fixed Linux temporary parent keeps arbitrary project/cache paths
 				# out of that setting; the executor creates a private child per call.
 				$operations = $operations.append(SourceFile(Runner.compiler)).append(Isolation({ directory: "/tmp", placeholder: "@blueprint-isolation-source@" }))
 					.append(LocalSystem(target))
+				# Only once the caller may build is anything copied or hashed.
+				originals = used.append(Runner.compiler).map(
+					|source| Measure({ target: SourceFile(source.sha256), argv: nar_hash, marker: source_marker(source.sha256), record: path_record }),
+				)
+				projects = builds.map(
+					|build| Measure({ target: Snapshot(build.name), argv: nar_hash, marker: project_marker(build.name), record: path_record }),
+				)
+				(True, originals.concat(projects))
 			}
-			_ => {}
+			_ => (False, [])
 		}
-		compiler_files = match action {
-			Build(_) => [{ path: "${layout.generated_root}/source-file-${Runner.compiler.sha256}.json", contents: "@blueprint-source-file-${Runner.compiler.sha256}@" }]
-			_ => []
+		$operations = $operations.concat(measures)
+		# Generation measures nothing: its builds cannot run, and its records
+		# say only where each original file is.
+		source_record = |sha256| if (measured) source_marker(sha256) else "{\"path\":@blueprint-source-file-${sha256}@}"
+		compiler_files = if measured {
+			[{ path: "${layout.generated_root}/source-file-${Runner.compiler.sha256}.json", contents: source_marker(Runner.compiler.sha256) }]
+				.concat(builds.map(|build| { path: "${layout.generated_root}/project-${build.name}.json", contents: project_marker(build.name) }))
+		} else {
+			[]
 		}
 		files = staged_files(layout, contents)
 			.append({
 				path: "${layout.generated_root}/flake.lock",
 				contents: derived.contents,
 			}).concat(
-			selected.project.source_files.keep_if(|source| builds.any(|build| build.inputs.contains(source.name))).map(
+			used.map(
 				|source| {
 					path: "${layout.generated_root}/source-file-${source.sha256}.json",
-					contents: "@blueprint-source-file-${source.sha256}@",
+					contents: source_record(source.sha256),
 				},
 			),
 		)
@@ -451,8 +467,25 @@ NixProvider :: [].{
 		}
 	}
 
+	## How Nix identifies a path it is to read: the NAR hash `nix hash path`
+	## prints, which `builtins.fetchTree` checks for a `path` input.
+	nar_hash : List(Str)
+	nar_hash = ["nix", "hash", "path"]
+
+	## A locked path as the flake reads it: where the host put the content,
+	## and its NAR hash.
+	path_record : Str
+	path_record = "{\"path\":@path@,\"narHash\":@identity@}"
+
+	source_marker : Str -> Str
+	source_marker = |sha256| "@blueprint-source-record-${sha256}@"
+
+	project_marker : Str -> Str
+	project_marker = |build| "@blueprint-project-record-${build}@"
+
 	## What a build never reads from the project: VCS metadata names at every
 	## depth, then caller-generated roots, the authority and local inputs.
+	## The host's selection of a build's project files leaves these out.
 	excluded : Layout, List(Locks.Input) -> List(Str)
 	excluded = |layout, inputs|
 		[
@@ -584,8 +617,8 @@ NixProvider :: [].{
 		Ok({ chunks: rendered.chunks.append(chunk), budget })
 	}
 
-	## The project a build copies: only an explicit build plan has one.
-	Source : [Unplanned, Planned({ root : Str, exclude : List(Str) })]
+	## The project a build reads: only an explicit build plan has one.
+	Source : [Unplanned, Planned]
 
 	## Inspection and executable plans share one renderer. Plans supply the full
 	## stable input set and explicit project source; inspection never guesses one.
@@ -754,7 +787,7 @@ NixProvider :: [].{
 					if spec.source_files.is_empty() {
 						[]
 					} else {
-						["      inputs = flakeInputs // { ${Str.join_with(spec.source_files.map(|source| "${quote(source.name)} = builtins.path { path = /. + (builtins.fromJSON (builtins.readFile ./source-file-${source.sha256}.json)); name = ${quote("blueprint-source-${source.sha256}")}; recursive = false; sha256 = ${quote(source.sha256)}; };"), " ")} };"]
+						["      inputs = flakeInputs // { ${Str.join_with(spec.source_files.map(|source| "${quote(source.name)} = ${recorded_file(source.sha256)};"), " ")} };"]
 					},
 				).append("      environmentsFor = system: {"),
 			),
@@ -815,7 +848,7 @@ NixProvider :: [].{
 						.map_err(|_| "unknown build environment")?
 					$rendered = append_rendered(
 						$rendered,
-						render_build(build, env, spec.system_tools, spec.commands, spec.configured_tools, spec.roc_packages, spec.build_files, spec.source_files, system, [Project.build_executor(spec, build.name)?.source]),
+						render_build(build, env, spec.system_tools, spec.commands, spec.configured_tools, spec.roc_packages, spec.source_files, system, [Project.build_executor(spec, build.name)?.source]),
 					)?
 				}
 				$rendered = append_rendered(
@@ -1180,61 +1213,56 @@ NixProvider :: [].{
 		prefix.concat(suffix)
 	}
 
-	## Open `packages` with what every build shares. Nix makes the one project
-	## copy: excluded entries are never inspected, and any other symlink or
-	## special file aborts evaluation. Nix records only whether the owner may
-	## execute a file. Namespace authorization travels outside these bytes.
-	## The versioned runner's source is independent of the CLI executable.
+	## Open `packages` with what every build shares. The host copies each
+	## build's selected project files and stages a record of where the copy
+	## is and its NAR hash; Nix reads the copy as that locked path, so
+	## evaluation is pure and the project's location is not in the recipe.
+	## Nix records only whether the owner may execute a file. Namespace
+	## authorization travels outside these bytes. The versioned runner's
+	## source is independent of the CLI executable.
 	render_source : Source -> Str
-	render_source = |source| match source {
-		Unplanned => lines([
+	render_source = |source| {
+		runner = [
 			"      packages = let",
 			"        runnerSource = { url = ${quote(Runner.source.url)}; sha256 = ${quote(Runner.source.sha256)}; };",
-			"        runnerFor = pkgs: (${Runner.nix}) { inherit pkgs; source = pkgs.fetchurl runnerSource; compilerArchive = builtins.path { path = /. + (builtins.fromJSON (builtins.readFile ./source-file-${Runner.compiler.sha256}.json)); name = ${quote("blueprint-source-${Runner.compiler.sha256}")}; recursive = false; sha256 = ${quote(Runner.compiler.sha256)}; }; };",
-			"        projectFor = _: builtins.throw \"build execution requires NixProvider.plan "
-				.concat("and a caller project\";"),
-			"        isolation = builtins.throw "
-				.concat("\"build execution requires a caller isolation witness\";"),
-			"        runner = builtins.throw \"build execution requires a caller runner\";",
-			"      in {",
-		])
-		Planned({ root, exclude }) => {
-			names = exclude.keep_if(|item| !item.starts_with("/")).map(quote)
-			paths = exclude.keep_if(|item| item != root and Layout.contains(root, item))
-				.fold([], |seen, item| if (seen.contains(item)) seen else seen.append(item))
-				.map(quote)
-			lines([
-				"      packages = let",
-				"        runnerSource = { url = ${quote(Runner.source.url)}; sha256 = ${quote(Runner.source.sha256)}; };",
-				"        runnerFor = pkgs: (${Runner.nix}) { inherit pkgs; source = pkgs.fetchurl runnerSource; compilerArchive = builtins.path { path = /. + (builtins.fromJSON (builtins.readFile ./source-file-${Runner.compiler.sha256}.json)); name = ${quote("blueprint-source-${Runner.compiler.sha256}")}; recursive = false; sha256 = ${quote(Runner.compiler.sha256)}; }; };",
-				"        projectFor = selected: assert selected == null || builtins.all (item: builtins.pathExists (${quote(root)} + \"/\" + item)) selected; builtins.path {",
-				"          path = /. + ${quote(root)};",
-				"          name = \"blueprint-project\";",
-				"          filter = path: type:",
-				"            (selected == null || path == ${quote(root)} || builtins.any",
-				"              (item: let full = ${quote(root)} + \"/\" + item;",
-				"                prefix = a: b: builtins.substring 0 (builtins.stringLength a) b == a;",
-				"               in path == full || prefix (full + \"/\") path || prefix (path + \"/\") full)",
-				"              selected)",
-				"            && !(builtins.elem (baseNameOf path) [ ${Str.join_with(names, " ")} ]",
-				"              || builtins.elem path [ ${Str.join_with(paths, " ")} ])",
-				"            && (if type == \"symlink\" then "
-					.concat("throw \"snapshot refuses symlink: \${path}\""),
-				"              else if type == \"unknown\" then "
-					.concat("throw \"snapshot refuses special file: \${path}\""),
-				"              else true);",
-				"        };",
-
-				"      in {",
-			])
+			"        runnerFor = pkgs: (${Runner.nix}) { inherit pkgs; source = pkgs.fetchurl runnerSource; compilerArchive = ${recorded_file(Runner.compiler.sha256)}; };",
+		]
+		match source {
+			Unplanned => lines(
+				runner.concat([
+					"        projectFor = _: builtins.throw \"build execution requires NixProvider.plan "
+						.concat("and a caller project\";"),
+					"        isolation = builtins.throw "
+						.concat("\"build execution requires a caller isolation witness\";"),
+					"        runner = builtins.throw \"build execution requires a caller runner\";",
+					"      in {",
+				]),
+			)
+			Planned => lines(
+				runner.concat([
+					"        projectFor = record: let project = builtins.fromJSON (builtins.readFile record); in "
+						.concat("(builtins.fetchTree { type = \"path\"; path = project.path; narHash = project.narHash; }).outPath;"),
+					"      in {",
+				]),
+			)
 		}
 	}
+
+	## An original file, read through the record the host stages beside the
+	## flake: a locked path wherever the host's store keeps it, whose flat
+	## SHA-256 Nix checks again. Its store identity is independent of that
+	## location.
+	recorded_file : Str -> Str
+	recorded_file = |sha256|
+		"(let record = builtins.fromJSON (builtins.readFile ./source-file-${sha256}.json); "
+			.concat("file = (builtins.fetchTree { type = \"path\"; path = record.path; narHash = record.narHash; }).outPath; ")
+			.concat("in assert builtins.hashFile \"sha256\" file == ${quote(sha256)}; file)")
 
 	## Ordinary, non-fixed-output derivations keep fetching outside user Run.
 	## The standalone versioned runner uses the locked package set's native Roc utility.
 	## Its own tools are absolute paths; argv and metadata enter through JSON.
-	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Spec.RocPackage), List(Spec.BuildFiles), List(Spec.SourceFile), Str, List(Str) -> Str
-	render_build = |build, environment, system_tools, commands, configured, roc_packages, build_files, source_files, system, builder| {
+	render_build : Spec.Build, Spec.Environment, List(Spec.SystemTools), List(Spec.Command), List(Spec.ConfiguredTool), List(Spec.RocPackage), List(Spec.SourceFile), Str, List(Str) -> Str
+	render_build = |build, environment, system_tools, commands, configured, roc_packages, source_files, system, builder| {
 		# A build has no network, so the runner gives Roc a cache of its own
 		# holding these. Other builds' derivations stay as they were.
 		bundles = roc_packages.keep_if(|entry| entry.environment == environment.name).map(roc_package_location)
@@ -1285,11 +1313,9 @@ NixProvider :: [].{
 			|name|
 				"{ name = ${quote(name)}; path = artifacts.${quote(name)}; }",
 		)
-		selected = build_files.find_first(|entry| entry.build == build.name)
-		project = match selected {
-			Ok(entry) => "projectFor [ ${Str.join_with(entry.paths.map(quote), " ")} ]"
-			Err(_) => "projectFor null"
-		}
+		# The host selected this build's project files (`Files` or the whole
+		# project) and recorded the copy it made of them.
+		project = "projectFor ./project-${build.name}.json"
 		argv = Str.join_with(build.run.map(quote), " ")
 		lines([
 			"          ${quote(build.name)} = let",
@@ -1813,7 +1839,7 @@ expect NixProvider.render({ ..mk(simple), configured_tools: [{ environment: "dev
 expect {
 	entry = { environment: "builder", tool: { source: "default", name: "zig" }, options: Value.Attrs([{ name: "debug", value: Value.Bool(True) }]) }
 	build = { name: "app", environment: "builder", inputs: [], needs: [], run: ["true"], output: "out" }
-	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [], overlays: [] }, [], [], [entry, { ..entry, environment: "other" }], [], [], [], "x86_64-linux", [])
+	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [], overlays: [] }, [], [], [entry, { ..entry, environment: "other" }], [], [], "x86_64-linux", [])
 	rendered.split_on("(sets.\"default\".\"zig\".override { \"debug\" = true; })").len() == 4
 }
 
@@ -2069,26 +2095,75 @@ expect match plan_fixture(Request.Build("app")) {
 		"--option",
 		"extra-sandbox-paths",
 		"/blueprint-isolation/witness=@blueprint-isolation-source@/witness",
-		"--impure",
 		"path:/generated#packages.x86_64-linux.app",
 	]
 	_ => False
 }
 
-# Inputs are verified before each fresh observation of the caller.
+# Evaluation is pure: neither the build nor its preparation asks for --impure.
+expect match plan_fixture(Request.Build("app")) {
+	Ok({ steps: [plan] }) => !plan.argv.contains("--impure")
+		and NixProvider.build_prepare_argv(plan).map_ok(|argv| !argv.contains("--impure") and argv.contains("allow-import-from-derivation")) == Ok(Bool.True)
+	_ => False
+}
+
+# Inputs are verified before each fresh observation of the caller. Only then
+# does the host locate, copy and hash what Nix reads as locked paths: the
+# compiler archive and each build's selected project files, one record each.
 expect match plan_fixture(Request.Build("app")) {
 	Ok({ steps: [plan] }) => plan.operations == [
 		VerifyTree({ path: "/project/assets", digest: assets_tree }),
 		SourceFile(Runner.compiler),
 		Isolation({ directory: "/tmp", placeholder: "@blueprint-isolation-source@" }),
 		LocalSystem("x86_64-linux"),
+		Measure({ target: SourceFile(Runner.compiler.sha256), argv: ["nix", "hash", "path"], marker: "@blueprint-source-record-${Runner.compiler.sha256}@", record: "{\"path\":@path@,\"narHash\":@identity@}" }),
+		Measure({ target: Snapshot("library"), argv: ["nix", "hash", "path"], marker: "@blueprint-project-record-library@", record: "{\"path\":@path@,\"narHash\":@identity@}" }),
+		Measure({ target: Snapshot("app"), argv: ["nix", "hash", "path"], marker: "@blueprint-project-record-app@", record: "{\"path\":@path@,\"narHash\":@identity@}" }),
 		Present([{ program: "nix", because: "build app runs in the Nix sandbox" }]),
-	] and plan.files.map(|file| file.path) == [
-		"/generated/flake.nix",
-		"/generated/flake.lock",
-		"/generated/source-file-${Runner.compiler.sha256}.json",
+	] and plan.files.map(|file| (file.path, if (file.path.ends_with(".json")) file.contents else "")) == [
+		("/generated/flake.nix", ""),
+		("/generated/flake.lock", ""),
+		("/generated/source-file-${Runner.compiler.sha256}.json", "@blueprint-source-record-${Runner.compiler.sha256}@"),
+		("/generated/project-library.json", "@blueprint-project-record-library@"),
+		("/generated/project-app.json", "@blueprint-project-record-app@"),
 	]
 	_ => False
+}
+
+# An original file a build uses is staged, then measured with the others.
+# Generation measures nothing and starts nothing: its record says only where
+# the file is.
+expect {
+	upstream = { name: "upstream", url: "https://example.test/upstream.tar.gz", sha256: "a".repeat(64) }
+	declared = TestData.project({ ..TestData.data, requires_: TestData.data.requires_.append("source-files"), builds: TestData.data.builds.map(|build| if (build.name == "library") { ..build, inputs: build.inputs.append("upstream") } else build) })
+	project = { ..declared, source_files: [upstream] }
+	locks = plan_locks?
+	measured = |request| NixProvider.plan(project, request, "x86_64-linux", TestData.layout, locks).map_ok(
+		|steps| steps.steps.map(
+			|step| (
+				step.operations.keep_if(
+					|operation| match operation {
+						SourceFile(_) | Measure(_) => True
+						_ => False
+					},
+				),
+				step.files.keep_if(|file| file.path == "/generated/source-file-${upstream.sha256}.json").map(|file| file.contents),
+			),
+		),
+	)
+	measured(Request.Build("library")) == Ok([
+		(
+			[
+				SourceFile(upstream),
+				SourceFile(Runner.compiler),
+				Measure({ target: SourceFile(upstream.sha256), argv: ["nix", "hash", "path"], marker: "@blueprint-source-record-${upstream.sha256}@", record: "{\"path\":@path@,\"narHash\":@identity@}" }),
+				Measure({ target: SourceFile(Runner.compiler.sha256), argv: ["nix", "hash", "path"], marker: "@blueprint-source-record-${Runner.compiler.sha256}@", record: "{\"path\":@path@,\"narHash\":@identity@}" }),
+				Measure({ target: Snapshot("library"), argv: ["nix", "hash", "path"], marker: "@blueprint-project-record-library@", record: "{\"path\":@path@,\"narHash\":@identity@}" }),
+			],
+			["@blueprint-source-record-${upstream.sha256}@"],
+		),
+	])
+		and measured(Request.Generate) == Ok([([SourceFile(upstream)], ["{\"path\":@blueprint-source-file-${upstream.sha256}@}"])])
 }
 
 # Exact argv stays JSON data; immutable input farms and a versioned runner
@@ -2108,30 +2183,32 @@ expect match plan_fixture(Request.Build("app")) {
 	_ => False
 }
 
-# Selected files are checked for existence; directory ancestry is retained.
+# A build reads its project, and the runner its compiler, as locked paths
+# through records beside the flake: never an absolute path of the caller's,
+# and no filter of Nix's own. The host selects the files.
 expect {
-	source = NixProvider.render_source(Planned({ root: "/project", exclude: [".git", "/project/work", "/outside/generated"] }))
-	source.contains("projectFor = selected: assert selected == null || builtins.all") and
-		source.contains("path == full || prefix (full + \"/\") path || prefix (path + \"/\") full") and
-			source.contains("builtins.elem (baseNameOf path) [ \".git\" ]") and
-				source.contains("builtins.elem path [ \"/project/work\" ]") and
-					!source.contains("/outside/generated") and
-						source.contains("snapshot refuses symlink") and source.contains("snapshot refuses special file")
+	planned = NixProvider.render_source(Planned)
+	planned.contains("projectFor = record: let project = builtins.fromJSON (builtins.readFile record); in (builtins.fetchTree { type = \"path\"; path = project.path; narHash = project.narHash; }).outPath;")
+		and planned.contains("compilerArchive = (let record = builtins.fromJSON (builtins.readFile ./source-file-${Runner.compiler.sha256}.json); file = (builtins.fetchTree { type = \"path\"; path = record.path; narHash = record.narHash; }).outPath; in assert builtins.hashFile \"sha256\" file == \"${Runner.compiler.sha256}\"; file);")
+		and !planned.contains("builtins.path")
+		and !planned.contains("filter")
 }
 
-# The build plan excludes VCS names, caller roots, the authority and local
-# inputs; inspection and non-build requests render builds that cannot run.
+# The build plan's flake reads no absolute path itself; the host's selection
+# leaves out VCS names, caller roots, the authority and local inputs.
+# Inspection and non-build requests render builds that cannot run.
 expect match (plan_fixture(Request.Build("app")), plan_fixture(Request.Generate)) {
 	(Ok({ steps: [build] }), Ok({ steps: [generate] })) => match (build.files.first(), generate.files.first()) {
 		(Ok(planned), Ok(inert)) =>
-			planned.contents.contains(
-				"[ \".git\" \".hg\" \".svn\" \".jj\" ]",
-			)
-				and planned.contents.contains("builtins.elem path [ \"/project/assets\" ])")
+			planned.contents.contains("project = projectFor ./project-app.json;")
+				and planned.contents.contains("project = projectFor ./project-library.json;")
+				and !planned.contents.contains("/. + ")
+				and !planned.contents.contains("builtins.path")
 				and inert.contents.contains("projectFor = _: builtins.throw")
 				and inert.contents.contains("isolation = builtins.throw")
 				and inert.contents.contains("runner = builtins.throw")
 				and !inert.contents.contains("@blueprint-caller")
+				and (NixProvider.provider.build_exclusions)(TestData.project(TestData.data), TestData.layout) == Ok([".git", ".hg", ".svn", ".jj", "/work", "/generated", "/authority/inputs.lock", "/project/assets"])
 		_ => False
 	}
 	_ => False
@@ -3402,10 +3479,11 @@ expect {
 		and NixProvider.resolving({ ..project, sources: [], environments: [], shells: [], tasks: [], builds: [] }) == "Blueprint.roc declares the source assets, which Nix locks"
 }
 
-# Selecting recipe files changes only that build's project snapshot.
+# Each build reads its own project record; which files it selects is the
+# host's to copy, not the recipe's.
 expect {
-	selected = NixProvider.render_build(TestData.library, { name: "builder", parents: [], tools: [{ source: "nix", name: "glibc" }], overlays: [] }, [], [], [], [], [{ build: "library", paths: ["recipe.sh"] }], [], "x86_64-linux", [])
-	selected.contains("project = projectFor [ \"recipe.sh\" ];") and
+	selected = NixProvider.render_build(TestData.library, { name: "builder", parents: [], tools: [{ source: "nix", name: "glibc" }], overlays: [] }, [], [], [], [], [], "x86_64-linux", [])
+	selected.contains("project = projectFor ./project-library.json;") and
 		selected.contains("name = \"nix#glibc\"; path = sets.\"nix\".\"glibc\";")
 }
 
@@ -3424,7 +3502,7 @@ expect {
 	selected = { name: "upstream", url: "https://example.test/source.tar.gz", sha256: "a".repeat(64) }
 	unrelated = { name: "unused", url: "https://example.test/other.tar.gz", sha256: "b".repeat(64) }
 	build = { name: "copy", environment: "builder", inputs: ["upstream"], needs: [], run: ["cp", "input", "out"], output: "out" }
-	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [{ source: "nix", name: "coreutils" }], overlays: [] }, [], [], [], [], [], [selected, unrelated], "x86_64-linux", [])
+	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [{ source: "nix", name: "coreutils" }], overlays: [] }, [], [], [], [], [selected, unrelated], "x86_64-linux", [])
 	rendered.contains("blueprint-input-evidence") and rendered.contains(selected.sha256)
 		and !rendered.contains(unrelated.sha256) and !rendered.contains("build_identity")
 		and rendered.contains("inputs.\"nix\".narHash")
@@ -3445,7 +3523,7 @@ expect {
 # Executor bootstrap ownership is independent of the package supplying tools.
 expect {
 	build = { name: "copy", environment: "builder", inputs: [], needs: [], run: ["cp", "input", "out"], output: "out" }
-	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [{ source: "tools", name: "coreutils" }], overlays: [] }, [], [], [], [], [], [], "x86_64-linux", ["bootstrap"])
+	rendered = NixProvider.render_build(build, { name: "builder", parents: [], tools: [{ source: "tools", name: "coreutils" }], overlays: [] }, [], [], [], [], [], "x86_64-linux", ["bootstrap"])
 	rendered.contains("pkgs = sets.\"bootstrap\";")
 		and rendered.contains("sets.\"tools\".\"coreutils\"")
 		and rendered.contains("inputs.\"bootstrap\".narHash")

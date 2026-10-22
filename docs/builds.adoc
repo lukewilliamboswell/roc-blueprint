@@ -46,9 +46,10 @@ from the writable project copy.
 
 Each build snapshots current project files, including untracked/task-generated
 files, excluding VCS metadata, caller-generated roots, authority and all local
-input trees. Nix makes that copy directly from the project, so a file is
-executable in a build only when its owner may execute it. Changing a locked
-local source requires explicit update. Initial
+input trees. Blueprint makes that copy itself, as
+xref:builds.adoc#select-a-builds-project-files[Select a build's project files]
+describes, and a file is executable in a build only when its owner may execute
+it. Changing a locked local source requires explicit update. Initial
 source/output policy rejects symlinks and special files. Only local x86_64 Linux
 sandboxed execution is verified; tasks/config compilation are not sandboxed.
 A build's `PATH` holds exactly the tools its environment takes from its
@@ -95,8 +96,10 @@ Ordinary builds and generation use the committed digest. They hash cached
 bytes on every use, fetch a missing file from its locked URL, and repair a
 corrupt cache by fetching and verifying it again. Wrong upstream bytes fail;
 ordinary fetches never change the lock. A verified cached file works offline.
-The source enters Nix as a fixed, non-recursive file snapshot whose hash is
-checked again by Nix. Its store identity is independent of the caller's cache
+The source enters Nix as a locked path: Blueprint measures the verified
+cached file with `nix hash path`, and the flake reads it with
+`builtins.fetchTree`, which checks that NAR hash, then checks the flat
+SHA-256 again. Its store identity is independent of the caller's cache
 location, and the recipe sees the original archive bytes. Unrelated files
 that no selected build uses are not fetched.
 
@@ -133,6 +136,18 @@ to the project root; absolute paths, `.` and `..` components are refused.
 A selected path must exist. The usual generated-root, authority, VCS and locked
 local-source exclusions still apply. Omit `Files` to retain the whole-project
 snapshot; `Files([])` gives the command an empty writable workspace.
+
+Blueprint applies the selection itself, once for each build it prepares. It
+copies the selected files into `snapshots/<build>` in the workspace, emptied
+first, keeping each name's bytes and whether the owner may execute each file,
+and refuses a symlink or special file among them; excluded entries are never
+inspected. The Nix executor measures that copy with `nix hash path` and
+records where it is and its NAR hash in `project-<build>.json` beside the
+flake. The flake reads the copy with `builtins.fetchTree`, locked to that
+hash, so evaluation is pure and the flake never reads the project itself.
+Nix has the copy in its store once the build is prepared, so Blueprint
+removes it when the build ends, however it ends, and removes any copy an
+interrupted run left before it stages anything.
 
 Give each component its own single-output build with its own `Files` list.
 The builds share their locked package sets and any identical selected trees in
@@ -407,9 +422,15 @@ comparison is not part of this interface.
 The Nix executor supplies a read-only JSON file at
 `$BLUEPRINT_INPUTS/blueprint-input-evidence`. Its native format 1 records selected
 package revisions and NAR hashes, original-file SHA-256 pins, other source
-tree paths, dependency artifact paths, Roc package paths, the captured
-project store path and tool roots. This is provider-native reproduction material,
-not another provider-neutral report API or a complete lock export.
+tree paths, dependency artifact paths, Roc package paths, the store path of
+the build's locked copy of its selected project files and tool roots. This is
+provider-native reproduction material, not another provider-neutral report API
+or a complete lock export.
+
+A prepared `plan`, `explain` or build measures each build's selected files in
+that same copy, after Blueprint hashed it for Nix, rather than in the project
+again, so the evidence is exactly what Nix received even if the project
+changes meanwhile. An unprepared `plan` makes no copy and measures the project.
 
 A producer can ship selected files and its producer module alongside this
 material. A dedicated configuration using the recorded package revision/NAR

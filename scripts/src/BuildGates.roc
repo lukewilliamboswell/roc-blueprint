@@ -448,7 +448,8 @@ reject_unsandboxed_runner! = |suite, state, base| {
 	Script.pass!("exact standalone runner fails closed before effects: missing, malformed and shared witnesses")
 }
 
-## Unsafe project entries remain rejected by real Nix snapshots.
+## Unsafe project entries are refused when the host copies the selected
+## files for Nix, before Nix runs.
 reject_unsafe_project_entries! : BuildHarness.Suite, BuildHarness.Layout => Try({}, _)
 reject_unsafe_project_entries! = |suite, place| {
 	project = place.project

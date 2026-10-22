@@ -29,6 +29,12 @@ import StubTool
 ##   nix         record; `flake update [INPUT...]` writes a `flake.lock` from `STUB_NIX_FIXTURE`
 ##               as `STUB_NIX_MODE` says (`declared` or `local`, the latter with
 ##               `STUB_NIX_REV`), after waiting at `STUB_NIX_PAUSE` if set;
+##               `hash path TARGET` prints `sha256-`, the first 43 hex digits of
+##               the SHA-256 of TARGET's last component, and `=`: an SRI hash
+##               a test can work out from the name alone; with
+##               `STUB_NIX_HASH_COPY`, a directory TARGET is first copied
+##               there under its last component, replacing an earlier copy,
+##               for a test to see what was hashed after the CLI removed it;
 ##               `derivation show` returns a static prepared recipe; `build` returns native JSON for that recipe; `print-dev-env --json` prints one tool directory (`STUB_NIX_DEV_PATH`) and the shell named; `develop` exits 23 if `STUB_NIX_FAIL`,
 ##               and with `STUB_NIX_RUN` runs what follows `--command`, as it is
 ##               found on this process's PATH
@@ -102,6 +108,21 @@ act! = |role, args| {
 						["--flake", target] => flake_update!(target, rest.drop_last(2))
 						_ => Err("unexpected nix flake update arguments: ${Str.join_with(rest, " ")}")
 					}
+				["hash", "path", target] => {
+					name = target.split_on("/").last() ?? target
+					match optional!("STUB_NIX_HASH_COPY") {
+						Ok(kept) if Path.is_dir!(Path.utf8(target)) ?? False => {
+							copy = Path.utf8("${kept}/${name}")
+							if Path.exists!(copy) ?? False {
+								Path.delete_all!(copy).map_err(|_| "cannot replace ${kept}/${name}")?
+							}
+							Path.copy_dir_with!(Path.utf8(target), copy, { symlinks: Preserve, destination: RequireNew }).map_err(|_| "cannot copy ${target} to ${kept}")?
+						}
+						_ => {}
+					}
+					hex = Crypto.SHA256.hash(name.to_utf8()).to_hex()
+					written!("sha256-${Str.from_utf8(hex.to_utf8().take_first(43)) ?? hex}=\n")
+				}
 				["derivation", "show", ..] => {
 					if !argv.contains("allow-import-from-derivation") or !argv.contains("false") or argv.contains("extra-sandbox-paths") {
 						return Err("preparation must forbid IFD and omit runtime isolation mounts")

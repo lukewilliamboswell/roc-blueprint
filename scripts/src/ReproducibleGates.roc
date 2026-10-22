@@ -43,6 +43,21 @@ ReproducibleGates := [].{
 		BuildHarness.require!(first.build_identity == prepared.build_identity and first.snapshot_digest == prepared.snapshot_digest, "execution diverged from prepared recipe/evidence")?
 		explained = inspection(BuildHarness.ok!(suite, place, ["explain", "build", "one", "--json"])?.out)?
 		BuildHarness.require!(explained.baseline == "available" and explained.changes.is_empty(), "successful build did not establish an unchanged baseline")?
+		# Evaluation is pure: Nix reads the build's selected files from the
+		# host's copy as a locked path, through a record beside the flake.
+		for event in BuildHarness.events!(suite)? {
+			BuildHarness.require!(event.kind != "nix" or !event.argv.contains("--impure"), "Nix was asked to evaluate impurely: ${Str.inspect(event.argv)}")?
+		}
+		snapshot_text = Path.read_utf8!(Path.utf8("${place.generated}/project-one.json"))?
+		snapshot : { path : Str, narHash : Str }
+		snapshot = Json.parse(snapshot_text)?
+		BuildHarness.require!(snapshot.path == "${place.workspace}/snapshots/one" and !BuildHarness.exists!("${place.workspace}/snapshots"), "the project record ${snapshot_text} names another copy, or the copy outlived the build")?
+		# The derivation's one source is that copy, as Nix stored it: exactly
+		# the selected files, with the NAR hash the record locks.
+		sources = Cmd.new("nix-store").args(["--query", "--references", first.build_identity].map(OsStr.from_str)).capture!()?.split_on("\n").keep_if(|line| line.ends_with("-source"))
+		project_source = sources.first()?
+		stored_hash = Cmd.new("nix").args(["hash", "path", project_source].map(OsStr.from_str)).capture!()?.trim()
+		BuildHarness.require!(sources.len() == 1 and stored_hash == snapshot.narHash and BuildHarness.names!(project_source)? == ["recipe.py"], "the derivation's project source ${Str.inspect(sources)} is not the recorded copy of exactly the selected files")?
 		Path.write_utf8!(Path.utf8("${suite.work}/standalone-runner-path"), StandaloneRunner.locate!(place.generated, "one")?)?
 		BuildHarness.require!(first.schema_version == 2 and first.name == "one" and first.system == "x86_64-linux", "invalid provenance header")?
 		BuildHarness.require!(first.provider == "nix" and first.build_identity == first.metadata.nix.derivation and first.build_identity.ends_with(".drv") and first.sources.len() == 1 and first.sources.any(|source| source.name == "nix" and !source.rev.is_empty() and !source.digest.is_empty()), "missing actual derivation or source identity")?
@@ -73,6 +88,7 @@ ReproducibleGates := [].{
 		BuildHarness.require!(unrelated.snapshot_digest == first.snapshot_digest and unrelated.changes.is_empty(), "unselected input changed selected evidence")?
 		unchanged = record(BuildHarness.ok!(suite, place, ["build", "one", "--json"])?.out)?
 		BuildHarness.require!(unchanged.build_identity == first.build_identity, "unselected file or symlink changed derivation")?
+		BuildHarness.require!(Path.read_utf8!(Path.utf8("${place.generated}/project-one.json"))? == snapshot_text, "an unselected file or symlink entered the copy Nix reads")?
 		Path.delete!(Path.utf8("${root}/unrelated-link"))?
 		two = record(BuildHarness.ok!(suite, place, ["build", "two", "--json"])?.out)?
 		BuildHarness.require!(Path.read_utf8!(Path.utf8(two.outputs.first()?.path))? == "two", "second single-output producer failed")?

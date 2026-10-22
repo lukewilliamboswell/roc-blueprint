@@ -155,8 +155,9 @@ gates! = |suite| {
 	moved = workflow!(suite, outside, "repeat", repeat, "")?
 	BuildHarness.require!(moved.outputs == [cached, cached], "out-of-tree layout changed artifact")?
 	_ = artifact!(cached, second_source, edited_bytes)?
+	# The workspace keeps only the build records, `explain`'s baseline.
 	BuildHarness.require!(
-		(Path.is_dir!(Path.utf8(outside.generated)) ?? Bool.False) and !BuildHarness.exists!(outside.workspace),
+		(Path.is_dir!(Path.utf8(outside.generated)) ?? Bool.False) and BuildHarness.names!(outside.workspace)? == ["build-records"],
 		"caller-selected out-of-tree roots not used",
 	)?
 	BuildHarness.require!(
@@ -296,10 +297,12 @@ artifact! = |output, source, generated| {
 
 noops! : BuildHarness.Suite, BuildHarness.Layout => Try({}, _)
 noops! = |suite, place| {
-	# An existing nonempty generated tree must not even be restaged. A build
-	# keeps nothing in a workspace that is not the generated root.
+	# An existing nonempty generated tree must not even be restaged. In a
+	# workspace that is not the generated root a build keeps only its
+	# records, the baseline `explain` compares with; the copy of the project
+	# it made for Nix is gone once the build ends.
 	BuildHarness.require!(
-		!BuildHarness.snapshot!(place.generated)?.is_empty() and BuildHarness.snapshot!(place.workspace)?.is_empty(),
+		!BuildHarness.snapshot!(place.generated)?.is_empty() and BuildHarness.names!(place.workspace)? == ["build-records"],
 		"no-op test needs prior state",
 	)?
 	for name in ["empty", "nested-empty"] {
