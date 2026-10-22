@@ -4,6 +4,8 @@ import cli.OsStr
 import cli.Path
 import core.Lock
 import core.Spec
+import core.Tree
+import compilers.StoreRecord
 import CliHarness
 import Integrity
 import Process
@@ -294,18 +296,21 @@ cases! = |bench, idle| {
 	# A tree with no record is not trusted either: it is made again, and its
 	# record with it.
 	Path.delete!(Path.utf8(record))?
-	unmade = CliHarness.identity!(roc_file)?
+	# `tar` keeps the archive's times and the file system may reuse the inode,
+	# so the file made again is told by when its inode last changed.
+	unmade = CliHarness.stat!("%z", roc_file)?
 	unrecorded = run!(test, refusing, first, ["run", "say"], 0, [])?
 	CliHarness.check!(
 		unrecorded.stdout == "exe: ${roc_file}\nstub roc-stable: configured\n"
 			and unrecorded.stderr == "blueprint: the stored tree of roc-stable has no digest record; making it again from its download\n",
 		"a tree with no digest record was used as it was, or fetched:\n${unrecorded.stdout}${unrecorded.stderr}",
 	)?
-	CliHarness.check!(CliHarness.identity!(roc_file)? != unmade and CliHarness.present!(record), "a tree with no digest record was not made again with one")?
+	CliHarness.check!(CliHarness.stat!("%z", roc_file)? != unmade and CliHarness.present!(record), "a tree with no digest record was not made again with one")?
 	CliHarness.check!(CliHarness.identity!(kept)? == archived, "the archive was written again while its tree was made again")?
 	quiet = run!(test, refusing, first, ["run", "say"], 0, [])?
 	CliHarness.check!(quiet.stderr == "", "a tree made again was not taken as it is on the next run:\n${quiet.stderr}")?
 	Script.pass!("a tree that was changed, or has no digest record, is made again from its stored archive before use, with no download")?
+	verifying!(test, server, { first, roc_sha, tool_sha, stub, page })?
 
 	# A program is on a step's PATH as a symbolic link into the store, never a
 	# hard link: the step finds a link, and the store's file has one name.
@@ -461,6 +466,130 @@ cases! = |bench, idle| {
 	Script.pass!("parity: with one Nix tool added, the task prints the same from the same store file, and only then starts Nix; without Nix it is refused before any download")?
 	updating!(test, idle, { archive, stub, page, system })?
 	requiring!(test, idle, system)
+}
+
+## The record the store keeps of the tree the served archive unpacks to, when
+## its program holds `program`, written with the store's own functions.
+tree_record : List(U8) -> Try(Str, [BadTree(Str)])
+tree_record = |program| {
+	digest = tree_digest(program)?
+	Ok(StoreRecord.text({ format: StoreRecord.format, digest, links: [] }))
+}
+
+## The core `Tree` digest of that tree.
+tree_digest : List(U8) -> Try(Str, [BadTree(Str)])
+tree_digest = |program|
+	Tree.digest([
+		{ path: "pkg", kind: Dir },
+		{ path: "pkg/beside.txt", kind: File({ executable: False, digest: Crypto.SHA256.hash("kept whole\n".to_utf8()) }) },
+		{ path: "pkg/roc-stable", kind: File({ executable: True, digest: Crypto.SHA256.hash(program) }) },
+	]).map_err(|message| BadTree(message))
+
+## `blueprint store verify` reads the store and nothing else: it is asked
+## here in a directory whose Blueprint.roc is not Roc, with no compiler, and
+## while the server refuses every request. It finds what the check before
+## each use cannot: a tree and its record rewritten together, so that they
+## agree. It changes nothing unless asked to repair, and downloads nothing
+## even then.
+verifying! : Test, Serve, { first : Str, roc_sha : Str, tool_sha : Str, stub : List(U8), page : List(U8) } => Try({}, _)
+verifying! = |test, server, given| {
+	refusing = Serve.emptied(server)
+	artifact = |sha256| "${test.store}/v1/artifacts/sha256/${sha256}"
+	roc_tree = "${test.store}/v1/trees/sha256/${given.roc_sha}.tar.gz"
+	tool_tree = "${test.store}/v1/trees/sha256/${given.tool_sha}.file"
+	roc_file = "${roc_tree}/pkg/roc-stable"
+	record = "${roc_tree}.digest"
+	# One line for each archive and then its tree, in the order of their
+	# digests; then what was repaired, and the sum of it all.
+	roc_first = Process.sorted([given.roc_sha, given.tool_sha]).first() == Ok(given.roc_sha)
+	printed = |roc_lines, tool_lines, repaired, totals| {
+		found = if roc_first roc_lines.concat(tool_lines) else tool_lines.concat(roc_lines)
+		Str.join_with(found.concat(repaired).append("store ${test.store}: ${totals}"), "\n").concat("\n")
+	}
+	roc_intact = ["intact ${artifact(given.roc_sha)}", "intact ${roc_tree}"]
+	tool_intact = ["intact ${artifact(given.tool_sha)}", "intact ${tool_tree}"]
+	clean = printed(roc_intact, tool_intact, [], "4 checked, 4 intact")
+	cwd = "${test.bench.work}/store-verify"
+	Path.create_dir!(Path.utf8(cwd))?
+	Path.write_utf8!(Path.utf8("${cwd}/Blueprint.roc"), "this is not a Roc program\n")?
+	verify! = |args| command!(test, refusing, cwd, ["store", "verify"].concat(args), [("ROC", "${test.bench.work}/missing-roc")])
+
+	intact = verify!([])?
+	CliHarness.check!(intact.code == 0 and intact.stdout == clean and intact.stderr == "", "store verify of an intact store (code ${intact.code.to_str()}):\n${intact.stdout}${intact.stderr}")?
+
+	# The program and its record rewritten together, the record with the
+	# store's own functions: the check before each use takes the tree as it
+	# is, and runs what is now there.
+	made = tree_record(given.stub)?
+	CliHarness.check!(Path.read_utf8!(Path.utf8(record))? == made, "the store's record is not the one written here for the same tree:\n${Path.read_utf8!(Path.utf8(record))?}")?
+	rewritten = "#!/bin/sh\necho rewritten\n".to_utf8()
+	CliHarness.tool!(["chmod", "u+w", "--", roc_file])?
+	Path.write_bytes!(Path.utf8(roc_file), rewritten)?
+	CliHarness.tool!(["chmod", "0555", "--", roc_file])?
+	Path.write_utf8!(Path.utf8(record), tree_record(rewritten)?)?
+	unseen = run!(test, refusing, given.first, ["run", "say"], 0, [])?
+	CliHarness.check!(unseen.stdout == "rewritten\n" and unseen.stderr == "", "a tree rewritten with its record was not taken as it is before use:\n${unseen.stdout}${unseen.stderr}")?
+	before = [CliHarness.identity!(roc_file)?, CliHarness.identity!(record)?]
+	differs = "tree differs ${roc_tree}: it and its record agree, but it holds ${tree_digest(rewritten)?}, and its archive unpacks to ${tree_digest(given.stub)?}"
+	found = verify!([])?
+	CliHarness.check!(
+		found.code == 1
+			and found.stdout == printed(["intact ${artifact(given.roc_sha)}", differs], tool_intact, [], "4 checked, 3 intact, 1 tree differs")
+				and found.stderr == "blueprint: the store is not intact; `blueprint store verify --repair` makes what differs again from its archive\n",
+		"store verify did not find a tree rewritten with its record (code ${found.code.to_str()}):\n${found.stdout}${found.stderr}",
+	)?
+	CliHarness.check!([CliHarness.identity!(roc_file)?, CliHarness.identity!(record)?] == before, "store verify changed a tree or its record")?
+	_ = kept!(test)?
+	reported = verify!(["--json"])?
+	decoded : Try({ format : U64, store : Str, findings : List({ item : Str, verdict : Str, detail : Str }), counts : { intact : U64, tree_differs : U64, no_archive : U64 }, repaired : List({ item : Str, action : Str }) }, _)
+	decoded = Json.parse(reported.stdout)
+	match decoded {
+		Ok(report) =>
+			CliHarness.check!(
+				reported.code == 1 and report.format == 1 and report.store == test.store and report.counts == { intact: 3, tree_differs: 1, no_archive: 0 } and report.repaired.is_empty()
+					and report.findings.keep_if(|finding| finding.verdict != "intact") == [{ item: roc_tree, verdict: "tree_differs", detail: differs.drop_prefix("tree differs ${roc_tree}: ") }],
+				"store verify --json did not report the tree that differs:\n${reported.stdout}",
+			)?
+
+		Err(_) => return Script.fail!("store verify --json did not print one JSON report:\n${reported.stdout}${reported.stderr}")
+	}
+
+	# Repaired, the tree is its archive's fresh extraction again, with the
+	# record the store makes; the next verification finds nothing.
+	mended = verify!(["--repair"])?
+	CliHarness.check!(
+		mended.code == 1 and mended.stdout == printed(["intact ${artifact(given.roc_sha)}", differs], tool_intact, ["repaired ${roc_tree}: replaced by a fresh extraction of its archive, with its record"], "4 checked, 3 intact, 1 tree differs; 1 repaired"),
+		"store verify --repair did not replace the tree (code ${mended.code.to_str()}):\n${mended.stdout}${mended.stderr}",
+	)?
+	CliHarness.check!(Path.read_bytes!(Path.utf8(roc_file))? == given.stub and CliHarness.stat!("%a", roc_file)? == "555" and Path.read_utf8!(Path.utf8(record))? == made, "the repaired tree or its record is not what its archive unpacks to")?
+	again = verify!([])?
+	CliHarness.check!(again.code == 0 and again.stdout == clean and again.stderr == "", "store verify after a repair (code ${again.code.to_str()}):\n${again.stdout}${again.stderr}")?
+	_ = kept!(test)?
+
+	# An archive that is not its digest is reported, and so is its tree, which
+	# nothing can verify now; nothing is fetched in its place. Repaired, both
+	# are removed, and the next use downloads the archive again.
+	Path.write_bytes!(Path.utf8(artifact(given.roc_sha)), given.page)?
+	roc_damaged = ["archive damaged ${artifact(given.roc_sha)}: its SHA-256 is ${Integrity.digest(given.page)}", "no archive ${roc_tree}"]
+	damaged = verify!([])?
+	CliHarness.check!(
+		damaged.code == 1 and damaged.stdout == printed(roc_damaged, tool_intact, [], "4 checked, 2 intact, 1 archive damaged, 1 no archive") and !damaged.stderr.contains("fetching")
+			and Path.read_bytes!(Path.utf8(artifact(given.roc_sha)))? == given.page,
+		"store verify did not report a damaged archive alone (code ${damaged.code.to_str()}):\n${damaged.stdout}${damaged.stderr}",
+	)?
+	removed = verify!(["--repair"])?
+	CliHarness.check!(
+		removed.code == 1
+			and removed.stdout == printed(roc_damaged, tool_intact, ["repaired ${artifact(given.roc_sha)}: removed; the next use downloads it again", "repaired ${roc_tree}: removed with its record; the next use downloads its archive and makes it again"], "4 checked, 2 intact, 1 archive damaged, 1 no archive; 2 repaired")
+				and !removed.stderr.contains("fetching") and !CliHarness.present!(artifact(given.roc_sha)) and !CliHarness.present!(roc_tree) and !CliHarness.present!(record),
+		"store verify --repair did not remove the damaged archive and its tree, or fetched (code ${removed.code.to_str()}):\n${removed.stdout}${removed.stderr}",
+	)?
+	rest = verify!([])?
+	CliHarness.check!(rest.code == 0 and rest.stdout == printed([], tool_intact, [], "2 checked, 2 intact"), "store verify after removing a damaged archive (code ${rest.code.to_str()}):\n${rest.stdout}${rest.stderr}")?
+	fetched = run!(test, server, given.first, ["run", "say"], 0, [])?
+	CliHarness.check!(fetched.stderr.contains("blueprint: fetching roc-stable from ") and Integrity.digest(Path.read_bytes!(Path.utf8(artifact(given.roc_sha)))?) == given.roc_sha, "the run after a repair did not download the removed archive:\n${fetched.stdout}${fetched.stderr}")?
+	CliHarness.check!(verify!([])?.stdout == clean, "the store is not intact after the archive was downloaded again")?
+	Script.pass!("store verify: with no project, compiler or download it finds a tree rewritten with its record, which the check before use runs; it changes nothing; --repair replaces the tree, removes a damaged archive for the next use to fetch, and a second verify is clean")
 }
 
 ## `blueprint requirements` answers from Blueprint.roc alone. Here it is asked

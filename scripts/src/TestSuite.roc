@@ -222,7 +222,7 @@ static! = |context| {
 	}
 	problem!(StaticChecks.native_grammar_problem(read!(context, "blueprint-nix/Native.roc")?, read!(context, "blueprint-platform/Lower.roc")?))?
 	var $authority = []
-	for file in ["blueprint-cli/Store.roc", "blueprint-cli/Bootstrap.roc", "blueprint-core/Lock.roc", "blueprint-core/Spec.roc", "blueprint-core/BuildModel.roc", "blueprint-core/Sexpr.roc"] {
+	for file in ["blueprint-cli/Store.roc", "blueprint-cli/StoreRecord.roc", "blueprint-cli/Bootstrap.roc", "blueprint-core/Lock.roc", "blueprint-core/Spec.roc", "blueprint-core/BuildModel.roc", "blueprint-core/Sexpr.roc"] {
 		$authority = $authority.append((file, read!(context, file)?))
 	}
 	problem!(StaticChecks.json_authority_problem($authority))?

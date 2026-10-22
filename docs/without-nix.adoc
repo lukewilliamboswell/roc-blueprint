@@ -150,7 +150,10 @@ its artifact, the tree is hashed again and compared with that record, which
 only reads it. A tree that differs, or has no record, is removed and made
 again from the verified artifact, with no download. In CI, cache
 `v1/artifacts` alone, keyed on `Blueprint.lock`: trees are rebuilt from it,
-and a cached artifact is re-hashed like any other.
+and a cached artifact is re-hashed like any other. This check cannot see a
+tree and its record changed together; `blueprint store verify` compares both
+with a fresh extraction of the archive, and `--repair` makes them again. See
+xref:commands.adoc#verify-the-store[Verify the store].
 
 An archive is listed before it is unpacked::
 An archive that holds an absolute name, a `..` segment, a name that is not

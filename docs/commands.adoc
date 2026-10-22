@@ -1,8 +1,9 @@
 = Run blueprint
 
 Run project commands in the directory containing `Blueprint.roc`, or set
-`BLUEPRINT_ROOT`. `compiler-version` works in any directory. `lock show` needs
-only a committed lock, and works even when `Blueprint.roc` is absent or invalid.
+`BLUEPRINT_ROOT`. `compiler-version` and `store verify` work in any directory.
+`lock show` needs only a committed lock, and works even when `Blueprint.roc` is
+absent or invalid.
 
 [cols="3,5",options="header"]
 |===
@@ -47,6 +48,9 @@ only a committed lock, and works even when `Blueprint.roc` is absent or invalid.
 
 | `blueprint lock show [--json] [NAME...]`
 | Read committed pins and per-entry content identities without evaluating the project. See <<inspect-committed-pins>>
+
+| `blueprint store verify [--repair] [--json]`
+| Unpack every archive in the store of downloads again and compare each tree and its record with it, without a project or a download; exit 1 when anything differs. `--repair` makes what differs again. See <<verify-the-store>>
 
 | `blueprint check`
 | Run the compiler check and validate all shell/task/build environments and executor declarations without requiring a lock
@@ -340,6 +344,57 @@ The inspector itself is offline; evaluating `builtins.fetchTree` may fetch the
 source if Nix does not already have it. Use `sources.nix.content_identity` as the
 producer's input fingerprint so an unrelated `roc-stable` update does not
 invalidate the producer's artifacts.
+
+== Verify the store
+
+Every use of a fetched program checks the store of downloads first: its
+archive is hashed again and compared with the SHA-256 it is named by, and its
+tree is hashed again and compared with the record written beside it when it
+was unpacked. An archive that differs is downloaded again, and a tree that
+differs is made again from its archive. That check guarantees a tree is what
+its record says. It cannot see a tree and its record changed together, so
+that they agree: nothing in it compares the tree with what its archive
+unpacks to.
+
+`blueprint store verify` makes that comparison, at the cost of unpacking every
+archive again. It hashes each archive in the store; for each tree with a
+record, it unpacks the archive afresh into a scratch directory beside the
+trees, never inside one, compares the tree and its record with that
+extraction, and removes the scratch directory. It reads the store and nothing
+else: not `Blueprint.roc`, the lock, a compiler or the network. It changes
+nothing.
+
+[source]
+----
+$ blueprint store verify
+intact /home/me/.cache/blueprint/v1/artifacts/sha256/<a>
+tree differs /home/me/.cache/blueprint/v1/trees/sha256/<a>.tar.gz: it and its record agree, but it holds sha256:<x>, and its archive unpacks to sha256:<y>
+intact /home/me/.cache/blueprint/v1/artifacts/sha256/<b>
+intact /home/me/.cache/blueprint/v1/trees/sha256/<b>.file
+store /home/me/.cache/blueprint: 4 checked, 3 intact, 1 tree differs
+blueprint: the store is not intact; `blueprint store verify --repair` makes what differs again from its archive
+----
+
+Each archive is followed by its trees, in the order of their digests. A
+finding is `intact`; `archive damaged`, when an archive is not its SHA-256;
+`tree differs` or `record differs`, from the fresh extraction; `no record`,
+for a tree with none; or `no archive`, for a tree whose archive is missing or
+damaged, which nothing can verify without a download. The status is 0 when
+every finding is `intact`, and 1 otherwise.
+
+`--repair` then makes the store what it should be, and prints a `repaired`
+line for each change. A tree that differs, or has no record, is replaced by
+its fresh extraction, with a record; a record that differs is written again.
+A damaged archive is removed, and so is a tree with no archive, for the next
+use to download the archive and make the tree from it. Nothing is downloaded,
+and the status still says what was found: run `verify` again to see a clean
+store.
+
+`--json` prints one JSON object for a program to read: `format` `1`, `store`,
+`findings` as `{ item, verdict, detail }` with `verdict` one of `intact`,
+`archive_damaged`, `tree_differs`, `record_differs`, `no_record` and
+`no_archive`, `counts` of each verdict, and `repaired` as `{ item, action }`.
+The JSON is presentation: the records in the store remain S-expressions.
 
 == What update needs and records
 
