@@ -282,9 +282,17 @@ main! = |raw_args| {
 		_ => False
 	}
 	context = if (independent_query) Err(NoBlueprint) else context!()
-	loaded = match context {
+	# Evaluation resolves and verifies the compiler once; every later use of
+	# it in this process, such as `check` or publishing Roc packages, takes
+	# the resolved path instead of verifying the store again.
+	evaluated = match context {
 		Ok(ctx) => evaluate!(ctx)
 		Err(err) => Err(err)
+	}
+	loaded = evaluated.map_ok(|found| found.spec)
+	prepared = match evaluated {
+		Ok(found) => Ok(found.ctx)
+		Err(_) => context
 	}
 	# basic-cli supplies arguments without the executable name.
 	match Cli.parse_or_display_message(cli_for(loaded), raw_args, OsStr.to_raw) {
@@ -294,7 +302,7 @@ main! = |raw_args| {
 			Err(Exit(2))
 		}
 		Ok(command) =>
-			match run!(command ?? Gen, loaded, context) {
+			match run!(command ?? Gen, loaded, prepared) {
 				Ok({}) => Ok({})
 				Err(err) => {
 					_ = Stderr.line!("blueprint: ${describe(err, provider_names)}")
@@ -364,14 +372,16 @@ check! = |loaded, ctx| {
 }
 
 ## Compile and run Blueprint.roc, then parse the Spec it prints.
-evaluate! : Context => Try(Spec, _)
+evaluate! : Context => Try({ spec : Spec, ctx : Context }, _)
 evaluate! = |ctx| {
 	root = ctx.layout.project_root
 	if !(path("${root}/Blueprint.roc").exists!() ?? False) {
 		return Err(NoBlueprint)
 	}
 	check_host!()?
-	output = native_command!(OsStr.from_str(roc!(ctx)?)).args(["Blueprint.roc"].map(OsStr.from_str))
+	compiler = roc!(ctx)?
+	resolved = { ..ctx, compiler: Resolved(compiler) }
+	output = native_command!(OsStr.from_str(compiler)).args(["Blueprint.roc"].map(OsStr.from_str))
 		.cwd(path(root)).capture!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = Spec.parse(output).map_err(|err| BadSpec(err))?
@@ -379,7 +389,8 @@ evaluate! = |ctx| {
 	if !missing.is_empty() {
 		return Err(NeedsFeatures(missing))
 	}
-	Project.validate(spec).map_err(|message| InvalidProject(message))
+	validated = Project.validate(spec).map_err(|message| InvalidProject(message))?
+	Ok({ spec: validated, ctx: resolved })
 }
 
 ## The files every provider would generate for the Spec.
@@ -488,8 +499,12 @@ print_files! = |spec| {
 ## this executable is kept in the store, by its digest. No provider is asked:
 ## reading a Blueprint.roc needs none installed.
 roc! : Context => Try(Str, _)
-roc! = |_ctx| {
+roc! = |ctx| {
 	expected = "Roc compiler version ${compiler_version.trim()}"
+	match ctx.compiler {
+		Resolved(compiler) => return Ok(compiler)
+		Unresolved => {}
+	}
 	match Env.var_str!("ROC") {
 		Ok(override) => {
 			compiler = if override.contains("/") and !override.starts_with("/") {
@@ -532,7 +547,7 @@ roc! = |_ctx| {
 ## or the lines a GitHub Actions step appends to its path or env file.
 ActivationFormat : [ShellLines, JsonReport, GithubPath, GithubEnv]
 
-Context : { layout : Layout, target : Str, build_json : Bool, rebuild : Bool, build_sources : List(Lock.Source), build_pins : List(Lock.Source), build_spec : Spec, build_mode : [Execute, Plan, Explain, Activate], activation_format : ActivationFormat }
+Context : { layout : Layout, target : Str, build_json : Bool, rebuild : Bool, build_sources : List(Lock.Source), build_pins : List(Lock.Source), build_spec : Spec, build_mode : [Execute, Plan, Explain, Activate], activation_format : ActivationFormat, compiler : [Unresolved, Resolved(Str)] }
 
 ## Caller paths are observations, resolved once against the selected root.
 context! : () => Try(Context, _)
@@ -569,6 +584,7 @@ context! = || {
 		build_spec: Spec.empty(""),
 		build_mode: Execute,
 		activation_format: ShellLines,
+		compiler: Unresolved,
 		layout: Layout.{
 			project_root: root,
 			workspace,

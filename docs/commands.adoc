@@ -18,7 +18,7 @@ only a committed lock, and works even when `Blueprint.roc` is absent or invalid.
 | `blueprint run TASK [-- ARGS...]`
 | Run the task's argv in its environment, with the extra arguments appended
 
-| `blueprint env NAME [--json \| --github-path \| --github-env]`
+| `blueprint env NAME`, with `--json`, `--github-path` or `--github-env`
 | Print what entering the shell `NAME` exports, as shell lines to `eval`, a JSON report, or the lines a GitHub Actions step appends; nothing is entered
 
 | `blueprint build NAME`

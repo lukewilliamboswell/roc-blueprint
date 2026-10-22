@@ -55,10 +55,6 @@ input : Fuzz.Generator(Spec.Input)
 input = {
 	name: Fuzz.str,
 	url: Fuzz.str,
-	kind: Fuzz.map(
-		Fuzz.u8_in(0, 1),
-		|n| if (n == 0) Overlay else Flake,
-	),
 }.Fuzz
 
 tool : Fuzz.Generator(Spec.Tool)
