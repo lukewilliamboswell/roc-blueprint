@@ -1,19 +1,21 @@
 import cli.Path
+import core.Manifest
 import core.Sbom
 import core.Project
 import core.Sidecar
 import compilers.Bootstrap
 import Bundle
 import Integrity
+import SbomFiles
 import "../../tests/sbom/fixtures/native-linux.spdx.json" as fixture_3 : Str
 import "../../tests/sbom/fixtures/native-linux.spdx-2.3.json" as fixture_2 : Str
 import "../../tests/sbom/fixtures/native-linux.cdx.json" as fixture_cdx : Str
 import "../../tests/sbom/fixtures/input/inventory.json" as inventory_json : Str
 
 ## The checks `scripts/check_sbom.roc` runs: the general ones of
-## `core.Sidecar`, which the standalone tool's `check` runs too, and
-## `release!`, which holds Blueprint's own release sidecars to the release
-## authorities committed in this repository.
+## `core.Sidecar` and `core.Manifest`, which the standalone tool's `check`
+## runs too, and `release!`, which holds Blueprint's own release sidecars to
+## the release authorities committed in this repository.
 SbomCheck := [].{
 	Evidence : Sidecar.Evidence
 
@@ -28,6 +30,32 @@ SbomCheck := [].{
 
 	same_graph : Checked, Checked -> Bool
 	same_graph = Sidecar.same_graph
+
+	## The evidence manifest at `path`, held to the files it names: its
+	## subject in `artifacts` (or beside the manifest), each listed sidecar
+	## beside it, and the inventory at `inventory`, or else the
+	## `<subject>.inventory.json` the release recipe leaves beside the
+	## manifest, when there is one.
+	manifest! : Str, Str, Str => Try(Manifest.Manifest, _)
+	manifest! = |path, artifacts, inventory| {
+		text = Path.read_utf8!(Path.utf8(path))?
+		listed = Manifest.read(text).map_err(|problem| Invalid("${path}: ${problem}"))?
+		subject_path = if (artifacts.is_empty()) Manifest.beside(path, listed.subject.filename) else "${artifacts}/${listed.subject.filename}"
+		subject_bytes = Path.read_bytes!(Path.utf8(subject_path)).map_err(|_| Invalid("${path}: no subject ${subject_path}"))?
+		var $sidecars = []
+		for entry in listed.sidecars {
+			match Path.read_bytes!(Path.utf8(Manifest.beside(path, entry.filename))) {
+				Ok(bytes) => {
+					$sidecars = $sidecars.append({ filename: entry.filename, sha256: Integrity.digest(bytes), size: bytes.len() })
+				}
+				Err(_) => {}
+			}
+		}
+		left_behind = Manifest.beside(path, "${listed.subject.filename}.inventory.json")
+		inventory_path = if !inventory.is_empty() inventory else if (Path.is_file!(Path.utf8(left_behind)) ?? False) left_behind else ""
+		measured = if inventory_path.is_empty() Unmeasured else Measured(Integrity.digest(Path.read_bytes!(Path.utf8(inventory_path))?))
+		Manifest.check(text, { subject: { sha256: Integrity.digest(subject_bytes), size: subject_bytes.len() }, inventory: measured, sidecars: $sidecars }).map_err(|problem| Invalid("${path}: ${problem}"))
+	}
 
 	## A release sidecar against the release authorities committed at `root`.
 	release! : Checked, Str => Try({}, _)
@@ -47,8 +75,12 @@ SbomCheck := [].{
 			}
 			Err(_) => return Err(Invalid("known build compiler omitted"))
 		}
+		# The standalone tool is released twice: as a source app bundle, which
+		# fetches the core bundle, and as a native executable per system, which
+		# compiles the core in.
 		tool_source = document.name.starts_with("roc-blueprint-sbom-")
-		if tool_source {
+		tool_binary = document.name.starts_with("blueprint-sbom-")
+		if tool_source or tool_binary {
 			tool = Path.read_utf8!(Path.utf8("${root}/scripts/sbom.roc"))?
 			if sorted(header_imports(tool, ["roc"])) != sorted(prefixed(evidence.inspected, "tool-import:")) {
 				return Err(Invalid("standalone tool import omitted"))
@@ -59,7 +91,8 @@ SbomCheck := [].{
 					return Err(Invalid("standalone tool source ${name} omitted"))
 				}
 			}
-			if !["basic-cli", "core", "http", "sqlite", "rust-std"].all(|id| ids.contains(id)) or ids.contains("roc-embedded") {
+			fetched = if tool_source ["core"] else []
+			if !["basic-cli", "http", "sqlite", "rust-std"].concat(fetched).all(|id| ids.contains(id)) or ids.contains("roc-embedded") {
 				return Err(Invalid("standalone tool inventory omits a dependency or claims the compiler ships"))
 			}
 		}
@@ -74,7 +107,7 @@ SbomCheck := [].{
 				return Err(Invalid("supplemental Cargo graph omits/conflicts with original upstream lock"))
 			}
 		}
-		if evidence.target != "source" {
+		if evidence.target != "source" and !tool_binary {
 			if !["basic-cli", "http", "weaver", "roc-embedded", "sqlite"].all(|id| ids.contains(id)) {
 				return Err(Invalid("known shipped/native input omitted"))
 			}
@@ -90,6 +123,14 @@ SbomCheck := [].{
 			core = find("core").map_err(|_| Invalid("missing core"))?
 			if core.sha256 != Integrity.digest(Path.read_bytes!(Path.utf8("${root}/dist/${core_name}"))?) {
 				return Err(Invalid("core bundle digest differs"))
+			}
+		}
+		if evidence.target == "source" {
+			# Every member of the released archive is stated by its digest.
+			for member in SbomFiles.archive_members!("${root}/dist/${document.name}")? {
+				if !document.packages_.any(|entry| entry.sha256 == member.sha256) {
+					return Err(Invalid("archive member ${member.name} is not stated by SHA-256"))
+				}
 			}
 		}
 		if ids.contains("linker-inputs") {

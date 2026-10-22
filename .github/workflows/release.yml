@@ -5,10 +5,11 @@ name: Release
 # published.
 #
 # One release holds the platform, core and standalone SBOM app bundles; the
-# `blueprint` binaries for x86_64 Linux, arm64 Linux, Apple Silicon macOS and
-# x86_64 Windows with checksums; artifact-bound SPDX sidecars; the examples,
-# documentation and manual. Everything is built once, tested as those
-# exact files on each kind of machine, and only then published, in one step.
+# `blueprint` and `blueprint-sbom` binaries for x86_64 Linux, arm64 Linux,
+# Apple Silicon macOS and x86_64 Windows with checksums; artifact-bound SPDX
+# sidecars; the examples, documentation and manual. Everything is built once,
+# tested as those exact files on each kind of machine, and only then
+# published, in one step.
 on:
   workflow_dispatch:
     inputs:
@@ -109,6 +110,11 @@ jobs:
       - name: Archive the examples with this release's platform
         run: nix develop -c scripts/package_examples.roc "$VERSION"
 
+      # The SBOM cases the test suite asserts, with their contract, for
+      # consumers that test the standalone tool without a checkout.
+      - name: Archive the SBOM fixture set with its case contract
+        run: nix develop -c scripts/package_sbom_fixtures.roc "$VERSION"
+
       # The manual attached to a release names that release's bundle.
       - name: Write the part of the manual that names the release
         run: nix develop -c scripts/docs_snippet.roc "$VERSION"
@@ -142,9 +148,11 @@ jobs:
         run: nix develop -c scripts/release_notes.roc "$VERSION" dist/notes.md
 
       # Generate in the read-only build job from final bytes: SPDX 3.0.1, and
-      # SPDX 2.3 and CycloneDX 1.7 of the same inventory. The separate offline check holds each
-      # to its version and the declared inventory; shared publication policy
-      # belongs to roc-automation.
+      # SPDX 2.3 and CycloneDX 1.7 of the same inventory, with an evidence
+      # manifest per subject listing them by digest and size. The separate
+      # offline check holds each to its version, the declared inventory and
+      # the manifest beside it; shared publication policy belongs to
+      # roc-automation.
       - name: Describe the final binaries and source bundles with SPDX
         run: nix develop -c scripts/release_sbom.roc "$VERSION"
 
@@ -215,6 +223,13 @@ jobs:
         shell: pwsh
         run: ./dist/smoke-x86_64-windows.exe --no-nix ./dist/blueprint-x86_64-windows.exe
 
+      # The SBOM tool binary of this system inspects, binds and checks the
+      # committed fixtures with no Roc.
+      - name: Smoke test the SBOM tool binary
+        uses: ./.github/actions/sbom-tool
+        with:
+          binary: dist/blueprint-sbom-${{ matrix.system }}${{ runner.os == 'Windows' && '.exe' || '' }}
+
       # The compiler and then this binary load each archived example from the
       # two bundles, served from localhost with an empty package cache.
       - name: Test the examples archive against the bundles
@@ -240,15 +255,16 @@ jobs:
         with:
           name: release-candidate
 
-      # setup-blueprint downloads these names from the release, as published.
+      # setup-blueprint downloads these names from the release, as published;
+      # the SBOM tool binaries follow the CLI's in the checksum file.
       - name: The binaries and their checksums carry the names callers depend on
         working-directory: dist/release
         run: |
           set -euo pipefail
-          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-windows.exe blueprint.sha256; do
+          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-windows.exe blueprint-sbom-x86_64-linux blueprint-sbom-aarch64-linux blueprint-sbom-aarch64-darwin blueprint-sbom-x86_64-windows.exe blueprint.sha256; do
             test -f "$name"
           done
-          test "$(find . -type f -name 'blueprint*' ! -name '*.spdx.json' ! -name '*.spdx-2.3.json' ! -name '*.cdx.json' | wc -l)" = 5
+          test "$(find . -type f -name 'blueprint*' ! -name '*.spdx.json' ! -name '*.spdx-2.3.json' ! -name '*.cdx.json' ! -name '*.sbom-manifest.json' | wc -l)" = 9
           sha256sum -c blueprint.sha256
           test "$(LC_ALL=C ls)" = "$(cat ../release-assets.txt)"
 
@@ -269,7 +285,7 @@ jobs:
         run: |
           set -euo pipefail
           cp "$BUNDLE" dist/release/roc-blueprint-provenance.sigstore.json
-          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-windows.exe; do
+          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-windows.exe blueprint-sbom-x86_64-linux blueprint-sbom-aarch64-linux blueprint-sbom-aarch64-darwin blueprint-sbom-x86_64-windows.exe; do
             policy=(--repo "$GH_REPO" --signer-workflow "$GH_REPO/.github/workflows/release.yml" --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners)
             gh attestation verify "dist/release/$name" "${policy[@]}" --bundle "$BUNDLE"
             gh attestation verify "dist/release/$name" "${policy[@]}"

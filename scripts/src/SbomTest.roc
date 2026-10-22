@@ -3,11 +3,18 @@ import core.Lock
 import core.Project
 import core.JsonData
 import core.Sbom
+import core.Sidecar
+import core.Manifest
 import core.Spdx2
 import core.Spdx3
 import core.CycloneDx
 import "../../tests/sbom/fixtures/input/Spec" as fixture_input_spec : Str
 import "../../tests/sbom/fixtures/input/Lock" as fixture_input_lock : Str
+import "../../tests/sbom/fixtures/input/composition.json" as fixture_input_composition : Str
+import "../../tests/sbom/fixtures/input/inventory.json" as fixture_input_inventory : Str
+import "../../tests/sbom/fixtures/input/subject.json" as fixture_input_subject : Str
+import "../../tests/sbom/fixtures/input/context.json" as fixture_input_context : Str
+import "../../tests/sbom/fixtures/input/sample-artifact" as fixture_input_artifact : Str
 import "../../tests/sbom/schema/cyclonedx-1.7/bom-1.7.schema.json" as schema_cdx : Str
 import "../../tests/sbom/schema/spdx-3.0.1.schema.json" as schema_3 : Str
 import "../../tests/sbom/schema/spdx-2.3.schema.json" as schema_2 : Str
@@ -19,6 +26,7 @@ import "../../tests/sbom/fixtures/verified-import.cdx.json" as fixture_verified_
 import "../../tests/sbom/fixtures/native-linux.cdx.json" as fixture_native_linux_cdx : Str
 import "../../tests/sbom/fixtures/native-arm64.cdx.json" as fixture_native_arm64_cdx : Str
 import "../../tests/sbom/fixtures/source-bundle.cdx.json" as fixture_source_bundle_cdx : Str
+import "../../tests/sbom/fixtures/native-source-import.cdx.json" as fixture_native_source_import_cdx : Str
 import "../../tests/sbom/fixtures/verified-empty.cdx.json" as fixture_verified_empty_cdx : Str
 import "../../tests/sbom/fixtures/unknown-closure.cdx.json" as fixture_unknown_closure_cdx : Str
 import "../../tests/sbom/fixtures/verified-import.spdx.json" as fixture_verified_import_3 : Str
@@ -29,10 +37,30 @@ import "../../tests/sbom/fixtures/native-arm64.spdx.json" as fixture_native_arm6
 import "../../tests/sbom/fixtures/native-arm64.spdx-2.3.json" as fixture_native_arm64_2 : Str
 import "../../tests/sbom/fixtures/source-bundle.spdx.json" as fixture_source_bundle_3 : Str
 import "../../tests/sbom/fixtures/source-bundle.spdx-2.3.json" as fixture_source_bundle_2 : Str
+import "../../tests/sbom/fixtures/native-source-import.spdx.json" as fixture_native_source_import_3 : Str
+import "../../tests/sbom/fixtures/native-source-import.spdx-2.3.json" as fixture_native_source_import_2 : Str
 import "../../tests/sbom/fixtures/verified-empty.spdx.json" as fixture_verified_empty_3 : Str
 import "../../tests/sbom/fixtures/verified-empty.spdx-2.3.json" as fixture_verified_empty_2 : Str
 import "../../tests/sbom/fixtures/unknown-closure.spdx.json" as fixture_unknown_closure_3 : Str
 import "../../tests/sbom/fixtures/unknown-closure.spdx-2.3.json" as fixture_unknown_closure_2 : Str
+import "../../tests/sbom/fixtures/CONTRACT.md" as fixture_contract : Str
+import "../../tests/sbom/fixtures/source-import/Spec" as source_import_spec : Str
+import "../../tests/sbom/fixtures/source-import/Lock" as source_import_lock : Str
+import "../../tests/sbom/fixtures/source-import/composition.json" as source_import_composition : Str
+import "../../tests/sbom/fixtures/source-import/subject.json" as source_import_subject_json : Str
+import "../../tests/sbom/fixtures/source-import/context.json" as source_import_context_json : Str
+import "../../tests/sbom/fixtures/source-import/consumer-artifact" as source_import_artifact : Str
+import "../../tests/sbom/fixtures/source-import/expected.json" as source_import_expected : Str
+import "../../tests/sbom/fixtures/source-import/inventory-source.json" as source_import_inventory_source : Str
+import "../../tests/sbom/fixtures/source-import/inventory-x86_64-linux.json" as source_import_inventory_x86_64 : Str
+import "../../tests/sbom/fixtures/source-import/inventory-aarch64-linux.json" as source_import_inventory_aarch64 : Str
+import "../../tests/sbom/fixtures/source-import/tamper-document-digest.json" as source_import_tamper_document_digest : Str
+import "../../tests/sbom/fixtures/source-import/tamper-subject-digest.json" as source_import_tamper_subject_digest : Str
+import "../../tests/sbom/fixtures/source-import/tamper-subject-version.json" as source_import_tamper_subject_version : Str
+import "../../tests/sbom/fixtures/source-import/tamper-import-native.json" as source_import_tamper_import_native : Str
+import "../../tests/sbom/fixtures/source-import/tamper-component-native.json" as source_import_tamper_component_native : Str
+import "../../tests/sbom/fixtures/source-import/tamper-import-aarch64.json" as source_import_tamper_import_aarch64 : Str
+import SbomFixtures
 
 ## Consumer fixtures intentionally include a transitive native library, a build
 ## compiler, a patched proprietary component, and a locked source identity.
@@ -40,7 +68,7 @@ SbomTest := [].{
 	context : Sbom.Context
 	context = { namespace: "https://example.org/sbom/fixture/revision-1", revision: "1", created: "2026-10-21T00:00:00Z", author: "Organization: Fixture producers", generator: "Tool: blueprint-sbom-0.7.0" }
 	subject : Sbom.Subject
-	subject = { filename: "sample-artifact", version: "1.0.0", target: "x86_64-linux", sha256: Crypto.SHA256.hash("fixture subject\n".to_utf8()).to_hex(), url: "https://example.org/releases/1.0.0/sample-artifact" }
+	subject = { filename: "sample-artifact", version: "1.0.0", target: "x86_64-linux", sha256: Crypto.SHA256.hash(subject_bytes.to_utf8()).to_hex(), url: "https://example.org/releases/1.0.0/sample-artifact" }
 	spec = { ..Spec.empty("fixture"), systems: ["x86_64-linux", "aarch64-linux"] }
 	lock = Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], fetched: [], hints: [] }
 	composition : Sbom.Composition
@@ -87,8 +115,6 @@ SbomTest := [].{
 		linux = inventory ?? crash "invalid fixture"
 		arm_composition = { ..composition, components: composition.components.map(|entry| { ..entry, target: "aarch64-linux" }) }
 		arm_inventory = Sbom.inspect(spec, lock, "aarch64-linux", arm_composition) ?? crash "invalid arm fixture"
-		source_composition = { ..composition, components: composition.components.map(|entry| { ..entry, target: "" }) }
-		source_inventory = Sbom.inspect(spec, lock, "source", source_composition) ?? crash "invalid source fixture"
 		empty = { ..composition, components: [], relationships: [], coverage: [{ scope: "all", status: "verified-empty", reason: "Reviewed generated text contains no third-party components", contact: "https://example.org/support" }] }
 		empty_inventory = Sbom.inspect(spec, lock, subject.target, empty) ?? crash "invalid empty fixture"
 		unknown = { ..empty, coverage: [{ scope: "all", status: "incomplete", reason: "Opaque task exposes no component closure", contact: "https://example.org/support" }] }
@@ -101,7 +127,8 @@ SbomTest := [].{
 			{ name: "verified-import", inventory: import_inventory, subject: { ..subject, filename: "consumer-artifact", sha256: Crypto.SHA256.hash("consumer of fixture\n".to_utf8()).to_hex() }, context: { ..context, namespace: "https://example.org/sbom/fixture/imported/revision-1" } },
 			{ name: "native-linux", inventory: linux, subject, context },
 			{ name: "native-arm64", inventory: arm_inventory, subject: { ..subject, target: "aarch64-linux" }, context: { ..context, namespace: "https://example.org/sbom/fixture/arm64/revision-1" } },
-			{ name: "source-bundle", inventory: source_inventory, subject: { ..subject, filename: "sample-source-bundle", target: "source", sha256: Crypto.SHA256.hash("fixture source bundle\n".to_utf8()).to_hex() }, context: { ..context, namespace: "https://example.org/sbom/fixture/source/revision-1" } },
+			{ name: "source-bundle", inventory: source_bundle_inventory, subject: { ..subject, filename: "sample-source-bundle", target: "source", sha256: Crypto.SHA256.hash("fixture source bundle\n".to_utf8()).to_hex() }, context: { ..context, namespace: "https://example.org/sbom/fixture/source/revision-1" } },
+			{ name: "native-source-import", inventory: native_from_source ?? crash "invalid source import fixture", subject: source_import_subject, context: source_import_context },
 			{ name: "verified-empty", inventory: empty_inventory, subject, context: { ..context, namespace: "https://example.org/sbom/fixture/empty/revision-1" } },
 			{ name: "unknown-closure", inventory: unknown_inventory, subject, context: { ..context, namespace: "https://example.org/sbom/fixture/unknown/revision-1" } },
 		]
@@ -109,6 +136,74 @@ SbomTest := [].{
 
 	output : Try(Str, Str)
 	output = Sbom.render(inventory ?? crash "invalid fixture", subject, context)
+
+	## The standalone tool's inputs for the native-linux case, as
+	## `tests/sbom/fixtures/input/` holds them: the evaluated Spec and Lock,
+	## the composition, the inventory `inspect` writes for `x86_64-linux`, and
+	## the subject, context and artifact `bind` takes. Regenerate them with
+	## `scripts/test_sbom.roc inputs tests/sbom/fixtures/input`.
+	input_files : List({ name : Str, text : Str })
+	input_files = [
+		{ name: "Spec", text: spec.to_str() },
+		{ name: "Lock", text: lock.to_str() },
+		{ name: "composition.json", text: Json.to_str(composition) },
+		{ name: "inventory.json", text: "${Json.to_str(inventory ?? crash "fixture invalid")}\n" },
+		{ name: "subject.json", text: Json.to_str(subject) },
+		{ name: "context.json", text: Json.to_str(context) },
+		{ name: "sample-artifact", text: subject_bytes },
+	]
+
+	## What `tests/sbom/fixtures/source-import/expected.json` states for the
+	## standalone tool: which inputs it reads, each target `inspect` accepts
+	## with the inventory it writes, what `bind` takes and which committed
+	## renderings it reproduces, and each composition it refuses with the
+	## exact message and what that refusal proves.
+	SourceImport : {
+		inputs : { spec : Str, lock : Str, composition : Str },
+		accepted : List({ target : Str, inventory : Str }),
+		bound : { inventory : Str, subject : Str, context : Str, artifact : Str, renderings : Str },
+		refused : List({ composition : Str, target : Str, refusal : Str, proves : Str }),
+	}
+
+	source_import : SourceImport
+	source_import = {
+		inputs: { spec: "Spec", lock: "Lock", composition: "composition.json" },
+		accepted: [
+			{ target: "source", inventory: "inventory-source.json" },
+			{ target: "x86_64-linux", inventory: "inventory-x86_64-linux.json" },
+			{ target: "aarch64-linux", inventory: "inventory-aarch64-linux.json" },
+		],
+		bound: { inventory: "inventory-x86_64-linux.json", subject: "subject.json", context: "context.json", artifact: "consumer-artifact", renderings: "native-source-import" },
+		refused: source_import_refusals.map(|refused| { composition: refused.composition, target: refused.target, refusal: refused.refusal, proves: refused.proves }),
+	}
+
+	## The standalone tool's inputs for a source supplier imported into
+	## consumers, as `tests/sbom/fixtures/source-import/` holds them: the
+	## consumer's Spec and Lock, its composition with the supplier document
+	## embedded, the inventory `inspect` writes for each accepted target, the
+	## subject, context and artifact `bind` takes, one composition per
+	## refusal, and `expected.json`. Regenerate them with
+	## `scripts/test_sbom.roc source-import tests/sbom/fixtures/source-import`.
+	source_import_files : List({ name : Str, text : Str })
+	source_import_files =
+		[
+			{ name: source_import.inputs.spec, text: consumer_spec.to_str() },
+			{ name: source_import.inputs.lock, text: consumer_lock.to_str() },
+			{ name: source_import.inputs.composition, text: Json.to_str(source_consumer) },
+			{ name: source_import.bound.subject, text: Json.to_str(source_import_subject) },
+			{ name: source_import.bound.context, text: Json.to_str(source_import_context) },
+			{ name: source_import.bound.artifact, text: consumer_bytes },
+			{ name: "expected.json", text: "${Json.to_str(source_import)}\n" },
+		]
+			.concat(source_import.accepted.map(|accepted| { name: accepted.inventory, text: "${Json.to_str(Sbom.inspect(consumer_spec, consumer_lock, accepted.target, source_consumer) ?? crash "invalid ${accepted.target} source import fixture")}\n" }))
+			.concat(source_import_refusals.map(|refused| { name: refused.composition, text: Json.to_str(refused.tampered) }))
+
+	## `tests/sbom/fixtures/CONTRACT.md`: every case of the set, its inputs,
+	## its expected outputs or refusal, and what it proves, written from the
+	## values above. Regenerate it with
+	## `scripts/test_sbom.roc contract tests/sbom/fixtures/CONTRACT.md`.
+	contract : Str
+	contract = contract_text
 }
 
 digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -355,7 +450,7 @@ expect inspect({ ..SbomTest.composition, components: SbomTest.composition.compon
 
 # The committed fixtures are what the renderers write now; regenerate them
 # with `scripts/test_sbom.roc fixtures tests/sbom/fixtures`.
-committed_fixtures = [{ name: "verified-import.cdx.json", text: fixture_verified_import_cdx }, { name: "native-linux.cdx.json", text: fixture_native_linux_cdx }, { name: "native-arm64.cdx.json", text: fixture_native_arm64_cdx }, { name: "source-bundle.cdx.json", text: fixture_source_bundle_cdx }, { name: "verified-empty.cdx.json", text: fixture_verified_empty_cdx }, { name: "unknown-closure.cdx.json", text: fixture_unknown_closure_cdx }, { name: "verified-import.spdx.json", text: fixture_verified_import_3 }, { name: "verified-import.spdx-2.3.json", text: fixture_verified_import_2 }, { name: "native-linux.spdx.json", text: fixture_native_linux_3 }, { name: "native-linux.spdx-2.3.json", text: fixture_native_linux_2 }, { name: "native-arm64.spdx.json", text: fixture_native_arm64_3 }, { name: "native-arm64.spdx-2.3.json", text: fixture_native_arm64_2 }, { name: "source-bundle.spdx.json", text: fixture_source_bundle_3 }, { name: "source-bundle.spdx-2.3.json", text: fixture_source_bundle_2 }, { name: "verified-empty.spdx.json", text: fixture_verified_empty_3 }, { name: "verified-empty.spdx-2.3.json", text: fixture_verified_empty_2 }, { name: "unknown-closure.spdx.json", text: fixture_unknown_closure_3 }, { name: "unknown-closure.spdx-2.3.json", text: fixture_unknown_closure_2 }]
+committed_fixtures = [{ name: "native-source-import.cdx.json", text: fixture_native_source_import_cdx }, { name: "native-source-import.spdx.json", text: fixture_native_source_import_3 }, { name: "native-source-import.spdx-2.3.json", text: fixture_native_source_import_2 }, { name: "verified-import.cdx.json", text: fixture_verified_import_cdx }, { name: "native-linux.cdx.json", text: fixture_native_linux_cdx }, { name: "native-arm64.cdx.json", text: fixture_native_arm64_cdx }, { name: "source-bundle.cdx.json", text: fixture_source_bundle_cdx }, { name: "verified-empty.cdx.json", text: fixture_verified_empty_cdx }, { name: "unknown-closure.cdx.json", text: fixture_unknown_closure_cdx }, { name: "verified-import.spdx.json", text: fixture_verified_import_3 }, { name: "verified-import.spdx-2.3.json", text: fixture_verified_import_2 }, { name: "native-linux.spdx.json", text: fixture_native_linux_3 }, { name: "native-linux.spdx-2.3.json", text: fixture_native_linux_2 }, { name: "native-arm64.spdx.json", text: fixture_native_arm64_3 }, { name: "native-arm64.spdx-2.3.json", text: fixture_native_arm64_2 }, { name: "source-bundle.spdx.json", text: fixture_source_bundle_3 }, { name: "source-bundle.spdx-2.3.json", text: fixture_source_bundle_2 }, { name: "verified-empty.spdx.json", text: fixture_verified_empty_3 }, { name: "verified-empty.spdx-2.3.json", text: fixture_verified_empty_2 }, { name: "unknown-closure.spdx.json", text: fixture_unknown_closure_3 }, { name: "unknown-closure.spdx-2.3.json", text: fixture_unknown_closure_2 }]
 expect SbomTest.outputs.sort_with(|a, b| Project.bytewise(a.name, b.name)) == committed_fixtures.sort_with(|a, b| Project.bytewise(a.name, b.name))
 
 # What a consumer asks of the native fixture, in either version: the native
@@ -396,8 +491,14 @@ expect [fixture_native_linux_3, fixture_native_linux_2].all(
 
 # The validators follow the vendored, digest-pinned schemas: every class,
 # member and enumeration they accept is the schema's own.
-expect Crypto.SHA256.hash(schema_3.to_utf8()).to_hex() == "582c64e809d5b3ef9bd0c4de13a32391b47b0284a3e8d199569fb96f649234b1"
-expect Crypto.SHA256.hash(schema_2.to_utf8()).to_hex() == "4126dc29f15e92feec92e9622f4939131ad58b125d6f578aa93e980a6e6f3212"
+schema_3_digest = "582c64e809d5b3ef9bd0c4de13a32391b47b0284a3e8d199569fb96f649234b1"
+
+schema_2_digest = "4126dc29f15e92feec92e9622f4939131ad58b125d6f578aa93e980a6e6f3212"
+
+schema_cdx_digest = "73308edec3ab2d38bfffd993e96a042b594314143b6971a6e9ed98bbb6bd76ce"
+
+expect Crypto.SHA256.hash(schema_3.to_utf8()).to_hex() == schema_3_digest
+expect Crypto.SHA256.hash(schema_2.to_utf8()).to_hex() == schema_2_digest
 
 sorted = |values| values.sort_with(Project.bytewise)
 
@@ -474,7 +575,7 @@ expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"scope\":\"ex
 expect Sbom.read(fixture_native_linux_cdx) == Sbom.read_cyclonedx(fixture_native_linux_cdx)
 
 # The CycloneDX validator follows the vendored, digest-pinned 1.7 schema.
-expect Crypto.SHA256.hash(schema_cdx.to_utf8()).to_hex() == "73308edec3ab2d38bfffd993e96a042b594314143b6971a6e9ed98bbb6bd76ce"
+expect Crypto.SHA256.hash(schema_cdx.to_utf8()).to_hex() == schema_cdx_digest
 
 definitions_cdx : JsonData
 definitions_cdx = (JsonData.decode_with(schema_cdx, JsonData.documents) ?? crash "schema is not JSON").field("definitions") ?? crash "schema has no definitions"
@@ -561,6 +662,450 @@ expect {
 expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..consumer, imported_documents: [{ ..supplier_import, subject: { ..supplier_import.subject, sha256: digest } }] }).is_err()
 expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..consumer, components: [{ ..dependency, sha256: digest }] }).is_err()
 
+# A source archive is architecture-independent: its consumer's compiler builds
+# it for the consumer's target. So a supplier's SBOM for one, such as a Roc
+# package bundle's, imports into a native executable's inventory with its
+# `source` target kept, never relabelled as native code, while the archive
+# digest, version and namespace bind exactly as a native supplier's do.
+source_bundle_inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, target: "" }) }) ?? crash "invalid source fixture"
+
+source_supplier_sbom = Sbom.render(source_bundle_inventory, { filename: "dep-abc.tar.zst", version: "1.2.0", target: "source", sha256: bundle_digest, url: bundle_url }, { ..SbomTest.context, namespace: "https://example.org/sbom/dep-source/revision-1" }) ?? crash "source supplier SBOM"
+
+source_supplier_import = { ..supplier_import, namespace: "https://example.org/sbom/dep-source/revision-1", target: "source", document: source_supplier_sbom, sha256: Crypto.SHA256.hash(source_supplier_sbom.to_utf8()).to_hex() }
+
+source_consumer = { ..consumer, components: [{ ..dependency, target: "source" }], relationships: [{ ..edge("Subject", "dep", "dependsOn"), scope: "build" }], imported_documents: [source_supplier_import] }
+
+native_from_source : Try(Sbom.Inventory, Str)
+native_from_source = Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", source_consumer)
+
+expect
+	match native_from_source {
+		Ok(inventory) =>
+			inventory.target == "x86_64-linux"
+				and inventory.components.all(|entry| entry.target == "source")
+					and inventory.components.any(|entry| entry.id == "dep" and entry.sha256 == bundle_digest and entry.version == "1.2.0")
+						and inventory.relationships.any(|relation| relation.from == "dep-sbom-Subject" and relation.to == "dep" and relation.relation == "copiedTo")
+							and inventory.coverage.any(|scope| scope.scope == "import:dep-sbom" and scope.reason.starts_with("Document digest and upstream subject artifact identity match"))
+		Err(_) => False
+	}
+expect Sbom.inspect(consumer_spec, consumer_lock, "source", source_consumer).is_ok()
+expect Sbom.inspect(consumer_spec, consumer_lock, "aarch64-linux", source_consumer).is_ok()
+expect Sbom.admits_target("x86_64-linux", "source") and Sbom.admits_target("x86_64-linux", "") and Sbom.admits_target("source", "x86_64-linux") and !Sbom.admits_target("x86_64-linux", "aarch64-linux")
+
+# The supplier's artifact binds exactly: other bytes, another version or
+# another target than the supplier states do not.
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, imported_documents: [{ ..source_supplier_import, subject: { ..source_supplier_import.subject, sha256: digest } }] }) == Err("import subject filename/version/SHA256 mismatch")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, imported_documents: [{ ..source_supplier_import, subject: { ..source_supplier_import.subject, version: "1.2.1" } }] }) == Err("import subject filename/version/SHA256 mismatch")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, imported_documents: [{ ..source_supplier_import, target: "x86_64-linux" }] }) == Err("imported document subject target mismatch")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, components: [{ ..dependency, target: "x86_64-linux" }] }) == Err("imported subject conflicts with authoritative component artifact")
+
+# A native supplier still has to match the inventory's target, and an import
+# has to state one.
+expect Sbom.inspect(consumer_spec, consumer_lock, "aarch64-linux", consumer) == Err("import target differs from subject")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, imported_documents: [{ ..source_supplier_import, target: "aarch64-linux" }] }) == Err("import target differs from subject")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, imported_documents: [{ ..source_supplier_import, target: "" }] }) == Err("import target differs from subject")
+expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..source_consumer, components: [{ ..dependency, target: "aarch64-linux" }], imported_documents: [{ ..source_supplier_import, target: "aarch64-linux" }] }) == Err("import target differs from subject")
+
+# Every rendering keeps the source identity through check and readback, and
+# a build-scoped source dependency ships nothing: it is excluded, and no
+# `contains` reaches it from the subject.
+expect [fixture_native_source_import_3, fixture_native_source_import_2, fixture_native_source_import_cdx].all(
+	|text|
+		match Sidecar.check(text) {
+			Ok(checked) =>
+				checked.evidence.target == "x86_64-linux"
+					and checked.subject.comment.contains("\"target\":\"x86_64-linux\"")
+						and checked.document.packages_.keep_if(|entry| entry.id != "Subject").all(|entry| entry.comment.contains("\"target\":\"source\""))
+							and !containers(checked.document, "dep").contains("Subject")
+								and checked.document.relationships.any(|relation| relation.from == "Subject" and relation.to == "dep" and relation.relation == "dependsOn" and relation.scope == "build")
+			Err(_) => False
+		},
+)
+expect {
+	bom = JsonData.decode_with(fixture_native_source_import_cdx, JsonData.documents) ?? crash "fixture"
+	components = (bom.field("components") ?? JsonData.Null).array() ?? []
+	scope = |ref| components.find_first(|entry| entry.field("bom-ref") == Ok(JsonData.String(ref))).map_ok(|entry| (entry.field("scope") ?? JsonData.Null).string() ?? "") ?? ""
+	scope("dep") == "excluded" and components.all(|entry| (entry.field("scope") ?? JsonData.Null).string() != Ok("required"))
+}
+
+# A source bundle is inventoried from the archive the bundler produced, member
+# by member: a bundler packs what a module imports as well as what it is
+# given, so a module that imports a text file and a LICENSE ships four
+# members. Each is stated by its digest, and a composition that omits one is
+# refused by name.
+member = |name, content| { name, size: content.to_utf8().len(), sha256: Crypto.SHA256.hash(content.to_utf8()).to_hex() }
+
+bundle_members = [member("main.roc", "module [hello]\n"), member("Example.roc", "import \"message.txt\" as message : Str\n"), member("LICENSE", "UPL-1.0\n"), member("message.txt", "hello\n")]
+
+message_input = "archive-member:message.txt:${Crypto.SHA256.hash("hello\n".to_utf8()).to_hex()}"
+
+bundle_composition : Sbom.Composition
+bundle_composition = {
+	archive = Sbom.archive_members("sources", bundle_members) ?? crash "invalid member listing"
+	sources = { ..component("sources", "example-bundle", "1.0.0"), target: "source" }
+	{ ..SbomTest.composition, components: [sources].concat(archive.components), relationships: [edge("Subject", "sources", "contains")].concat(archive.relationships), coverage: [{ scope: "members", status: "complete", reason: "Every archive member is stated by SHA-256", contact: "https://example.org/support" }] }
+}
+
+## `bundle_composition` without the member `message.txt`.
+dropped_composition = { ..bundle_composition, components: bundle_composition.components.keep_if(|entry| entry.id != "member-message.txt"), relationships: bundle_composition.relationships.keep_if(|relation| relation.to != "member-message.txt") }
+
+inspect_bundle = |composition| Sbom.inspect_archive(SbomTest.spec, SbomTest.lock, "source", composition, bundle_members)
+
+expect
+	match Sbom.archive_members("sources", bundle_members) {
+		Ok(archive) =>
+			archive.components.map(|entry| entry.id) == ["member-main.roc", "member-Example.roc", "member-LICENSE", "member-message.txt"]
+				and archive.components.all(|entry| entry.origin == "reviewed" and entry.target == "source" and entry.license == "NOASSERTION" and entry.download == "NOASSERTION" and entry.producer == "NOASSERTION" and entry.version == "sha256-${entry.sha256}" and entry.identity == "urn:blueprint:archive-member:${entry.name}:${entry.sha256}" and bundle_members.any(|listed| listed.name == entry.name and listed.sha256 == entry.sha256))
+					and archive.relationships.all(|relation| relation.from == "sources" and relation.relation == "contains" and relation.scope.is_empty() and relation.basis.contains("bytes"))
+						and archive.relationships.map(|relation| relation.to) == archive.components.map(|entry| entry.id)
+		Err(_) => False
+	}
+expect
+	match inspect_bundle(bundle_composition) {
+		Ok(inventory) => inventory.components.keep_if(|entry| entry.identity.starts_with("urn:blueprint:archive-member:")).len() == 4 and inventory.inspected.is_empty()
+		Err(_) => False
+	}
+expect
+	match inspect_bundle(dropped_composition) {
+		Err(problem) => problem.contains("message.txt (sha256 ") and problem.contains(message_input)
+		Ok(_) => False
+	}
+expect Sbom.members_accounted(bundle_members, bundle_composition).is_ok()
+expect Sbom.members_accounted(bundle_members, dropped_composition).is_err()
+# Without the listing, the omission goes unnoticed: the archive is the proof.
+expect Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", dropped_composition).is_ok()
+# A reviewer's own component that states the same bytes accounts for a member.
+expect {
+	reviewed = { ..bundle_composition, components: bundle_composition.components.map(|entry| if (entry.id == "member-LICENSE") { ..entry, id: "licence", name: "Universal Permissive License", license: "UPL-1.0", producer: "Organization: Oracle" } else entry), relationships: bundle_composition.relationships.map(|relation| if (relation.to == "member-LICENSE") { ..relation, to: "licence" } else relation) }
+	inspect_bundle(reviewed).is_ok()
+}
+# So does an input disposition, which is then exported like any input's.
+expect
+	match inspect_bundle({ ..dropped_composition, inputs: [{ input: message_input, component: "", reason: "Greeting text imported by Example.roc; not code" }] }) {
+		Ok(inventory) => inventory.inspected == [message_input] and inventory.inputs.len() == 1
+		Err(_) => False
+	}
+# A disposition for a member a component already states is an unknown input.
+expect inspect_bundle({ ..bundle_composition, inputs: [{ input: message_input, component: "member-message.txt", reason: "Stated twice" }] }).is_err()
+# Only a source archive has members.
+expect Sbom.inspect_archive(SbomTest.spec, SbomTest.lock, "x86_64-linux", bundle_composition, bundle_members).is_err()
+# A listing with a repeated or unsafe name or a bad digest is refused.
+expect Sbom.archive_members("sources", bundle_members.append(member("main.roc", "other"))).is_err()
+expect Sbom.archive_members("sources", [member("../escape", "x")]).is_err()
+expect Sbom.archive_members("sources", [member("/etc/passwd", "x")]).is_err()
+expect Sbom.archive_members("sources", [member("a/./b", "x")]).is_err()
+expect Sbom.archive_members("sources", [member("a b", "x")]).is_err()
+expect Sbom.archive_members("sources", [member("", "x")]).is_err()
+expect Sbom.archive_members("sources", [{ ..member("a", "x"), sha256: "BAD" }]).is_err()
+expect Sbom.members_accounted([member("../escape", "x")], bundle_composition).is_err()
+expect Sbom.archive_members("sources", [member("fonts/a+b.ttf", "x"), member("fonts/a-b.ttf", "y")]).is_ok()
+expect Sbom.member_input(member("message.txt", "hello\n")) == message_input
+
 # Binding inputs must track the current public Spec and Lock wire contracts.
 expect Spec.parse(fixture_input_spec) == Ok(SbomTest.spec)
 expect Lock.parse(fixture_input_lock) == Ok(SbomTest.lock)
+
+# An evidence manifest renders deterministically, reads back, and is held to
+# what a checker measured: the subject, each listed sidecar and the inventory.
+manifest_digest = |text| Crypto.SHA256.hash(text.to_utf8()).to_hex()
+
+manifest_sample : Manifest.Manifest
+manifest_sample = {
+	profile: Sbom.profile,
+	subject: { filename: "sample-artifact", version: "1.0.0", target: "x86_64-linux", sha256: SbomTest.subject.sha256, size: 16 },
+	inventory_sha256: manifest_digest("inventory"),
+	context: { namespace: SbomTest.context.namespace, revision: SbomTest.context.revision, created: SbomTest.context.created, generator: SbomTest.context.generator },
+	sidecars: [
+		{ filename: "sample-artifact.spdx.json", format: "spdx-3.0.1", sha256: manifest_digest("three"), size: 3 },
+		{ filename: "sample-artifact.cdx.json", format: "cyclonedx-1.7", sha256: manifest_digest("bom"), size: 4 },
+	],
+}
+
+manifest_listed = { ..manifest_sample, sidecars: manifest_sample.sidecars.sort_with(|a, b| Project.bytewise(a.filename, b.filename)) }
+
+manifest_text = Manifest.render(manifest_sample) ?? crash "manifest"
+
+manifest_observed : Manifest.Observed
+manifest_observed = { subject: { sha256: SbomTest.subject.sha256, size: 16 }, inventory: Measured(manifest_digest("inventory")), sidecars: manifest_sample.sidecars.map(|entry| { filename: entry.filename, sha256: entry.sha256, size: entry.size }) }
+
+expect manifest_text == "{\"profile\":\"${Sbom.profile}\",\"subject\":{\"filename\":\"sample-artifact\",\"version\":\"1.0.0\",\"target\":\"x86_64-linux\",\"sha256\":\"${SbomTest.subject.sha256}\",\"size\":16},\"inventory_sha256\":\"${manifest_digest("inventory")}\",\"context\":{\"namespace\":\"${SbomTest.context.namespace}\",\"revision\":\"1\",\"created\":\"${SbomTest.context.created}\",\"generator\":\"${SbomTest.context.generator}\"},\"sidecars\":[{\"filename\":\"sample-artifact.cdx.json\",\"format\":\"cyclonedx-1.7\",\"sha256\":\"${manifest_digest("bom")}\",\"size\":4},{\"filename\":\"sample-artifact.spdx.json\",\"format\":\"spdx-3.0.1\",\"sha256\":\"${manifest_digest("three")}\",\"size\":3}]}\n"
+expect Manifest.render(manifest_listed) == Ok(manifest_text)
+expect Manifest.read(manifest_text) == Ok(manifest_listed)
+expect Manifest.check(manifest_text, manifest_observed) == Ok(manifest_listed)
+expect Manifest.check(manifest_text, { ..manifest_observed, inventory: Unmeasured }) == Ok(manifest_listed)
+expect Manifest.check(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.prepend({ filename: "sample-artifact.spdx-2.3.json", sha256: manifest_digest("two"), size: 9 }) }) == Ok(manifest_listed)
+expect Manifest.formats == ["spdx-3.0.1", "spdx-2.3", "cyclonedx-1.7"] and Manifest.suffix == ".sbom-manifest.json"
+expect Manifest.format_of("SPDX-3.0.1") == Ok("spdx-3.0.1") and Manifest.format_of("SPDX-2.3") == Ok("spdx-2.3") and Manifest.format_of("CycloneDX-1.7") == Ok("cyclonedx-1.7") and Manifest.format_of("SPDX-2.2").is_err()
+
+# Each refusal names what differs: the profile, the subject's digest or size,
+# a sidecar's digest or size, a listed sidecar that is absent, and the
+# inventory's digest.
+expect Manifest.read(manifest_text.replace_each(Sbom.profile, "blueprint-spdx-2.3-v1")) == Err("the manifest names profile blueprint-spdx-2.3-v1, not ${Sbom.profile}")
+expect Manifest.check(manifest_text, { ..manifest_observed, subject: { ..manifest_observed.subject, sha256: manifest_digest("other bytes") } }) == Err("the subject's bytes differ from what the manifest states")
+expect Manifest.check(manifest_text, { ..manifest_observed, subject: { ..manifest_observed.subject, size: 17 } }) == Err("the subject's size differs from what the manifest states")
+expect Manifest.check(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.map(|entry| if (entry.filename == "sample-artifact.cdx.json") { ..entry, sha256: manifest_digest("tampered") } else entry) }) == Err("sample-artifact.cdx.json differs from what the manifest states")
+expect Manifest.check(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.map(|entry| if (entry.filename == "sample-artifact.spdx.json") { ..entry, size: 30 } else entry) }) == Err("the size of sample-artifact.spdx.json differs from what the manifest states")
+expect Manifest.check(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.drop_if(|entry| entry.filename == "sample-artifact.cdx.json") }) == Err("the manifest lists sample-artifact.cdx.json, which is absent")
+expect Manifest.check(manifest_text, { ..manifest_observed, inventory: Measured(manifest_digest("another inventory")) }) == Err("the inventory differs from the one the manifest states")
+
+# A manifest names files by name alone and holds no developer path or
+# credential; a rendered one lists each known-format sidecar once, with
+# lowercase digests, apart from its subject.
+expect Manifest.render({ ..manifest_sample, subject: { ..manifest_sample.subject, filename: "dist/sample-artifact" } }) == Err("the manifest must name its subject by file name alone")
+expect ["out/sample-artifact.spdx.json", "..\\sample-artifact.spdx.json", "..", "", "sample-artifact"].all(|filename| Manifest.render({ ..manifest_sample, sidecars: [{ ..manifest_sample.sidecars.first() ?? crash "sample", filename }] }) == Err("the manifest must name each sidecar by file name alone, apart from its subject"))
+expect Manifest.read(manifest_text.replace_each("\"sample-artifact.cdx.json\"", "\"../sample-artifact.cdx.json\"")) == Err("the manifest must name each sidecar by file name alone, apart from its subject")
+expect Manifest.render({ ..manifest_sample, context: { ..manifest_sample.context, namespace: "https://example.org/Users/someone/revision-1" } }) == Err("the manifest holds a developer path or credential")
+expect Manifest.read(manifest_text.replace_each(SbomTest.context.generator, "Tool: built in /home/someone")) == Err("the manifest holds a developer path or credential")
+expect Manifest.render({ ..manifest_sample, sidecars: [] }) == Err("the manifest lists no sidecar")
+expect Manifest.render({ ..manifest_sample, sidecars: manifest_sample.sidecars.concat(manifest_sample.sidecars) }) == Err("the manifest lists a sidecar twice")
+expect Manifest.render({ ..manifest_sample, sidecars: manifest_sample.sidecars.map(|entry| { ..entry, format: "spdx-2.2" }) }).is_err()
+expect Manifest.render({ ..manifest_sample, sidecars: manifest_sample.sidecars.map(|entry| { ..entry, sha256: Str.join_with(List.repeat("A", 64), "") }) }) == Err("sample-artifact.spdx.json needs a lowercase SHA-256")
+expect Manifest.render({ ..manifest_sample, inventory_sha256: "" }) == Err("the inventory digest must be a lowercase SHA-256")
+expect Manifest.render({ ..manifest_sample, subject: { ..manifest_sample.subject, target: "" } }) == Err("the subject needs a version, a target and a lowercase SHA-256")
+expect Manifest.render({ ..manifest_sample, context: { ..manifest_sample.context, revision: "2" } }) == Err("namespace does not end with its revision")
+expect Manifest.read("{\"profile\":\"${Sbom.profile}\"}").is_err() and Manifest.read("not json").is_err()
+
+# A checked sidecar describes the manifest's subject, in the listed format.
+expect {
+	checked = Sidecar.check(fixture_native_linux_3) ?? crash "fixture"
+	bom = Sidecar.check(fixture_native_linux_cdx) ?? crash "fixture"
+	Manifest.describes(manifest_sample, "", checked) == Ok({})
+		and Manifest.describes(manifest_sample, "sample-artifact.spdx.json", checked) == Ok({})
+			and Manifest.describes(manifest_sample, "sample-artifact.cdx.json", bom) == Ok({})
+				and Manifest.describes(manifest_sample, "sample-artifact.cdx.json", checked) == Err("sample-artifact.cdx.json is a SPDX-3.0.1 document, not the cyclonedx-1.7 sidecar the manifest lists")
+					and Manifest.describes({ ..manifest_sample, subject: { ..manifest_sample.subject, version: "2.0.0" } }, "", checked) == Err("the sidecar describes sample-artifact 1.0.0, not the manifest's sample-artifact 2.0.0")
+						and Manifest.describes({ ..manifest_sample, subject: { ..manifest_sample.subject, sha256: manifest_digest("other") } }, "", bom).is_err()
+}
+
+subject_bytes = "fixture subject\n"
+
+# The standalone tool's inputs for the source supplier import. The consumer's
+# artifact, subject and context are the native-source-import case's.
+consumer_bytes = "consumer of fixture\n"
+
+source_import_subject : Sbom.Subject
+source_import_subject = { ..SbomTest.subject, filename: "consumer-artifact", sha256: Crypto.SHA256.hash(consumer_bytes.to_utf8()).to_hex() }
+
+source_import_context : Sbom.Context
+source_import_context = { ..SbomTest.context, namespace: "https://example.org/sbom/fixture/source-import/revision-1" }
+
+## One composition per refusal of the source supplier import: its file name,
+## the consumer target it is inspected for, the exact message, and what the
+## refusal proves.
+source_import_refusals : List({ composition : Str, target : Str, refusal : Str, proves : Str, tampered : Sbom.Composition })
+source_import_refusals = [
+	{ composition: "tamper-document-digest.json", target: "x86_64-linux", refusal: "imported SBOM content digest mismatch", proves: "The supplier document must hash to the digest the import states; a document with other bytes is not read.", tampered: { ..source_consumer, imported_documents: [{ ..source_supplier_import, sha256: digest }] } },
+	{ composition: "tamper-subject-digest.json", target: "x86_64-linux", refusal: "import subject filename/version/SHA256 mismatch", proves: "The supplier's described artifact must be the bytes the consumer pinned: another SHA-256 does not bind.", tampered: { ..source_consumer, imported_documents: [{ ..source_supplier_import, subject: { ..source_supplier_import.subject, sha256: digest } }] } },
+	{ composition: "tamper-subject-version.json", target: "x86_64-linux", refusal: "import subject filename/version/SHA256 mismatch", proves: "Another version of the same bytes does not bind either.", tampered: { ..source_consumer, imported_documents: [{ ..source_supplier_import, subject: { ..source_supplier_import.subject, version: "1.2.1" } }] } },
+	{ composition: "tamper-import-native.json", target: "x86_64-linux", refusal: "imported document subject target mismatch", proves: "A `source` document cannot be imported as native code: the import's stated target must be the one the document states for its subject.", tampered: { ..source_consumer, imported_documents: [{ ..source_supplier_import, target: "x86_64-linux" }] } },
+	{ composition: "tamper-component-native.json", target: "x86_64-linux", refusal: "imported subject conflicts with authoritative component artifact", proves: "The consumer's component for a `source` supplier cannot claim a native target: it conflicts with the bound artifact's identity.", tampered: { ..source_consumer, components: [{ ..dependency, target: "x86_64-linux" }] } },
+	{ composition: "tamper-import-aarch64.json", target: "x86_64-linux", refusal: "import target differs from subject", proves: "A native target that is not the consumer's is refused, as for any native supplier; only `source` crosses architectures.", tampered: { ..source_consumer, imported_documents: [{ ..source_supplier_import, target: "aarch64-linux" }] } },
+]
+
+expect source_import_refusals.all(|refused| Sbom.inspect(consumer_spec, consumer_lock, refused.target, refused.tampered) == Err(refused.refusal))
+expect SbomTest.source_import.accepted.all(
+	|accepted|
+		match Sbom.inspect(consumer_spec, consumer_lock, accepted.target, source_consumer) {
+			Ok(inventory) => inventory.target == accepted.target and inventory.components.all(|entry| entry.target == "source")
+			Err(_) => False
+		},
+)
+# The inventory `bind` takes is the accepted native one, and it renders to the
+# committed native-source-import documents with the subject and context written.
+expect {
+	bound = SbomTest.source_import.bound
+	SbomTest.source_import.accepted.any(|accepted| accepted.inventory == bound.inventory and accepted.target == "x86_64-linux")
+		and SbomTest.cases.any(|case| case.name == bound.renderings and Ok(case.inventory) == native_from_source and case.subject == source_import_subject and case.context == source_import_context)
+}
+# Everything expected.json names is a file of the set, and the committed
+# expected.json reads back to the suite's own statement.
+expect {
+	names = SbomTest.source_import_files.map(|file| file.name)
+	stated = SbomTest.source_import
+	named = [stated.inputs.spec, stated.inputs.lock, stated.inputs.composition, stated.bound.inventory, stated.bound.subject, stated.bound.context, stated.bound.artifact].concat(stated.accepted.map(|accepted| accepted.inventory)).concat(stated.refused.map(|refused| refused.composition))
+	parsed : Try(SbomTest.SourceImport, _)
+	parsed = Json.parse(source_import_expected)
+	named.all(|name| names.contains(name)) and parsed == Ok(stated)
+}
+
+# The committed inputs are what the suite writes now; regenerate them with
+# `scripts/test_sbom.roc inputs tests/sbom/fixtures/input` and
+# `scripts/test_sbom.roc source-import tests/sbom/fixtures/source-import`.
+by_name = |files| files.sort_with(|a, b| Project.bytewise(a.name, b.name))
+
+committed_input = [{ name: "Spec", text: fixture_input_spec }, { name: "Lock", text: fixture_input_lock }, { name: "composition.json", text: fixture_input_composition }, { name: "inventory.json", text: fixture_input_inventory }, { name: "subject.json", text: fixture_input_subject }, { name: "context.json", text: fixture_input_context }, { name: "sample-artifact", text: fixture_input_artifact }]
+
+committed_source_import = [{ name: "Spec", text: source_import_spec }, { name: "Lock", text: source_import_lock }, { name: "composition.json", text: source_import_composition }, { name: "subject.json", text: source_import_subject_json }, { name: "context.json", text: source_import_context_json }, { name: "consumer-artifact", text: source_import_artifact }, { name: "expected.json", text: source_import_expected }, { name: "inventory-source.json", text: source_import_inventory_source }, { name: "inventory-x86_64-linux.json", text: source_import_inventory_x86_64 }, { name: "inventory-aarch64-linux.json", text: source_import_inventory_aarch64 }, { name: "tamper-document-digest.json", text: source_import_tamper_document_digest }, { name: "tamper-subject-digest.json", text: source_import_tamper_subject_digest }, { name: "tamper-subject-version.json", text: source_import_tamper_subject_version }, { name: "tamper-import-native.json", text: source_import_tamper_import_native }, { name: "tamper-component-native.json", text: source_import_tamper_component_native }, { name: "tamper-import-aarch64.json", text: source_import_tamper_import_aarch64 }]
+
+expect by_name(SbomTest.input_files) == by_name(committed_input)
+expect by_name(SbomTest.source_import_files) == by_name(committed_source_import)
+expect Spec.parse(source_import_spec) == Ok(consumer_spec)
+expect Lock.parse(source_import_lock) == Ok(consumer_lock)
+
+## What each rendered case proves, with the bytes of its subject, for the
+## contract. The cases and these notes are one list in one order.
+case_notes : List({ name : Str, bytes : Str, proves : Str })
+case_notes = [
+	{ name: "verified-import", bytes: consumer_bytes, proves: "A native supplier's SBOM (the `native-linux` document) imported into a consumer and bound to the consumed input it describes, pinned by SHA-256: the supplier's components join the consumer's graph under `upstream-` identifiers, and the import's coverage states that the document digest and the subject's identity matched." },
+	{ name: "native-linux", bytes: subject_bytes, proves: "The reference native inventory: a platform that contains a transitive native library with a digest of its own, a compiler that only builds the subject (`dependsOn` with scope `build`; CycloneDX scope `excluded`), patched restricted code that keeps its patch identity and licence terms, and an `incomplete` coverage record for the rest of the native closure." },
+	{ name: "native-arm64", bytes: subject_bytes, proves: "The same composition for `aarch64-linux`: the subject and every component carry that target, and nothing from the `x86_64-linux` case is admitted." },
+	{ name: "source-bundle", bytes: "fixture source bundle\n", proves: "An architecture-independent subject, target `source`, whose components state no target: what a source archive's own SBOM, such as a Roc package bundle's, looks like. It is the supplier document of the `native-source-import` case." },
+	{ name: "native-source-import", bytes: consumer_bytes, proves: "The `source-bundle` document imported into an `x86_64-linux` consumer and bound to the file pin `source:dep`: every component keeps target `source`, the archive's digest and version bind exactly, and the build-scoped dependency ships nothing. Its inputs are under `source-import/`." },
+	{ name: "verified-empty", bytes: subject_bytes, proves: "A reviewed subject with no third-party components, stated as `verified-empty` coverage: an asserted fact, distinct from not knowing." },
+	{ name: "unknown-closure", bytes: subject_bytes, proves: "A subject whose closure is not known: no components, and an `incomplete` coverage record with its reason and contact. A consumer must not read it as empty." },
+]
+
+expect SbomTest.cases.map(|case| case.name) == case_notes.map(|note| note.name)
+expect SbomTest.cases.all(|case| case_notes.any(|note| note.name == case.name and Crypto.SHA256.hash(note.bytes.to_utf8()).to_hex() == case.subject.sha256))
+
+## The case contract as Markdown: prose wrapped at 80 columns, one table row
+## per case, and the commands a consumer runs over the set.
+contract_text : Str
+contract_text = {
+	code = |text| "`${text}`"
+	shown = |bytes| code(bytes.replace_each("\n", "\\n"))
+	row = |cells| "| ${Str.join_with(cells, " | ")} |"
+	case_rows = SbomTest.cases.map(
+		|case| {
+			note = case_notes.find_first(|entry| entry.name == case.name) ?? crash "no note for ${case.name}"
+			row([code(case.name), code(case.subject.target), "${code(case.subject.filename)} ${case.subject.version}, the bytes ${shown(note.bytes)}", code(case.context.namespace), note.proves])
+		},
+	)
+	accepted_rows = SbomTest.source_import.accepted.map(|accepted| row([code(accepted.target), code("source-import/${accepted.inventory}")]))
+	refused_rows = SbomTest.source_import.refused.map(|refused| row([code("source-import/${refused.composition}"), code(refused.target), code(Str.concat("SBOM: Invalid(\"", Str.concat(refused.refusal, "\")"))), refused.proves]))
+	inputs = SbomTest.source_import.inputs
+	bound = SbomTest.source_import.bound
+	Str.join_with(
+		[
+			"# SBOM fixture contract",
+			"",
+			"This is the fixture set of Blueprint's SBOM profile, `${Sbom.profile}`,",
+			"as a release publishes it: `roc-blueprint-sbom-fixtures-<version>.zip`. The",
+			"test suite of the roc-blueprint repository, `scripts/src/SbomTest.roc`,",
+			"asserts every case below, and `scripts/test_sbom.roc contract` writes this",
+			"file from the same values. The suite fails when a case, a committed file or",
+			"this contract drifts from the others.",
+			"",
+			"The standalone tool is the `roc-blueprint-sbom-<hash>.tar.zst` bundle of the",
+			"same release, run as `roc run <bundle-url> -- <command>`; `sbom` below stands",
+			"for that. It never changes an input and never replaces an output that",
+			"exists, so work in a scratch copy of the set. A refusal is printed on",
+			"standard error as `SBOM: Invalid(\"<message>\")`, with exit code 1.",
+			"",
+			"## Rendered cases",
+			"",
+			"Each case is one inventory rendered three ways from one subject and",
+			"context: `<case>.spdx.json` (SPDX 3.0.1 JSON-LD), `<case>.spdx-2.3.json`",
+			"(SPDX 2.3) and `<case>.cdx.json` (CycloneDX 1.7). The three state one package",
+			"graph, and `sbom check <case>.spdx.json <case>.spdx-2.3.json <case>.cdx.json`",
+			"accepts them. The subject's SHA-256 in each document is that of the bytes",
+			"shown.",
+			"",
+			row(["Case", "Target", "Subject", "Namespace", "Proves"]),
+			row(["---", "---", "---", "---", "---"]),
+		]
+			.concat(case_rows)
+			.concat([
+				"",
+				"## Native inputs: `input/`",
+				"",
+				"The standalone tool's inputs for the `native-linux` case: the evaluated",
+				"`Spec` and `Lock` in their wire formats, `composition.json`, `subject.json`,",
+				"`context.json` and the artifact `sample-artifact`. `inventory.json` is what",
+				"`inspect` writes for `x86_64-linux`, byte for byte, and `bind` reproduces",
+				"the committed renderings:",
+				"",
+				"```sh",
+				"sbom inspect input/Spec input/Lock input/composition.json x86_64-linux out.json",
+				"cmp out.json input/inventory.json",
+				"sbom bind input/inventory.json input/subject.json input/context.json input/sample-artifact",
+				"cmp input/sample-artifact.spdx.json native-linux.spdx.json",
+				"cmp input/sample-artifact.cdx.json native-linux.cdx.json",
+				"sbom bind input/inventory.json input/subject.json input/context.json input/sample-artifact out.spdx-2.3.json --spdx-2.3",
+				"cmp out.spdx-2.3.json native-linux.spdx-2.3.json",
+				"sbom check --artifacts input --inventory input/inventory.json native-linux.spdx.json native-linux.spdx-2.3.json native-linux.cdx.json",
+				"```",
+				"",
+				"## Source supplier import: `source-import/`",
+				"",
+				"A consumer whose `Spec` holds one `source_files` entry, `dep`, pinned by the",
+				"SHA-256 of a supplier's archive; whose `Lock` records that pin as a `file`",
+				"provider source; and whose `composition.json` declares a `source:dep`",
+				"component at target `source`, with the supplier's own SBOM (the",
+				"`source-bundle` document, for the archive `dep-abc.tar.zst` 1.2.0) imported",
+				"at target `source` and bound to that component. The dependency is",
+				"build-scoped: the consumer's compiler builds the archive for the consumer's",
+				"target, so the archive keeps its `source` identity in every consumer and is",
+				"never relabelled as native code. `expected.json` states this section for",
+				"automation: the inputs, each accepted target with its inventory, what `bind`",
+				"takes and reproduces, and each refusal.",
+				"",
+				"### Accepted",
+				"",
+				"`inspect` writes each inventory byte for byte, and in every one each",
+				"component keeps target `source`:",
+				"",
+				row(["Consumer target", "Inventory"]),
+				row(["---", "---"]),
+			])
+			.concat(accepted_rows)
+			.concat([
+				"",
+				"```sh",
+				"sbom inspect source-import/${inputs.spec} source-import/${inputs.lock} source-import/${inputs.composition} x86_64-linux out.json",
+				"cmp out.json source-import/${bound.inventory}",
+				"```",
+				"",
+				"`bind` of that inventory to `${bound.artifact}` with `${bound.subject}` and",
+				"`${bound.context}` reproduces the `${bound.renderings}` renderings:",
+				"",
+				"```sh",
+				"sbom bind source-import/${bound.inventory} source-import/${bound.subject} source-import/${bound.context} source-import/${bound.artifact}",
+				"cmp source-import/${bound.artifact}.spdx.json ${bound.renderings}.spdx.json",
+				"cmp source-import/${bound.artifact}.cdx.json ${bound.renderings}.cdx.json",
+				"```",
+				"",
+				"Build-only versus contained: in those renderings `dep` is excluded from what",
+				"ships. The subject reaches it through `dependsOn` with scope `build` alone,",
+				"no `contains` relationship leads from the subject to it, and its CycloneDX",
+				"scope is `excluded` while no component is `required`.",
+				"",
+				"### Refused",
+				"",
+				"Each composition differs from `composition.json` in one value. `inspect` of",
+				"it for the target shown exits 1 with the message, and writes nothing:",
+				"",
+				row(["Composition", "Target", "Refusal", "Proves"]),
+				row(["---", "---", "---", "---"]),
+			])
+			.concat(refused_rows)
+			.concat([
+				"",
+				"## Upstream documents: `upstream/`",
+				"",
+				"What Syft and Trivy wrote for one Cargo project, in CycloneDX and SPDX, as",
+				"`upstream/README.md` describes. Each imports with exactly the gaps the suite",
+				"states for it; what the profile cannot carry is counted, never dropped.",
+				"",
+				"## Schemas",
+				"",
+				"The set holds no schema. The JSON schemas the validators are held to are",
+				"vendored in the repository's `tests/sbom/schema/`, each pinned by SHA-256:",
+				"",
+				row(["Schema", "SHA-256"]),
+				row(["---", "---"]),
+				row([code("spdx-3.0.1.schema.json"), code(schema_3_digest)]),
+				row([code("spdx-2.3.schema.json"), code(schema_2_digest)]),
+				row([code("cyclonedx-1.7/bom-1.7.schema.json"), code(schema_cdx_digest)]),
+				"",
+			]),
+		"\n",
+	)
+}
+
+# The committed contract is what the suite writes now; regenerate it with
+# `scripts/test_sbom.roc contract tests/sbom/fixtures/CONTRACT.md`.
+expect SbomTest.contract == fixture_contract
+
+# The release asset holds exactly the files this suite asserts.
+expect sorted(SbomFixtures.files) == sorted([SbomFixtures.contract].concat(SbomTest.outputs.map(|file| file.name)).concat(SbomTest.input_files.map(|file| "input/${file.name}")).concat(SbomTest.source_import_files.map(|file| "source-import/${file.name}")).concat(["upstream/README.md", "upstream/syft.cdx.json", "upstream/syft.spdx.json", "upstream/trivy.cdx.json", "upstream/trivy.spdx.json"]))

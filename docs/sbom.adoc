@@ -360,6 +360,13 @@ An SBOM is only useful if it is accurate. Before you publish, check:
   records, and may ask for it again later.
 * *Anyone* can compare the SBOM's SHA-256 with the file they have, to be sure
   the SBOM describes it.
+* *Publishers and signers* that rehash every asset before signing read the
+  evidence manifest beside the sidecars, `<artifact>.sbom-manifest.json`,
+  for the mapping they would otherwise reconstruct by hand: the subject's
+  name, version, target, SHA-256 and size, each sidecar's name, format,
+  SHA-256 and size, and the SHA-256 of the inventory they were bound from.
+  `check --manifest` confirms that mapping against the files (see
+  <<bind-the-final-bytes-separately>>).
 
 [#what-an-sbom-does-not-prove]
 === What an SBOM does not prove
@@ -436,32 +443,62 @@ separate records.
 [#use-the-released-standalone-tool]
 == Use the released standalone tool
 
-Each release includes `roc-blueprint-sbom-<content-hash>.tar.zst`, a supported
-Roc app bundle containing the same wrapper and filesystem boundary used here.
-The release notes link to its exact immutable URL. Pin that URL in automation:
-its release version and Roc content hash identify the source bytes.
-The compiler pin matches `blueprint compiler-version` for that release.
+Each release ships the reporting tool in two forms: a native binary per
+system, `blueprint-sbom-<system>`, beside the `blueprint` binaries, and
+`roc-blueprint-sbom-<content-hash>.tar.zst`, a supported Roc app bundle
+containing the same wrapper and filesystem boundary used here.
+
+The binary is the recommended way for CI to run the tool. A job downloads
+`blueprint-sbom-<system>` from the release (`blueprint-sbom-x86_64-linux`,
+`blueprint-sbom-aarch64-linux`, `blueprint-sbom-aarch64-darwin` or
+`blueprint-sbom-x86_64-windows.exe`), verifies it against the line of that
+name in the release's `blueprint.sha256`, and runs it. It needs no Roc
+compiler and compiles nothing: the core and the native platform host are
+compiled in, and nothing is fetched at run time. Pin the release and the
+reviewed digest in automation, as roc-automation's `setup-blueprint` action
+does for the CLI; the binary's own sidecars and the release attestation cover
+it (see <<blueprints-own-release-evidence>>).
 
 [source,console]
 ----
-roc run <immutable-tool-bundle-url> -- inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
-roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary
-roc run <immutable-tool-bundle-url> -- bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx-2.3.json --spdx-2.3
-roc run <immutable-tool-bundle-url> -- check --inventory inventory.json --artifacts dist dist/my-binary.spdx.json dist/my-binary.cdx.json dist/my-binary.spdx-2.3.json
+curl -fsSLO https://github.com/lukewilliamboswell/roc-blueprint/releases/download/<version>/blueprint-sbom-x86_64-linux
+curl -fsSLO https://github.com/lukewilliamboswell/roc-blueprint/releases/download/<version>/blueprint.sha256
+sha256sum --ignore-missing -c blueprint.sha256
+chmod +x blueprint-sbom-x86_64-linux
+./blueprint-sbom-x86_64-linux inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
+./blueprint-sbom-x86_64-linux members dist/my-package.tar.zst members.json
+./blueprint-sbom-x86_64-linux inspect Spec Blueprint.lock composition.json source inventory.json --members members.json
+./blueprint-sbom-x86_64-linux bind inventory.json subject.json context.json dist/my-binary
+./blueprint-sbom-x86_64-linux bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx-2.3.json --spdx-2.3
+./blueprint-sbom-x86_64-linux check --inventory inventory.json --artifacts dist dist/my-binary.spdx.json dist/my-binary.cdx.json dist/my-binary.spdx-2.3.json
+./blueprint-sbom-x86_64-linux check --manifest dist/my-binary.sbom-manifest.json --inventory inventory.json --artifacts dist
 ----
 
-The first `bind` writes `dist/my-binary.spdx.json` and `dist/my-binary.cdx.json`;
-the second adds the SPDX 2.3 rendering, and `check` checks all three. See
-<<bind-the-final-bytes-separately>>.
+The first `bind` writes `dist/my-binary.spdx.json`, `dist/my-binary.cdx.json`
+and the evidence manifest `dist/my-binary.sbom-manifest.json`; the second
+adds the SPDX 2.3 rendering, and the first `check` checks all three. The
+second `check` holds the manifest to the files it lists, and checks those
+sidecars. See <<bind-the-final-bytes-separately>>. `members` and
+`inspect --members` inventory a source archive from its own contents; see
+<<inventory-a-source-bundle-from-its-archive>>. They need only a `tar` that
+reads zstd on `PATH`.
 
-No Blueprint project is required; even an unrelated invalid `Blueprint.roc`
-in the working directory is ignored. Supply the already evaluated Spec and
-Lock paths explicitly. A matching Roc compiler prepares the immutable core
-and native platform dependencies in its package cache before execution;
-materialize those dependencies before taking a release job offline. The report
-itself performs no resolution, provider execution or network request.
-The source app's own sidecar distinguishes its contained wrapper/I/O source
-from the core/platform/compiler dependencies fetched separately.
+The app bundle is the alternative for a machine that has the matching Roc
+compiler and wants the tool as source. The release notes link to its exact
+immutable URL. Pin that URL in automation: its release version and Roc
+content hash identify the source bytes. The compiler pin matches
+`blueprint compiler-version` for that release. The same commands take the
+form `roc run <immutable-tool-bundle-url> -- inspect ...`. A matching Roc
+compiler prepares the immutable core and native platform dependencies in its
+package cache before execution; materialize those dependencies before taking
+a release job offline. The source app's own sidecar distinguishes its
+contained wrapper/I/O source from the core/platform/compiler dependencies
+fetched separately.
+
+In either form no Blueprint project is required; even an unrelated invalid
+`Blueprint.roc` in the working directory is ignored. Supply the already
+evaluated Spec and Lock paths explicitly. The report itself performs no
+resolution, provider execution or network request.
 
 [#inspect-without-executing-a-provider]
 == Inspect without executing a provider
@@ -507,6 +544,9 @@ A component's `origin` is `reviewed`, `source:<locked-name>`, or
 `program:<locked-name>:<system>`. Locked origins populate `version`,
 `identity`, `download`, `sha256` and, for a program, `target` from the Lock when
 the corresponding field is empty. Supplied pin-derived values must agree.
+A component's `target` is `source` for an architecture-independent archive,
+the system its native code was built for, or empty when it states nothing;
+see <<import-inert-verified-upstream-graphs>> for what each may enter.
 A source revision is the version where available; otherwise its documented
 content identity is used. A fetched program with no reviewed upstream version
 uses `sha256-<digest>` as a byte identity, without inventing a release version.
@@ -641,6 +681,23 @@ coverage says the subject is not bound to a resolved artifact and its claims
 are unverified. An unbound subject may state no SHA-256, as a supplier's SBOM
 of a source tree often does; a bound one must.
 
+The entry's `target` is what the supplier's document says of its subject:
+`source` for an architecture-independent archive, or the system its native
+code was built for. A `source` import, and a `source` component, belong in
+an inventory of any target, because each consumer's compiler builds a source
+archive for the consumer's own target: a Roc package bundle a Linux
+executable was built from keeps its `source` identity in that executable's
+`x86_64-linux` inventory, and is never relabelled as native code. A native
+import or component must have the inventory's target, so an `aarch64-linux`
+library cannot enter an `x86_64-linux` inventory. A `source` inventory, such
+as a platform bundle that carries a linker member for each of its targets,
+admits either. The relationship still says what the archive is to the
+subject: a build-scoped `dependsOn` from the subject to a source archive
+states that the archive went into compilation, not that its files, which
+may include the fonts, data and notices its modules import, ship unchanged
+in the executable. Nor does importing a source SBOM establish the
+executable's native closure; state what remains unknown in coverage.
+
 The importer is tested against what Syft and Trivy write, in both CycloneDX and
 SPDX (`tests/sbom/fixtures/upstream/`), and the `sbom-read` fuzz target requires
 that every document Blueprint can read also imports.
@@ -648,6 +705,66 @@ that every document Blueprint can read also imports.
 Inputs are limited to 1 MiB, JSON nesting to 64 levels, imports to 16,
 components to 4,096 and relationships to 16,384. Licenses and exceptions are
 checked against the pinned SPDX License List 3.26.0 and expression grammar.
+
+[#inventory-a-source-bundle-from-its-archive]
+== Inventory a source bundle from its archive
+
+A source bundle's inventory comes from the archive the bundler produced, not
+from the list of files you asked it to pack. `roc bundle` follows
+`import "file" as x : Str` (or `List(U8)`) and packs those files even when
+they are not command arguments, so a font, a lookup table or a licence
+notice that a module imports is in the shipped archive whether or not
+anyone named it. The explicit arguments choose what to bundle; the archive
+is the proof of what was bundled.
+
+`members` lists a produced `.tar.zst` member by member. It runs the system
+`tar`, which must read zstd, lists the archive, refuses a member that is a
+symbolic or hard link, a device or a fifo, or whose name has a `..` part or a
+leading `/`, and only then extracts the members into a fresh private
+temporary directory, hashes each one and deletes the directory. Nothing is
+executed from the archive, and no Blueprint project or Nix is needed.
+
+[source,console]
+----
+roc bundle main.roc --output-dir dist
+roc run <tool> -- members dist/<hash>.tar.zst sbom/members.json
+----
+
+The listing names the archive, its SHA-256 and each member's name, size and
+SHA-256 in archive order:
+
+[source,json]
+----
+{"archive": "<hash>.tar.zst", "sha256": "<the archive's SHA-256>",
+ "members": [
+   {"name": "main.roc", "size": 139, "sha256": "<its SHA-256>"},
+   {"name": "Example.roc", "size": 41, "sha256": "<its SHA-256>"},
+   {"name": "LICENSE", "size": 8, "sha256": "<its SHA-256>"},
+   {"name": "message.txt", "size": 6, "sha256": "<its SHA-256>"}]}
+----
+
+Pass it to `inspect` with `--members`, for a `source` target:
+
+[source,console]
+----
+roc run <tool> -- inspect sbom/Spec sbom/Lock sbom/composition.json source sbom/inventory.json --members sbom/members.json
+----
+
+`inspect` then refuses a composition that does not account for every member.
+A member is accounted for by a component whose `sha256` is the member's, or
+by an input disposition named `archive-member:NAME:SHA256` with a reason, for
+example a notice file that is not code. The refusal names each member that
+has neither. The usual way to account for them is to generate one component
+per member and a `contains` relationship from the bundle's component to each,
+as `Sbom.archive_members` in `blueprint-core` does and as Blueprint's own
+release does: the member's name, `sha256-<digest>` as its version and
+`urn:blueprint:archive-member:<name>:<digest>` as its identity, with
+`NOASSERTION` for the supplier, download and license. A reviewer replaces a
+generated component with a fuller one, naming the licence of a bundled
+third-party asset, as long as it states the same SHA-256. A member no
+component states is a known input, so its disposition is exported in the
+sidecar's evidence like any other input's. Without `--members`, nothing
+checks the archive against the composition.
 
 [#chain-sboms-across-dependencies]
 == Chain SBOMs across your dependencies
@@ -683,16 +800,16 @@ platform that uses a package published as
     {"id": "dep", "name": "dep-abc.tar.zst", "version": "1.2.0",
      "producer": "Organization: Example", "license": "MIT", "license_url": "",
      "identity": "", "download": "", "sha256": "", "modified": "",
-     "target": "", "origin": "source:dep"}
+     "target": "source", "origin": "source:dep"}
   ],
   "relationships": [
-    {"from": "Subject", "to": "dep", "relation": "dependsOn", "scope": "",
+    {"from": "Subject", "to": "dep", "relation": "dependsOn", "scope": "build",
      "basis": "Imported by the platform's Roc modules"}
   ],
   "imported_documents": [
     {"id": "dep-sbom", "url": "https://example.org/releases/1.2.0/dep-abc.tar.zst.spdx.json",
      "sha256": "<SHA-256 of that SBOM file>", "namespace": "<its namespace>",
-     "target": "x86_64-linux", "document": "<the SBOM file's contents>",
+     "target": "source", "document": "<the SBOM file's contents>",
      "relation": "dependsOn", "basis": "Supplier's published SBOM",
      "contact": "https://example.org/security",
      "subject": {"component": "dep", "filename": "dep-abc.tar.zst",
@@ -704,13 +821,15 @@ platform that uses a package published as
 
 The `source:dep` origin takes the download location and SHA-256 from the
 Lock, so the composition never repeats a pin. The reviewed `version` is the
-release the supplier's SBOM names. `inspect` then requires the SBOM's
-described file to have exactly the locked SHA-256 and that version, and
-records a `copiedTo` relationship from the supplier's subject to your
-component. The supplier's components and relationships join your inventory
-under the `dep-sbom-` prefix, so your SBOM states what the package contains
-without you inventorying it again. Because the supplier's SBOM already holds
-whatever it imported, the chain is transitive.
+release the supplier's SBOM names, and the `source` target is what the
+supplier's SBOM says of the bundle, whichever target your own inventory is
+for. `inspect` then requires the SBOM's described file to have exactly the
+locked SHA-256, that version and that target, and records a `copiedTo`
+relationship from the supplier's subject to your component. The supplier's
+components and relationships join your inventory under the `dep-sbom-`
+prefix, so your SBOM states what the package contains without you
+inventorying it again. Because the supplier's SBOM already holds whatever it
+imported, the chain is transitive.
 
 *Requiring SBOMs is the default.* `inspect` refuses an inventory in which a
 locked dependency, a component with a `source:` or `program:` origin, has
@@ -749,21 +868,70 @@ hashes a regular final file in 64 KiB chunks:
 nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary
 ----
 
-Without an output path, `bind` writes `ARTIFACT.spdx.json` (SPDX 3.0.1) and
-`ARTIFACT.cdx.json` (CycloneDX 1.7) beside the artifact. It renders both
-before writing either, so an inventory, subject or context that one format
-refuses leaves no sidecar behind. To write a single document to a path of
-your choice, name it, with a flag for a format other than SPDX 3.0.1:
+Without an output path, `bind` writes `ARTIFACT.spdx.json` (SPDX 3.0.1),
+`ARTIFACT.cdx.json` (CycloneDX 1.7) and `ARTIFACT.sbom-manifest.json`, the
+evidence manifest listing both, beside the artifact. It renders all three
+before writing any, so an inventory, subject or context that one format
+refuses leaves no file behind. To write a single document to a path of your
+choice, name it, with a flag for a format other than SPDX 3.0.1, and
+`--manifest` for the manifest of that one sidecar, which must sit beside it:
 
 [source,console]
 ----
 nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary out/my-binary.spdx.json
 nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary out/my-binary.spdx-2.3.json --spdx-2.3
-nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary out/my-binary.cdx.json --cyclonedx
+nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary out/my-binary.cdx.json --cyclonedx --manifest out/my-binary.sbom-manifest.json
 ----
 
 Bind every format from the same inventory, subject and context: they are then
 renderings of one document, and `check` requires them to agree (see <<read-the-cyclonedx-rendering>>).
+
+[#the-evidence-manifest]
+=== The evidence manifest
+
+A publisher that rehashes every asset before signing needs, per release
+file, the subject's SHA-256, size, version and target, each sidecar's name,
+SHA-256 and size, the digest of the inventory they came from, and the
+generator. `bind` has all of these when it writes the sidecars, so it states
+them once, in one JSON document rendered from the shared types:
+
+[source,json]
+----
+{"profile":"blueprint-spdx-3.0-v1",
+ "subject":{"filename":"my-binary","version":"1.0.0","target":"x86_64-linux","sha256":"<sha256>","size":1234},
+ "inventory_sha256":"<sha256 of inventory.json>",
+ "context":{"namespace":"https://example.org/sbom/my-binary/revision-1","revision":"1","created":"2026-10-21T00:00:00Z","generator":"Tool: blueprint-sbom-0.7.0"},
+ "sidecars":[{"filename":"my-binary.cdx.json","format":"cyclonedx-1.7","sha256":"<sha256>","size":5678},
+             {"filename":"my-binary.spdx.json","format":"spdx-3.0.1","sha256":"<sha256>","size":6789}]}
+----
+
+The manifest is evidence about files, not a fourth rendering of the SBOM: it
+holds no package, and nothing in it is read as composition. Files are named
+by name alone, resolved beside the manifest (the sidecars) or in the artifact
+directory (the subject); it never holds a path, an absolute developer path or
+a credential, and `bind` refuses to write one that would. The text is one
+line with a fixed key order and the sidecars by name, so the same evidence is
+the same bytes. The formats are `spdx-3.0.1`, `spdx-2.3` and
+`cyclonedx-1.7`; the inventory digest is the SHA-256 of the inventory file as
+`bind` read it.
+
+`check --manifest` holds a manifest to the files it names and checks the
+sidecars it lists as documents, so no document need be named:
+
+[source,console]
+----
+nix develop -c scripts/sbom.roc check --manifest dist/my-binary.sbom-manifest.json --artifacts dist --inventory inventory.json
+----
+
+It rehashes the subject in `--artifacts` (or beside the manifest), each
+listed sidecar beside the manifest, and the inventory, and refuses a manifest
+of another profile, a subject whose digest or size differs, a sidecar whose
+digest or size differs or that is absent, an inventory digest that differs
+from `--inventory`, or any file named with a path separator. Each listed
+sidecar must also describe the manifest's subject, in the listed format, and
+passes the same profile, subject, inventory and one-graph checks as any
+named document. Without `--inventory` the inventory digest is recorded but
+not measured.
 
 `subject.json` contains `filename`, `version`, `target`, `sha256` and `url`.
 An empty SHA-256 asks the binder to compute it; a supplied digest must match.
@@ -776,9 +944,10 @@ while retaining the unchanged software digest at a new immutable location.
 In CycloneDX the namespace determines the BOM's `serialNumber` (a UUID URN
 derived from it) and the revision its `version`.
 
-Metadata inputs and final subjects must be regular files. Sidecars use
-exclusive creation, in every format: an existing file, symlink, hardlink or `../` alias is
-rejected, preserving all inputs. Generate into a fresh staging directory.
+Metadata inputs and final subjects must be regular files. Sidecars and
+manifests use exclusive creation, in every format: an existing file, symlink,
+hardlink or `../` alias is rejected, preserving all inputs. Generate into a
+fresh staging directory.
 Metadata reads are bounded before parsing; credentials and absolute developer
 paths are rejected. Generation needs no publication credentials or advisory
 service. Ordinary task outputs and sandboxed build outputs use this same
@@ -842,11 +1011,13 @@ CycloneDX BOMs, such as a supplier's, are read by their standard fields (see
 <<import-inert-verified-upstream-graphs>>), and what those cannot carry is
 counted in the import's coverage.
 
+[#blueprints-own-release-evidence]
 == Blueprint's own release evidence
 
 The read-only release build runs `scripts/release_sbom.roc VERSION` after the
-four target executables, both library/platform source bundles and the
-standalone tool app bundle exist. Its generation
+four CLI executables, the four standalone tool executables, both
+library/platform source bundles and the standalone tool app bundle exist. Its
+generation
 time comes from the selected source commit, not the wall clock. The extended
 command `VERSION CREATED SOURCE_COMMIT DOCUMENT_REVISION` supplies an explicit
 context for reproducible local checks or corrections.
@@ -859,11 +1030,22 @@ no empty project Lock substitutes for release-input knowledge.
 
 The compiler used to build Blueprint is a build input. The target compiler
 archive imported into its executable is a separate contained component with
-its own archive SHA-256. A source bundle does not contain that compiler.
-The platform source bundle records each declared target linker member with its
-own SHA-256, separately from the original input archive, and includes known
-musl/Zig and Windows startup inputs
-and depends on the sibling core bundle fetched later by Roc.
+its own archive SHA-256. A source bundle does not contain that compiler, and
+neither does a standalone tool executable: its sidecar names the wrapper,
+I/O module and core modules compiled in, and the basic-cli host linked, with
+the embedded-archive input of its target explicitly excluded.
+Each source bundle, the core, the platform and the standalone tool, is
+inventoried from the archive in `dist/`, as
+<<inventory-a-source-bundle-from-its-archive>> describes: every member is a
+component stated by its own SHA-256, contained by the bundle's source
+component, so a file a module imports is listed whether or not
+`scripts/bundle.roc` named it. The platform source bundle records each
+declared target linker member with its own SHA-256, separately from the
+original input archive, as the same component the archive listing yields,
+and includes known musl/Zig and Windows startup inputs and depends on the
+sibling core bundle fetched later by Roc. `scripts/check_sbom.roc
+--release-root` refuses a source bundle sidecar that omits a member of its
+archive.
 
 The native CLI inventory preserves the pinned basic-cli Cargo graph and a
 known SQLite native relationship; reviewed provenance lives in `sbom/upstream/`.
@@ -871,15 +1053,22 @@ Unclassified Cargo feature/target/build candidates are explicit `other` edges;
 they do not claim all resolved crates ship in every target. Unknown license
 and optimized native/compiler closure scopes retain explicit gaps.
 
-Every release subject has all three sidecars: `.spdx.json`, `.spdx-2.3.json`
-and `.cdx.json`. `scripts/check_sbom.roc` runs the same checks as the tool's
-`check`, plus checks against this repository's release authorities, offline before the
-release job gathers them into the same tested asset set: each must be valid
-SPDX or CycloneDX of its version, meet the profile, describe the actual
-artifact bytes, account for the release's observed inputs, and state the same
-package graph as every other rendering of the same document (the same
-namespace). Conformance is Roc throughout: `core.Spdx3`, `core.Spdx2` and
-`core.CycloneDx` hold the classes or objects, properties, cardinalities,
+Every release subject has all three sidecars, `.spdx.json`, `.spdx-2.3.json`
+and `.cdx.json`, and the evidence manifest `.sbom-manifest.json` that lists
+them with the subject by digest and size (see <<the-evidence-manifest>>).
+The inventory each was bound from is written beside them in `dist/` as
+`<subject>.inventory.json` for the check, and is not published.
+`scripts/check_sbom.roc` runs the same checks as the tool's `check`, plus
+checks against this repository's release authorities, offline before the
+release job gathers the sidecars and manifests into the same tested and
+attested asset set: each document must be valid SPDX or CycloneDX of its
+version, meet the profile, describe the actual artifact bytes, account for
+the release's observed inputs, and state the same package graph as every
+other rendering of the same document (the same namespace); the manifest
+found beside it, or named with `--manifest`, must be what the subject, the
+sidecars and that inventory file hash to, and each document must describe
+the manifest's subject. Conformance is Roc throughout: `core.Spdx3`,
+`core.Spdx2` and `core.CycloneDx` hold the classes or objects, properties, cardinalities,
 enumerations and references of each format, and the test suite holds them to
 the published SPDX 3.0.1 JSON schema, the SPDX 2.3.1 schema and the CycloneDX
 1.7 schema, vendored in `tests/sbom/schema/` and pinned by SHA-256. It
@@ -890,18 +1079,49 @@ composition from a sibling executable's SBOM.
 == Exercise the stable consumer contract
 
 `tests/sbom/fixtures/` contains native Linux and ARM64 instances, a source
-bundle, a verified imported graph, and distinct empty/unknown coverage records,
+bundle, a verified imported graph, a source supplier imported into a native
+consumer, and distinct empty/unknown coverage records,
 each as SPDX 3.0.1 (`.spdx.json`), SPDX 2.3 (`.spdx-2.3.json`) and CycloneDX
 1.7 (`.cdx.json`).
 The matching evaluated Spec/Lock, composition, inventory, subject and context
-are under `fixtures/input/`. They let roc-automation test an independent
+are under `fixtures/input/`, and the source supplier import's, with one
+composition per refusal and `expected.json` naming each outcome, under
+`fixtures/source-import/`. They let roc-automation test an independent
 consumer without depending on Blueprint's implementation.
+`fixtures/CONTRACT.md` states, for every case, its inputs, its expected
+outputs or exact refusal, and what it proves. The suite writes the inputs
+and the contract from the same values it asserts and fails when a committed
+file differs, so none can drift from the cases.
 
 [source,console]
 ----
 nix develop -c roc-stable test scripts/test_sbom.roc
 nix develop -c scripts/check_sbom.roc tests/sbom/fixtures/*.spdx.json tests/sbom/fixtures/*.spdx-2.3.json tests/sbom/fixtures/*.cdx.json
 ----
+
+Each release publishes the set as `roc-blueprint-sbom-fixtures-<version>.zip`,
+covered by the release's checksums, sidecars and attestation like every other
+asset, and holding exactly the files the suite asserts. A consumer runs the
+released standalone tool over it without a checkout: unpack the archive,
+then, in a scratch copy, run the commands `CONTRACT.md` gives for each case
+and compare the outputs with the files beside them. For the source supplier
+import, `expected.json` names each accepted consumer target with the
+inventory `inspect` must write byte for byte, what `bind` takes and which
+committed renderings it must reproduce, and each tampered composition with
+the message `inspect` must refuse it with:
+
+[source,console]
+----
+unzip -q roc-blueprint-sbom-fixtures-<version>.zip
+cd roc-blueprint-sbom-fixtures-<version>
+roc run <immutable-tool-bundle-url> -- inspect source-import/Spec source-import/Lock source-import/composition.json x86_64-linux out.json
+cmp out.json source-import/inventory-x86_64-linux.json
+roc run <immutable-tool-bundle-url> -- inspect source-import/Spec source-import/Lock source-import/tamper-subject-digest.json x86_64-linux refused.json
+----
+
+The last command exits 1 and prints
+`SBOM: Invalid("import subject filename/version/SHA256 mismatch")`, the
+message `expected.json` states for that file.
 
 The conformance suite checks a transitive native component's origin and affected
 subject, distinguishes the build compiler from contained code, retains patched

@@ -95,7 +95,7 @@ Sidecar := [].{
 				identity : Try({ identity : Str, origin : Str, target : Str }, _)
 				identity = Json.parse(entry.comment)
 				match identity {
-					Ok(found) => if found.identity.is_empty() or found.origin.is_empty() or (evidence.target != "source" and !found.target.is_empty() and found.target != evidence.target) {
+					Ok(found) => if found.identity.is_empty() or found.origin.is_empty() or !Sbom.admits_target(evidence.target, found.target) {
 						return Err("package ${entry.id} lacks its identity or names another target")
 					}
 					Err(_) => return Err("package ${entry.id} does not record its identity")

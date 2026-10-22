@@ -96,11 +96,12 @@ the evaluation of a `Blueprint.roc` work too. Sandboxed builds, and so the
 == Release
 
 One release holds the platform bundle, the roc-blueprint-core bundle it
-depends on, the standalone Roc SBOM reporting app, the `blueprint` binaries
-with their checksums, the examples archive, the documentation archive and
-the manual. Each executable and Roc source bundle has artifact-bound SBOM
-sidecars: SPDX 3.0.1 (`.spdx.json`), SPDX 2.3 (`.spdx-2.3.json`) and
-CycloneDX 1.7 (`.cdx.json`). It is made by
+depends on, the standalone Roc SBOM reporting app as a source bundle and as
+a `blueprint-sbom-<system>` binary per system, the `blueprint` binaries, the
+checksums of both kinds of binary, the examples archive, the documentation
+archive and the manual. Each executable and Roc source bundle has
+artifact-bound SBOM sidecars: SPDX 3.0.1 (`.spdx.json`), SPDX 2.3
+(`.spdx-2.3.json`) and CycloneDX 1.7 (`.cdx.json`). It is made by
 `.github/workflows/release.yml`, run by hand from `main` with a version. Every
 pull request runs the same workflow as a dry run, under the version
 `0.0.1-dry-run`, which is never published.
@@ -129,11 +130,13 @@ exists, that it is the version the CLI and the flake report, and that the
 product compiler pin names the latest official nightly.
 
 build::
-Cross-builds the binaries (`scripts/build_release.roc`), runs the whole test
-suite on them, bundles the core, platform and reporting app for the version
-(`scripts/bundle.roc`), checks the version against the public API
+Cross-builds the CLI and SBOM tool binaries (`scripts/build_release.roc`),
+runs the whole test suite on them, bundles the core, platform and reporting
+app for the version (`scripts/bundle.roc`), checks the version against the
+public API
 (`scripts/check_version.roc bump`), archives the examples
-(`scripts/package_examples.roc`), renders the manual with the release's
+(`scripts/package_examples.roc`) and the SBOM fixture set with its case
+contract (`scripts/package_sbom_fixtures.roc`), renders the manual with the release's
 platform URL and archives the site (`scripts/docs_snippet.roc`,
 `scripts/package_docs.roc`), renders the notes
 (`scripts/release_notes.roc`), generates artifact-bound SPDX and CycloneDX
@@ -143,9 +146,11 @@ subjects, known inputs and agreement on one package graph, and gathers the asset
 `ci.yml`.
 
 test::
-Runs each binary on its own kind of machine, and
-`scripts/test_release.roc` tests the examples archive there against the two
-bundles.
+Runs each binary on its own kind of machine: the CLI through the smoke
+program, and the SBOM tool over the committed fixtures
+(`.github/actions/sbom-tool`: `inspect`, `bind` and `check`, with no Roc on
+the machine). `scripts/test_release.roc` tests the examples archive there
+against the two bundles.
 
 publish::
 The only job that may write to the repository. It checks out nothing and
@@ -191,7 +196,8 @@ The CLI binaries are compiled sequentially. Before each compilation,
 `blueprint-cli/compiler-archive`, after checking its size and digest against
 `Bootstrap.roc`. Downloads are cached in `.cache/compilers/`; the staged
 archive is ignored by Git. The local host's archive is restored afterwards,
-including when compilation fails. Smoke programs still compile in parallel.
+including when compilation fails. The SBOM tool embeds no compiler, so its
+four binaries compile in parallel with the smoke programs.
 
 Each binary embeds only its own system's archive. On first use it installs
 that archive into the existing per-user store and verifies its recorded
@@ -214,7 +220,9 @@ exist until the release builds them. `scripts/release_notes.roc X.Y.Z
 dist/notes.md` renders the notes as the release body with the real URLs, and
 adds what the release was built from: the Roc nightly and the Zig version, the
 roc-overlay revision and the hashes of the two compiler archives it supplied,
-the flake's nixpkgs revision, the core bundle, the Roc packages compiled into
+the flake's nixpkgs revision, the core bundle, the standalone SBOM tool as
+the `blueprint-sbom-<system>` binaries (the recommended way for CI to run
+it) and as its app bundle URL, the Roc packages compiled into
 the CLI as `roc deps blueprint-cli/main.roc` resolves them, and the
 linker-input release with the SHA-256 of `link-inputs.lock.json`. It fails on
 a placeholder that is unused or unknown. The committed file keeps its
@@ -254,10 +262,22 @@ inventory go into the bundle under `linker-inputs/`.
 archive and its test. A change that adds a Spec field needs nothing more: the
 core bundle carrying the field is released with the platform that uses it.
 
-=== The reporting app bundle
+=== The reporting tool: binaries and app bundle
+
+`scripts/build_release.roc` cross-builds `scripts/sbom.roc` as
+`blueprint-sbom-<system>` for every released system, beside the CLI
+binaries and in the same `blueprint.sha256`, after the CLI's lines. The
+product compiler builds it, so like the smoke program it names no `roc`
+field in its header (`product_built` in `scripts/src/StaticChecks.roc`);
+`roc-stable` builds the same file for the unit tests. Each binary is
+smoke-tested on its own kind of machine (`.github/actions/sbom-tool`) and has
+its own sidecars, which name the wrapper, the core and the basic-cli host
+and record that no compiler archive is embedded. The release notes name the
+binary as the recommended way for CI to run the tool.
 
 The same bundling command stages `scripts/sbom.roc` and its filesystem helper
-as a standalone app, using the released core URL and the product compiler pin.
+as a standalone app, using the released core URL and adding the product
+compiler pin to its header.
 Its archive is named `roc-blueprint-sbom-<hash>.tar.zst`, so it has a distinct
 package identity. A separate smoke test downloads that app and exercises
 `inspect` and `bind` in a directory with an invalid `Blueprint.roc`; neither
@@ -291,12 +311,31 @@ setup action does not yet install it. Callers copy the SHA-256 values from
 `blueprint.sha256`.
 Renaming an asset, archiving the binaries or changing the checksum file breaks
 every caller. `scripts/release_assets.roc` fails the build unless exactly
-those five names are present, and the publish job checks again before it
-uploads. A binary for another system is an addition; it does not change these.
+those five names and the four `blueprint-sbom-<system>` binaries are
+present, and the publish job checks again before it uploads. A binary for
+another system is an addition; it does not change these.
+
+`blueprint.sha256` lists the four CLI binaries first, then the four SBOM
+tool binaries. The setup action never reads the file: it admits
+`blueprint-<system>` by a digest reviewed into its own `releases.json`, so
+the lines that follow the CLI's are safe for it, and a maintainer copying
+digests takes the line of the binary's name. The CLI's lines keep their
+order and place.
 
 The platform bundle is the one `.tar.zst` asset named by its hash alone, and
 the core bundle the one that starts `roc-blueprint-core-`. The manual and the
 version check find the previous release's bundles that way.
+
+`roc-blueprint-sbom-fixtures-<version>.zip` is the SBOM fixture set of
+`tests/sbom/fixtures/` with its `CONTRACT.md`, which states what each case
+proves and the exact refusal each tampered input earns. roc-automation tests
+its SBOM actions against it with the release's standalone tool
+(`roc-blueprint-sbom-<hash>.tar.zst`), so a case may be added but not
+renamed or removed without a note in the release's notes.
+`scripts/package_sbom_fixtures.roc` fails unless the archive holds exactly
+the files the SBOM suite asserts, and the suite fails when the contract,
+the committed inputs or the asset's file list drift from the cases. See
+xref:sbom.adoc#exercise-the-stable-consumer-contract[Exercise the stable consumer contract].
 
 [#verify-release-provenance]
 === Verify release provenance

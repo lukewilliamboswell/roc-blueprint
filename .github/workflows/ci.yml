@@ -15,9 +15,9 @@ permissions: {}
 # Every script runs through `nix develop -c`: the flake's dev shell is the one
 # definition of the toolchain (see .github/actions/toolchain).
 jobs:
-  # Cross-builds every release binary once. The cli, scenarios and builds jobs
-  # test the x86_64 Linux one, so the binary that is tested is the binary that
-  # ships.
+  # Cross-builds every release binary once: the CLI and the standalone SBOM
+  # tool for each system. The cli, scenarios and builds jobs test the x86_64
+  # Linux ones, so the binary that is tested is the binary that ships.
   build:
     permissions:
       contents: read
@@ -34,7 +34,7 @@ jobs:
       - name: Fetch and verify the platform's linker inputs
         run: nix develop -c scripts/link_inputs.roc fetch
 
-      - name: Cross-build the release binaries and their smoke-test programs
+      - name: Cross-build the release binaries, the SBOM tool and the smoke-test programs
         run: nix develop -c scripts/build_release.roc
 
       # Later jobs evaluate a Blueprint.roc against this checkout's platform;
@@ -117,6 +117,14 @@ jobs:
       - run: nix develop -c scripts/test.roc ${{ matrix.group }}
         env:
           BLUEPRINT_PREBUILT: 1
+
+      # The unit job builds the SBOM tool from source with roc-stable; this
+      # runs the same binding checks against the cross-built binary that ships.
+      - name: Read-only SPDX binding with the cross-built SBOM tool
+        if: matrix.group == 'cli'
+        run: |
+          chmod +x dist/blueprint-sbom-x86_64-linux
+          nix develop -c roc-stable scripts/test_sbom.roc binding "$PWD/dist/blueprint-sbom-x86_64-linux" tests/sbom/fixtures/input tests/sbom/fixtures/source-import
 
   # Compare the same tiny producer on two independent Linux runners. The
   # second compiles a synthetic next-patch CLI; frozen runner pins stay fixed.
@@ -254,6 +262,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./dist/smoke-x86_64-windows.exe --no-nix ./dist/blueprint-x86_64-windows.exe
+
+      # The SBOM tool binary of this system inspects, binds and checks the
+      # committed fixtures with no Roc and no Nix.
+      - name: Smoke test the SBOM tool binary
+        uses: ./.github/actions/sbom-tool
+        with:
+          binary: dist/blueprint-sbom-${{ matrix.system }}${{ runner.os == 'Windows' && '.exe' || '' }}
 
   # The one required check: green only when every job above succeeded.
   test:

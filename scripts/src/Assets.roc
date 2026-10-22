@@ -4,6 +4,7 @@ import Examples
 import Integrity
 import Process
 import Release
+import SbomFixtures
 import Script
 
 ## The files a release publishes, gathered into one directory so the job that
@@ -14,10 +15,21 @@ import Script
 ## from the release a caller names, exactly as published, and callers copy the
 ## SHA-256 values from `blueprint.sha256`. Renaming one, archiving the
 ## binaries or changing the checksum file breaks every caller.
+##
+## The standalone SBOM tool is released the same way, as
+## `blueprint-sbom-<system>`, listed after the CLI in `blueprint.sha256`.
+## The setup action reads the file by binary name, never as a whole, so
+## lines after the CLI's are safe for it.
 Assets := [].{
 
-	## The binaries, in the order `blueprint.sha256` lists them.
+	## The CLI binaries, in the order `blueprint.sha256` lists them.
 	binaries = ["blueprint-x86_64-linux", "blueprint-aarch64-linux", "blueprint-aarch64-darwin", "blueprint-x86_64-windows.exe"]
+
+	## The SBOM tool binaries, listed after the CLI's.
+	tool_binaries = ["blueprint-sbom-x86_64-linux", "blueprint-sbom-aarch64-linux", "blueprint-sbom-aarch64-darwin", "blueprint-sbom-x86_64-windows.exe"]
+
+	## Every binary `blueprint.sha256` lists, in its order.
+	summed = binaries.concat(tool_binaries)
 
 	checksums = "blueprint.sha256"
 
@@ -35,12 +47,13 @@ Assets := [].{
 	inventory : { version : Str, platform_bundle : Str, core_bundle : Str, tool_bundle : Str } -> List(Str)
 	inventory = |release|
 		Process.sorted(
-			binaries.concat(sidecars_of(binaries)).concat(sidecars_of([release.platform_bundle, release.core_bundle, release.tool_bundle])).concat([
+			summed.concat(sidecars_of(summed)).concat(sidecars_of([release.platform_bundle, release.core_bundle, release.tool_bundle])).concat([
 				checksums,
 				release.platform_bundle,
 				release.core_bundle,
 				release.tool_bundle,
 				"${Examples.archive_name(release.version)}.zip",
+				"${SbomFixtures.archive_name(release.version)}.zip",
 				docs_archive(release.version),
 				manual(release.version),
 			]),
@@ -50,16 +63,16 @@ Assets := [].{
 	## checksum file, or "" when nothing does.
 	contract_problem : List(Str), Str -> Str
 	contract_problem = |names, sums| {
-		missing = binaries.concat([checksums]).keep_if(|name| !names.contains(name))
-		others = names.keep_if(|name| name.starts_with("blueprint") and !binaries.contains(name) and name != checksums and !sidecars_of(binaries).contains(name))
-		summed = Process.lines(sums).map(|line| line.split_on("  ").last() ?? "")
+		missing = summed.concat([checksums]).keep_if(|name| !names.contains(name))
+		others = names.keep_if(|name| name.starts_with("blueprint") and !summed.contains(name) and name != checksums and !sidecars_of(summed).contains(name))
+		listed = Process.lines(sums).map(|line| line.split_on("  ").last() ?? "")
 		malformed = Process.lines(sums).keep_if(|line| !checksum_line(line))
 		if !missing.is_empty() {
 			"the release must hold ${Str.join_with(missing, ", ")}"
 		} else if !others.is_empty() {
 			"the release must hold no other blueprint binary or checksum file: ${Str.join_with(others, ", ")}"
-		} else if summed != binaries or !malformed.is_empty() {
-			"${checksums} must hold one `<sha256>  <name>` line for each of ${Str.join_with(binaries, ", ")}, in that order"
+		} else if listed != summed or !malformed.is_empty() {
+			"${checksums} must hold one `<sha256>  <name>` line for each of ${Str.join_with(summed, ", ")}, in that order"
 		} else {
 			""
 		}
@@ -106,7 +119,7 @@ Assets := [].{
 		sums = Path.read_utf8!(Path.utf8("${gathered}/${checksums}"))?
 		reason = contract_problem(names, sums)
 		Process.check!(reason.is_empty(), reason)?
-		for name in binaries {
+		for name in summed {
 			line = Release.checksum_line(name, Path.read_bytes!(Path.utf8("${gathered}/${name}"))?)
 			Process.check!(sums.contains(line), "${checksums} does not hold the SHA-256 of the ${name} being released")?
 		}
@@ -117,9 +130,9 @@ Assets := [].{
 }
 
 ## Each subject's SBOM sidecars of one inventory: SPDX 3.0.1, SPDX 2.3 and
-## CycloneDX 1.7.
+## CycloneDX 1.7, and the evidence manifest that lists them by digest and size.
 sidecars_of : List(Str) -> List(Str)
-sidecars_of = |subjects| subjects.fold([], |all, name| all.concat(["${name}.spdx.json", "${name}.spdx-2.3.json", "${name}.cdx.json"]))
+sidecars_of = |subjects| subjects.fold([], |all, name| all.concat(["${name}.spdx.json", "${name}.spdx-2.3.json", "${name}.cdx.json", "${name}.sbom-manifest.json"]))
 
 ## `<64 lowercase hex digits>  <name>`, as `sha256sum -c` reads it.
 checksum_line : Str -> Bool
@@ -129,18 +142,24 @@ checksum_line = |line|
 		_ => False
 	}
 
-sums_sample = Str.join_with(Assets.binaries.map(|name| Release.checksum_line(name, name.to_utf8())), "")
+sums_sample = Str.join_with(Assets.summed.map(|name| Release.checksum_line(name, name.to_utf8())), "")
 
 names_sample = Assets.inventory({ version: "0.5.0", platform_bundle: "Abc.tar.zst", core_bundle: "roc-blueprint-core-Def.tar.zst", tool_bundle: "roc-blueprint-sbom-Tool.tar.zst" })
 
-expect names_sample == ["Abc.tar.zst", "Abc.tar.zst.cdx.json", "Abc.tar.zst.spdx-2.3.json", "Abc.tar.zst.spdx.json", "blueprint-aarch64-darwin", "blueprint-aarch64-darwin.cdx.json", "blueprint-aarch64-darwin.spdx-2.3.json", "blueprint-aarch64-darwin.spdx.json", "blueprint-aarch64-linux", "blueprint-aarch64-linux.cdx.json", "blueprint-aarch64-linux.spdx-2.3.json", "blueprint-aarch64-linux.spdx.json", "blueprint-x86_64-linux", "blueprint-x86_64-linux.cdx.json", "blueprint-x86_64-linux.spdx-2.3.json", "blueprint-x86_64-linux.spdx.json", "blueprint-x86_64-windows.exe", "blueprint-x86_64-windows.exe.cdx.json", "blueprint-x86_64-windows.exe.spdx-2.3.json", "blueprint-x86_64-windows.exe.spdx.json", "blueprint.sha256", "roc-blueprint-0.5.0.pdf", "roc-blueprint-core-Def.tar.zst", "roc-blueprint-core-Def.tar.zst.cdx.json", "roc-blueprint-core-Def.tar.zst.spdx-2.3.json", "roc-blueprint-core-Def.tar.zst.spdx.json", "roc-blueprint-docs-0.5.0.zip", "roc-blueprint-examples-0.5.0.zip", "roc-blueprint-sbom-Tool.tar.zst", "roc-blueprint-sbom-Tool.tar.zst.cdx.json", "roc-blueprint-sbom-Tool.tar.zst.spdx-2.3.json", "roc-blueprint-sbom-Tool.tar.zst.spdx.json"]
+expect names_sample == ["Abc.tar.zst", "Abc.tar.zst.cdx.json", "Abc.tar.zst.sbom-manifest.json", "Abc.tar.zst.spdx-2.3.json", "Abc.tar.zst.spdx.json", "blueprint-aarch64-darwin", "blueprint-aarch64-darwin.cdx.json", "blueprint-aarch64-darwin.sbom-manifest.json", "blueprint-aarch64-darwin.spdx-2.3.json", "blueprint-aarch64-darwin.spdx.json", "blueprint-aarch64-linux", "blueprint-aarch64-linux.cdx.json", "blueprint-aarch64-linux.sbom-manifest.json", "blueprint-aarch64-linux.spdx-2.3.json", "blueprint-aarch64-linux.spdx.json", "blueprint-sbom-aarch64-darwin", "blueprint-sbom-aarch64-darwin.cdx.json", "blueprint-sbom-aarch64-darwin.sbom-manifest.json", "blueprint-sbom-aarch64-darwin.spdx-2.3.json", "blueprint-sbom-aarch64-darwin.spdx.json", "blueprint-sbom-aarch64-linux", "blueprint-sbom-aarch64-linux.cdx.json", "blueprint-sbom-aarch64-linux.sbom-manifest.json", "blueprint-sbom-aarch64-linux.spdx-2.3.json", "blueprint-sbom-aarch64-linux.spdx.json", "blueprint-sbom-x86_64-linux", "blueprint-sbom-x86_64-linux.cdx.json", "blueprint-sbom-x86_64-linux.sbom-manifest.json", "blueprint-sbom-x86_64-linux.spdx-2.3.json", "blueprint-sbom-x86_64-linux.spdx.json", "blueprint-sbom-x86_64-windows.exe", "blueprint-sbom-x86_64-windows.exe.cdx.json", "blueprint-sbom-x86_64-windows.exe.sbom-manifest.json", "blueprint-sbom-x86_64-windows.exe.spdx-2.3.json", "blueprint-sbom-x86_64-windows.exe.spdx.json", "blueprint-x86_64-linux", "blueprint-x86_64-linux.cdx.json", "blueprint-x86_64-linux.sbom-manifest.json", "blueprint-x86_64-linux.spdx-2.3.json", "blueprint-x86_64-linux.spdx.json", "blueprint-x86_64-windows.exe", "blueprint-x86_64-windows.exe.cdx.json", "blueprint-x86_64-windows.exe.sbom-manifest.json", "blueprint-x86_64-windows.exe.spdx-2.3.json", "blueprint-x86_64-windows.exe.spdx.json", "blueprint.sha256", "roc-blueprint-0.5.0.pdf", "roc-blueprint-core-Def.tar.zst", "roc-blueprint-core-Def.tar.zst.cdx.json", "roc-blueprint-core-Def.tar.zst.sbom-manifest.json", "roc-blueprint-core-Def.tar.zst.spdx-2.3.json", "roc-blueprint-core-Def.tar.zst.spdx.json", "roc-blueprint-docs-0.5.0.zip", "roc-blueprint-examples-0.5.0.zip", "roc-blueprint-sbom-Tool.tar.zst", "roc-blueprint-sbom-Tool.tar.zst.cdx.json", "roc-blueprint-sbom-Tool.tar.zst.sbom-manifest.json", "roc-blueprint-sbom-Tool.tar.zst.spdx-2.3.json", "roc-blueprint-sbom-Tool.tar.zst.spdx.json", "roc-blueprint-sbom-fixtures-0.5.0.zip"]
 
 # The contract is these names, whatever systems the build script lists.
 expect Assets.binaries == Release.systems.map(|released| Release.binary_name("blueprint", released.system))
 expect Assets.binaries == ["blueprint-x86_64-linux", "blueprint-aarch64-linux", "blueprint-aarch64-darwin", "blueprint-x86_64-windows.exe"] and Assets.checksums == "blueprint.sha256"
+expect Assets.tool_binaries == Release.systems.map(|released| Release.binary_name("blueprint-sbom", released.system))
+expect Assets.summed == Release.published.fold([], |all, program| all.concat(Release.systems.map(|released| Release.binary_name(program, released.system))))
 
 expect Assets.contract_problem(names_sample, sums_sample) == ""
 expect Assets.contract_problem(names_sample.keep_if(|name| name != "blueprint-aarch64-linux"), sums_sample) == "the release must hold blueprint-aarch64-linux"
+expect Assets.contract_problem(names_sample.keep_if(|name| name != "blueprint-sbom-x86_64-windows.exe"), sums_sample) == "the release must hold blueprint-sbom-x86_64-windows.exe"
+# The CLI's lines come first: a setup action that reads the file by name is unaffected, and nothing else may move.
+expect Assets.contract_problem(names_sample, Str.join_with(Assets.tool_binaries.concat(Assets.binaries).map(|name| Release.checksum_line(name, name.to_utf8())), "")) != ""
+expect Assets.contract_problem(names_sample, Str.join_with(Assets.binaries.map(|name| Release.checksum_line(name, name.to_utf8())), "")) != ""
 expect Assets.contract_problem(names_sample.keep_if(|name| name != "blueprint.sha256"), sums_sample) == "the release must hold blueprint.sha256"
 expect Assets.contract_problem(names_sample.concat(["blueprint-x86_64-linux.tar.gz"]), sums_sample) == "the release must hold no other blueprint binary or checksum file: blueprint-x86_64-linux.tar.gz"
 expect Assets.contract_problem(names_sample.concat(["blueprint.sha512"]), sums_sample) != ""

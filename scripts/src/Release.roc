@@ -4,8 +4,9 @@ import Integrity
 import Process
 import Script
 
-## Cross-build the `blueprint` CLI, and the program that smoke-tests it, for
-## every host the configuration platform supports, from one Linux machine.
+## Cross-build the `blueprint` CLI, the standalone SBOM tool and the program
+## that smoke-tests the CLI, for every host the configuration platform
+## supports, from one Linux machine.
 ##
 ## Roc links macOS programs against a minimal sysroot it expects beside its own
 ## executable. Only the macOS compiler archive ships that sysroot, so the
@@ -30,7 +31,15 @@ Release := [].{
 	binary_name = |name, system| "${name}-${system}${if system == "x86_64-windows" ".exe" else ""}"
 
 	## The program each system's binary is built from, and its name in `dist/`.
-	programs = [{ source: "blueprint-cli/main.roc", name: "blueprint" }, { source: "scripts/smoke_binary.roc", name: "smoke" }]
+	programs = [
+		{ source: "blueprint-cli/main.roc", name: "blueprint" },
+		{ source: "scripts/sbom.roc", name: "blueprint-sbom" },
+		{ source: "scripts/smoke_binary.roc", name: "smoke" },
+	]
+
+	## The programs a release publishes, in the order `blueprint.sha256`
+	## lists their binaries. The smoke program only tests the CLI.
+	published = ["blueprint", "blueprint-sbom"]
 
 	## The compiler's arguments for one released file.
 	build_args : Str, Str, Str -> List(Str)
@@ -97,12 +106,16 @@ build! = |root, roc| {
 	compiled = compile_blueprints!(roc, root, dist)
 	Path.write_bytes!(archive, local_archive)?
 	compiled?
-	compile_together!(roc, root, Release.files("smoke", dist))?
+	# The SBOM tool embeds no compiler, so it compiles like the smoke
+	# program: every target at once.
+	compile_together!(roc, root, Release.files("blueprint-sbom", dist).concat(Release.files("smoke", dist)))?
 
 	var $sums = ""
-	for released in Release.systems {
-		name = Release.binary_name("blueprint", released.system)
-		$sums = $sums.concat(Release.checksum_line(name, Path.read_bytes!(Path.utf8("${dist}/${name}"))?))
+	for program in Release.published {
+		for released in Release.systems {
+			name = Release.binary_name(program, released.system)
+			$sums = $sums.concat(Release.checksum_line(name, Path.read_bytes!(Path.utf8("${dist}/${name}"))?))
+		}
 	}
 	Path.write_utf8!(Path.utf8("${dist}/blueprint.sha256"), $sums)?
 	Stdout.write!($sums)
@@ -167,4 +180,10 @@ expect Release.files("smoke", "/repo/dist") == [
 	{ source: "scripts/smoke_binary.roc", target: "arm64mac", output: "/repo/dist/smoke-aarch64-darwin" },
 	{ source: "scripts/smoke_binary.roc", target: "x64win", output: "/repo/dist/smoke-x86_64-windows.exe" },
 ]
-expect Release.programs.map(|program| program.name) == ["blueprint", "smoke"] and Release.files("other", "dist").is_empty()
+expect Release.files("blueprint-sbom", "dist").map(|file| file.output) == ["dist/blueprint-sbom-x86_64-linux", "dist/blueprint-sbom-aarch64-linux", "dist/blueprint-sbom-aarch64-darwin", "dist/blueprint-sbom-x86_64-windows.exe"]
+expect Release.files("blueprint-sbom", "dist").all(|file| file.source == "scripts/sbom.roc")
+expect Release.programs.map(|program| program.name) == ["blueprint", "blueprint-sbom", "smoke"] and Release.files("other", "dist").is_empty()
+
+# The checksum file lists the CLI and then the SBOM tool, for every system;
+# the smoke program is built but not released.
+expect Release.published == ["blueprint", "blueprint-sbom"] and Release.published.all(|name| Release.programs.any(|program| program.name == name))
