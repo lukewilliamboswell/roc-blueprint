@@ -314,14 +314,17 @@ noops! = |suite, place| {
 reject_capabilities! : BuildHarness.Suite, State => Try({}, _)
 reject_capabilities! = |suite, state| {
 	config = Path.utf8("${state.place.project}/Blueprint.roc")
-	for (name, old, new) in [
-		("unsupported-task", "Task(\"later\", [Use(\"builder\")", "Task(\"later\", [Use(\"foreign\")"),
-		("unsupported-build", "Build(\"later-library\", [Execute(\"native\"), Use(\"builder\")", "Build(\"later-library\", [Execute(\"native\"), Use(\"foreign\")"),
+	# A task whose environment expects a tool the machine lacks is refused when
+	# the whole workflow is checked; a build in that environment is refused by
+	# the Nix executor, which supplies nothing of the machine.
+	for (name, old, new, diagnostic) in [
+		("unsupported-task", "Task(\"later\", [Use(\"builder\")", "Task(\"later\", [Use(\"foreign\")", "blueprint-fixture-absent-tool"),
+		("unsupported-build", "Build(\"later-library\", [Execute(\"native\"), Use(\"builder\")", "Build(\"later-library\", [Execute(\"native\"), Use(\"foreign\")", "does not support downloaded or expected tools"),
 	] {
 		BuildHarness.require!(count(state.config, old) == 1, "vacuous negative fixture edit")?
 		Path.write_utf8!(config, state.config.replace_each(old, new))?
 		before = state!(suite, state.place)?
-		refused = BuildHarness.refused!(suite, state.place, ["workflow", name], "Guix")?
+		refused = BuildHarness.refused!(suite, state.place, ["workflow", name], diagnostic)?
 		BuildHarness.require!(state!(suite, state.place)? == before, "${name} performed effects before whole-closure preflight")?
 		BuildHarness.require!(refused.stdout.is_empty(), "unsupported closure produced a marker")?
 	}

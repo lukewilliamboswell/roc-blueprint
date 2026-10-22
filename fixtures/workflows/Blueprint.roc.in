@@ -4,18 +4,18 @@ app [config] {
 }
 
 config = [
-	Resolver("nix", ["roc", "assets", @ROC_SOURCE_NAMES@]),
-	Executor("native", "nix", "default"),
+	Executor("native", Nix("default")),
 	Name("workflow-integration"),
 	Systems(["x86_64-linux"]),
 	Packages("default", From(NixPackages("@PACKAGES@"))),
-	Packages("foreign", From(GuixPackages("https://example.invalid/guix"))),
 	Overlay("roc", "@ROC_OVERLAY@"),
 	# Tasks and builds are Roc scripts: one pinned compiler and the bundles
 	# those scripts name, and no other tool. Roc takes the first `--` for
 	# itself, so each command has one before the script's arguments.
 	Environment("builder", [Overlays(["roc"]), Command("roc-stable", "default#rocpkgs.@ROC_COMPILER@"), RocPackages([@ROC_PACKAGES@])]),
-	Environment("foreign", [Tools(["foreign#python"])]),
+	# An environment no executor here can supply: it expects a tool of the
+	# machine, which the sandbox never has and this machine does not either.
+	Environment("foreign", [Expect(["blueprint-fixture-absent-tool"])]),
 	Source("assets", "path:./assets"),
 	Task("record", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "record", "configured argument"])]),
 	Task("prepare", [Use("builder"), Run(["roc-stable", "task.roc", "--", "@EVENTS@", "prepare"])]),

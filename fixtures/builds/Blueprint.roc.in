@@ -4,8 +4,7 @@ app [config] {
 }
 
 config = [
-	Resolver("nix", ["roc", "assets", "extra", @ROC_SOURCE_NAMES@]),
-	Executor("native", "nix", "default"),
+	Executor("native", Nix("default")),
 	Name("build-integration"),
 	Systems(["x86_64-linux"]),
 	Packages("default", From(NixPackages("@PACKAGES@"))),
@@ -23,8 +22,9 @@ config = [
 	),
 	Environment("coreutils", [Tools(["default#coreutils"])]),
 	Environment("bare", []),
-	Packages("foreign", From(GuixPackages("https://example.invalid/guix"))),
-	Environment("foreign", [Tools(["foreign#python"])]),
+	# An environment the Nix executor cannot supply: it expects a tool of the
+	# machine, which a sandbox never has.
+	Environment("foreign", [Expect(["blueprint-fixture-absent-tool"])]),
 	Shell("default", [Use("builder")]),
 	Source("assets", "path:./assets"),
 	Source("extra", "path:./packages"),

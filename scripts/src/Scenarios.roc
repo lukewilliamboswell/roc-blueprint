@@ -60,10 +60,6 @@ Scenarios := [].{
 		## fresh project names a revision, so the lock must then read as it
 		## did: the pins the update kept and the ones it resolved again.
 		UpdateInputs(List(Str)),
-
-		## `./blueprint` with these arguments while `Blueprint.lock` is as a
-		## blueprint from before the `nixpkgs` alias wrote it: without the edge.
-		BeforeAlias(List(Str), Check),
 	]
 
 	## `Example` runs in a directory of this repository and updates when its
@@ -132,7 +128,7 @@ Scenarios := [].{
 							"	Name(\"overlay-execution\"),",
 							"	Systems([\"x86_64-linux\"]),",
 							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
-							"	Resolver(\"nix\", [\"first\", \"patch\", \"unused\"]), Overlay(\"first\", \"path:./first\"),",
+							"	Overlay(\"first\", \"path:./first\"),",
 							"	Overlay(\"patch\", \"path:./patch\"),",
 							"	Overlay(\"unused\", \"path:./unused\"),",
 							"	Environment(\"base\", [Tools([\"default#fixtureTool\"]), Overlays([\"first\"])]),",
@@ -215,7 +211,7 @@ Scenarios := [].{
 							"	Name(\"commands\"),",
 							"	Systems([\"x86_64-linux\", \"aarch64-darwin\"]),",
 							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
-							"	Resolver(\"nix\", [\"roc\"]), Overlay(\"roc\", \"${overlay_ref}\"),",
+							"	Overlay(\"roc\", \"${overlay_ref}\"),",
 							"	Environment(\"base\", [Command(\"greet\", \"default#hello\")]),",
 							"	Environment(\"dev\", [Extend(\"base\"), Overlays([\"roc\"]), Command(\"roc-stable\", \"default#rocpkgs.nightly\")]),",
 							"	Shell(\"default\", [Use(\"dev\")]),",
@@ -241,8 +237,6 @@ Scenarios := [].{
 				Cli(["run", "script"], Says("Hello from a roc-stable script")),
 				Launchers("path", ["greet", "roc-stable"]),
 				LockedBash("devShells.x86_64-linux.default", packages_ref),
-				# A lock from before the alias still runs, untouched and without a word from Nix.
-				BeforeAlias(["run", "greet"], Says("Hello, world!")),
 				Eval("devShells.aarch64-darwin.default.drvPath", Succeeds),
 			],
 		},
@@ -258,7 +252,7 @@ Scenarios := [].{
 							"	Name(\"scripts\"),",
 							"	Systems([\"x86_64-linux\", \"aarch64-darwin\"]),",
 							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
-							"	Resolver(\"nix\", [\"roc\"]), Overlay(\"roc\", \"${overlay_ref}\"),",
+							"	Overlay(\"roc\", \"${overlay_ref}\"),",
 							"	Environment(\"dev\", [Overlays([\"roc\"]), Command(\"roc-stable\", \"default#rocpkgs.${roc.compiler}\"), RocPackages([\"${roc.basic_cli}\"])]),",
 							"	Task(\"check\", [Use(\"dev\"), Run([\"scripts/check_all.roc\"])]),",
 							"]",
@@ -288,7 +282,7 @@ Scenarios := [].{
 							"	Name(\"toolchains\"),",
 							"	Systems([\"x86_64-linux\", \"aarch64-darwin\"]),",
 							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
-							"	Resolver(\"nix\", [\"zig\", \"rust\"]), Overlay(\"zig\", \"${toolchains.zig}\"),",
+							"	Overlay(\"zig\", \"${toolchains.zig}\"),",
 							"	Overlay(\"rust\", \"${toolchains.rust}\"),",
 							"	Environment(\"zig\", [Overlays([\"zig\"]), Tools([\"default#zigpkgs.\\\"0.16.0\\\"\"])]),",
 							"	Environment(\"rust\", [Overlays([\"rust\"]), Tools([\"default#rust-bin.stable.\\\"1.95.0\\\".default\"])]),",
@@ -323,7 +317,7 @@ Scenarios := [].{
 							"	Name(\"configured-tools\"),",
 							"	Systems([\"x86_64-linux\", \"aarch64-darwin\"]),",
 							"	Packages(\"default\", From(NixPackages(\"${packages_ref}\"))),",
-							"	Resolver(\"nix\", [\"configurable\", \"rust\"]), Overlay(\"configurable\", \"path:./configurable\"),",
+							"	Overlay(\"configurable\", \"path:./configurable\"),",
 							"	Overlay(\"rust\", \"${toolchains.rust}\"),",
 							"	Environment(\"base\", [Overlays([\"configurable\"]), ToolWith(\"default#configurableTool\", [(\"targets\", List([Str(\"a\")]))])]),",
 							"	Environment(\"dev\", [Extend(\"base\"), ToolWith(\"default#configurableTool\", [(\"targets\", List([Str(\"b\"), Str(\"c d\")])), (\"extensions\", List([Str(\"src\")]))])]),",
@@ -469,22 +463,6 @@ Scenarios := [].{
 		}
 	}
 
-	## A `Blueprint.lock` without the root edge that makes `nixpkgs` follow
-	## `default`: the lock an earlier blueprint wrote for the same pins. The
-	## edge is the last field of the root node's inputs or it is not removed.
-	without_alias : Str -> Str
-	without_alias = |lock| {
-		edge = "(value (List ((Str \"default\")))))"
-		match lock.split_on(edge) {
-			[before, after] => {
-				named = before.trim_end()
-				opened = named.drop_suffix("(name \"nixpkgs\")").trim_end()
-				if named.ends_with("(name \"nixpkgs\")") and opened.ends_with(" (") "${opened.drop_suffix(" (")}${after}" else lock
-			}
-			_ => lock
-		}
-	}
-
 	## Run every scenario from the repository root, each fresh project in a
 	## temporary directory that is removed afterwards.
 	run! : Path => Try({}, _)
@@ -555,14 +533,6 @@ one! = |context, scenario, index|
 		}
 	}
 
-## Give a read-only file new contents and leave it read-only.
-replace! : Str, Str => Try({}, _)
-replace! = |file, text| {
-	chmod!("u+w", file)?
-	Path.write_utf8!(Path.utf8(file), text)?
-	chmod!("a-w", file)
-}
-
 chmod! : Str, Str => Try({}, _)
 chmod! = |mode, target|
 	Cmd.new(OsStr.from_str("chmod")).args([mode, "--", target].map(OsStr.from_str)).exec!().map_err(|_| ChmodFailed(target))
@@ -614,22 +584,6 @@ step! = |context, project, step|
 				return Script.fail!("${Str.join_with(kept, "\n")}\n${job.label}: ${reason}")
 			}
 			Ok({})
-		}
-		BeforeAlias(args, check) => {
-			file = "${project}/Blueprint.lock"
-			written = Path.read_utf8!(Path.utf8(file))?
-			earlier = Scenarios.without_alias(written)
-			Process.check!(earlier != written, "`blueprint update` did not record the nixpkgs alias in Blueprint.lock")?
-			replace!(file, earlier)?
-			outcome = Process.traced!(Process.command(context.blueprint, args, project))
-			kept = Path.read_utf8!(Path.utf8(file))
-			staged = Path.read_utf8!(Path.utf8("${project}/.blueprint/flake.lock"))
-			replace!(file, written)?
-			reason = Scenarios.verdict(check, outcome?)
-			Process.check!(reason.is_empty(), "with a lock from before the alias, ${Str.join_with(args, " ")}: ${reason}\n${outcome?.stderr}")?
-			Process.check!(!outcome?.stderr.contains("lock"), "with a lock from before the alias, Nix or blueprint complained:\n${outcome?.stderr}")?
-			Process.check!(kept? == earlier, "a lock from before the alias was rewritten outside `blueprint update`")?
-			Process.check!(staged?.contains("\"nixpkgs\":[\"default\"]"), "the staged lock of a lock from before the alias lacks the edge")
 		}
 		UpdateInputs(names) => {
 			_ = Process.succeed!(Process.command(context.blueprint, ["update"].concat(names), project))?
@@ -772,15 +726,6 @@ expect Scenarios.bash_problem({ code: 1, stdout: "", stderr: locked_bash_log }, 
 
 # Two fresh scenarios check which bash `nix develop` takes: a task's entry and a shell alias.
 expect Scenarios.scenarios("p", "o", sample_roc, sample_toolchains).map(|scenario| scenario.steps.keep_if(|step| step == LockedBash("devShells.x86_64-linux.default", "p") or step == LockedBash("devShells.x86_64-linux.blueprint-env-base", "p")).len()) == [0, 0, 1, 0, 1, 0, 0, 0]
-
-# The edge an update now records is removed whole, leaving balanced text;
-# a lock without it, or with another edge of that name, is left as it is.
-expect Scenarios.without_alias("(value (Str \"default\"))) (\n\t\t\t(name \"nixpkgs\")\n\t\t\t(value (List ((Str \"default\")))))))))") == "(value (Str \"default\")))))))"
-expect Scenarios.without_alias("(value (Str \"default\")))))))") == "(value (Str \"default\")))))))"
-expect Scenarios.without_alias("(\n(name \"nixpkgs\")\n(value (Str \"nixpkgs\")))") == "(\n(name \"nixpkgs\")\n(value (Str \"nixpkgs\")))"
-
-# An input of another name that follows `default` is not the alias.
-expect Scenarios.without_alias("(a) (\n(name \"other\")\n(value (List ((Str \"default\")))))") == "(a) (\n(name \"other\")\n(value (List ((Str \"default\")))))"
 
 expect Scenarios.changed_lines("a\nb\nc\n", "a\nx\nc\n") == "- b\n+ x"
 expect Scenarios.changed_lines("a\n", "a\n") == ""
