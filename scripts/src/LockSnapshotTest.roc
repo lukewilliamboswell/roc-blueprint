@@ -91,6 +91,16 @@ cases = |raw| {
 		(file.replace_each("\"rev\":\"\"", "\"rev\":\"wrong\""), False),
 		(file.replace_each("\"flatSha256\":\"${file_hash}\"", "\"flatSha256\":null"), False),
 		(file.replace_each("\"content_identity\":\"sha256:${file_hash}", "\"content_identity\":\"sha256:${"a".repeat(64)}"), False),
+		# Where the bytes came from and where a published digest was read:
+		# hosts that are nonempty strings, an address that is a string, even
+		# an empty one, and an entry that says both.
+		(raw.replace_each("\"served\":[]", "\"served\":[\"objects.example.test\",\"mirror.example.test\"]"), True),
+		(raw.replace_each("\"witness\":\"", "\"witness\":\"\",\"was\":\""), True),
+		(raw.replace_each("\"served\":[]", "\"served\":[\"\"]"), False),
+		(raw.replace_each("\"served\":[]", "\"served\":\"objects.example.test\""), False),
+		(raw.replace_each("\"served\":[]", "\"unserved\":[]"), False),
+		(raw.replace_each("\"witness\":\"", "\"witness\":null,\"was\":\""), False),
+		(raw.replace_each("\"witness\":\"", "\"unwitnessed\":\""), False),
 	]
 }
 
@@ -393,11 +403,11 @@ is_string = |value| JsonData.string(value).is_ok()
 
 encoded = |value| JsonData.encode(value) ?? "a value"
 
-sample = "{\"format\":2,\"sources\":{\"nix\":{\"name\":\"nix\",\"provider\":\"nix\",\"ref\":\"github:example/packages\",\"rev\":\"abc\",\"digest\":\"opaque-tree\",\"content_identity\":\"opaque-content\",\"digestKind\":\"tree\",\"flatSha256\":null,\"metadata\":{\"nix\":{\"fetchTree\":{\"type\":\"git\",\"url\":\"https://example.test/packages.git\",\"rev\":\"abc\"},\"future\":[null,340282366920938463463374607431768211455,-1.2300e+99999]}}}},\"fetched\":[{\"name\":\"roc-stable\",\"system\":\"x86_64-linux\",\"urls\":[\"https://example.test/roc.tar.gz\"],\"sha256\":\"${"a".repeat(64)}\",\"content_identity\":\"sha256:${"a".repeat(64)}\",\"size\":18446744073709551615,\"obtained\":\"published\"}]}\n"
+sample = "{\"format\":2,\"sources\":{\"nix\":{\"name\":\"nix\",\"provider\":\"nix\",\"ref\":\"github:example/packages\",\"rev\":\"abc\",\"digest\":\"opaque-tree\",\"content_identity\":\"opaque-content\",\"digestKind\":\"tree\",\"flatSha256\":null,\"metadata\":{\"nix\":{\"fetchTree\":{\"type\":\"git\",\"url\":\"https://example.test/packages.git\",\"rev\":\"abc\"},\"future\":[null,340282366920938463463374607431768211455,-1.2300e+99999]}}}},\"fetched\":[{\"name\":\"roc-stable\",\"system\":\"x86_64-linux\",\"urls\":[\"https://example.test/roc.tar.gz\"],\"sha256\":\"${"a".repeat(64)}\",\"content_identity\":\"sha256:${"a".repeat(64)}\",\"size\":18446744073709551615,\"obtained\":\"published\",\"served\":[],\"witness\":\"https://api.example.test/repos/example/roc/releases/tags/1.0\"}]}\n"
 
 expect JsonData.decode(schema_text).map_ok(supported) == Ok(True)
 expect cases(sample).all(|(candidate, expected)| LockSnapshotTest.conforms(candidate).is_ok() == expected)
-expect cases(sample).len() == 18 and cases(sample).drop_first(1).all(|(candidate, _)| candidate != sample)
+expect cases(sample).len() == 25 and cases(sample).drop_first(1).all(|(candidate, _)| candidate != sample)
 expect LockSnapshotTest.conforms(sample.replace_each("\"urls\":[\"https://example.test/roc.tar.gz\"]", "\"urls\":[]")).is_err()
 expect LockSnapshotTest.conforms(sample.replace_each("\"obtained\":\"published\"", "\"obtained\":\" \"")).is_err()
 expect LockSnapshotTest.conforms(sample.replace_each("\"size\":18446744073709551615", "\"size\":-1")).is_err()

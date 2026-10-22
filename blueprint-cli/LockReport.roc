@@ -22,7 +22,7 @@ LockReport := [].{
 # Fetched entries round-trip the caller-facing names, escaping and provenance,
 # with every system selected by one program name, including old unstated pins.
 expect {
-	entry = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/a?quote=\"&slash=\\"], sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", size: 4, obtained: Published }
+	entry = { name: "roc-stable", system: "x86_64-linux", urls: ["https://example.test/a?quote=\"&slash=\\"], sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", size: 4, obtained: Published, served: [], witness: "https://api.example.test/repos/o/roc/releases/tags/1.0" }
 	lock = Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], hints: [], fetched: [entry, { ..entry, system: "aarch64-darwin", obtained: Unstated }] }
 	match LockReport.render(lock, ["roc-stable"], True, []) {
 		Ok(text) => {

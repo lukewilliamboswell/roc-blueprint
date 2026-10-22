@@ -134,7 +134,7 @@ fetched = Fuzz.map(
 	|r| {
 		hash = hex_of(r.hash)
 		urls = [r.url].concat(r.urls).map(|url| if (url.is_empty()) "u" else url)
-		{ name: nonblank(r.name), system: nonblank(r.system), urls, sha256: hash, content_identity: "sha256:${hash}", size: r.size, obtained: nonblank(r.obtained) }
+		{ name: nonblank(r.name), system: nonblank(r.system), urls, sha256: hash, content_identity: "sha256:${hash}", size: r.size, obtained: nonblank(r.obtained), served: [], witness: "" }
 	},
 )
 

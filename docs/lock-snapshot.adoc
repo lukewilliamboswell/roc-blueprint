@@ -116,6 +116,14 @@ by both name and system; its identity is the original download's SHA-256.
 `same_source` compares only the selected content identity. It does not infer
 which builds or shipped artifacts are affected by a change.
 
+A fetched entry also says where its digest came from. `obtained` is how it
+was obtained; `served` lists the hosts that served the bytes the update
+hashed, after any redirect, and is empty when nothing was downloaded;
+`witness` is the address a published digest was read from, and is empty when
+the digest was only computed. They are what a reviewer reads, not identity:
+neither changes `sha256` or `content_identity`, and neither is checked again
+when a program is downloaded.
+
 `Source.digest_kind` is `File`, `Tree`, or `Unknown(originalText)`; even future
 kind strings remain unknown to a reader that does not understand them.
 `flat_sha256` is `Present(hash)` for Core-owned `SourceFile` entries and
@@ -159,7 +167,9 @@ would exceed 8 MiB. Duplicate decoded keys, including escaped aliases, invalid
 Unicode, trailing input, mismatched source names and duplicate program/system
 pairs fail. The `format` and `size` fields use unsigned base-10 integer
 lexemes; size must fit U64. Declared flat/program hashes must agree with their
-identities. Generic native numeric lexemes remain lossless and are never
+identities. Every fetched entry has `served`, an array of nonempty host
+strings, and `witness`, a string. Generic native numeric lexemes remain
+lossless and are never
 executed as source text.
 
 The existing core bundle includes `lock-snapshot-v2.schema.json`, also

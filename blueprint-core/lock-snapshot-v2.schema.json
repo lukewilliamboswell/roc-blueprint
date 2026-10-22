@@ -143,7 +143,9 @@
         "sha256",
         "content_identity",
         "size",
-        "obtained"
+        "obtained",
+        "served",
+        "witness"
       ],
       "properties": {
         "name": {
@@ -183,6 +185,19 @@
           "type": "string",
           "minLength": 1,
           "pattern": "\\S"
+        },
+        "served": {
+          "description": "The hosts that served the bytes blueprint update hashed, after any redirect; empty when it downloaded nothing.",
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "witness": {
+          "description": "The address a published digest was read from; empty when none was.",
+          "type": "string"
         }
       },
       "additionalProperties": true

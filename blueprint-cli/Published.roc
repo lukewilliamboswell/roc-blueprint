@@ -11,7 +11,9 @@ import Download
 ## with no token and nothing else that identifies the caller: what is asked
 ## about is public. An answer is not trusted more than the download is. It is
 ## a second witness from the same publisher over another path, and the Lock
-## records which witnesses a digest had.
+## records which witnesses a digest had: the address of the description it
+## was read from (`Release.api`) as the entry's `witness`, and the hosts that
+## served the bytes it hashed as its `served`.
 Published := [].{
 
 	## A release asset, by the URL it is downloaded from: where its release

@@ -224,7 +224,7 @@ expect inspect({ ..SbomTest.composition, components: SbomTest.composition.compon
 
 locked_spec = { ..SbomTest.spec, sources: [{ name: "upstream", provider: { name: "nix", version: 1, ref: "github:example/source/stable" } }], programs: [{ name: "roc", system: "x86_64-linux", urls: ["https://example.org/roc/3.0.0.tar.gz"], unpack: TarGz, path: "roc/roc" }] }
 
-locked_lock = Lock.{ format: Lock.current_format, intent: Lock.intent_of(locked_spec), sources: [{ name: "upstream", provider: "nix", ref: "github:example/source/stable", rev: "1111111111111111111111111111111111111111", digest: "sha256-Zml4dHVyZQ==" }], fetched: [{ name: "roc", system: "x86_64-linux", urls: ["https://example.org/roc/3.0.0.tar.gz"], sha256: digest, size: 100, obtained: Both }], hints: [] }
+locked_lock = Lock.{ format: Lock.current_format, intent: Lock.intent_of(locked_spec), sources: [{ name: "upstream", provider: "nix", ref: "github:example/source/stable", rev: "1111111111111111111111111111111111111111", digest: "sha256-Zml4dHVyZQ==" }], fetched: [{ name: "roc", system: "x86_64-linux", urls: ["https://example.org/roc/3.0.0.tar.gz"], sha256: digest, size: 100, obtained: Both, served: ["example.org"], witness: "https://api.example.org/repos/roc/releases/tags/3.0.0" }], hints: [] }
 
 source_component = { ..component("source", "upstream", "1111111111111111111111111111111111111111"), download: "github:example/source/stable", identity: "github:example/source/stable@1111111111111111111111111111111111111111#sha256-Zml4dHVyZQ==", origin: "source:upstream" }
 
