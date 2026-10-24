@@ -13,7 +13,7 @@ config = [
 		"dev",
 		[
 			Overlays(["roc"]),
-			Command("roc-stable", "nix#rocpkgs.nightly-2026-10-21-5349569"),
+			Command("roc-stable", "nix#rocpkgs.nightly-2026-10-23-18478ff"),
 			RocPackages([
 				"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
 				"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",

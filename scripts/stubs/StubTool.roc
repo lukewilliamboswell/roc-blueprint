@@ -160,7 +160,7 @@ expect StubTool.role("/tmp/work/bin/roc-record") == Ok(RocRecord)
 expect StubTool.role("nix") == Ok(Nix)
 expect StubTool.role("/tmp/work/bin/roc") == Err(UnknownRole("roc"))
 expect StubTool.names.all(|name| StubTool.role("/bin/${name}").is_ok())
-expect StubTool.role("/project/.blueprint/host/commands/roc-stable/nightly-2026-10-21-5349569/bin/roc-stable") == Ok(RocStable)
+expect StubTool.role("/project/.blueprint/host/commands/roc-stable/nightly-2026-10-23-18478ff/bin/roc-stable") == Ok(RocStable)
 
 expect StubTool.record(["develop", "two words", "line\nbreak", "a'b\"c", ""]) == "[\"develop\",\"two words\",\"line\\u000abreak\",\"a'b\\\"c\",\"\"]\n"
 expect StubTool.parse_record(StubTool.record(["develop", "two words", "line\nbreak", "a'b\"c", ""])) == Ok(["develop", "two words", "line\nbreak", "a'b\"c", ""])

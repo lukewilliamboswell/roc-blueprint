@@ -17,6 +17,12 @@ The importable core package is `{core-url}`. The `blueprint` and
 macOS and x86_64 Windows, with SHA-256 sums in `blueprint.sha256`.
 Spec major 3 and Lock 2 are unchanged.
 
+== Bundled compiler
+
+`blueprint compiler-version` now reports `nightly-2026-10-23-18478ff`. Each
+CLI binary embeds its system's archive from that nightly. Projects that align
+their automation compiler with Blueprint should update their pin to match.
+
 == Containment and dependencies
 
 CycloneDX nests contained components through standard `components` fields.
