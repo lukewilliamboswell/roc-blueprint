@@ -15,7 +15,7 @@ identities and metadata across Roc, Python, `jq`, Nix and other tools.
 == Run from a Blueprint checkout
 
 Run these commands at the repository root. Use product compiler
-`nightly-2026-10-21-5349569` as `roc`; the pure consumer is also tested with
+`nightly-2026-10-23-18478ff` as `roc`; the pure consumer is also tested with
 script compiler `nightly-2026-10-13-b17d287`. The compiler may prepare its
 pinned basic-cli dependency; the pure functions perform no I/O.
 

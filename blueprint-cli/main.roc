@@ -1010,8 +1010,8 @@ fetch_programs! = |steps| {
 source_is_embedded_compiler : Str, Str -> Bool
 source_is_embedded_compiler = |sha256, system| Bootstrap.compiler(compiler_version.trim(), system).map_ok(|program| program.sha256 == sha256) ?? False
 
-expect source_is_embedded_compiler("70346ac60dd0b0507881447c5b47aed799fd1bea01c50bac56f82ed96897f4df", "x86_64-linux")
-expect !source_is_embedded_compiler("70346ac60dd0b0507881447c5b47aed799fd1bea01c50bac56f82ed96897f4df", "aarch64-darwin")
+expect source_is_embedded_compiler("c283ae01e758b9d64002d72b8e4ad776466e7e6e5f495fd466e274afbd25ce7f", "x86_64-linux")
+expect !source_is_embedded_compiler("c283ae01e758b9d64002d72b8e4ad776466e7e6e5f495fd466e274afbd25ce7f", "aarch64-darwin")
 expect !source_is_embedded_compiler("different bytes", "x86_64-linux")
 
 ## One consumer-owned executor for standalone requests and workflow steps.

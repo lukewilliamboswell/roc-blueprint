@@ -101,7 +101,7 @@
               {
                 src = pkgs.fetchurl {
                   url = "https://github.com/roc-lang/nightlies/releases/download/${rocTag}/roc_nightly-source-${lib.removePrefix "nightly-" rocTag}.tar.gz";
-                  hash = "sha256-yQLLcwXQb5TNklI/tYSY9gclVzYYX8MEU1pFjSaoJhM=";
+                  hash = "sha256-RWcQGvpcixcd+Y1Hs0k2hevR9trMqO/wMbrUb6YrvRw=";
                 };
               }
               ''
