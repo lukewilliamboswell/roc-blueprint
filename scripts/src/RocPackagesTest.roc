@@ -189,7 +189,7 @@ check_clean! : Str, List(Str), Str => Try({}, _)
 check_clean! = |package_dir, hashes, when| {
 	entries = names!(package_dir)?
 	check!(
-		entries.all(|name| hashes.contains(name) or hashes.contains(name.drop_suffix(".deps.json"))) and !entries.any(leftover),
+		entries.all(|name| hashes.contains(name) or hashes.contains(name.drop_suffix(".deps")) or hashes.contains(name.drop_suffix(".deps.json"))) and !entries.any(leftover),
 		"${when}, the package cache holds something unexpected: ${Str.join_with(entries, " ")}",
 	)
 }

@@ -6,7 +6,7 @@ config = [
 	Name("artifacts"),
 	Systems(["x86_64-linux"]),
 	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
-	Input("roc", "github:roc-lang/roc-overlay/a9b461cd4df73ccb69a79a2bc7f58ab60e715619"),
+	Input("roc", "github:roc-lang/roc-overlay/d0ad2328b1d81e2f6dcfcdf1fc800d9e74838a4d"),
 	# The scripts are Roc programs. A build has no network, so the bundles
 	# they name are locked here: basic-cli, and http, which basic-cli needs.
 	Environment(
