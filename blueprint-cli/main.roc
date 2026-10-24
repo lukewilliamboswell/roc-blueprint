@@ -47,7 +47,7 @@ import "compiler-version" as compiler_version : Str
 import "compiler-archive" as compiler_archive : List(U8)
 
 version : Str
-version = "0.8.0"
+version = "0.9.0"
 
 ## The providers a request may be planned with. This is the only reference to
 ## a concrete provider: everything else uses the Provider contract

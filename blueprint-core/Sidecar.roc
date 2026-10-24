@@ -58,7 +58,7 @@ Sidecar := [].{
 		evidence = match document.evidence {
 			[only] => {
 				decoded : Try(Sidecar.Evidence, _)
-				decoded = Json.parse(only)
+				decoded = Json.parse(Sbom.normalize_input(only)?)
 				decoded.map_err(|_| "the evidence annotation is not profile evidence")?
 			}
 			_ => return Err("expected exactly one evidence annotation")
@@ -75,11 +75,8 @@ Sidecar := [].{
 		if evidence.coverage.is_empty() {
 			return Err("unknown coverage silently omitted")
 		}
-		for scope in evidence.coverage {
-			if scope.scope.is_empty() or scope.reason.is_empty() or scope.contact.is_empty() or !["complete", "incomplete", "excluded", "verified-empty"].contains(scope.status) {
-				return Err("invalid or unexplained coverage")
-			}
-		}
+		_ = Sbom.validate_coverage(evidence.coverage, ids, document.relationships)?
+
 		inputs = evidence.dispositions.map(|entry| entry.input)
 		if unique(evidence.inspected).len() != evidence.inspected.len() or unique(inputs).len() != inputs.len() or sorted(evidence.inspected) != sorted(inputs) {
 			return Err("unexplained known-input omission")
@@ -88,6 +85,7 @@ Sidecar := [].{
 			return Err("input disposition without a reason or with an unknown component")
 		}
 		for entry in document.packages_ {
+			Sbom.validate_metadata(entry)?
 			if entry.version.is_empty() or entry.license.is_empty() or (entry.supplier != "NOASSERTION" and !entry.supplier.starts_with("Person: ") and !entry.supplier.starts_with("Organization: ")) {
 				return Err("package ${entry.id} needs a version, a license and an SPDX supplier")
 			}
@@ -115,6 +113,10 @@ Sidecar := [].{
 			Err("evidence differs from the inventory")
 		} else if sorted(inventory.components.map(|entry| entry.id)) != sorted(checked.document.packages_.map(|entry| entry.id).drop_if(|id| id == "Subject")) {
 			Err("known component omission")
+		} else if inventory.components.any(|component| checked.document.packages_.find_first(|entry| entry.id == component.id) != Ok(Sbom.package_of(component))) {
+			Err("component metadata differs from the inventory")
+		} else if inventory.relationships.sort_with(compare_edges) != checked.document.relationships.sort_with(compare_edges) {
+			Err("relationships differ from the inventory")
 		} else {
 			Ok({})
 		}
@@ -133,3 +135,6 @@ sorted = |values| values.sort_with(Project.bytewise)
 
 lowercase_sha256 : Str -> Bool
 lowercase_sha256 = |value| value.to_utf8().len() == 64 and value.to_utf8().all(|byte| (byte >= '0' and byte <= '9') or (byte >= 'a' and byte <= 'f'))
+
+compare_edges : Sbom.Edge, Sbom.Edge -> [Before, Same, After]
+compare_edges = |a, b| Project.bytewise(Json.to_str(a), Json.to_str(b))

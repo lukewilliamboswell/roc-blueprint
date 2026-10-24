@@ -148,7 +148,7 @@ differently, and CycloneDX cannot spell all of them in its standard fields.
 
 | Declared license, including `NOASSERTION` and `NONE` | `hasDeclaredLicense`, with named individuals for both | `licenseDeclared` | `licenses` expression; `NOASSERTION` is omitted and `NONE` is a `blueprint:license` property
 
-| Shipped code (`contains`) | `contains` | `CONTAINS` | a dependency, and `scope` `required`
+| Shipped code (`contains`) | `contains` | `CONTAINS` | nested `components`, and `scope` `required`
 
 | Build, test and development tools | `dependsOn` with a lifecycle scope | `BUILD_DEPENDENCY_OF` and its siblings | a dependency, and `scope` `excluded`
 
@@ -159,8 +159,9 @@ differently, and CycloneDX cannot spell all of them in its standard fields.
 
 Where CycloneDX loses meaning:
 
-* *A dependency is not containment.* CycloneDX `dependencies` say only that
-  one component needs another. Read `scope` to tell shipped code from tools:
+* *A dependency is not containment.* Nested `components` state containment;
+  CycloneDX `dependencies` state only actual `dependsOn` relationships. Read
+  `scope` to tell shipped code from tools:
   `required` is reached through shipped or run-time edges, `excluded` is only
   a build, test or development dependency, and `optional` is anything else,
   such as an unresolved resolution candidate.
@@ -172,7 +173,7 @@ Where CycloneDX loses meaning:
 
 Nothing is changed silently. Blueprint reads its own CycloneDX back from the
 `blueprint:` properties, and the tool's `check` refuses a BOM whose
-standard dependencies or scopes disagree with them, or whose graph differs
+standard containment, dependencies or scopes disagree with them, or whose graph differs
 from the SPDX renderings of the same document. The checks compare
 identities, relationships, coverage and subjects, not bytes.
 
@@ -216,7 +217,7 @@ cp Blueprint.lock sbom/Lock
 [source,json]
 ----
 {
-  "profile": "blueprint-spdx-3.0-v1",
+  "profile": "blueprint-spdx-3.0-v2",
   "components": [
     {"id": "parser", "name": "example-parser", "version": "2.4.1",
      "producer": "Organization: Example Upstream", "license": "MIT", "license_url": "",
@@ -522,7 +523,7 @@ nix develop -c scripts/sbom.roc inspect Spec Blueprint.lock composition.json x86
 `Spec` is the evaluated S-expression, rather than `Blueprint.roc`. The JSON
 composition contains these fields:
 
-* `profile`: `blueprint-spdx-3.0-v1`.
+* `profile`: `blueprint-spdx-3.0-v2`.
 * `components`: reviewed component records with unique local identifiers
   (letters, digits, `-` and `.`), canonical `name`, SPDX `producer`
   (`Organization: ...`, `Person: ...`, or `NOASSERTION`), `license`,
@@ -531,7 +532,12 @@ composition contains these fields:
 * `relationships`: records with `from`, `to`, an SPDX 3.0.1 `relation`, a
   lifecycle `scope` (`""` for none) and reviewed `basis`. `Subject` names the
   final deliverable.
-* `coverage`: records with `scope`, `status`, `reason` and `contact`.
+* `coverage`: records with `scope`, `component`, `aspect`, `status`, `reason`
+  and `contact`. `component` names `Subject` or a declared component;
+  `aspect` is `assembly` (direct contained membership) or `dependencies`
+  (direct dependency closure). Status is `complete`, `verified-empty`,
+  `incomplete`, `unknown`, or `excluded`. Reasons and contacts remain evidence
+  in every format.
 * `inputs`: one reviewed disposition for every known input, with `input`,
   `component` and `reason`. An empty component means an explained exclusion.
 * `imported_documents`: verified upstream graphs, or an empty list.
@@ -539,6 +545,34 @@ composition contains these fields:
   publishes no SBOM, with `component`, `reason` and `contact`. Every other
   locked dependency needs a supplier SBOM in `imported_documents`, bound to it:
   see <<chain-sboms-across-dependencies>>.
+
+Coverage is a reviewed assertion about exactly one component and aspect. It
+never cascades to contained children or transitive dependencies. For example,
+a complete shipped-source assembly does not claim the compiler's dependencies
+are known. Use `verified-empty` only after reviewing an aspect and finding no
+relationships; inspection rejects it when matching relationships exist. Use
+`unknown` for an unexamined closure and `incomplete` for a known partial graph.
+Conflicting statuses for the same address are rejected.
+
+CycloneDX writes addressed claims as standard `compositions`, using
+`assemblies` or `dependencies` references. Complete and verified-empty map to
+`complete`, incomplete to `incomplete`, and unknown/excluded to `unknown`.
+A dependency entry is emitted when known outgoing dependencies exist, or a
+complete/verified-empty dependency claim examines that component. Unknown
+leaves remain absent; known incoming build dependencies remain present.
+Thus an empty examined leaf and an unknown closure differ in standard fields.
+SPDX preserves these assertions in its evidence annotations; the cross-format
+checker compares that evidence and validates CycloneDX's standard assertions.
+Supplier imports preserve addressed assertions with namespaced component
+references and retain the separate conservative import coverage gap.
+
+For legacy unaddressed declarations, add `component: ""` and `aspect: ""` to
+preserve the original scope, status, reason and contact as evidence only.
+These declarations emit no standard completeness claim and never justify an
+empty dependency leaf. To migrate to addressed completeness, review the facts
+and supply an explicit component and aspect. Blueprint does not infer an
+address by interpreting a scope name or reason. Partially addressed or dangling
+records produce diagnostics identifying the required fields.
 
 A component's `origin` is `reviewed`, `source:<locked-name>`, or
 `program:<locked-name>:<system>`. Locked origins populate `version`,
@@ -897,7 +931,7 @@ them once, in one JSON document rendered from the shared types:
 
 [source,json]
 ----
-{"profile":"blueprint-spdx-3.0-v1",
+{"profile":"blueprint-spdx-3.0-v2",
  "subject":{"filename":"my-binary","version":"1.0.0","target":"x86_64-linux","sha256":"<sha256>","size":1234},
  "inventory_sha256":"<sha256 of inventory.json>",
  "context":{"namespace":"https://example.org/sbom/my-binary/revision-1","revision":"1","created":"2026-10-21T00:00:00Z","generator":"Tool: blueprint-sbom-0.7.0"},
@@ -957,20 +991,27 @@ binding operation.
 == Read the CycloneDX rendering
 
 The CycloneDX BOM has `bomFormat` `CycloneDX` and `specVersion` `1.7`. Its
-`metadata.component` is the subject, a `file` component with its final
+`metadata.component` is the subject with its reviewed kind, final
 SHA-256 and distribution URL. `metadata.timestamp`, `metadata.tools`, and
 `metadata.authors` or `metadata.manufacturer` carry the context's creation
-time, generator and author. Each inventory component is a `library` component
-whose `bom-ref` is its local identifier, with:
+time, generator and author. Each inventory component carries its reviewed
+kind (`file`, `application` or `library`), and its `bom-ref` is its local
+identifier. Unknown kinds use the documented adapter fallback below. Each
+component has:
 
 * `name`, `version` and a SHA-256 `hashes` entry;
 * `supplier` for an `Organization:` producer, or `authors` for a `Person:`
   producer (none for `NOASSERTION`);
 * a `licenses` expression, omitted when the license is `NOASSERTION` or
   `NONE`;
-* `purl` when its identity is a Package URL;
-* `externalReferences` of type `distribution` for its download, and of type
-  `license` for the `license_url` of a `LicenseRef-...` expression.
+* `purl` from `package_url`, or from a legacy `pkg:` identity;
+* typed `vcs` or `source-distribution` references from `source_refs`, a
+  `distribution` reference for its download, and a `license` reference for
+  the `license_url` of a `LicenseRef-...` expression.
+
+`license_url` is supported only for `LicenseRef-...` terms; leave it empty
+for standard SPDX licenses. Subject and component declarations using the
+same `LicenseRef` must name the same terms URL.
 
 CycloneDX has no relationship types, so a component's `scope` summarizes its
 role for the subject:
@@ -991,13 +1032,23 @@ unresolved `other` candidate or a `patchedBy`, `generates` or `hasVariant`
 edge.
 |===
 
-The `dependencies` section lists, for the subject and every component, the
-components it `contains` or `dependsOn`. Other relationships do not appear
-there. The full graph travels losslessly in `blueprint:` properties: each
+Containment is the standard component assembly tree: components contained by
+`Subject` are nested under `metadata.component.components`; their children
+nest recursively in their `components`. Components with no containment parent
+appear in the BOM's top-level `components`. Each `bom-ref` occurs once. The
+writer rejects containment cycles, a contained subject, children with multiple
+distinct parents, and chains deeper than 24 parents, with a diagnostic; it
+never substitutes dependency edges or duplicate identifiers. SPDX can still
+represent shared containment graphs.
+
+The `dependencies` section lists actual `dependsOn` targets. Containment alone
+does not create a dependency. The full graph travels losslessly in
+`blueprint:` properties: each
 relationship, with its scope and basis, is a `blueprint:relationship`
 property of the BOM; each component carries `blueprint:identity`,
 `blueprint:origin`, `blueprint:target` and `blueprint:modifications`; the
-metadata carries `blueprint:namespace` and `blueprint:evidence`.
+metadata carries `blueprint:namespace`, `blueprint:evidence` and the
+`blueprint:cyclonedx-profile` marker `standard-containment-v1`.
 A consumer that reads only standard CycloneDX sees what ships, what was only
 used to build it, and what remains unresolved. A consumer that needs the exact
 relationships, coverage gaps or evidence reads the properties or the SPDX
@@ -1005,11 +1056,22 @@ rendering.
 
 `Sbom.read_cyclonedx` reads a BOM that Blueprint rendered back to the same
 package graph as `Sbom.read` gives for its SPDX renderings, after validating
-it against CycloneDX 1.7 and checking that its `dependencies` and scopes are
-what its relationships state; `Sbom.read` uses it for such BOMs. Other
+it against CycloneDX 1.7 and checking that its nested containment,
+`dependencies` and scopes are what its relationships state; `Sbom.read` uses it for such BOMs. Other
 CycloneDX BOMs, such as a supplier's, are read by their standard fields (see
 <<import-inert-verified-upstream-graphs>>), and what those cannot carry is
 counted in the import's coverage.
+
+Blueprint's legacy 0.8.0 CycloneDX profile has no
+`blueprint:cyclonedx-profile` marker. The reader continues to accept that
+profile only with flat components and the legacy dependency union of
+`contains` and `dependsOn`, checked against its properties. Its standard
+fields cannot distinguish archive membership from dependencies; use the SPDX
+sidecar or regenerate it with 0.9.0. New renderings always use the marked
+profile and reject disagreement between nesting and properties. Unknown or
+repeated profile markers are rejected. Importing a supplier's ordinary
+CycloneDX BOM continues to read nesting as `contains` and dependencies as
+`dependsOn`, without Blueprint extensions.
 
 [#blueprints-own-release-evidence]
 == Blueprint's own release evidence
@@ -1133,3 +1195,75 @@ fuzz targets check rendering and reading in every format with
 generated inventories and mutated documents. These checks establish
 consistency with declared inputs, not proof that an opaque tool disclosed all
 shipped code.
+
+=== Reviewed kinds, attribution and independent source references (0.9.0)
+
+The `blueprint-spdx-3.0-v2` composition contract adds `kind`, `copyright`,
+`attribution`, `package_url` and `source_refs` to every component. The reviewed
+kinds are `file`, `application`, `library` and `unknown`; classifications never
+come from filenames, origins or dependency scopes. `Sbom.archive_members`
+produces explicit `file` records because its input is a verified file listing.
+Use `NOASSERTION` for unknown copyright and attribution, an empty package URL,
+and an empty source-reference list when none was reviewed. Subject binding
+adds its own `kind`, `producer`, `license`, `license_url`, `copyright` and
+`attribution`. Those facts are independent of its children: a mixed-license
+archive can retain an unknown declared license and supplier. Declaring a
+license never manufactures `licenseConcluded`.
+
+`package_url` is a separately reviewed, versioned PURL. `identity` continues
+to preserve an opaque source/tree/content identity; a legacy `pkg:` identity
+also supplies the PURL when `package_url` is empty. Conflicting PURLs are an
+error. Each `source_refs` entry has an explicit `type` (`vcs` or
+`source-distribution`) and an HTTPS `url`. A repository URL is never guessed
+to be VCS; no registry or network lookup occurs. Credential-bearing URLs,
+queries, whitespace and oversized reference lists are refused. Release
+version, commit reference, package URL, tree identity and archive/member
+SHA-256 remain separate facts owned and reviewed by the repository producer.
+
+CycloneDX uses standard component `type`, `copyright`, `purl`, supplier,
+licenses and typed `externalReferences`. CycloneDX has no equivalent reviewed
+attribution-text field in this adapter, so attribution is retained as
+`blueprint:attribution`. Its schema requires a component type: `unknown`
+uses the historical `library` fallback for inventory entries and `file` for
+the subject, with an explicit `blueprint:kind=unknown` declaration. This is
+an adapter compatibility default, not a reviewed library classification.
+Readers check these exact fallbacks and reject contradictory standard kinds.
+SPDX 2.3 uses `primaryPackagePurpose` (`FILE`, `APPLICATION`, `LIBRARY` or
+`OTHER`), `copyrightText`, `attributionTexts` and PURL external references;
+SPDX 3.0.1 uses the corresponding standard software purpose, copyright,
+attribution and package URL fields. File inventory records are represented
+as packages with file purpose so supplied version, supplier and declared
+license remain expressible; native SPDX file entries are also imported,
+without inventing package metadata or conclusions. Both SPDX adapters put
+the explicitly typed source-reference list in standard `sourceInfo` /
+`software_sourceInfo` text as JSON. The SPDX text field cannot make those
+references independently typed links; consumers needing typed URL links
+should use CycloneDX. All formats retain opaque identity in Blueprint
+metadata, distinct from delivered-file hashes.
+
+`Sbom.normalize_input` and the standalone `inspect`/`bind` input path migrate
+legacy JSON with bounded, duplicate-key-aware parsing: the v1 profile becomes
+v2, missing component kinds become `unknown`, subject kind defaults to `file`,
+missing reviewed facts stay unknown, and legacy coverage lacks an addressed
+component/aspect and therefore claims no standard completeness. Existing
+explicit PURL identities keep working; source-only and opaque identities
+are not relabelled. Typed Roc callers must add the new fields explicitly.
+Regenerate inspected inventories and bind fresh sidecars to adopt v2; retain
+original v1 documents as original evidence rather than rewriting their bytes.
+The `reviewed-source` consumer fixture demonstrates an archive, library,
+source file and build compiler with explicit and unknown attribution,
+subject declarations, and simultaneous package and commit references.
+
+For Blueprint's platform release, each delivered linker file has its own
+runtime occurrence. The occurrences retain the reviewed runtime's version,
+license, attribution and package/source references, and `hasVariant` links
+them to the shared upstream component. Their local identifiers are distinct;
+the measured file hash belongs to the containing member, not the runtime
+subset. This states physical copies explicitly while keeping containment a
+tree in standard CycloneDX fields.
+
+An `unavailable_sboms` entry records missing supplier documentation as an
+unaddressed evidence gap. It does not assert that dependency closure is
+incomplete or override a producer's explicit assessment. Use addressed
+`coverage` to state unknown, incomplete, complete or verified-empty closure,
+even when the supplier publishes no document.

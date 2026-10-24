@@ -156,7 +156,7 @@ member = |name, value| { name, value: JsonData.String(value) }
 valid : Manifest.Manifest -> Try({}, Str)
 valid = |manifest| {
 	subject = manifest.subject
-	if manifest.profile != Sbom.profile {
+	if ![Sbom.profile, "blueprint-spdx-3.0-v1"].contains(manifest.profile) {
 		return Err("the manifest names profile ${manifest.profile}, not ${Sbom.profile}")
 	}
 	if !file_name(subject.filename) {

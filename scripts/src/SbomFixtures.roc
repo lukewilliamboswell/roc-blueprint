@@ -25,12 +25,12 @@ SbomFixtures := [].{
 
 	## The rendered cases, each held as `<case>.spdx.json`,
 	## `<case>.spdx-2.3.json` and `<case>.cdx.json`.
-	cases = ["native-arm64", "native-linux", "native-source-import", "source-bundle", "unknown-closure", "verified-empty", "verified-import"]
+	cases = ["mixed-coverage", "native-arm64", "native-linux", "native-source-import", "reviewed-source", "source-bundle", "unknown-closure", "verified-empty", "verified-import"]
 
 	## Every file the archive holds, below its top directory, in byte order.
 	files : List(Str)
 	files = Process.sorted(
-		[contract]
+		[contract, "legacy/blueprint-0.8.cdx.json"]
 			.concat(cases.fold([], |all, case| all.concat(["${case}.spdx.json", "${case}.spdx-2.3.json", "${case}.cdx.json"])))
 			.concat(["Spec", "Lock", "composition.json", "inventory.json", "subject.json", "context.json", "sample-artifact"].map(|name| "input/${name}"))
 			.concat(

@@ -74,7 +74,7 @@ check! = |documents, options| {
 		}
 		if !options.inventory.is_empty() {
 			inventory : Sbom.Inventory
-			inventory = Json.parse(Path.read_utf8!(Path.utf8(options.inventory))?).map_err(|_| Invalid("invalid inventory ${options.inventory}"))?
+			inventory = Json.parse(Sbom.normalize_input(Path.read_utf8!(Path.utf8(options.inventory))?).map_err(|problem| Invalid(problem))?).map_err(|_| Invalid("invalid inventory ${options.inventory}"))?
 			SbomCheck.against_inventory(checked, inventory).map_err(|problem| Invalid("${path}: ${problem}"))?
 		}
 		if !options.root.is_empty() {

@@ -13,7 +13,7 @@ import Spdx3
 ## this applies rules the specification states in prose: every `bom-ref` is
 ## unique within the BOM, a dependency names components by `bom-ref`, a
 ## license expression is a valid SPDX expression, a hash has its algorithm's
-## length, and a serial number is an RFC 4122 URN. Services, compositions,
+## length, and a serial number is an RFC 4122 URN. Services,
 ## vulnerabilities, formulation and the other top-level sections are outside
 ## this profile and rejected rather than skimmed.
 CycloneDx := [].{
@@ -92,7 +92,7 @@ CycloneDx := [].{
 	## The members of each object this profile reads, by definition name, so a
 	## test can hold them to the schema.
 	objects : List({ definition : Str, members : List(Str) })
-	objects = ["metadata", "component", "hash", "externalReference", "dependency", "property", "organizationalEntity", "organizationalContact"].map(|name| { definition: name, members: (class(name) ?? []).map(|property| property.name) })
+	objects = ["metadata", "component", "hash", "externalReference", "dependency", "compositions", "property", "organizationalEntity", "organizationalContact"].map(|name| { definition: name, members: (class(name) ?? []).map(|property| property.name) })
 }
 
 Mode : [Strict, Lenient]
@@ -123,6 +123,14 @@ check_bom = |tree, mode| {
 		depends = ((dependency.field("dependsOn") ?? JsonData.Array([])).array() ?? []).map(|item| item.string() ?? "")
 		if Lookup.repeated(Lookup.index(depends.map(|ref| { key: ref, value: ref }))) != [] {
 			return Err("dependsOn repeats a reference")
+		}
+	}
+	for composition in (tree.field("compositions") ?? JsonData.Array([])).array() ?? [] {
+		for aspect in ["assemblies", "dependencies"] {
+			named = ((composition.field(aspect) ?? JsonData.Array([])).array() ?? []).map(|item| item.string() ?? "")
+			if named.any(|ref| !Lookup.contains(refs, ref)) or Lookup.repeated(Lookup.index(named.map(|ref| { key: ref, value: ref }))) != [] {
+				return Err("composition has dangling or repeated component references")
+			}
 		}
 	}
 	dependents = ((tree.field("dependencies") ?? JsonData.Array([])).array() ?? []).map(|dependency| (dependency.field("ref") ?? JsonData.Null).string() ?? "")
@@ -160,7 +168,7 @@ needs = |property| { ..property, required: True }
 class : Str -> Try(List(Property), Str)
 class = |name|
 	match name {
-		"bom" => Ok([one("$schema", Text), needs(one("bomFormat", Enum(["CycloneDX"]))), needs(one("specVersion", Text)), one("serialNumber", Serial), one("version", Integer), one("metadata", Inline("metadata")), many("components", Inline("component")), many("dependencies", Inline("dependency")), many("properties", Inline("property"))].concat(["services", "externalReferences", "compositions", "vulnerabilities", "annotations", "formulation", "declarations", "definitions", "citations", "signature"].map(|unread| one(unread, Unsupported))))
+		"bom" => Ok([one("$schema", Text), needs(one("bomFormat", Enum(["CycloneDX"]))), needs(one("specVersion", Text)), one("serialNumber", Serial), one("version", Integer), one("metadata", Inline("metadata")), many("components", Inline("component")), many("dependencies", Inline("dependency")), many("compositions", Inline("compositions")), many("properties", Inline("property"))].concat(["services", "externalReferences", "vulnerabilities", "annotations", "formulation", "declarations", "definitions", "citations", "signature"].map(|unread| one(unread, Unsupported))))
 		"metadata" => Ok([one("timestamp", DateTime), many("lifecycles", Inline("lifecycle")), one("tools", Inline("tools")), one("manufacturer", Inline("organizationalEntity")), many("authors", Inline("organizationalContact")), one("component", Inline("component")), one("supplier", Inline("organizationalEntity")), many("properties", Inline("property"))].concat(["manufacture", "licenses", "distributionConstraints"].map(|unread| one(unread, Unsupported))))
 		"lifecycle" => Ok([needs(one("phase", Enum(phases)))])
 		"tools" => Ok([many("components", Inline("component")), one("services", Unsupported)])
@@ -194,6 +202,7 @@ class = |name|
 		"license" => Ok([one("bom-ref", Ref), one("id", Text), one("name", Text), one("url", Iri), one("acknowledgement", Enum(["declared", "concluded"]))].concat(["text", "licensing", "properties"].map(|unread| one(unread, Unsupported))))
 		"tool" => Ok([one("vendor", Text), one("name", Text), one("version", Version), many("hashes", Inline("hash")), many("externalReferences", Inline("externalReference"))])
 		"externalReference" => Ok([needs(one("url", Iri)), one("comment", Text), needs(one("type", Enum(reference_types))), many("hashes", Inline("hash")), many("properties", Inline("property"))])
+		"compositions" => Ok([one("bom-ref", Ref), needs(one("aggregate", Enum(["complete", "incomplete", "incomplete_first_party_only", "incomplete_first_party_proprietary_only", "incomplete_first_party_opensource_only", "incomplete_third_party_only", "incomplete_third_party_proprietary_only", "incomplete_third_party_opensource_only", "unknown", "not_specified"]))), many("assemblies", Ref), many("dependencies", Ref), many("vulnerabilities", Unsupported), one("signature", Unsupported)])
 		"dependency" => Ok([needs(one("ref", Ref)), many("dependsOn", Ref), many("provides", Unsupported)])
 		"property" => Ok([needs(one("name", Text)), one("value", Text)])
 		"organizationalEntity" => Ok([one("bom-ref", Ref), one("name", Text), many("url", Iri), many("contact", Inline("organizationalContact")), one("address", Unsupported)])

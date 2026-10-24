@@ -11,6 +11,7 @@ import "../../tests/sbom/fixtures/native-linux.spdx.json" as fixture_3 : Str
 import "../../tests/sbom/fixtures/native-linux.spdx-2.3.json" as fixture_2 : Str
 import "../../tests/sbom/fixtures/native-linux.cdx.json" as fixture_cdx : Str
 import "../../tests/sbom/fixtures/input/inventory.json" as inventory_json : Str
+import "../../tests/sbom/fixtures/legacy/blueprint-0.8.cdx.json" as legacy_cdx : Str
 
 ## The checks `scripts/check_sbom.roc` runs: the general ones of
 ## `core.Sidecar` and `core.Manifest`, which the standalone tool's `check`
@@ -98,7 +99,7 @@ SbomCheck := [].{
 		}
 		cargo_lock = Path.read_utf8!(Path.utf8("${root}/sbom/upstream/basic-cli-Cargo.lock"))?
 		cargo : { components : List(Sbom.Component) }
-		cargo = Json.parse(Path.read_utf8!(Path.utf8("${root}/sbom/basic-cli-cargo.json"))?).map_err(|_| Invalid("invalid reviewed Cargo graph"))?
+		cargo = Json.parse(Sbom.normalize_input(Path.read_utf8!(Path.utf8("${root}/sbom/basic-cli-cargo.json"))?).map_err(|problem| Invalid(problem))?).map_err(|_| Invalid("invalid reviewed Cargo graph"))?
 		if evidence.target != "source" or tool_source {
 			if !cargo.components.all(|entry| ids.contains(entry.id)) {
 				return Err(Invalid("known upstream resolution component omitted"))
@@ -209,7 +210,32 @@ expect [fixture_3, fixture_2, fixture_cdx].all(
 		text.replace_each(Sbom.profile, "blueprint-spdx-2.3-v1"),
 		text.replace_each("Reviewed fixture composition declaration", "Built in /Users/someone/work"),
 		text.replace_each("native-closure", ""),
-		text.replace_each("\\\"status\\\":\\\"incomplete\\\"", "\\\"status\\\":\\\"unknown\\\""),
+		text.replace_each("\\\"status\\\":\\\"incomplete\\\"", "\\\"status\\\":\\\"unreviewed\\\""),
 		text.replace_each("2026-10-21T00:00:00Z", "2026-99-01T00:00:00Z"),
 	].all(|broken| broken != text and SbomCheck.profile(broken).is_err()),
 )
+
+# Equal component IDs and evidence cannot hide a different relationship graph.
+expect {
+	checked = SbomCheck.profile(fixture_3) ?? crash "fixture"
+	inventory : Sbom.Inventory
+	inventory = Json.parse(inventory_json) ?? crash "inventory"
+	SbomCheck.against_inventory(checked, { ..inventory, relationships: inventory.relationships.drop_first(1) }) == Err("relationships differ from the inventory")
+		and SbomCheck.against_inventory(checked, { ..inventory, relationships: inventory.relationships.map(|edge| { ..edge, basis: "A different reviewed assertion" }) }).is_err()
+			and SbomCheck.against_inventory(checked, { ..inventory, relationships: inventory.relationships.fold([], |all, edge| all.prepend(edge)) }).is_ok()
+}
+
+# Legacy documents predate standard completeness; they cannot carry new claims.
+expect {
+	broken = legacy_cdx.replace_each("\"dependencies\":[", "\"compositions\":[{\"aggregate\":\"complete\",\"dependencies\":[\"compiler\"]}],\"dependencies\":[")
+	broken != legacy_cdx and Sbom.read_cyclonedx(legacy_cdx).is_ok() and Sbom.read_cyclonedx(broken).is_err()
+}
+
+# Binding to the inventory checks reviewed facts, not only component names.
+expect {
+	checked = SbomCheck.profile(fixture_3) ?? crash "fixture"
+	inventory : Sbom.Inventory
+	inventory = Json.parse(inventory_json) ?? crash "inventory"
+	SbomCheck.against_inventory(checked, { ..inventory, components: inventory.components.map(|entry| { ..entry, copyright: "A different copyright notice" }) }) == Err("component metadata differs from the inventory")
+}
+expect Sidecar.check(legacy_cdx).is_ok()

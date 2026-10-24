@@ -1,6 +1,6 @@
 # SBOM fixture contract
 
-This is the fixture set of Blueprint's SBOM profile, `blueprint-spdx-3.0-v1`,
+This is the fixture set of Blueprint's SBOM profile, `blueprint-spdx-3.0-v2`,
 as a release publishes it: `roc-blueprint-sbom-fixtures-<version>.zip`. The
 test suite of the roc-blueprint repository, `scripts/src/SbomTest.roc`,
 asserts every case below, and `scripts/test_sbom.roc contract` writes this
@@ -26,11 +26,13 @@ shown.
 | --- | --- | --- | --- | --- |
 | `verified-import` | `x86_64-linux` | `consumer-artifact` 1.0.0, the bytes `consumer of fixture\n` | `https://example.org/sbom/fixture/imported/revision-1` | A native supplier's SBOM (the `native-linux` document) imported into a consumer and bound to the consumed input it describes, pinned by SHA-256: the supplier's components join the consumer's graph under `upstream-` identifiers, and the import's coverage states that the document digest and the subject's identity matched. |
 | `native-linux` | `x86_64-linux` | `sample-artifact` 1.0.0, the bytes `fixture subject\n` | `https://example.org/sbom/fixture/revision-1` | The reference native inventory: a platform that contains a transitive native library with a digest of its own, a compiler that only builds the subject (`dependsOn` with scope `build`; CycloneDX scope `excluded`), patched restricted code that keeps its patch identity and licence terms, and an `incomplete` coverage record for the rest of the native closure. |
+| `mixed-coverage` | `x86_64-linux` | `sample-artifact` 1.0.0, the bytes `fixture subject\n` | `https://example.org/sbom/fixture/mixed-coverage/revision-1` | Complete source assembly, verified-empty external package dependencies, incomplete native closure, and unknown compiler dependency closure use standard compositions without asserting unknown leaves empty. |
 | `native-arm64` | `aarch64-linux` | `sample-artifact` 1.0.0, the bytes `fixture subject\n` | `https://example.org/sbom/fixture/arm64/revision-1` | The same composition for `aarch64-linux`: the subject and every component carry that target, and nothing from the `x86_64-linux` case is admitted. |
+| `reviewed-source` | `source` | `roc-ansi-0.13.3.tar.zst` 0.13.3, the bytes `fixture subject\n` | `https://example.org/sbom/fixture/reviewed-source/revision-1` | A reviewed source archive with a library, file and build compiler; explicit subject supplier and UPL-1.0 declaration, independent PURL and immutable VCS reference, exact digests and reviewed copyright/attribution. Mixed member licenses do not invent a subject conclusion. |
 | `source-bundle` | `source` | `sample-source-bundle` 1.0.0, the bytes `fixture source bundle\n` | `https://example.org/sbom/fixture/source/revision-1` | An architecture-independent subject, target `source`, whose components state no target: what a source archive's own SBOM, such as a Roc package bundle's, looks like. It is the supplier document of the `native-source-import` case. |
 | `native-source-import` | `x86_64-linux` | `consumer-artifact` 1.0.0, the bytes `consumer of fixture\n` | `https://example.org/sbom/fixture/source-import/revision-1` | The `source-bundle` document imported into an `x86_64-linux` consumer and bound to the file pin `source:dep`: every component keeps target `source`, the archive's digest and version bind exactly, and the build-scoped dependency ships nothing. Its inputs are under `source-import/`. |
 | `verified-empty` | `x86_64-linux` | `sample-artifact` 1.0.0, the bytes `fixture subject\n` | `https://example.org/sbom/fixture/empty/revision-1` | A reviewed subject with no third-party components, stated as `verified-empty` coverage: an asserted fact, distinct from not knowing. |
-| `unknown-closure` | `x86_64-linux` | `sample-artifact` 1.0.0, the bytes `fixture subject\n` | `https://example.org/sbom/fixture/unknown/revision-1` | A subject whose closure is not known: no components, and an `incomplete` coverage record with its reason and contact. A consumer must not read it as empty. |
+| `unknown-closure` | `x86_64-linux` | `sample-artifact` 1.0.0, the bytes `fixture subject\n` | `https://example.org/sbom/fixture/unknown/revision-1` | A subject whose closure is not known: no components, and an `unknown` coverage record with its reason and contact. A consumer must not read it as empty. |
 
 ## Native inputs: `input/`
 

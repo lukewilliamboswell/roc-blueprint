@@ -21,9 +21,10 @@ import Spdx3
 ## vocabulary; a lifecycle `scope` on `dependsOn` is how SPDX 3 says what SPDX
 ## 2 said with `BUILD_DEPENDENCY_OF` and its siblings.
 Sbom := [].{
-	Component : { id : Str, name : Str, producer : Str, version : Str, identity : Str, download : Str, sha256 : Str, license : Str, license_url : Str, modified : Str, target : Str, origin : Str }
+	SourceRef : { type : Str, url : Str }
+	Component : { kind : Str, copyright : Str, attribution : Str, package_url : Str, source_refs : List(SourceRef), id : Str, name : Str, producer : Str, version : Str, identity : Str, download : Str, sha256 : Str, license : Str, license_url : Str, modified : Str, target : Str, origin : Str }
 	Edge : { from : Str, to : Str, relation : Str, scope : Str, basis : Str }
-	Coverage : { scope : Str, status : Str, reason : Str, contact : Str }
+	Coverage : { scope : Str, component : Str, aspect : Str, status : Str, reason : Str, contact : Str }
 	Disposition : { input : Str, component : Str, reason : Str }
 	Imported : { subject : { component : Str, filename : Str, version : Str, sha256 : Str }, id : Str, url : Str, sha256 : Str, namespace : Str, target : Str, document : Str, relation : Str, basis : Str, contact : Str }
 
@@ -32,23 +33,34 @@ Sbom := [].{
 	Unavailable : { component : Str, reason : Str, contact : Str }
 	Composition : { profile : Str, imported_documents : List(Imported), unavailable_sboms : List(Unavailable), components : List(Component), relationships : List(Edge), coverage : List(Coverage), inputs : List(Disposition) }
 	Context : { namespace : Str, revision : Str, created : Str, author : Str, generator : Str }
-	Subject : { filename : Str, version : Str, target : Str, sha256 : Str, url : Str }
+	Subject : { kind : Str, producer : Str, license : Str, license_url : Str, copyright : Str, attribution : Str, filename : Str, version : Str, target : Str, sha256 : Str, url : Str }
 	Inventory : { target : Str, components : List(Component), relationships : List(Edge), coverage : List(Coverage), inputs : List(Disposition), inspected : List(Str) }
 
 	## A package as an SPDX document states it, whichever version wrote it.
 	## Unstated supplier, download and license read as `NOASSERTION`; an
 	## unstated SHA-256, package URL or comment reads as "".
-	Package : { id : Str, name : Str, version : Str, supplier : Str, download : Str, license : Str, license_url : Str, sha256 : Str, identity : Str, comment : Str }
+	Package : { kind : Str, copyright : Str, attribution : Str, source_refs : List(SourceRef), id : Str, name : Str, version : Str, supplier : Str, download : Str, license : Str, license_url : Str, sha256 : Str, identity : Str, comment : Str }
 
 	## The package graph of an SPDX document. `roots` are the packages it
 	## describes. Identifiers are local, as in a Composition. `evidence` holds
 	## the text of each `other` annotation on the document itself, where
 	## `render` records the profile's coverage and input dispositions. `gaps`
-	## counts what the reader left out of the package graph, and why: files,
+	## counts what the reader left out of the artifact graph, and why:
 	## snippets, relationships to them or into other documents, relationship
 	## types with no composition meaning, and the sections of a CycloneDX BOM
 	## that are not composition. Blueprint's own documents have none.
 	Document : { version : Str, namespace : Str, name : Str, roots : List(Str), packages_ : List(Package), relationships : List(Edge), evidence : List(Str), gaps : List(Str) }
+
+	## Explicit v1 migration: library/file defaults are compatibility defaults,
+	## never reviewed declarations. Opaque legacy identities remain opaque.
+	normalize_input : Str -> Try(Str, Str)
+	normalize_input = |input| {
+		if !json_within_bounds(input) {
+			return Err("SBOM input exceeds 1MiB or depth 64")
+		}
+		tree = JsonData.decode_with(input, JsonData.documents).map_err(JsonData.message)?
+		JsonData.encode_with(migrate_input(tree), JsonData.documents).map_err(JsonData.message)
+	}
 
 	## Existing optional Spec extension seam: Custom("sbom-v1", SUBJECT, Str(JSON)).
 	## No resolver pins live in this metadata; `origin` references the Lock.
@@ -57,7 +69,7 @@ Sbom := [].{
 		matches = spec.extensions.keep_if(|extension| extension.kind == "sbom-v1" and extension.name == name)
 		match matches {
 			[extension] => match extension.value {
-				Str(text) => if (!json_within_bounds(text)) Err("SBOM composition exceeds 1MiB") else Json.parse(text).map_err(|_| "invalid SBOM composition JSON")
+				Str(text) => if (!json_within_bounds(text)) Err("SBOM composition exceeds 1MiB") else Json.parse(normalize_input(text)?).map_err(|_| "invalid SBOM composition JSON")
 				_ => Err("sbom-v1 extension must hold JSON in Str")
 			}
 			_ => Err("expected exactly one sbom-v1 extension for subject")
@@ -99,7 +111,7 @@ Sbom := [].{
 		$depth == 0 and !$quoted
 	}
 
-	profile = "blueprint-spdx-3.0-v1"
+	profile = "blueprint-spdx-3.0-v2"
 
 	## The SPDX 3.0.1 relationship types a composition may state. Each has an
 	## SPDX 2.3 spelling, so both renderings say the same thing.
@@ -208,7 +220,9 @@ Sbom := [].{
 				return Err("dependency ${entry.id} (${entry.origin}) has no supplier SBOM. Import one in imported_documents with subject.component ${Json.to_str(entry.id)}, or list it in unavailable_sboms with the reason none is available.${hint}")
 			}
 		}
-		gaps = composition.unavailable_sboms.map(|entry| { scope: "sbom:${entry.component}", status: "incomplete", reason: "No supplier SBOM: ${entry.reason}", contact: entry.contact })
+		# Missing supplier documentation is an evidence gap, not a reviewed
+		# assembly/dependency completeness claim. Explicit coverage owns those facts.
+		gaps = composition.unavailable_sboms.map(|entry| { scope: "sbom:${entry.component}", component: "", aspect: "", status: "incomplete", reason: "No supplier SBOM: ${entry.reason}", contact: entry.contact })
 		var $combined = { ..composition, imported_documents: [], unavailable_sboms: [], coverage: composition.coverage.concat(gaps) }
 		for imported in composition.imported_documents {
 			binding = if imported.subject.component.is_empty() {
@@ -218,7 +232,7 @@ Sbom := [].{
 				Ok(resolve(declared, lock)?)
 			}
 			expanded = expand_import(imported, target, binding)?
-			$combined = { ..$combined, components: $combined.components.concat(expanded.components), relationships: $combined.relationships.concat(expanded.relationships), coverage: $combined.coverage.append(expanded.coverage) }
+			$combined = { ..$combined, components: $combined.components.concat(expanded.components), relationships: $combined.relationships.concat(expanded.relationships), coverage: $combined.coverage.concat(expanded.coverage) }
 		}
 		unstated = members.keep_if(|member| !states_member(composition.components, member)).map(member_input)
 		inspect_composition(lock, target, $combined, known_inputs(spec, lock, target).concat(unstated))
@@ -275,6 +289,11 @@ Sbom := [].{
 		}
 		components = members.map(
 			|member| {
+				kind: "file",
+				copyright: "NOASSERTION",
+				attribution: "NOASSERTION",
+				package_url: "",
+				source_refs: [],
 				id: member_id(member),
 				name: member.name,
 				producer: "NOASSERTION",
@@ -329,6 +348,15 @@ Sbom := [].{
 			}
 			if !admits_target(target, resolved.target) {
 				return Err("component target differs from subject target")
+			}
+			if !kind_valid(component.kind) or component.copyright.is_empty() or component.attribution.is_empty() or !refs_valid(component.source_refs) {
+				return Err("invalid reviewed kind, copyright, attribution or source reference")
+			}
+			if (!component.package_url.is_empty() and (!component.package_url.starts_with("pkg:") or !identity(component.package_url))) or (component.identity.starts_with("pkg:") and !component.package_url.is_empty() and component.identity != component.package_url) {
+				return Err("invalid or conflicting package URL")
+			}
+			if !component.license.contains("LicenseRef-") and !component.license_url.is_empty() {
+				return Err("license_url is only supported for LicenseRef terms; omit it for standard licenses")
 			}
 			if !supplier(component.producer) or !license(component.license) {
 				return Err("invalid SPDX supplier or license expression")
@@ -400,11 +428,8 @@ Sbom := [].{
 		if composition.coverage.is_empty() {
 			return Err("coverage must distinguish verified empty from unknown inventory")
 		}
-		for scope in composition.coverage {
-			if scope.scope.is_empty() or scope.reason.is_empty() or scope.contact.is_empty() or !["complete", "incomplete", "excluded", "verified-empty"].contains(scope.status) {
-				return Err("invalid or unexplained coverage")
-			}
-		}
+		_ = Sbom.validate_coverage(composition.coverage, ids.prepend(subject_id), composition.relationships)?
+
 		declared = composition.inputs.map(|input| input.input)
 		if unique(declared).len() != declared.len() or declared.len() != known.len() or known.any(|input| !declared.contains(input)) {
 			return Err("known input omitted or unknown/duplicate input disposition")
@@ -416,6 +441,67 @@ Sbom := [].{
 		}
 		Ok({ target, components: $components.sort_with(|a, b| Project.bytewise(a.id, b.id)), relationships: composition.relationships.sort_with(|a, b| Project.bytewise(edge_key(a), edge_key(b))), coverage: composition.coverage.sort_with(|a, b| Project.bytewise(a.scope, b.scope)), inputs: composition.inputs.sort_with(|a, b| Project.bytewise(a.input, b.input)), inspected: known.sort_with(Project.bytewise) })
 	}
+
+	## Empty addresses preserve legacy evidence without making completeness claims.
+	## Migration is explicit: name a component (including Subject) and an aspect.
+	validate_coverage : List(Coverage), List(Str), List(Edge) -> Try({}, Str)
+	validate_coverage = |coverage, ids, edges| {
+		if unique(coverage.map(|claim| claim.scope)).len() != coverage.len() {
+			return Err("duplicate coverage scope")
+		}
+		for claim in coverage {
+			if claim.scope.is_empty() or claim.reason.is_empty() or claim.contact.is_empty() or !["complete", "incomplete", "unknown", "excluded", "verified-empty"].contains(claim.status) {
+				return Err("invalid or unexplained coverage")
+			}
+			if !claim.component.is_empty() or !claim.aspect.is_empty() {
+				if !ids.contains(claim.component) or !["assembly", "dependencies"].contains(claim.aspect) {
+					return Err("coverage ${claim.scope}: set component to a declared component or Subject and aspect to assembly or dependencies; leave both empty only for legacy evidence")
+				}
+				if coverage.any(|other| other.component == claim.component and other.aspect == claim.aspect and other.status != claim.status) {
+					return Err("conflicting coverage completeness for ${claim.component}/${claim.aspect}")
+				}
+				relation = if claim.aspect == "assembly" {
+					"contains"
+				} else {
+					"dependsOn"
+				}
+				if claim.status == "verified-empty" and edges.any(|edge| edge.from == claim.component and edge.relation == relation) {
+					return Err("verified-empty coverage contradicts known ${relation} relationships")
+				}
+			}
+		}
+		Ok({})
+	}
+
+	validate_metadata : Package -> Try({}, Str)
+	validate_metadata = |entry| {
+		if !kind_valid(entry.kind) or !refs_valid(entry.source_refs) {
+			return Err("invalid kind or source references")
+		}
+		metadata : Try({ kind : Str, copyright : Str, attribution : Str }, _)
+		metadata = Json.parse(entry.comment)
+		match metadata {
+			Ok(reviewed) => if reviewed.kind != entry.kind or reviewed.copyright != entry.copyright or reviewed.attribution != entry.attribution {
+				return Err("standard metadata differs from reviewed declaration")
+			}
+			Err(_) => {}
+		}
+		identity_meta : Try({ package_url : Str, source_refs : List(SourceRef) }, _)
+		identity_meta = Json.parse(entry.comment)
+		match identity_meta {
+			Ok(reviewed) => if reviewed.package_url != entry.identity or reviewed.source_refs != entry.source_refs {
+				return Err("standard package/source references differ from reviewed declaration")
+			}
+			Err(_) => {}
+		}
+		Ok({})
+	}
+
+	package_of : Component -> Package
+	package_of = |component| component_package(component)
+
+	package_graph : Inventory, Subject -> List(Package)
+	package_graph = |inventory, subject| packages_of(inventory, subject)
 
 	## Bind caller-supplied digest of final bytes as SPDX 3.0.1 JSON-LD. Effects
 	## live in scripts/sbom.roc. A revised document gets a distinct namespace
@@ -441,7 +527,9 @@ Sbom := [].{
 	## `render` as CycloneDX 1.7 JSON. The subject is the metadata component
 	## and each inventory component a component with its hashes, purl,
 	## license expression, supplier or authors, download and license terms
-	## locations. `contains` and `dependsOn` relationships are dependencies.
+	## locations. `contains` nests components as assemblies; only `dependsOn`
+	## relationships appear in the dependency graph. Containment must be a
+	## forest: shared children, cycles and containing the subject are rejected.
 	## A component's scope is `required` when the subject reaches it through
 	## `contains` or a `dependsOn` without a lifecycle scope or with `runtime`,
 	## `excluded` when it is otherwise the target of a build, test or
@@ -452,6 +540,7 @@ Sbom := [].{
 	render_cyclonedx : Inventory, Subject, Context -> Try(Str, Str)
 	render_cyclonedx = |inventory, subject, context| {
 		bindable(inventory, subject, context)?
+		containment(inventory.relationships)?
 		text = "${JsonData.encode_with(cyclonedx(inventory, subject, context), JsonData.documents).map_err(JsonData.message)?}\n"
 		_ = CycloneDx.validate(text).map_err(|problem| "rendered CycloneDX ${CycloneDx.version} is invalid: ${problem}")?
 		no_leaks(text)
@@ -466,12 +555,16 @@ Sbom := [].{
 		if !json_within_bounds(text) {
 			return Err("CycloneDX document exceeds 1MiB or nests deeper than 64 levels")
 		}
-		read_bom(CycloneDx.validate(text)?)
+		document = read_bom(CycloneDx.validate(text)?)?
+		for entry in document.packages_ {
+			validate_metadata(entry)?
+		}
+		Ok(document)
 	}
 
 	## The package graph of an SPDX 3.0.1, 2.3 or 2.2 JSON document, or of a
 	## CycloneDX 1.4 to 1.7 JSON BOM, after checking it against that format.
-	## A BOM Blueprint wrote is read through its `blueprint:` properties. Only a package graph is read: other
+	## A BOM Blueprint wrote is read through its `blueprint:` properties. Package and file graphs are read: other
 	## element kinds, and relationships without a Composition spelling, are
 	## outside this profile and rejected.
 	read : Str -> Try(Document, Str)
@@ -480,7 +573,7 @@ Sbom := [].{
 			return Err("SPDX document exceeds 1MiB or nests deeper than 64 levels")
 		}
 		tree = JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?
-		if tree.field("@context").is_ok() {
+		decoded = if tree.field("@context").is_ok() {
 			read_spdx3(Spdx3.check(tree)?)
 		} else if tree.field("spdxVersion").is_ok() {
 			Spdx2.validate(tree)?
@@ -491,6 +584,11 @@ Sbom := [].{
 		} else {
 			Err("not an SPDX 3 JSON-LD, SPDX 2 JSON or CycloneDX JSON document")
 		}
+		document = decoded?
+		for entry in document.packages_ {
+			validate_metadata(entry)?
+		}
+		Ok(document)
 	}
 }
 
@@ -568,8 +666,17 @@ no_leaks = |text| if (leaks(text)) Err("SBOM contains credential or absolute dev
 ## What both renderings require of their inputs.
 bindable : Sbom.Inventory, Sbom.Subject, Sbom.Context -> Try({}, Str)
 bindable = |inventory, subject, context| {
+	if !kind_valid(subject.kind) or !supplier(subject.producer) or !license(subject.license) or subject.copyright.is_empty() or subject.attribution.is_empty() or (!subject.license_url.is_empty() and !uri(subject.license_url)) or (subject.license.contains("LicenseRef-") and subject.license_url.is_empty()) {
+		return Err("invalid reviewed subject metadata")
+	}
 	if !uri(subject.url) or !uri(context.namespace) or context.namespace.contains("#") {
 		return Err("invalid or credential-bearing subject/document URI")
+	}
+	terms = inventory.components.map(|entry| { license: entry.license, license_url: entry.license_url }).append({ license: subject.license, license_url: subject.license_url }).fold([], |all, entry| all.concat(SbomLicenses.custom_ids(entry.license).map(|id| { id, url: entry.license_url })))
+	for term in terms {
+		if terms.any(|other| other.id == term.id and other.url != term.url) {
+			return Err("subject and component LicenseRef terms conflict")
+		}
 	}
 	if inventory.target != subject.target {
 		return Err("subject target differs from inspected target")
@@ -577,6 +684,9 @@ bindable = |inventory, subject, context| {
 	_ = Sbom.inspect_declared(subject.target, { profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components: inventory.components.map(|entry| { ..entry, origin: "reviewed" }), relationships: inventory.relationships, coverage: inventory.coverage, inputs: inventory.inputs }, inventory.inspected)?
 	if unique(inventory.inspected).len() != inventory.inspected.len() or inventory.inspected.sort_with(Project.bytewise) != inventory.inputs.map(|entry| entry.input).sort_with(Project.bytewise) {
 		return Err("inventory evidence does not account for inspected inputs")
+	}
+	if !subject.license.contains("LicenseRef-") and !subject.license_url.is_empty() {
+		return Err("license_url is only supported for LicenseRef terms; omit it for standard licenses")
 	}
 	if subject.filename.is_empty() or subject.filename.contains("/") or subject.filename.contains("\\") or subject.filename == "." or subject.filename == ".." or subject.version.is_empty() or subject.target.is_empty() or !hex(subject.sha256) {
 		return Err("invalid subject filename/version/target/SHA-256")
@@ -597,14 +707,29 @@ evidence : Sbom.Inventory, Sbom.Subject, Sbom.Context -> Str
 evidence = |inventory, subject, context| Json.to_str({ profile: Sbom.profile, revision: context.revision, target: subject.target, coverage: inventory.coverage, inspected: inventory.inspected, dispositions: inventory.inputs })
 
 component_comment : Sbom.Component -> Str
-component_comment = |component| Json.to_str({ identity: component.identity, origin: component.origin, target: component.target, modifications: component.modified })
+component_comment = |component| Json.to_str({ kind: component.kind, copyright: component.copyright, attribution: component.attribution, package_url: package_url(component), source_refs: component.source_refs, identity: component.identity, origin: component.origin, target: component.target, modifications: component.modified })
 
 subject_comment : Sbom.Subject -> Str
-subject_comment = |subject| Json.to_str({ target: subject.target, digest_kind: "final-deliverable-sha256" })
+subject_comment = |subject| Json.to_str({ kind: subject.kind, copyright: subject.copyright, attribution: subject.attribution, target: subject.target, digest_kind: "final-deliverable-sha256" })
 
 ## The packages of a rendering, the subject first.
 packages_of : Sbom.Inventory, Sbom.Subject -> List(Sbom.Package)
-packages_of = |inventory, subject| inventory.components.map(|component| { id: component.id, name: component.name, version: component.version, supplier: component.producer, download: component.download, license: component.license, license_url: component.license_url, sha256: component.sha256, identity: if (component.identity.starts_with("pkg:")) component.identity else "", comment: component_comment(component) }).prepend({ id: subject_id, name: subject.filename, version: subject.version, supplier: "NOASSERTION", download: subject.url, license: "NOASSERTION", license_url: "", sha256: subject.sha256, identity: "", comment: subject_comment(subject) })
+packages_of = |inventory, subject| inventory.components.map(component_package).prepend({ kind: subject.kind, copyright: subject.copyright, attribution: subject.attribution, source_refs: [], id: subject_id, name: subject.filename, version: subject.version, supplier: subject.producer, download: subject.url, license: subject.license, license_url: subject.license_url, sha256: subject.sha256, identity: "", comment: subject_comment(subject) })
+
+package_url : Sbom.Component -> Str
+package_url = |component| if (component.package_url.is_empty() and component.identity.starts_with("pkg:")) component.identity else component.package_url
+
+kind_valid : Str -> Bool
+kind_valid = |kind| ["library", "application", "file", "unknown"].contains(kind)
+
+refs_valid : List(Sbom.SourceRef) -> Bool
+refs_valid = |refs| refs.len() <= 16 and refs.all(|ref| ["vcs", "source-distribution"].contains(ref.type) and ref.url != "NOASSERTION" and uri(ref.url)) and unique(refs.map(|ref| "${ref.type} ${ref.url}")).len() == refs.len()
+
+purpose : Str -> Str
+purpose = |kind| if (kind == "unknown") "other" else kind
+
+read_purpose : Str -> Str
+read_purpose = |kind| if (kind_valid(kind)) kind else "unknown"
 
 ## SPDX 3.0.1
 
@@ -641,7 +766,7 @@ spdx3 = |inventory, subject, context| {
 		|entry| element(
 			"software_Package",
 			entry.id,
-			[member("name", text(entry.name)), member("comment", text(entry.comment)), member("software_packageVersion", text(entry.version))]
+			[member("name", text(entry.name)), member("comment", text(entry.comment)), member("software_primaryPurpose", text(purpose(entry.kind))), member("software_copyrightText", text(entry.copyright)), member("software_attributionText", texts(if (entry.attribution == "NOASSERTION") [] else [entry.attribution])), member("software_sourceInfo", text(Json.to_str(entry.source_refs))), member("software_packageVersion", text(entry.version))]
 				.concat(when(entry.download != "NOASSERTION", [member("software_downloadLocation", text(entry.download))]))
 				.concat(when(entry.supplier != "NOASSERTION", [member("suppliedBy", text(iri(agent_local(entry.supplier))))]))
 				.concat(when(!entry.identity.is_empty(), [member("software_packageUrl", text(entry.identity))]))
@@ -712,7 +837,7 @@ read_spdx3 = |nodes| {
 	field_texts = |tree, key| ((tree.field(key) ?? JsonData.Array([])).array() ?? []).map(|item| item.string() ?? "")
 	declared = nodes.keep_if(|node| (node.type == "Relationship" or node.type == "LifecycleScopedRelationship") and field_text(node.tree, "relationshipType") == "hasDeclaredLicense")
 	var $found = []
-	for node in nodes.keep_if(|candidate| candidate.type == "software_Package") {
+	for node in nodes.keep_if(|candidate| (candidate.type == "software_Package" or candidate.type == "software_File")) {
 		id = local(node.id)?
 		supplied = field_text(node.tree, "suppliedBy")
 		supplied_by = match Lookup.find(by_id, supplied) {
@@ -739,9 +864,13 @@ read_spdx3 = |nodes| {
 			_ => ((node.tree.field("externalIdentifier") ?? JsonData.Array([])).array() ?? []).find_first(|entry| field_text(entry, "externalIdentifierType") == "packageUrl").map_ok(|entry| field_text(entry, "identifier")) ?? ""
 		}
 		$found = $found.append({
+			kind: if (node.type == "software_File") "file" else read_purpose(field_text(node.tree, "software_primaryPurpose")),
+			copyright: unknown_text(field_text(node.tree, "software_copyrightText")),
+			attribution: unknown_text(Str.join_with(field_texts(node.tree, "software_attributionText"), "\n")),
+			source_refs: read_refs(field_text(node.tree, "software_sourceInfo")),
 			id,
 			name: field_text(node.tree, "name"),
-			version: field_text(node.tree, "software_packageVersion"),
+			version: unknown_text(field_text(node.tree, "software_packageVersion")),
 			supplier: supplied_by,
 			download: if (node.tree.field("software_downloadLocation").is_ok()) field_text(node.tree, "software_downloadLocation") else "NOASSERTION",
 			license: license_text,
@@ -751,7 +880,7 @@ read_spdx3 = |nodes| {
 			comment: field_text(node.tree, "comment"),
 		})
 	}
-	package_iris = nodes.keep_if(|node| node.type == "software_Package").map(|node| node.id)
+	package_iris = nodes.keep_if(|node| (node.type == "software_Package" or node.type == "software_File")).map(|node| node.id)
 	var $roots = []
 	for root in field_texts(document.tree, "rootElement") {
 		match Lookup.find(by_id, root) {
@@ -796,10 +925,8 @@ read_spdx3 = |nodes| {
 			$gaps = $gaps.append("described element that is not a package")
 		}
 	}
-	files = nodes.keep_if(|node| node.type == "software_File").len()
-	file_gaps = List.repeat("file", files)
 	statements = nodes.keep_if(|node| node.type == "Annotation" and field_text(node.tree, "annotationType") == "other" and field_text(node.tree, "subject") == document.id).map(|node| field_text(node.tree, "statement"))
-	Ok({ version: "SPDX-${Spdx3.version}", namespace, name: field_text(document.tree, "name"), roots: $root_ids, packages_: $found, relationships: $edges, evidence: statements, gaps: tally(file_gaps.concat($gaps)) })
+	Ok({ version: "SPDX-${Spdx3.version}", namespace, name: field_text(document.tree, "name"), roots: $root_ids, packages_: $found, relationships: $edges, evidence: statements, gaps: tally($gaps) })
 }
 
 ## SPDX 2.3
@@ -862,7 +989,10 @@ spdx2 = |inventory, subject, context| {
 			filesAnalyzed: not_analyzed,
 			licenseConcluded: "NOASSERTION",
 			licenseDeclared: entry.license,
-			copyrightText: "NOASSERTION",
+			copyrightText: entry.copyright,
+			attributionTexts: if (entry.attribution == "NOASSERTION") [] else [entry.attribution],
+			primaryPackagePurpose: if (entry.kind == "file") "FILE" else if (entry.kind == "application") "APPLICATION" else if (entry.kind == "library") "LIBRARY" else "OTHER",
+			sourceInfo: Json.to_str(entry.source_refs),
 			checksums: if (entry.sha256.is_empty()) [] else [{ algorithm: "SHA256", checksumValue: entry.sha256 }],
 			comment: entry.comment,
 			externalRefs: if (entry.identity.is_empty()) [] else [{ referenceCategory: "PACKAGE-MANAGER", referenceType: "purl", referenceLocator: entry.identity }],
@@ -877,7 +1007,7 @@ spdx2 = |inventory, subject, context| {
 	annotation = Json.to_str({ annotationType: "OTHER", annotator: context.author, annotationDate: context.created, comment: evidence(inventory, subject, context) })
 	var $licenses = []
 	var $declared = []
-	for component in inventory.components {
+	for component in packages_of(inventory, subject) {
 		for id in SbomLicenses.custom_ids(component.license) {
 			if !$declared.contains(id) {
 				$declared = $declared.append(id)
@@ -899,6 +1029,15 @@ read_spdx2 = |tree| {
 			license_text = if (entry.field("licenseDeclared").is_ok()) field_text(entry, "licenseDeclared") else "NOASSERTION"
 			first = SbomLicenses.custom_ids(license_text).first() ?? ""
 			{
+				kind: match field_text(entry, "primaryPackagePurpose") {
+					"FILE" => "file"
+					"APPLICATION" => "application"
+					"LIBRARY" => "library"
+					_ => "unknown"
+				},
+				copyright: unknown_text(field_text(entry, "copyrightText")),
+				attribution: unknown_text(Str.join_with(listed(entry, "attributionTexts").map(|value| value.string() ?? ""), "\n")),
+				source_refs: read_refs(field_text(entry, "sourceInfo")),
 				id: local(field_text(entry, "SPDXID")),
 				name: field_text(entry, "name"),
 				version: field_text(entry, "versionInfo"),
@@ -915,8 +1054,9 @@ read_spdx2 = |tree| {
 			}
 		},
 	)
-	package_ids = listed(tree, "packages").map(|entry| field_text(entry, "SPDXID"))
-	files = listed(tree, "files").map(|_| "file").concat(listed(tree, "snippets").map(|_| "snippet"))
+	file_entries = listed(tree, "files").map(|entry| { kind: "file", copyright: unknown_text(field_text(entry, "copyrightText")), attribution: unknown_text(Str.join_with(listed(entry, "attributionTexts").map(|value| value.string() ?? ""), "\n")), source_refs: [], id: local(field_text(entry, "SPDXID")), name: field_text(entry, "fileName"), version: "NOASSERTION", supplier: "NOASSERTION", download: "NOASSERTION", license: "NOASSERTION", license_url: "", identity: "", comment: field_text(entry, "comment"), sha256: listed(entry, "checksums").find_first(|checksum| field_text(checksum, "algorithm") == "SHA256").map_ok(|checksum| field_text(checksum, "checksumValue")) ?? "" })
+	package_ids = listed(tree, "packages").concat(listed(tree, "files")).map(|entry| field_text(entry, "SPDXID"))
+	files = listed(tree, "snippets").map(|_| "snippet")
 
 	## Why an endpoint is not a package of this document, if it is not.
 	elsewhere : Str -> Try({}, Str)
@@ -927,7 +1067,7 @@ read_spdx2 = |tree| {
 		else if (id.starts_with("DocumentRef-")) Err("relationship into another SPDX document")
 		else Err("relationship to a file or snippet")
 	var $roots = []
-	var $gaps = files
+	var $gaps = files.concat(listed(tree, "files").keep_if(|entry| !["", "NOASSERTION"].contains(field_text(entry, "licenseConcluded")) or listed(entry, "licenseInfoInFiles").any(|value| value.string() != Ok("NOASSERTION"))).map(|_| "file concluded/observed license facts have no declared-license meaning"))
 	for described in listed(tree, "documentDescribes").map(|item| item.string() ?? "") {
 		if package_ids.contains(described) {
 			$roots = $roots.append(local(described))
@@ -969,7 +1109,7 @@ read_spdx2 = |tree| {
 		}
 	}
 	statements = listed(tree, "annotations").keep_if(|annotation| field_text(annotation, "annotationType") == "OTHER").map(|annotation| field_text(annotation, "comment"))
-	Ok({ version: field_text(tree, "spdxVersion"), namespace: field_text(tree, "documentNamespace"), name: field_text(tree, "name"), roots: unique($roots), packages_: listed_packages, relationships: $edges, evidence: statements, gaps: tally($gaps) })
+	Ok({ version: field_text(tree, "spdxVersion"), namespace: field_text(tree, "documentNamespace"), name: field_text(tree, "name"), roots: unique($roots), packages_: listed_packages.concat(file_entries), relationships: $edges, evidence: statements, gaps: tally($gaps) })
 }
 
 resolve : Sbom.Component, Lock -> Try(Sbom.Component, Str)
@@ -1058,7 +1198,7 @@ license = |value| value == "NOASSERTION" or value == "NONE" or SbomLicenses.expr
 
 # Import inert, caller-supplied bytes only. Namespace and checksum are distinct
 # identities; imports never download a URI or execute a document's contents.
-expand_import : Sbom.Imported, Str, Try(Sbom.Component, [Unbound]) -> Try({ components : List(Sbom.Component), relationships : List(Sbom.Edge), coverage : Sbom.Coverage }, Str)
+expand_import : Sbom.Imported, Str, Try(Sbom.Component, [Unbound]) -> Try({ components : List(Sbom.Component), relationships : List(Sbom.Edge), coverage : List(Sbom.Coverage) }, Str)
 expand_import = |imported, target, binding| {
 	if !valid_id(imported.id) or !uri(imported.url) or !namespace_identity(imported.namespace) or !hex(imported.sha256) or !Sbom.json_within_bounds(imported.document) or imported.contact.is_empty() or imported.basis.is_empty() or !Sbom.relations.contains(imported.relation) {
 		return Err("invalid or oversized imported reference")
@@ -1129,12 +1269,18 @@ expand_import = |imported, target, binding| {
 			$claimed = $claimed.append(purl)
 		}
 	}
+	for entry in decoded.packages_ {
+		if !refs_valid(entry.source_refs) {
+			return Err("invalid imported source reference")
+		}
+		Sbom.validate_metadata(entry)?
+	}
 	components = decoded.packages_.map(
 		|entry| {
 			found = normalized(entry)
 			kept = if ($shared.contains(entry.id)) { kept: { ..found.kept, identity: "" }, notes: found.notes.append("package URL ${found.kept.identity} is shared with another imported package") } else found
 			fallback = "${imported.namespace}#${entry.id}"
-			{ id: map_id(entry.id), name: kept.kept.name, version: kept.kept.version, producer: kept.kept.supplier, download: kept.kept.download, license: kept.kept.license, license_url: kept.kept.license_url, sha256: kept.kept.sha256, identity: if (kept.kept.identity.is_empty()) fallback else kept.kept.identity, origin: "reviewed", target: imported.target, modified: "Imported ${imported.namespace}#${entry.id} from ${imported.url}; document SHA256 ${imported.sha256}; upstream metadata ${if (entry.comment.is_empty()) "NOASSERTION" else entry.comment}${Str.join_with(kept.notes.map(|note| "; ${note}"), "")}" }
+			{ kind: kept.kept.kind, copyright: kept.kept.copyright, attribution: kept.kept.attribution, package_url: kept.kept.identity, source_refs: kept.kept.source_refs, id: map_id(entry.id), name: kept.kept.name, version: kept.kept.version, producer: kept.kept.supplier, download: kept.kept.download, license: kept.kept.license, license_url: kept.kept.license_url, sha256: kept.kept.sha256, identity: if (kept.kept.identity.is_empty()) fallback else kept.kept.identity, origin: "reviewed", target: imported.target, modified: "Imported ${imported.namespace}#${entry.id} from ${imported.url}; document SHA256 ${imported.sha256}; upstream metadata ${if (entry.comment.is_empty()) "NOASSERTION" else entry.comment}${Str.join_with(kept.notes.map(|note| "; ${note}"), "")}" }
 		},
 	)
 	# One LicenseRef- names one terms location in a document, so a later
@@ -1160,7 +1306,31 @@ expand_import = |imported, target, binding| {
 	}
 	verified = if (binding.is_ok()) "Document digest and upstream subject artifact identity match; completeness and undisclosed closure remain unverified" else "Document integrity verified; upstream subject not bound to a resolved artifact, so composition claims remain unverified"
 	omitted = if (decoded.gaps.is_empty()) "" else ". Not imported from ${decoded.version}: ${Str.join_with(decoded.gaps, "; ")}"
-	Ok({ components: $unified, relationships: $edges, coverage: { scope: "import:${imported.id}", status: "incomplete", reason: "${verified}${omitted}", contact: imported.contact } })
+	var $coverage = [{ scope: "import:${imported.id}", component: "", aspect: "", status: "incomplete", reason: "${verified}${omitted}", contact: imported.contact }]
+	for statement in decoded.evidence {
+		upstream : Try({ coverage : List(Sbom.Coverage) }, _)
+		upstream = Json.parse(Sbom.normalize_input(statement) ?? statement)
+		match upstream {
+			Ok(evidence_) => {
+				_ = Sbom.validate_coverage(evidence_.coverage, ids, decoded.relationships)?
+				$coverage = $coverage.concat(
+					evidence_.coverage.map(
+						|claim| {
+							..claim,
+							scope: "import:${imported.id}:${claim.scope}",
+							component: if claim.component.is_empty() {
+								""
+							} else {
+								map_id(claim.component)
+							},
+						},
+					),
+				)
+			}
+			Err(_) => {}
+		}
+	}
+	Ok({ components: $unified, relationships: $edges, coverage: $coverage })
 }
 
 # Keep JSON boolean nominal rather than an inferred single tag.
@@ -1236,33 +1406,124 @@ sha256_hashes = |digest| when(!digest.is_empty(), [member("hashes", JsonData.Arr
 references : List({ type : Str, url : Str }) -> List({ name : Str, value : JsonData })
 references = |listed| when(!listed.is_empty(), [member("externalReferences", JsonData.Array(listed.map(|reference| JsonData.Object([member("type", text(reference.type)), member("url", text(reference.url))]))))])
 
+## A CycloneDX assembly has one parent and each bom-ref occurs once. The
+## inventory may describe a DAG, but it cannot render a shared child as two
+## assemblies without duplicating its identifier or silently losing an edge.
+containment : List(Sbom.Edge) -> Try({}, Str)
+containment = |edges| {
+	contains = edges.keep_if(|edge| edge.relation == "contains")
+	for edge in contains {
+		if edge.to == subject_id {
+			return Err("CycloneDX containment cannot contain the subject")
+		}
+		if unique(contains.keep_if(|other| other.to == edge.to).map(|other| other.from)).len() > 1 {
+			return Err("CycloneDX containment requires one parent per component: ${edge.to}")
+		}
+		var $visited = [edge.to]
+		var $parent = edge.from
+		var $depth = 0.U64
+		while !$parent.is_empty() {
+			if $visited.contains($parent) {
+				return Err("CycloneDX containment contains a cycle")
+			}
+			$visited = $visited.append($parent)
+			$depth = $depth + 1
+			if $depth > 24 {
+				return Err("CycloneDX containment exceeds the supported nesting depth of 24")
+			}
+			$parent = contains.find_first(|other| other.to == $parent).map_ok(|other| other.from) ?? ""
+		}
+	}
+	Ok({})
+}
+
+## Nest the already rendered components without cloning bom-ref identifiers.
+assemblies : List(JsonData), List(Sbom.Edge), Str -> List(JsonData)
+assemblies = |components, edges, parent| {
+	children = components.keep_if(
+		|component| {
+			id = (component.field("bom-ref") ?? JsonData.Null).string() ?? ""
+			if parent.is_empty() {
+				!edges.any(|edge| edge.relation == "contains" and edge.to == id)
+			} else {
+				edges.any(|edge| edge.relation == "contains" and edge.from == parent and edge.to == id)
+			}
+		},
+	)
+	children.map(
+		|component| {
+			id = (component.field("bom-ref") ?? JsonData.Null).string() ?? ""
+			nested = assemblies(components, edges, id)
+			match component {
+				Object(fields) => JsonData.Object(fields.concat(when(!nested.is_empty(), [member("components", JsonData.Array(nested))])))
+				_ => component
+			}
+		},
+	)
+}
+
+## Dependency entries assert an examined graph. Unknown leaves stay absent.
+dependency_ids : List(Sbom.Edge), List(Sbom.Coverage), List(Str) -> List(Str)
+dependency_ids = |edges, coverage, ids| ids.keep_if(|id| edges.any(|edge| edge.from == id and edge.relation == "dependsOn") or coverage.any(|claim| claim.component == id and claim.aspect == "dependencies" and ["complete", "verified-empty"].contains(claim.status)))
+
+coverage_compositions : List(Sbom.Coverage) -> List(JsonData)
+coverage_compositions = |coverage| coverage.keep_if(|claim| !claim.component.is_empty()).map(
+	|claim| {
+		aggregate = if ["complete", "verified-empty"].contains(claim.status) {
+			"complete"
+		} else if claim.status == "incomplete" {
+			"incomplete"
+		} else {
+			"unknown"
+		}
+		JsonData.Object([
+			member("aggregate", text(aggregate)),
+			member(
+				if claim.aspect == "assembly" {
+					"assemblies"
+				} else {
+					"dependencies"
+				},
+				texts([claim.component]),
+			),
+		])
+	},
+)
+
 cyclonedx : Sbom.Inventory, Sbom.Subject, Sbom.Context -> JsonData
 cyclonedx = |inventory, subject, context| {
 	required = shipped(inventory.relationships)
 	expression = |license_text| license_text != "NOASSERTION" and license_text != "NONE"
-	components = inventory.components.map(
+	flat_components = inventory.components.map(
 		|component|
 			JsonData.Object(
-				[member("type", text("library")), member("bom-ref", text(component.id)), member("name", text(component.name)), member("version", text(component.version))]
+				[member("type", text(if (component.kind == "unknown") "library" else component.kind)), member("bom-ref", text(component.id)), member("name", text(component.name)), member("version", text(component.version))]
 					.concat(supplied(component.producer))
 					.append(member("scope", text(cyclonedx_scope(inventory.relationships, required, component.id))))
 					.concat(sha256_hashes(component.sha256))
 					.concat(when(expression(component.license), [member("licenses", JsonData.Array([JsonData.Object([member("expression", text(component.license))])]))]))
-					.concat(when(component.identity.starts_with("pkg:"), [member("purl", text(component.identity))]))
+					.concat(when(!package_url(component).is_empty(), [member("purl", text(package_url(component)))]))
+					.concat(when(component.copyright != "NOASSERTION", [member("copyright", text(component.copyright))]))
 					.concat(
 						references(
-							(if (component.download == "NOASSERTION") [] else [{ type: "distribution", url: component.download }])
+							component.source_refs.concat(if (component.download == "NOASSERTION") [] else [{ type: "distribution", url: component.download }])
 								.concat(if (component.license.contains("LicenseRef-") and !component.license_url.is_empty() and component.license_url != "NOASSERTION") [{ type: "license", url: component.license_url }] else []),
 						),
 					)
-					.append(member("properties", JsonData.Array([property("blueprint:identity", component.identity), property("blueprint:origin", component.origin), property("blueprint:target", component.target), property("blueprint:modifications", component.modified)].concat(if (component.license == "NONE") [property("blueprint:license", "NONE")] else [])))),
+					.append(member("properties", JsonData.Array([property("blueprint:kind", component.kind), property("blueprint:attribution", component.attribution), property("blueprint:identity", component.identity), property("blueprint:origin", component.origin), property("blueprint:target", component.target), property("blueprint:modifications", component.modified)].concat(if (component.license == "NONE") [property("blueprint:license", "NONE")] else [])))),
 			),
 	)
+	components = assemblies(flat_components, inventory.relationships, "")
+	contained = assemblies(flat_components, inventory.relationships, subject_id)
 	metadata_component = JsonData.Object(
-		[member("type", text("file")), member("bom-ref", text(subject_id)), member("name", text(subject.filename)), member("version", text(subject.version))]
+		[member("type", text(if (subject.kind == "unknown") "file" else subject.kind)), member("bom-ref", text(subject_id)), member("name", text(subject.filename)), member("version", text(subject.version))]
+			.concat(supplied(subject.producer))
+			.concat(when(expression(subject.license), [member("licenses", JsonData.Array([JsonData.Object([member("expression", text(subject.license))])]))]))
+			.concat(when(subject.copyright != "NOASSERTION", [member("copyright", text(subject.copyright))]))
 			.concat(sha256_hashes(subject.sha256))
-			.concat(references(if (subject.url == "NOASSERTION") [] else [{ type: "distribution", url: subject.url }]))
-			.append(member("properties", JsonData.Array([property("blueprint:target", subject.target), property("blueprint:digest-kind", "final-deliverable-sha256")]))),
+			.concat(references((if (subject.url == "NOASSERTION") [] else [{ type: "distribution", url: subject.url }]).concat(if (subject.license_url.is_empty() or subject.license_url == "NOASSERTION") [] else [{ type: "license", url: subject.license_url }])))
+			.append(member("properties", JsonData.Array([property("blueprint:kind", subject.kind), property("blueprint:attribution", subject.attribution), property("blueprint:license", subject.license), property("blueprint:license-url", subject.license_url), property("blueprint:target", subject.target), property("blueprint:digest-kind", "final-deliverable-sha256")])))
+			.concat(when(!contained.is_empty(), [member("components", JsonData.Array(contained))])),
 	)
 	creator = if context.author.starts_with("Person: ") {
 		member("authors", JsonData.Array([JsonData.Object([member("name", text(context.author.drop_prefix("Person: ")))])]))
@@ -1275,11 +1536,11 @@ cyclonedx = |inventory, subject, context| {
 		member("tools", JsonData.Object([member("components", JsonData.Array([JsonData.Object([member("type", text("application")), member("name", text(context.generator.drop_prefix("Tool: ")))])]))])),
 		creator,
 		member("component", metadata_component),
-		member("properties", JsonData.Array([property("blueprint:namespace", context.namespace), property("blueprint:evidence", evidence(inventory, subject, context))])),
+		member("properties", JsonData.Array([property("blueprint:namespace", context.namespace), property("blueprint:evidence", evidence(inventory, subject, context)), property("blueprint:cyclonedx-profile", "standard-containment-v1")])),
 	])
-	dependencies = inventory.components.map(|component| component.id).prepend(subject_id).map(
+	dependencies = dependency_ids(inventory.relationships, inventory.coverage, inventory.components.map(|component| component.id).prepend(subject_id)).map(
 		|ref| {
-			depends = unique(inventory.relationships.keep_if(|edge| edge.from == ref and (edge.relation == "contains" or edge.relation == "dependsOn")).map(|edge| edge.to))
+			depends = unique(inventory.relationships.keep_if(|edge| edge.from == ref and edge.relation == "dependsOn").map(|edge| edge.to))
 			JsonData.Object([member("ref", text(ref))].concat(when(!depends.is_empty(), [member("dependsOn", texts(depends))])))
 		},
 	)
@@ -1292,6 +1553,7 @@ cyclonedx = |inventory, subject, context| {
 		member("metadata", metadata),
 		member("components", JsonData.Array(components)),
 		member("dependencies", JsonData.Array(dependencies)),
+		member("compositions", JsonData.Array(coverage_compositions(inventory.coverage))),
 		member("properties", JsonData.Array(inventory.relationships.map(|edge| property("blueprint:relationship", Json.to_str(edge))))),
 	])
 }
@@ -1322,26 +1584,82 @@ read_bom = |tree| {
 					[] => "NOASSERTION"
 				}
 		}
+	profiles = values(metadata, "blueprint:cyclonedx-profile")
+	legacy = profiles.is_empty()
+	if !legacy and profiles != ["standard-containment-v1"] {
+		return Err("unsupported Blueprint CycloneDX profile")
+	}
+	if !legacy {
+		for name in ["blueprint:kind", "blueprint:attribution", "blueprint:license", "blueprint:license-url"] {
+			_ = only(subject, name)?
+		}
+	}
+	declared_subject_license = if (values(subject, "blueprint:kind").is_empty()) "NOASSERTION" else only(subject, "blueprint:license")?
+	declared_subject_terms = if (values(subject, "blueprint:kind").is_empty()) "" else only(subject, "blueprint:license-url")?
+	if (reference(subject, "license") ?? "") != (if (declared_subject_terms == "NOASSERTION") "" else declared_subject_terms) {
+		return Err("subject standard license terms differ from reviewed declaration")
+	}
+	standard_subject_license = match listed(subject, "licenses") {
+		[choice] => field_text(choice, "expression")
+		[] => if (declared_subject_license == "NONE") "NONE" else "NOASSERTION"
+		_ => "INVALID"
+	}
+	if declared_subject_license != standard_subject_license {
+		return Err("subject standard license differs from reviewed declaration")
+	}
+	subject_kind = match values(subject, "blueprint:kind") {
+		[] => "file"
+		[_] => only(subject, "blueprint:kind")?
+		_ => return Err("duplicate subject kind declaration")
+	}
+	if !kind_valid(subject_kind) or field_text(subject, "type") != (if (subject_kind == "unknown") "file" else subject_kind) {
+		return Err("subject standard kind differs from reviewed declaration")
+	}
 	subject_package = {
+		kind: only(subject, "blueprint:kind") ?? read_purpose(field_text(subject, "type")),
+		copyright: unknown_text(field_text(subject, "copyright")),
+		attribution: if (values(subject, "blueprint:kind").is_empty()) "NOASSERTION" else only(subject, "blueprint:attribution")?,
+		source_refs: [],
 		id: subject_id,
 		name: field_text(subject, "name"),
 		version: field_text(subject, "version"),
-		supplier: "NOASSERTION",
+		supplier: supplier_of(subject),
 		download: reference(subject, "distribution") ?? "NOASSERTION",
-		license: "NOASSERTION",
-		license_url: "",
+		license: only(subject, "blueprint:license") ?? "NOASSERTION",
+		license_url: only(subject, "blueprint:license-url") ?? "",
 		sha256: digest(subject),
 		identity: "",
-		comment: Json.to_str({ target: only(subject, "blueprint:target")?, digest_kind: only(subject, "blueprint:digest-kind")? }),
+		comment: Json.to_str({ kind: only(subject, "blueprint:kind") ?? read_purpose(field_text(subject, "type")), copyright: unknown_text(field_text(subject, "copyright")), attribution: if (values(subject, "blueprint:kind").is_empty()) "NOASSERTION" else only(subject, "blueprint:attribution")?, target: only(subject, "blueprint:target")?, digest_kind: only(subject, "blueprint:digest-kind")? }),
 	}
+	entries = flatten(listed(subject, "components"), subject_id, "subject-").concat(flatten(listed(tree, "components"), "", ""))
+	if legacy and entries.any(|entry| !entry.parent.is_empty()) {
+		return Err("legacy Blueprint CycloneDX must use flat components")
+	}
+	components = entries.map(|entry| entry.tree).sort_with(|a, b| Project.bytewise(field_text(a, "bom-ref"), field_text(b, "bom-ref")))
 	var $found = [subject_package]
-	for component in listed(tree, "components") {
+	for component in components {
+		if !legacy {
+			_ = only(component, "blueprint:kind")?
+			_ = only(component, "blueprint:attribution")?
+		}
+		component_kind = match values(component, "blueprint:kind") {
+			[] => "library"
+			[_] => only(component, "blueprint:kind")?
+			_ => return Err("duplicate component kind declaration")
+		}
+		if !kind_valid(component_kind) or field_text(component, "type") != (if (component_kind == "unknown") "library" else component_kind) {
+			return Err("component standard kind differs from reviewed declaration")
+		}
 		license_text = match listed(component, "licenses") {
 			[choice] => field_text(choice, "expression")
 			[] => if (values(component, "blueprint:license") == ["NONE"]) "NONE" else "NOASSERTION"
 			_ => return Err("a component states more than one license choice")
 		}
 		$found = $found.append({
+			kind: only(component, "blueprint:kind") ?? read_purpose(field_text(component, "type")),
+			copyright: unknown_text(field_text(component, "copyright")),
+			attribution: if (values(component, "blueprint:kind").is_empty()) "NOASSERTION" else only(component, "blueprint:attribution")?,
+			source_refs: cdx_refs(component),
 			id: field_text(component, "bom-ref"),
 			name: field_text(component, "name"),
 			version: field_text(component, "version"),
@@ -1351,7 +1669,7 @@ read_bom = |tree| {
 			license_url: reference(component, "license") ?? (if (license_text.contains("LicenseRef-")) "NOASSERTION" else ""),
 			sha256: digest(component),
 			identity: field_text(component, "purl"),
-			comment: Json.to_str({ identity: only(component, "blueprint:identity")?, origin: only(component, "blueprint:origin")?, target: only(component, "blueprint:target")?, modifications: only(component, "blueprint:modifications")? }),
+			comment: Json.to_str({ kind: only(component, "blueprint:kind") ?? read_purpose(field_text(component, "type")), copyright: unknown_text(field_text(component, "copyright")), attribution: if (values(component, "blueprint:kind").is_empty()) "NOASSERTION" else only(component, "blueprint:attribution")?, package_url: field_text(component, "purl"), source_refs: cdx_refs(component), identity: only(component, "blueprint:identity")?, origin: only(component, "blueprint:origin")?, target: only(component, "blueprint:target")?, modifications: only(component, "blueprint:modifications")? }),
 		})
 	}
 	var $edges = []
@@ -1361,27 +1679,61 @@ read_bom = |tree| {
 		$edges = $edges.append(decoded.map_err(|_| "a blueprint:relationship property is not a relationship")?)
 	}
 	ids = $found.map(|entry| entry.id)
+	if ids.any(|id| id.is_empty()) or unique(ids).len() != ids.len() {
+		return Err("every CycloneDX component needs a unique bom-ref")
+	}
+	if !legacy {
+		containment($edges)?
+		for entry in entries {
+			ref = field_text(entry.tree, "bom-ref")
+			parents = unique($edges.keep_if(|edge| edge.relation == "contains" and edge.to == ref).map(|edge| edge.from))
+			stated = if (entry.parent.is_empty()) [] else [entry.parent]
+			if parents != stated {
+				return Err("the containment of ${ref} differs from its relationships")
+			}
+		}
+	}
 	if $edges.any(|edge| !ids.contains(edge.from) or !ids.contains(edge.to) or !Sbom.relations.contains(edge.relation)) {
 		return Err("a blueprint:relationship names an unknown component or relation")
 	}
 	if $edges.any(|edge| !edge.scope.is_empty() and (edge.relation != "dependsOn" or !Sbom.scopes.contains(edge.scope))) {
 		return Err("a blueprint:relationship has a lifecycle scope outside dependsOn")
 	}
+	if legacy {
+		legacy_evidence = JsonData.decode_with(only(metadata, "blueprint:evidence")?, JsonData.documents).map_err(JsonData.message)?
+		if !listed(tree, "compositions").is_empty() or listed(legacy_evidence, "coverage").any(|claim| !field_text(claim, "component").is_empty() or !field_text(claim, "aspect").is_empty()) {
+			return Err("legacy Blueprint CycloneDX cannot carry compositions or addressed coverage; use the standard-containment-v1 profile")
+		}
+		dependency_refs = listed(tree, "dependencies").map(|entry| field_text(entry, "ref"))
+		if dependency_refs.len() != ids.len() or unique(dependency_refs).len() != dependency_refs.len() or ids.any(|id| !dependency_refs.contains(id)) {
+			return Err("legacy dependency entries must name every component exactly once")
+		}
+	} else {
+		evidence_ : { coverage : List(Sbom.Coverage) }
+		evidence_ = Json.parse(only(metadata, "blueprint:evidence")?).map_err(|_| "coverage evidence needs component/aspect fields; migrate legacy records with empty strings for unaddressed evidence")?
+		_ = Sbom.validate_coverage(evidence_.coverage, ids, $edges)?
+		if listed(tree, "compositions") != coverage_compositions(evidence_.coverage) {
+			return Err("standard compositions differ from addressed coverage")
+		}
+		expected_refs = dependency_ids($edges, evidence_.coverage, ids)
+		actual_refs = listed(tree, "dependencies").map(|entry| field_text(entry, "ref"))
+		if unique(actual_refs).len() != actual_refs.len() or actual_refs.len() != expected_refs.len() or expected_refs.any(|id| !actual_refs.contains(id)) {
+			return Err("dependency entries differ from examined dependency coverage")
+		}
+	}
 	for dependency in listed(tree, "dependencies") {
 		ref = field_text(dependency, "ref")
 		stated = listed(dependency, "dependsOn").map(|item| item.string() ?? "")
-		implied = unique($edges.keep_if(|edge| edge.from == ref and (edge.relation == "contains" or edge.relation == "dependsOn")).map(|edge| edge.to))
+		implied = unique($edges.keep_if(|edge| edge.from == ref and (edge.relation == "dependsOn" or (legacy and edge.relation == "contains"))).map(|edge| edge.to))
 		if stated != implied {
 			return Err("the dependencies of ${ref} differ from its relationships")
 		}
 	}
-	if listed(tree, "dependencies").len() != ids.len() {
-		return Err("every component needs a dependency entry")
-	}
+
 	# The standard fields must say what the relationships say, so a reader of
 	# plain CycloneDX learns the same thing this reader does.
 	required = shipped($edges)
-	for component in listed(tree, "components") {
+	for component in components {
 		ref = field_text(component, "bom-ref")
 		if field_text(component, "scope") != cyclonedx_scope($edges, required, ref) {
 			return Err("the scope of ${ref} differs from its relationships")
@@ -1539,6 +1891,10 @@ read_foreign_bom = |tree, ignored| {
 		maker = field_text(component.field("manufacturer") ?? JsonData.Null, "name")
 		author = field_text(listed(component, "authors").first() ?? JsonData.Null, "name")
 		$packages = $packages.append({
+			kind: read_purpose(field_text(component, "type")),
+			copyright: unknown_text(field_text(component, "copyright")),
+			attribution: "NOASSERTION",
+			source_refs: cdx_refs(component),
 			id: entry.id,
 			name: field_text(component, "name"),
 			version: field_text(component, "version"),
@@ -1594,7 +1950,51 @@ read_foreign_bom = |tree, ignored| {
 			$edges = $edges.append({ from: root, to: entry.id, relation: "other", scope: "", basis: "Listed in the CycloneDX BOM's components; the BOM states no relationship to the described component" })
 		}
 	}
-	Ok({ version: "${CycloneDx.format}-${field_text(tree, "specVersion")}", namespace: serial, name: roots.first().map_ok(|root| field_text(root.tree, "name")) ?? "", roots: roots.keep_if(|root| root.parent.is_empty()).map(|root| root.id), packages_: $packages, relationships: $edges, evidence: [], gaps: tally($gaps) })
+	var $coverage = []
+	var $composition_index = 0.U64
+	for composition in listed(tree, "compositions") {
+		aggregate = field_text(composition, "aggregate")
+		status = if aggregate == "complete" {
+			"complete"
+		} else if aggregate.starts_with("incomplete") {
+			"incomplete"
+		} else {
+			"unknown"
+		}
+		for aspect in ["assemblies", "dependencies"] {
+			for ref in listed(composition, aspect).map(|item| item.string() ?? "") {
+				component_ = Lookup.find(refs, ref).map_err(|_| "composition references unsupported service")?
+				$coverage = $coverage.append({
+					scope: "cyclonedx:${$composition_index.to_str()}:${aspect}:${component_}",
+					component: component_,
+					aspect: if aspect == "assemblies" {
+						"assembly"
+					} else {
+						"dependencies"
+					},
+					status,
+					reason: "Upstream CycloneDX composition aggregate ${aggregate}; supplier assertion",
+					contact: "NOASSERTION",
+				})
+			}
+		}
+		$composition_index = $composition_index + 1
+	}
+	_ = Sbom.validate_coverage($coverage, ids, $edges)?
+	Ok({
+		version: "${CycloneDx.format}-${field_text(tree, "specVersion")}",
+		namespace: serial,
+		name: roots.first().map_ok(|root| field_text(root.tree, "name")) ?? "",
+		roots: roots.keep_if(|root| root.parent.is_empty()).map(|root| root.id),
+		packages_: $packages,
+		relationships: $edges,
+		evidence: if $coverage.is_empty() {
+			[]
+		} else {
+			[Json.to_str({ coverage: $coverage })]
+		},
+		gaps: tally($gaps),
+	})
 }
 
 ## An SPDX identifier for a CycloneDX license object, or "" when it names its
@@ -1615,3 +2015,29 @@ namespace_identity : Str -> Bool
 namespace_identity = |value| CycloneDx.serial_number(value) or (value != "NOASSERTION" and (uri(value) or (value.starts_with("http://") and uri("https://${value.drop_prefix("http://")}"))))
 
 expect namespace_identity("http://trivy.dev/filesystem/src-1") and namespace_identity("urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79") and !namespace_identity("http://user:pw@example.org/x") and !namespace_identity("NOASSERTION")
+
+unknown_text : Str -> Str
+unknown_text = |value| if (value.is_empty()) "NOASSERTION" else value
+
+read_refs : Str -> List(Sbom.SourceRef)
+read_refs = |value| Json.parse(value) ?? []
+
+cdx_refs : JsonData -> List(Sbom.SourceRef)
+cdx_refs = |object| ((object.field("externalReferences") ?? JsonData.Array([])).array() ?? []).keep_if(|ref| ["vcs", "source-distribution"].contains((ref.field("type") ?? JsonData.Null).string() ?? "")).map(|ref| { type: (ref.field("type") ?? JsonData.Null).string() ?? "", url: (ref.field("url") ?? JsonData.Null).string() ?? "" })
+
+component_package : Sbom.Component -> Sbom.Package
+component_package = |component| { kind: component.kind, copyright: component.copyright, attribution: component.attribution, source_refs: component.source_refs, id: component.id, name: component.name, version: component.version, supplier: component.producer, download: component.download, license: component.license, license_url: component.license_url, sha256: component.sha256, identity: package_url(component), comment: component_comment(component) }
+
+migrate_input : JsonData -> JsonData
+migrate_input = |tree| match tree {
+	Array(values) => JsonData.Array(values.map(migrate_input))
+	Object(members) => {
+		keys = members.map(|entry| entry.name)
+		component = keys.contains("origin") and keys.contains("producer") and keys.contains("identity")
+		subject = keys.contains("filename") and keys.contains("url") and keys.contains("target")
+		coverage = keys.contains("scope") and keys.contains("status") and keys.contains("reason")
+		defaults = if (component) [member("kind", text("unknown")), member("copyright", text("NOASSERTION")), member("attribution", text("NOASSERTION")), member("package_url", text("")), member("source_refs", JsonData.Array([]))] else if (subject) [member("kind", text("file")), member("producer", text("NOASSERTION")), member("license", text("NOASSERTION")), member("license_url", text("")), member("copyright", text("NOASSERTION")), member("attribution", text("NOASSERTION"))] else if (coverage) [member("component", text("")), member("aspect", text(""))] else []
+		JsonData.Object(members.map(|entry| { name: entry.name, value: if (entry.name == "profile" and entry.value == text("blueprint-spdx-3.0-v1")) text(Sbom.profile) else migrate_input(entry.value) }).concat(defaults.keep_if(|entry| !keys.contains(entry.name))))
+	}
+	_ => tree
+}
