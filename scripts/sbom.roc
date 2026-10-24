@@ -88,7 +88,7 @@ inspect! = |spec_path, lock_path, composition_path, target, output, listing_path
 	spec = Spec.parse(read!(spec_path)?).map_err(|error| Invalid(Str.inspect(error)))?
 	lock = Lock.parse(read!(lock_path)?).map_err(|error| Invalid(Str.inspect(error)))?
 	composition : Sbom.Composition
-	composition = Json.parse(read!(composition_path)?).map_err(|error| Invalid(Str.inspect(error)))?
+	composition = Json.parse(Sbom.normalize_input(read!(composition_path)?).map_err(|problem| Invalid(problem))?).map_err(|error| Invalid(Str.inspect(error)))?
 	inventory = if listing_path.is_empty() {
 		Sbom.inspect(spec, lock, target, composition).map_err(|error| Invalid(error))?
 	} else {
@@ -131,7 +131,7 @@ check! = |args, options|
 				}
 				if !options.inventory.is_empty() {
 					inventory : Sbom.Inventory
-					inventory = Json.parse(read!(options.inventory)?).map_err(|error| Invalid(Str.inspect(error)))?
+					inventory = Json.parse(Sbom.normalize_input(read!(options.inventory)?).map_err(|problem| Invalid(problem))?).map_err(|error| Invalid(Str.inspect(error)))?
 					Sidecar.against_inventory(checked, inventory).map_err(|problem| Invalid("${path}: ${problem}"))?
 				}
 				match manifest {
@@ -181,9 +181,9 @@ verify_manifest! = |options| {
 bind! = |inventory_path, subject_path, context_path, artifact, outputs, manifest_path| {
 	inventory_text = read!(inventory_path)?
 	inventory : Sbom.Inventory
-	inventory = Json.parse(inventory_text).map_err(|error| Invalid(Str.inspect(error)))?
+	inventory = Json.parse(Sbom.normalize_input(inventory_text).map_err(|problem| Invalid(problem))?).map_err(|error| Invalid(Str.inspect(error)))?
 	subject : Sbom.Subject
-	subject = Json.parse(read!(subject_path)?).map_err(|error| Invalid(Str.inspect(error)))?
+	subject = Json.parse(Sbom.normalize_input(read!(subject_path)?).map_err(|problem| Invalid(problem))?).map_err(|error| Invalid(Str.inspect(error)))?
 	context : Sbom.Context
 	context = Json.parse(read!(context_path)?).map_err(|error| Invalid(Str.inspect(error)))?
 	if Manifest.file_name_of(artifact) != subject.filename {

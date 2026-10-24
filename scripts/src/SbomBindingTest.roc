@@ -31,7 +31,11 @@ SbomBindingTest := [].{
 		imported = Path.to_str(Env.create_temp_dir_with_prefix!("blueprint-sbom-source-import-")?)?
 		outcome = source_import!(tool, source_import, imported)
 		_ = Path.delete_all!(Path.utf8(imported))
-		outcome
+		outcome?
+		reviewed = Path.to_str(Env.create_temp_dir_with_prefix!("blueprint-sbom-reviewed-source-")?)?
+		bound = reviewed_source!(tool, reviewed)
+		_ = Path.delete_all!(Path.utf8(reviewed))
+		bound
 	}
 }
 
@@ -244,9 +248,9 @@ cases! = |tool, fixtures, work| {
 		return Script.fail!("members does not list the archive's four members by digest")
 	}
 	archive = Sbom.archive_members("sources", members) ?? crash "invalid member listing"
-	sources = { id: "sources", name: "example-bundle", version: "1.0.0", producer: "Organization: Fixture upstream", identity: "https://example.org/source/example-bundle/1.0.0", download: "https://example.org/source/example-bundle/1.0.0.tar.gz", sha256: "", license: "MIT", license_url: "", modified: "", target: "source", origin: "reviewed" }
+	sources = { kind: "library", copyright: "NOASSERTION", attribution: "NOASSERTION", package_url: "", source_refs: [], id: "sources", name: "example-bundle", version: "1.0.0", producer: "Organization: Fixture upstream", identity: "https://example.org/source/example-bundle/1.0.0", download: "https://example.org/source/example-bundle/1.0.0.tar.gz", sha256: "", license: "MIT", license_url: "", modified: "", target: "source", origin: "reviewed" }
 	composition : Sbom.Composition
-	composition = { profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components: [sources].concat(archive.components), relationships: [{ from: "Subject", to: "sources", relation: "contains", scope: "", basis: "Source files in the produced bundle" }].concat(archive.relationships), coverage: [{ scope: "members", status: "complete", reason: "Every archive member is stated by SHA-256", contact: "https://example.org/support" }], inputs: [] }
+	composition = { profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components: [sources].concat(archive.components), relationships: [{ from: "Subject", to: "sources", relation: "contains", scope: "", basis: "Source files in the produced bundle" }].concat(archive.relationships), coverage: [{ scope: "members", component: "", aspect: "", status: "complete", reason: "Every archive member is stated by SHA-256", contact: "https://example.org/support" }], inputs: [] }
 	Path.write_utf8!(Path.utf8("${work}/composition-members.json"), Json.to_str(composition))?
 	call!(["inspect", "Spec", "Lock", "composition-members.json", "source", "members-inventory.json", "--members", "members.json"], True)?
 	dropped = { ..composition, components: composition.components.keep_if(|entry| entry.id != "member-message.txt"), relationships: composition.relationships.keep_if(|relation| relation.to != "member-message.txt") }
@@ -351,4 +355,32 @@ source_import! = |tool, fixtures, work| {
 		}
 	}
 	Script.pass!("source supplier import: ${expected.accepted.len().to_str()} consumer targets accepted with source kept, the bound renderings committed, ${expected.refused.len().to_str()} refusals exact")
+}
+
+## Exercise every new reviewed field through the actual standalone executable.
+reviewed_source! : Str, Str => Try({}, _)
+reviewed_source! = |tool, work| {
+	case = SbomTest.cases.find_first(|entry| entry.name == "reviewed-source") ?? crash "reviewed source case"
+	composition : Sbom.Composition
+	composition = { profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components: case.inventory.components, relationships: case.inventory.relationships, coverage: case.inventory.coverage, inputs: case.inventory.inputs }
+	payload = SbomTest.input_files.find_first(|entry| entry.name == "sample-artifact") ?? crash "fixture bytes"
+	for (name, text) in [("Spec", SbomTest.spec.to_str()), ("Lock", SbomTest.lock.to_str()), ("composition.json", Json.to_str(composition)), ("subject.json", Json.to_str(case.subject)), ("context.json", Json.to_str(case.context)), (case.subject.filename, payload.text)] {
+		Path.write_utf8!(Path.utf8("${work}/${name}"), text)?
+	}
+	call! = |args| guarded!(tool, args, work, [], True).map_ok(|_| {})
+	call!(["inspect", "Spec", "Lock", "composition.json", "source", "inventory.json"])?
+	inspected : Try(Sbom.Inventory, _)
+	inspected = Json.parse(Path.read_utf8!(Path.utf8("${work}/inventory.json"))?)
+	if inspected != Ok(case.inventory) {
+		return Script.fail!("inspect changed reviewed source metadata")
+	}
+	call!(["bind", "inventory.json", "subject.json", "context.json", case.subject.filename])?
+	call!(["bind", "inventory.json", "subject.json", "context.json", case.subject.filename, "reviewed.spdx-2.3.json", "--spdx-2.3"])?
+	for (path, name) in [("${case.subject.filename}.spdx.json", "reviewed-source.spdx.json"), ("${case.subject.filename}.cdx.json", "reviewed-source.cdx.json"), ("reviewed.spdx-2.3.json", "reviewed-source.spdx-2.3.json")] {
+		if Path.read_utf8!(Path.utf8("${work}/${path}"))? != rendering!(name)? {
+			return Script.fail!("bind changed reviewed source fields in ${name}")
+		}
+	}
+	call!(["check", "--manifest", "${case.subject.filename}.sbom-manifest.json", "--artifacts", ".", "--inventory", "inventory.json", "reviewed.spdx-2.3.json"])?
+	Script.pass!("reviewed source kinds, notices, package/source references and addressed coverage survive inspect, bind and check")
 }

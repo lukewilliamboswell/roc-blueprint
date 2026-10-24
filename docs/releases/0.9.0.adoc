@@ -1,0 +1,96 @@
+= roc-blueprint 0.9.0
+
+This release improves what standard SBOM consumers can recover from a
+Blueprint inventory. Containment, dependency completeness, reviewed artifact
+metadata and source references are represented in the formats' standard
+fields. These changes address issues #68, #69, #70 and #71.
+
+== Use 0.9.0
+
+[source,roc,snippet=unchecked]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+The importable core package is `{core-url}`. The `blueprint` and
+`blueprint-sbom` binaries ship for x86_64 Linux, arm64 Linux, Apple Silicon
+macOS and x86_64 Windows, with SHA-256 sums in `blueprint.sha256`.
+Spec major 3 and Lock 2 are unchanged.
+
+== Containment and dependencies
+
+CycloneDX nests contained components through standard `components` fields.
+An archive containing a library containing source files therefore exposes
+that hierarchy to a reader that ignores Blueprint properties. Only actual
+`dependsOn` relationships become dependency edges. A compiler used to build
+the archive remains a build dependency with component scope `excluded`.
+Shared containment that cannot be represented as a tree is diagnosed instead
+of duplicating identifiers or manufacturing dependencies. Blueprint's platform
+inventory records a distinct runtime occurrence for each delivered linker
+member, connected to its reviewed source by `hasVariant`. Each occurrence
+keeps the source metadata; only the containing file carries the measured
+member hash, since that hash does not identify the runtime-only bytes.
+
+== State what dependency coverage establishes
+
+Coverage declarations can address a component and distinguish assembly
+membership from dependency closure. CycloneDX compositions carry those
+completeness claims. A reviewed empty dependency closure is distinct from
+an unknown closure: absence of a known edge is not proof of completeness.
+Reasons and contacts remain available in the evidence carried by each format.
+Completeness of a source archive's assembly does not establish completeness
+of its compiler's dependencies. Missing supplier documentation remains an
+evidence gap and does not override the producer's reviewed closure assessment,
+including an explicitly unknown or verified-empty locked compiler.
+
+== Carry reviewed metadata and source references
+
+Components can state their artifact kind, copyright and attribution.
+Source members can be files, a compiler an application and a package a
+library. Subject supplier and declared license are supplied explicitly;
+Blueprint does not infer them from a child, and a declared license does not
+establish a concluded license.
+
+A package URL and typed source or VCS references can travel together.
+The release version, package identity, immutable source reference and
+archive SHA-256 remain separate facts. Opaque tree or content identities
+remain identities; they are not converted into package URLs or delivered
+file hashes. Rendering performs no registry lookup.
+
+See xref:sbom.adoc[the SBOM reference] for the input contract, format mappings,
+compatibility rules and the consumer fixture contract. Producers own the
+reviewed facts; Blueprint validates and translates them. Downstream adoption
+remains coordinated through
+https://github.com/lukewilliamboswell/roc-automation/issues/66[roc-automation#66].
+
+== Migrate SBOM producers
+
+The inventory profile is `blueprint-spdx-3.0-v2`. The standalone tool and
+`Sbom.from_spec` normalize earlier JSON inputs; callers decoding JSON into
+core types directly should call `Sbom.normalize_input` first. Missing
+reviewed metadata remains unknown, and legacy coverage without component
+and aspect references remains evidence only. It does not become a standard
+completeness claim by interpreting its prose. Programs constructing Roc
+records directly must supply the new fields.
+
+Previously emitted CycloneDX documents remain readable under an explicit
+legacy path: they have flat components and the old containment/dependency
+union. They do not acquire corrected standard semantics merely by being
+read. Reinspect the reviewed composition and bind the artifact again to
+publish corrected sidecars. New documents identify their mapping with
+`blueprint:cyclonedx-profile` `standard-containment-v1`; the reader checks
+standard nesting, dependency entries and compositions against the reviewed
+graph. Legacy documents cannot carry compositions or addressed coverage.
+
+The consumer fixture asset retains the existing case names and adds
+`mixed-coverage`, `reviewed-source` and a legacy CycloneDX example. The
+reviewed source example separates an archive, a library, a source file and
+a build compiler, with reviewed attribution and independent package/source
+identifiers. The fixture contract describes each case and its exact input
+and output expectations.
+
+Existing v1 evidence manifests remain readable and are checked against their
+original subject, inventory and sidecar digests. New bindings write v2
+manifests. Native SPDX file imports keep copyright, attribution and exact
+hashes; observed or concluded file licenses are reported as import gaps
+rather than promoted into a declared license.

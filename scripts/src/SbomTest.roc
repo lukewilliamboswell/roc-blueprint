@@ -1,4 +1,7 @@
 import core.Spec
+import "../../tests/sbom/fixtures/reviewed-source.cdx.json" as fixture_reviewed_source_cdx : Str
+import "../../tests/sbom/fixtures/reviewed-source.spdx.json" as fixture_reviewed_source_3 : Str
+import "../../tests/sbom/fixtures/reviewed-source.spdx-2.3.json" as fixture_reviewed_source_2 : Str
 import core.Lock
 import core.Project
 import core.JsonData
@@ -23,6 +26,9 @@ import "../../tests/sbom/fixtures/upstream/syft.spdx.json" as upstream_syft_spdx
 import "../../tests/sbom/fixtures/upstream/trivy.cdx.json" as upstream_trivy_cdx : Str
 import "../../tests/sbom/fixtures/upstream/trivy.spdx.json" as upstream_trivy_spdx : Str
 import "../../tests/sbom/fixtures/verified-import.cdx.json" as fixture_verified_import_cdx : Str
+import "../../tests/sbom/fixtures/mixed-coverage.cdx.json" as fixture_mixed_coverage_cdx : Str
+import "../../tests/sbom/fixtures/mixed-coverage.spdx.json" as fixture_mixed_coverage_3 : Str
+import "../../tests/sbom/fixtures/mixed-coverage.spdx-2.3.json" as fixture_mixed_coverage_2 : Str
 import "../../tests/sbom/fixtures/native-linux.cdx.json" as fixture_native_linux_cdx : Str
 import "../../tests/sbom/fixtures/native-arm64.cdx.json" as fixture_native_arm64_cdx : Str
 import "../../tests/sbom/fixtures/source-bundle.cdx.json" as fixture_source_bundle_cdx : Str
@@ -60,6 +66,7 @@ import "../../tests/sbom/fixtures/source-import/tamper-subject-version.json" as 
 import "../../tests/sbom/fixtures/source-import/tamper-import-native.json" as source_import_tamper_import_native : Str
 import "../../tests/sbom/fixtures/source-import/tamper-component-native.json" as source_import_tamper_component_native : Str
 import "../../tests/sbom/fixtures/source-import/tamper-import-aarch64.json" as source_import_tamper_import_aarch64 : Str
+import "../../tests/sbom/fixtures/legacy/blueprint-0.8.cdx.json" as fixture_legacy_cdx : Str
 import SbomFixtures
 
 ## Consumer fixtures intentionally include a transitive native library, a build
@@ -68,7 +75,7 @@ SbomTest := [].{
 	context : Sbom.Context
 	context = { namespace: "https://example.org/sbom/fixture/revision-1", revision: "1", created: "2026-10-21T00:00:00Z", author: "Organization: Fixture producers", generator: "Tool: blueprint-sbom-0.7.0" }
 	subject : Sbom.Subject
-	subject = { filename: "sample-artifact", version: "1.0.0", target: "x86_64-linux", sha256: Crypto.SHA256.hash(subject_bytes.to_utf8()).to_hex(), url: "https://example.org/releases/1.0.0/sample-artifact" }
+	subject = { kind: "file", producer: "NOASSERTION", license: "NOASSERTION", license_url: "", copyright: "NOASSERTION", attribution: "NOASSERTION", filename: "sample-artifact", version: "1.0.0", target: "x86_64-linux", sha256: Crypto.SHA256.hash(subject_bytes.to_utf8()).to_hex(), url: "https://example.org/releases/1.0.0/sample-artifact" }
 	spec = { ..Spec.empty("fixture"), systems: ["x86_64-linux", "aarch64-linux"] }
 	lock = Lock.{ format: Lock.current_format, intent: Lock.empty_intent, sources: [], fetched: [], hints: [] }
 	composition : Sbom.Composition
@@ -88,7 +95,7 @@ SbomTest := [].{
 			{ ..edge("Subject", "compiler", "dependsOn"), scope: "build" },
 			edge("Subject", "restricted", "contains"),
 		],
-		coverage: [{ scope: "native-closure", status: "incomplete", reason: "Opaque task lacks remaining native closure metadata", contact: "https://example.org/support" }],
+		coverage: [{ scope: "native-closure", component: "", aspect: "", status: "incomplete", reason: "Opaque task lacks remaining native closure metadata", contact: "https://example.org/support" }],
 		inputs: [],
 	}
 
@@ -115,9 +122,9 @@ SbomTest := [].{
 		linux = inventory ?? crash "invalid fixture"
 		arm_composition = { ..composition, components: composition.components.map(|entry| { ..entry, target: "aarch64-linux" }) }
 		arm_inventory = Sbom.inspect(spec, lock, "aarch64-linux", arm_composition) ?? crash "invalid arm fixture"
-		empty = { ..composition, components: [], relationships: [], coverage: [{ scope: "all", status: "verified-empty", reason: "Reviewed generated text contains no third-party components", contact: "https://example.org/support" }] }
+		empty = { ..composition, components: [], relationships: [], coverage: [{ scope: "all", component: "Subject", aspect: "dependencies", status: "verified-empty", reason: "Reviewed generated text contains no third-party components", contact: "https://example.org/support" }] }
 		empty_inventory = Sbom.inspect(spec, lock, subject.target, empty) ?? crash "invalid empty fixture"
-		unknown = { ..empty, coverage: [{ scope: "all", status: "incomplete", reason: "Opaque task exposes no component closure", contact: "https://example.org/support" }] }
+		unknown = { ..empty, coverage: [{ scope: "all", component: "Subject", aspect: "dependencies", status: "unknown", reason: "Opaque task exposes no component closure", contact: "https://example.org/support" }] }
 		unknown_inventory = Sbom.inspect(spec, lock, subject.target, unknown) ?? crash "invalid unknown fixture"
 		incoming = { ..component("consumed-input", "sample-artifact", subject.version), sha256: subject.sha256, download: subject.url, identity: "urn:example:fixture:consumed-input" }
 		bound = { ..imported_document, subject: { ..imported_document.subject, component: incoming.id } }
@@ -126,7 +133,9 @@ SbomTest := [].{
 		[
 			{ name: "verified-import", inventory: import_inventory, subject: { ..subject, filename: "consumer-artifact", sha256: Crypto.SHA256.hash("consumer of fixture\n".to_utf8()).to_hex() }, context: { ..context, namespace: "https://example.org/sbom/fixture/imported/revision-1" } },
 			{ name: "native-linux", inventory: linux, subject, context },
+			{ name: "mixed-coverage", inventory: inspect(mixed_coverage_composition) ?? crash "invalid mixed coverage", subject, context: { ..context, namespace: "https://example.org/sbom/fixture/mixed-coverage/revision-1" } },
 			{ name: "native-arm64", inventory: arm_inventory, subject: { ..subject, target: "aarch64-linux" }, context: { ..context, namespace: "https://example.org/sbom/fixture/arm64/revision-1" } },
+			{ name: "reviewed-source", inventory: reviewed_inventory, subject: reviewed_subject, context: { ..context, namespace: "https://example.org/sbom/fixture/reviewed-source/revision-1" } },
 			{ name: "source-bundle", inventory: source_bundle_inventory, subject: { ..subject, filename: "sample-source-bundle", target: "source", sha256: Crypto.SHA256.hash("fixture source bundle\n".to_utf8()).to_hex() }, context: { ..context, namespace: "https://example.org/sbom/fixture/source/revision-1" } },
 			{ name: "native-source-import", inventory: native_from_source ?? crash "invalid source import fixture", subject: source_import_subject, context: source_import_context },
 			{ name: "verified-empty", inventory: empty_inventory, subject, context: { ..context, namespace: "https://example.org/sbom/fixture/empty/revision-1" } },
@@ -209,7 +218,7 @@ SbomTest := [].{
 digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 component : Str, Str, Str -> Sbom.Component
-component = |id, name, version| { id, name, version, producer: "Organization: Fixture upstream", identity: "https://example.org/source/${name}/${version}", download: "https://example.org/source/${name}/${version}.tar.gz", sha256: "", license: "MIT", license_url: "", modified: "", target: "x86_64-linux", origin: "reviewed" }
+component = |id, name, version| { kind: "library", copyright: "NOASSERTION", attribution: "NOASSERTION", package_url: "", source_refs: [], id, name, version, producer: "Organization: Fixture upstream", identity: "https://example.org/source/${name}/${version}", download: "https://example.org/source/${name}/${version}.tar.gz", sha256: "", license: "MIT", license_url: "", modified: "", target: "x86_64-linux", origin: "reviewed" }
 
 edge = |from, to, relation| { from, to, relation, scope: "", basis: "Reviewed fixture composition declaration" }
 
@@ -222,7 +231,7 @@ expect inspect({ ..SbomTest.composition, components: SbomTest.composition.compon
 expect inspect({ ..SbomTest.composition, relationships: [edge("Subject", "missing", "contains")] }).is_err()
 expect inspect({ ..SbomTest.composition, relationships: [edge("native", "platform", "contains")] }).is_err()
 expect inspect({ ..SbomTest.composition, coverage: [] }).is_err()
-expect inspect({ ..SbomTest.composition, coverage: [{ scope: "all", status: "incomplete", reason: "", contact: "contact" }] }).is_err()
+expect inspect({ ..SbomTest.composition, coverage: [{ scope: "all", component: "Subject", aspect: "dependencies", status: "unknown", reason: "", contact: "contact" }] }).is_err()
 expect inspect({ ..SbomTest.composition, relationships: SbomTest.composition.relationships.concat(SbomTest.composition.relationships) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, target: "aarch64-linux" }) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, origin: "import:https://unverified.example/sbom" }) }).is_err()
@@ -231,9 +240,58 @@ expect inspect({ ..SbomTest.composition, components: SbomTest.composition.compon
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, license: "LicenseRef-restricted", license_url: "" }) }).is_err()
 
 # Unknown and verified-empty inventories are distinct, explicitly asserted facts.
-empty_composition = { ..SbomTest.composition, components: [], relationships: [], coverage: [{ scope: "all", status: "verified-empty", reason: "Reviewed generated text contains no third-party components", contact: "https://example.org/support" }] }
+empty_composition = { ..SbomTest.composition, components: [], relationships: [], coverage: [{ scope: "all", component: "Subject", aspect: "dependencies", status: "verified-empty", reason: "Reviewed generated text contains no third-party components", contact: "https://example.org/support" }] }
 expect inspect(empty_composition).is_ok()
-expect inspect({ ..empty_composition, coverage: [{ scope: "all", status: "incomplete", reason: "No closure data exposed by opaque task", contact: "https://example.org/support" }] }).is_ok()
+expect inspect({ ..empty_composition, coverage: [{ scope: "all", component: "Subject", aspect: "dependencies", status: "unknown", reason: "No closure data exposed by opaque task", contact: "https://example.org/support" }] }).is_ok()
+
+# Coverage is addressed explicitly; an assembly declaration does not cascade.
+claim = |scope, component_, aspect, status| { scope, component: component_, aspect, status, reason: "Reviewed fixture coverage", contact: "https://example.org/support" }
+
+mixed_coverage_composition = { ..SbomTest.composition, coverage: [claim("shipped-source", "Subject", "assembly", "complete"), claim("external-packages", "platform", "dependencies", "verified-empty"), claim("compiler-closure", "compiler", "dependencies", "unknown"), claim("native-closure", "native", "dependencies", "incomplete")] }
+expect inspect(mixed_coverage_composition).is_ok()
+expect inspect({ ..mixed_coverage_composition, coverage: [claim("dangling", "missing", "dependencies", "unknown")] }).is_err()
+expect inspect({ ..mixed_coverage_composition, coverage: [claim("bad-aspect", "Subject", "native", "complete")] }).is_err()
+expect inspect({ ..mixed_coverage_composition, coverage: [claim("partial", "", "dependencies", "complete")] }).is_err()
+expect inspect({ ..mixed_coverage_composition, coverage: [claim("one", "compiler", "dependencies", "unknown"), claim("two", "compiler", "dependencies", "complete")] }).is_err()
+expect inspect({ ..mixed_coverage_composition, coverage: [claim("false-empty", "Subject", "dependencies", "verified-empty")] }).is_err()
+expect inspect({ ..mixed_coverage_composition, coverage: [claim("false-empty", "Subject", "assembly", "verified-empty")] }).is_err()
+
+mixed_cdx = Sbom.render_cyclonedx(inspect(mixed_coverage_composition) ?? crash "mixed coverage invalid", SbomTest.subject, SbomTest.context) ?? crash "mixed coverage render failed"
+expect {
+	# Inspect ordinary standard fields independently of Blueprint evidence.
+	tree = JsonData.decode_with(mixed_cdx, JsonData.documents) ?? crash "bad JSON"
+	compositions = (tree.field("compositions") ?? JsonData.Null).array() ?? []
+	dependencies = (tree.field("dependencies") ?? JsonData.Null).array() ?? []
+	has_claim = |aggregate, aspect, ref| compositions.any(|entry| entry.field("aggregate") == Ok(JsonData.String(aggregate)) and entry.field(aspect) == Ok(JsonData.Array([JsonData.String(ref)])))
+	has_claim("complete", "assemblies", "Subject") and has_claim("complete", "dependencies", "platform") and has_claim("unknown", "dependencies", "compiler") and has_claim("incomplete", "dependencies", "native") and dependencies.len() == 2 and dependencies.any(|entry| entry.field("ref") == Ok(JsonData.String("platform")) and entry.field("dependsOn").is_err()) and dependencies.any(|entry| entry.field("ref") == Ok(JsonData.String("Subject")) and entry.field("dependsOn") == Ok(JsonData.Array([JsonData.String("compiler")])))
+}
+expect Sbom.read_cyclonedx(mixed_cdx).is_ok()
+expect Sbom.read_cyclonedx(mixed_cdx.replace_each("\"aggregate\":\"unknown\"", "\"aggregate\":\"complete\"")).is_err()
+expect Sbom.read_cyclonedx(mixed_cdx.replace_each("\"dependencies\":[\"compiler\"]", "\"dependencies\":[\"missing\"]")).is_err()
+expect {
+	inventory = inspect(mixed_coverage_composition) ?? crash "bad mixed fixture"
+	three = Sbom.render(inventory, SbomTest.subject, SbomTest.context) ?? crash "bad SPDX3"
+	two = Sbom.render_spdx2(inventory, SbomTest.subject, SbomTest.context) ?? crash "bad SPDX2"
+	a = Sidecar.check(three) ?? crash "bad SPDX3 check"
+	b = Sidecar.check(two) ?? crash "bad SPDX2 check"
+	c = Sidecar.check(mixed_cdx) ?? crash "bad CDX check"
+	Sidecar.same_graph(a, b) and Sidecar.same_graph(a, c)
+}
+expect {
+	text = Sbom.render(inspect(mixed_coverage_composition) ?? crash "bad mixed fixture", SbomTest.subject, SbomTest.context) ?? crash "bad SPDX3"
+	upstream = { ..imported_document, document: text, sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex() }
+	inventory = inspect({ ..SbomTest.composition, components: [], relationships: [], imported_documents: [upstream] }) ?? crash "import failed"
+	inventory.coverage.any(|entry| entry.component == "upstream-compiler" and entry.aspect == "dependencies" and entry.status == "unknown") and inventory.coverage.any(|entry| entry.component == "upstream-platform" and entry.status == "verified-empty")
+}
+
+expect {
+	# A supplier's standard compositions survive import without Blueprint properties.
+	foreign = mixed_cdx.replace_each("blueprint:namespace", "supplier:namespace")
+	decoded = Sbom.read(foreign) ?? crash "foreign compositions unreadable"
+	upstream = { ..imported_document, namespace: decoded.namespace, document: foreign, sha256: Crypto.SHA256.hash(foreign.to_utf8()).to_hex() }
+	inventory = inspect({ ..SbomTest.composition, components: [], relationships: [], imported_documents: [upstream] }) ?? crash "foreign coverage import failed"
+	inventory.coverage.any(|entry| entry.component == "upstream-compiler" and entry.aspect == "dependencies" and entry.status == "unknown") and inventory.coverage.any(|entry| entry.component == "upstream-platform" and entry.aspect == "dependencies" and entry.status == "complete")
+}
 
 # Complete known-input dispositions; a tool's availability proves no containment.
 tool_spec = { ..SbomTest.spec, environments: [{ name: "builder", parents: [], tools: [{ source: "packages", name: "cc" }], overlays: [] }] }
@@ -312,7 +370,7 @@ expect inspect({ ..SbomTest.composition, components: SbomTest.composition.compon
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, producer: "Not-an-SPDX-supplier" }) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, license: "Not-A-License" }) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, license: "MIT AND ( Apache-2.0 OR )" }) }).is_err()
-expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, license: "MIT OR ( Apache-2.0 WITH LLVM-exception )" }) }).is_ok()
+expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, license: "MIT OR ( Apache-2.0 WITH LLVM-exception )", license_url: "" }) }).is_ok()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, download: "https://user:secret@example.org/source" }) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, download: "https://example.org/source?token=secret" }) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, download: "file:///etc/passwd" }) }).is_err()
@@ -450,7 +508,7 @@ expect inspect({ ..SbomTest.composition, components: SbomTest.composition.compon
 
 # The committed fixtures are what the renderers write now; regenerate them
 # with `scripts/test_sbom.roc fixtures tests/sbom/fixtures`.
-committed_fixtures = [{ name: "native-source-import.cdx.json", text: fixture_native_source_import_cdx }, { name: "native-source-import.spdx.json", text: fixture_native_source_import_3 }, { name: "native-source-import.spdx-2.3.json", text: fixture_native_source_import_2 }, { name: "verified-import.cdx.json", text: fixture_verified_import_cdx }, { name: "native-linux.cdx.json", text: fixture_native_linux_cdx }, { name: "native-arm64.cdx.json", text: fixture_native_arm64_cdx }, { name: "source-bundle.cdx.json", text: fixture_source_bundle_cdx }, { name: "verified-empty.cdx.json", text: fixture_verified_empty_cdx }, { name: "unknown-closure.cdx.json", text: fixture_unknown_closure_cdx }, { name: "verified-import.spdx.json", text: fixture_verified_import_3 }, { name: "verified-import.spdx-2.3.json", text: fixture_verified_import_2 }, { name: "native-linux.spdx.json", text: fixture_native_linux_3 }, { name: "native-linux.spdx-2.3.json", text: fixture_native_linux_2 }, { name: "native-arm64.spdx.json", text: fixture_native_arm64_3 }, { name: "native-arm64.spdx-2.3.json", text: fixture_native_arm64_2 }, { name: "source-bundle.spdx.json", text: fixture_source_bundle_3 }, { name: "source-bundle.spdx-2.3.json", text: fixture_source_bundle_2 }, { name: "verified-empty.spdx.json", text: fixture_verified_empty_3 }, { name: "verified-empty.spdx-2.3.json", text: fixture_verified_empty_2 }, { name: "unknown-closure.spdx.json", text: fixture_unknown_closure_3 }, { name: "unknown-closure.spdx-2.3.json", text: fixture_unknown_closure_2 }]
+committed_fixtures = [{ name: "reviewed-source.cdx.json", text: fixture_reviewed_source_cdx }, { name: "reviewed-source.spdx.json", text: fixture_reviewed_source_3 }, { name: "reviewed-source.spdx-2.3.json", text: fixture_reviewed_source_2 }, { name: "mixed-coverage.cdx.json", text: fixture_mixed_coverage_cdx }, { name: "mixed-coverage.spdx.json", text: fixture_mixed_coverage_3 }, { name: "mixed-coverage.spdx-2.3.json", text: fixture_mixed_coverage_2 }, { name: "native-source-import.cdx.json", text: fixture_native_source_import_cdx }, { name: "native-source-import.spdx.json", text: fixture_native_source_import_3 }, { name: "native-source-import.spdx-2.3.json", text: fixture_native_source_import_2 }, { name: "verified-import.cdx.json", text: fixture_verified_import_cdx }, { name: "native-linux.cdx.json", text: fixture_native_linux_cdx }, { name: "native-arm64.cdx.json", text: fixture_native_arm64_cdx }, { name: "source-bundle.cdx.json", text: fixture_source_bundle_cdx }, { name: "verified-empty.cdx.json", text: fixture_verified_empty_cdx }, { name: "unknown-closure.cdx.json", text: fixture_unknown_closure_cdx }, { name: "verified-import.spdx.json", text: fixture_verified_import_3 }, { name: "verified-import.spdx-2.3.json", text: fixture_verified_import_2 }, { name: "native-linux.spdx.json", text: fixture_native_linux_3 }, { name: "native-linux.spdx-2.3.json", text: fixture_native_linux_2 }, { name: "native-arm64.spdx.json", text: fixture_native_arm64_3 }, { name: "native-arm64.spdx-2.3.json", text: fixture_native_arm64_2 }, { name: "source-bundle.spdx.json", text: fixture_source_bundle_3 }, { name: "source-bundle.spdx-2.3.json", text: fixture_source_bundle_2 }, { name: "verified-empty.spdx.json", text: fixture_verified_empty_3 }, { name: "verified-empty.spdx-2.3.json", text: fixture_verified_empty_2 }, { name: "unknown-closure.spdx.json", text: fixture_unknown_closure_3 }, { name: "unknown-closure.spdx-2.3.json", text: fixture_unknown_closure_2 }]
 expect SbomTest.outputs.sort_with(|a, b| Project.bytewise(a.name, b.name)) == committed_fixtures.sort_with(|a, b| Project.bytewise(a.name, b.name))
 
 # What a consumer asks of the native fixture, in either version: the native
@@ -559,17 +617,120 @@ expect SbomTest.cases.all(
 )
 expect {
 	bom = JsonData.decode_with(fixture_native_linux_cdx, JsonData.documents) ?? crash "fixture"
-	components = (bom.field("components") ?? JsonData.Null).array() ?? []
+	components = cdx_components(bom)
 	scope = |ref| components.find_first(|entry| entry.field("bom-ref") == Ok(JsonData.String(ref))).map_ok(|entry| (entry.field("scope") ?? JsonData.Null).string() ?? "") ?? ""
 	scope("native") == "required" and scope("platform") == "required" and scope("restricted") == "required" and scope("compiler") == "excluded"
 }
+# Walk standard component fields without consulting Blueprint properties.
+cdx_children : JsonData -> List(JsonData)
+cdx_children = |node| {
+	children = (node.field("components") ?? JsonData.Array([])).array() ?? []
+	children.fold([], |all, child| all.append(child).concat(cdx_children(child)))
+}
+
+cdx_components : JsonData -> List(JsonData)
+cdx_components = |bom| cdx_children(bom).concat(cdx_children((bom.field("metadata") ?? JsonData.Null).field("component") ?? JsonData.Null))
+
+without_blueprint : JsonData -> JsonData
+without_blueprint = |tree|
+	match tree {
+		Object(fields) => JsonData.Object(
+			fields.map(
+				|field| {
+					value = if field.name == "properties" {
+						JsonData.Array((field.value.array() ?? []).keep_if(|entry| !((entry.field("name") ?? JsonData.Null).string() ?? "").starts_with("blueprint:")))
+					} else without_blueprint(field.value)
+					{ name: field.name, value }
+				},
+			),
+		)
+		Array(items) => JsonData.Array(items.map(without_blueprint))
+		_ => tree
+	}
+
+expect {
+	bom = without_blueprint(JsonData.decode_with(fixture_native_linux_cdx, JsonData.documents) ?? crash "fixture")
+	children = |object| ((object.field("components") ?? JsonData.Array([])).array() ?? []).map(|entry| (entry.field("bom-ref") ?? JsonData.Null).string() ?? "")
+	subject = (bom.field("metadata") ?? JsonData.Null).field("component") ?? JsonData.Null
+	assembly = cdx_components(bom).find_first(|entry| entry.field("bom-ref") == Ok(JsonData.String("platform"))) ?? crash "platform"
+	dependencies = (bom.field("dependencies") ?? JsonData.Array([])).array() ?? []
+	outgoing = |ref| dependencies.find_first(|entry| entry.field("ref") == Ok(JsonData.String(ref))).map_ok(|entry| (entry.field("dependsOn") ?? JsonData.Array([])).array() ?? []) ?? []
+	children(subject) == ["platform", "restricted"] and children(assembly) == ["native"] and children(bom) == ["compiler"] and outgoing("Subject") == [JsonData.String("compiler")] and outgoing("platform").is_empty()
+}
+expect {
+	bom = without_blueprint(JsonData.decode_with(fixture_native_linux_cdx, JsonData.documents) ?? crash "fixture")
+	text = JsonData.encode_with(bom, JsonData.documents) ?? crash "encode"
+	imported = Sbom.read(text) ?? crash "plain standard import"
+	imported.relationships.any(|relation| relation.from == "Subject" and relation.to == "platform" and relation.relation == "contains") and imported.relationships.any(|relation| relation.from == "platform" and relation.to == "native" and relation.relation == "contains") and imported.relationships.keep_if(|relation| relation.relation == "dependsOn").map(|relation| { from: relation.from, to: relation.to }) == [{ from: "Subject", to: "compiler" }]
+}
+expect {
+	inventory = SbomTest.inventory ?? crash "fixture"
+	# A shared child and containment cycles stay valid inventory graph statements,
+	# but CycloneDX cannot represent them as unique nested components.
+	shared = { ..inventory, relationships: inventory.relationships.append(edge("restricted", "native", "contains")) }
+	cycle = { ..inventory, relationships: inventory.relationships.map(|relation| if (relation.from == "Subject" and relation.to == "platform") { ..relation, relation: "other" } else relation).append(edge("native", "platform", "contains")) }
+	subject_child = { ..inventory, relationships: inventory.relationships.append(edge("native", "Subject", "contains")) }
+	Sbom.render_cyclonedx(shared, SbomTest.subject, SbomTest.context).is_err() and Sbom.render_cyclonedx(cycle, SbomTest.subject, SbomTest.context) == Err("CycloneDX containment contains a cycle") and Sbom.render_cyclonedx(subject_child, SbomTest.subject, SbomTest.context).is_err()
+}
+expect {
+	# Hoisting the same components breaks the standard containment mapping even
+	# while every Blueprint relationship property remains unchanged.
+	bom = JsonData.decode_with(fixture_native_linux_cdx, JsonData.documents) ?? crash "fixture"
+	flat = match bom {
+		Object(fields) => JsonData.Object(
+			fields.map(
+				|field| if field.name == "metadata" {
+					{
+						..field,
+						value: match field.value {
+							Object(metadata_fields) => JsonData.Object(
+								metadata_fields.map(
+									|item| if item.name == "component" {
+										{
+											..item,
+											value: match item.value {
+												Object(component_fields) => JsonData.Object(component_fields.keep_if(|part| part.name != "components"))
+												_ => item.value
+											},
+										}
+									} else item,
+								),
+							)
+							_ => field.value
+						},
+					}
+				} else if field.name == "components" {
+					{
+						..field,
+						value: JsonData.Array(
+							cdx_components(bom).map(
+								|node| match node {
+									Object(parts) => JsonData.Object(parts.keep_if(|part| part.name != "components"))
+									_ => node
+								},
+							),
+						),
+					}
+				} else field,
+			),
+		)
+		_ => bom
+	}
+	Sbom.read_cyclonedx(JsonData.encode_with(flat, JsonData.documents) ?? "").is_err()
+}
+expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"bom-ref\":\"native\"", "\"bom-ref\":\"platform\"")).is_err()
+expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"dependsOn\":[\"compiler\"]", "\"dependsOn\":[\"compiler\",\"platform\"]")).is_err()
+expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("standard-containment-v1", "unsupported-profile")).is_err()
+expect Sbom.read_cyclonedx(fixture_legacy_cdx).is_ok()
+expect Sbom.read_cyclonedx(fixture_legacy_cdx.replace_each("blueprint:namespace", "blueprint:cyclonedx-profile")).is_err()
+
 expect {
 	bom = JsonData.decode_with(fixture_native_linux_cdx, JsonData.documents) ?? crash "fixture"
 	serial = (bom.field("serialNumber") ?? JsonData.Null).string() ?? ""
 	other = JsonData.decode_with(fixture_verified_empty_cdx, JsonData.documents) ?? crash "fixture"
 	serial.starts_with("urn:uuid:") and serial.to_utf8().get(23) == Ok('8') and other.field("serialNumber") != bom.field("serialNumber") and bom.field("version") == Ok(JsonData.Number("1"))
 }
-expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each(",\"compiler\"]", "]")).is_err()
+expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"dependsOn\":[\"compiler\"]", "\"dependsOn\":[]")).is_err()
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("blueprint:namespace", "other:namespace")).is_err()
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"scope\":\"excluded\"", "\"scope\":\"required\"")).is_err()
 expect Sbom.read(fixture_native_linux_cdx) == Sbom.read_cyclonedx(fixture_native_linux_cdx)
@@ -610,7 +771,7 @@ upstream_import = |text| {
 
 expect (Sbom.read(upstream_syft_cdx) ?? crash "syft cdx").gaps == ["1 × component.author"]
 expect (Sbom.read(upstream_trivy_cdx) ?? crash "trivy cdx").gaps == ["1 × bom.vulnerabilities"]
-expect (Sbom.read(upstream_syft_spdx) ?? crash "syft spdx").gaps == ["1 × file", "108 × relationship to a file or snippet"]
+expect (Sbom.read(upstream_syft_spdx) ?? crash "syft spdx").gaps == []
 expect (Sbom.read(upstream_trivy_spdx) ?? crash "trivy spdx").gaps == []
 expect [upstream_syft_cdx, upstream_syft_spdx, upstream_trivy_cdx, upstream_trivy_spdx].all(
 	|text|
@@ -622,7 +783,7 @@ expect [upstream_syft_cdx, upstream_syft_spdx, upstream_trivy_cdx, upstream_triv
 expect {
 	inventory = upstream_import(upstream_syft_spdx) ?? crash "syft spdx import"
 	coverage = inventory.coverage.find_first(|scope| scope.scope == "import:upstream") ?? crash "no import coverage"
-	coverage.reason.contains("108 × relationship to a file or snippet") and inventory.components.any(|entry| entry.identity.starts_with("pkg:cargo/libsqlite3-sys@0.33.0"))
+	inventory.components.any(|entry| entry.kind == "file") and coverage.status == "incomplete" and inventory.components.any(|entry| entry.identity.starts_with("pkg:cargo/libsqlite3-sys@0.33.0"))
 }
 expect {
 	# Both formats from one tool describe the same crates.
@@ -669,7 +830,7 @@ expect Sbom.inspect(consumer_spec, consumer_lock, "x86_64-linux", { ..consumer, 
 # digest, version and namespace bind exactly as a native supplier's do.
 source_bundle_inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, target: "" }) }) ?? crash "invalid source fixture"
 
-source_supplier_sbom = Sbom.render(source_bundle_inventory, { filename: "dep-abc.tar.zst", version: "1.2.0", target: "source", sha256: bundle_digest, url: bundle_url }, { ..SbomTest.context, namespace: "https://example.org/sbom/dep-source/revision-1" }) ?? crash "source supplier SBOM"
+source_supplier_sbom = Sbom.render(source_bundle_inventory, { ..SbomTest.subject, filename: "dep-abc.tar.zst", version: "1.2.0", target: "source", sha256: bundle_digest, url: bundle_url }, { ..SbomTest.context, namespace: "https://example.org/sbom/dep-source/revision-1" }) ?? crash "source supplier SBOM"
 
 source_supplier_import = { ..supplier_import, namespace: "https://example.org/sbom/dep-source/revision-1", target: "source", document: source_supplier_sbom, sha256: Crypto.SHA256.hash(source_supplier_sbom.to_utf8()).to_hex() }
 
@@ -723,7 +884,7 @@ expect [fixture_native_source_import_3, fixture_native_source_import_2, fixture_
 )
 expect {
 	bom = JsonData.decode_with(fixture_native_source_import_cdx, JsonData.documents) ?? crash "fixture"
-	components = (bom.field("components") ?? JsonData.Null).array() ?? []
+	components = cdx_components(bom)
 	scope = |ref| components.find_first(|entry| entry.field("bom-ref") == Ok(JsonData.String(ref))).map_ok(|entry| (entry.field("scope") ?? JsonData.Null).string() ?? "") ?? ""
 	scope("dep") == "excluded" and components.all(|entry| (entry.field("scope") ?? JsonData.Null).string() != Ok("required"))
 }
@@ -743,7 +904,7 @@ bundle_composition : Sbom.Composition
 bundle_composition = {
 	archive = Sbom.archive_members("sources", bundle_members) ?? crash "invalid member listing"
 	sources = { ..component("sources", "example-bundle", "1.0.0"), target: "source" }
-	{ ..SbomTest.composition, components: [sources].concat(archive.components), relationships: [edge("Subject", "sources", "contains")].concat(archive.relationships), coverage: [{ scope: "members", status: "complete", reason: "Every archive member is stated by SHA-256", contact: "https://example.org/support" }] }
+	{ ..SbomTest.composition, components: [sources].concat(archive.components), relationships: [edge("Subject", "sources", "contains")].concat(archive.relationships), coverage: [{ scope: "members", component: "", aspect: "", status: "complete", reason: "Every archive member is stated by SHA-256", contact: "https://example.org/support" }] }
 }
 
 ## `bundle_composition` without the member `message.txt`.
@@ -831,6 +992,7 @@ manifest_observed = { subject: { sha256: SbomTest.subject.sha256, size: 16 }, in
 expect manifest_text == "{\"profile\":\"${Sbom.profile}\",\"subject\":{\"filename\":\"sample-artifact\",\"version\":\"1.0.0\",\"target\":\"x86_64-linux\",\"sha256\":\"${SbomTest.subject.sha256}\",\"size\":16},\"inventory_sha256\":\"${manifest_digest("inventory")}\",\"context\":{\"namespace\":\"${SbomTest.context.namespace}\",\"revision\":\"1\",\"created\":\"${SbomTest.context.created}\",\"generator\":\"${SbomTest.context.generator}\"},\"sidecars\":[{\"filename\":\"sample-artifact.cdx.json\",\"format\":\"cyclonedx-1.7\",\"sha256\":\"${manifest_digest("bom")}\",\"size\":4},{\"filename\":\"sample-artifact.spdx.json\",\"format\":\"spdx-3.0.1\",\"sha256\":\"${manifest_digest("three")}\",\"size\":3}]}\n"
 expect Manifest.render(manifest_listed) == Ok(manifest_text)
 expect Manifest.read(manifest_text) == Ok(manifest_listed)
+expect Manifest.check(manifest_text.replace_each(Sbom.profile, "blueprint-spdx-3.0-v1"), manifest_observed) == Ok({ ..manifest_listed, profile: "blueprint-spdx-3.0-v1" })
 expect Manifest.check(manifest_text, manifest_observed) == Ok(manifest_listed)
 expect Manifest.check(manifest_text, { ..manifest_observed, inventory: Unmeasured }) == Ok(manifest_listed)
 expect Manifest.check(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.prepend({ filename: "sample-artifact.spdx-2.3.json", sha256: manifest_digest("two"), size: 9 }) }) == Ok(manifest_listed)
@@ -947,12 +1109,15 @@ expect Lock.parse(source_import_lock) == Ok(consumer_lock)
 case_notes : List({ name : Str, bytes : Str, proves : Str })
 case_notes = [
 	{ name: "verified-import", bytes: consumer_bytes, proves: "A native supplier's SBOM (the `native-linux` document) imported into a consumer and bound to the consumed input it describes, pinned by SHA-256: the supplier's components join the consumer's graph under `upstream-` identifiers, and the import's coverage states that the document digest and the subject's identity matched." },
+
 	{ name: "native-linux", bytes: subject_bytes, proves: "The reference native inventory: a platform that contains a transitive native library with a digest of its own, a compiler that only builds the subject (`dependsOn` with scope `build`; CycloneDX scope `excluded`), patched restricted code that keeps its patch identity and licence terms, and an `incomplete` coverage record for the rest of the native closure." },
+	{ name: "mixed-coverage", bytes: subject_bytes, proves: "Complete source assembly, verified-empty external package dependencies, incomplete native closure, and unknown compiler dependency closure use standard compositions without asserting unknown leaves empty." },
 	{ name: "native-arm64", bytes: subject_bytes, proves: "The same composition for `aarch64-linux`: the subject and every component carry that target, and nothing from the `x86_64-linux` case is admitted." },
+	{ name: "reviewed-source", bytes: subject_bytes, proves: "A reviewed source archive with a library, file and build compiler; explicit subject supplier and UPL-1.0 declaration, independent PURL and immutable VCS reference, exact digests and reviewed copyright/attribution. Mixed member licenses do not invent a subject conclusion." },
 	{ name: "source-bundle", bytes: "fixture source bundle\n", proves: "An architecture-independent subject, target `source`, whose components state no target: what a source archive's own SBOM, such as a Roc package bundle's, looks like. It is the supplier document of the `native-source-import` case." },
 	{ name: "native-source-import", bytes: consumer_bytes, proves: "The `source-bundle` document imported into an `x86_64-linux` consumer and bound to the file pin `source:dep`: every component keeps target `source`, the archive's digest and version bind exactly, and the build-scoped dependency ships nothing. Its inputs are under `source-import/`." },
 	{ name: "verified-empty", bytes: subject_bytes, proves: "A reviewed subject with no third-party components, stated as `verified-empty` coverage: an asserted fact, distinct from not knowing." },
-	{ name: "unknown-closure", bytes: subject_bytes, proves: "A subject whose closure is not known: no components, and an `incomplete` coverage record with its reason and contact. A consumer must not read it as empty." },
+	{ name: "unknown-closure", bytes: subject_bytes, proves: "A subject whose closure is not known: no components, and an `unknown` coverage record with its reason and contact. A consumer must not read it as empty." },
 ]
 
 expect SbomTest.cases.map(|case| case.name) == case_notes.map(|note| note.name)
@@ -1108,4 +1273,165 @@ contract_text = {
 expect SbomTest.contract == fixture_contract
 
 # The release asset holds exactly the files this suite asserts.
-expect sorted(SbomFixtures.files) == sorted([SbomFixtures.contract].concat(SbomTest.outputs.map(|file| file.name)).concat(SbomTest.input_files.map(|file| "input/${file.name}")).concat(SbomTest.source_import_files.map(|file| "source-import/${file.name}")).concat(["upstream/README.md", "upstream/syft.cdx.json", "upstream/syft.spdx.json", "upstream/trivy.cdx.json", "upstream/trivy.spdx.json"]))
+expect sorted(SbomFixtures.files) == sorted([SbomFixtures.contract, "legacy/blueprint-0.8.cdx.json"].concat(SbomTest.outputs.map(|file| file.name)).concat(SbomTest.input_files.map(|file| "input/${file.name}")).concat(SbomTest.source_import_files.map(|file| "source-import/${file.name}")).concat(["upstream/README.md", "upstream/syft.cdx.json", "upstream/syft.spdx.json", "upstream/trivy.cdx.json", "upstream/trivy.spdx.json"]))
+
+# A reviewed source bundle keeps release/package/commit/member identities separate.
+reviewed_subject = { ..SbomTest.subject, filename: "roc-ansi-0.13.3.tar.zst", version: "0.13.3", target: "source", producer: "Organization: Fixture upstream", license: "UPL-1.0", copyright: "Copyright 2026 Fixture upstream", attribution: "Reviewed source archive notice" }
+
+reviewed_library = { ..component("ansi", "roc-ansi", "0.13.3"), target: "source", identity: "urn:example:source-tree:commit-abc", package_url: "pkg:generic/roc-ansi@0.13.3", source_refs: [{ type: "vcs", url: "https://example.org/roc-ansi/tree/abcdef0123456789" }], sha256: digest, license: "UPL-1.0", copyright: "Copyright 2026 Fixture upstream", attribution: "Library notice" }
+
+reviewed_file = { ..component("ansi-file", "src/Ansi.roc", "0.13.3"), kind: "file", target: "source", identity: "urn:example:source-member:Ansi.roc", download: "NOASSERTION", sha256: digest, license: "UPL-1.0", copyright: "Copyright 2026 Fixture upstream", attribution: "Source notice" }
+
+reviewed_compiler = { ..component("roc", "roc", "0.1.0"), kind: "application", target: "x86_64-linux", license: "MIT", copyright: "NOASSERTION", attribution: "NOASSERTION" }
+
+reviewed_inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, coverage: [claim("source-assembly", "Subject", "assembly", "complete"), claim("external-packages", "ansi", "dependencies", "verified-empty"), claim("compiler-closure", "roc", "dependencies", "unknown")], components: [reviewed_library, reviewed_file, reviewed_compiler], relationships: [edge("Subject", "ansi", "contains"), edge("ansi", "ansi-file", "contains"), { ..edge("Subject", "roc", "dependsOn"), scope: "build" }] }) ?? crash "reviewed fixture"
+
+expect ["spdx3", "spdx2", "cdx"].all(
+	|format| {
+		text = if format == "cdx" Sbom.render_cyclonedx(reviewed_inventory, reviewed_subject, SbomTest.context) else if format == "spdx2" Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) else Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context)
+		checked = Sidecar.check(text ?? crash "render reviewed") ?? crash "read reviewed"
+		library = checked.document.packages_.find_first(|entry| entry.id == "ansi") ?? crash "library"
+		file = checked.document.packages_.find_first(|entry| entry.id == "ansi-file") ?? crash "file"
+		compiler = checked.document.packages_.find_first(|entry| entry.id == "roc") ?? crash "compiler"
+		checked.subject.supplier == reviewed_subject.producer and checked.subject.license == "UPL-1.0" and library.identity == reviewed_library.package_url and library.source_refs == reviewed_library.source_refs and library.copyright == reviewed_library.copyright and library.attribution == reviewed_library.attribution and file.kind == "file" and compiler.kind == "application"
+	},
+)
+expect Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context).map_ok(|text| text.contains("\"licenseConcluded\":\"NOASSERTION\"")) == Ok(True)
+expect Sbom.render_spdx2(reviewed_inventory, { ..reviewed_subject, producer: "NOASSERTION", license: "NOASSERTION" }, SbomTest.context).map_ok(|text| (Sbom.read(text) ?? crash "read").packages_.first().map_ok(|entry| entry.supplier == "NOASSERTION" and entry.license == "NOASSERTION") == Ok(True)) == Ok(True)
+expect ["https://user:secret@example.org/src", "https://example.org/src?token=secret", "http://example.org/src"].all(|url| Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [{ ..reviewed_library, source_refs: [{ type: "vcs", url }] }], relationships: [edge("Subject", "ansi", "contains")] }).is_err())
+expect Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [{ ..reviewed_library, identity: "pkg:generic/other@1" }], relationships: [edge("Subject", "ansi", "contains")] }).is_err()
+expect Sbom.normalize_input("{\"profile\":\"blueprint-spdx-3.0-v1\",\"components\":[{\"origin\":\"reviewed\",\"producer\":\"NOASSERTION\",\"identity\":\"opaque\"}]}").map_ok(|value| value.contains("\"kind\":\"unknown\"") and value.contains(Sbom.profile)) == Ok(True)
+
+expect {
+	rendered = Sbom.render_cyclonedx(reviewed_inventory, reviewed_subject, SbomTest.context) ?? crash "render"
+	tree = JsonData.decode_with(rendered, JsonData.documents) ?? crash "json"
+	components = cdx_components(tree)
+	library = components.find_first(|entry| (entry.field("bom-ref") ?? JsonData.Null).string() == Ok("ansi")) ?? crash "library"
+	(library.field("type") ?? JsonData.Null).string() == Ok("library") and (library.field("purl") ?? JsonData.Null).string() == Ok(reviewed_library.package_url) and ((library.field("externalReferences") ?? JsonData.Null).array() ?? []).any(|ref| (ref.field("type") ?? JsonData.Null).string() == Ok("vcs") and (ref.field("url") ?? JsonData.Null).string() == Ok("https://example.org/roc-ansi/tree/abcdef0123456789"))
+}
+expect {
+	rendered = Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) ?? crash "render"
+	tree = JsonData.decode_with(rendered, JsonData.documents) ?? crash "json"
+	entries = ((tree.field("packages") ?? JsonData.Null).array() ?? [])
+	file = entries.find_first(|entry| (entry.field("SPDXID") ?? JsonData.Null).string() == Ok("SPDXRef-ansi-file")) ?? crash "file"
+	(file.field("primaryPackagePurpose") ?? JsonData.Null).string() == Ok("FILE") and (file.field("copyrightText") ?? JsonData.Null).string() == Ok(reviewed_file.copyright) and ((file.field("attributionTexts") ?? JsonData.Null).array() ?? []).len() == 1
+}
+expect {
+	rendered = Sbom.render_cyclonedx(reviewed_inventory, reviewed_subject, SbomTest.context) ?? crash "render"
+	Sbom.read_cyclonedx(rendered.replace_each("\"type\":\"file\"", "\"type\":\"application\"")).is_err()
+}
+expect {
+	subject = { ..reviewed_subject, license: "LicenseRef-Terms", license_url: "https://example.org/terms" }
+	rendered = Sbom.render_cyclonedx(reviewed_inventory, subject, SbomTest.context) ?? crash "render"
+	Sbom.read_cyclonedx(rendered.replace_each("\"type\":\"license\",\"url\":\"https://example.org/terms\"", "\"type\":\"license\",\"url\":\"https://example.org/other\"")).is_err()
+}
+
+expect ["spdx3", "spdx2", "cdx"].all(
+	|format| {
+		text = (if format == "cdx" Sbom.render_cyclonedx(reviewed_inventory, reviewed_subject, SbomTest.context) else if format == "spdx2" Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) else Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context)) ?? crash "render"
+		imported = { ..imported_document, document: text, sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), subject: { component: "", filename: reviewed_subject.filename, version: reviewed_subject.version, sha256: reviewed_subject.sha256 }, target: "source", namespace: SbomTest.context.namespace }
+		inspected = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [], relationships: [], imported_documents: [imported] }) ?? crash "import reviewed"
+		inspected.components.any(|entry| entry.kind == "library" and entry.package_url == reviewed_library.package_url and entry.source_refs == reviewed_library.source_refs and entry.copyright == reviewed_library.copyright) and inspected.components.any(|entry| entry.kind == "file" and entry.name == reviewed_file.name)
+	},
+)
+
+# A standard consumer sees the whole reviewed source contract without extensions.
+expect {
+	rendered = Sbom.render_cyclonedx(reviewed_inventory, reviewed_subject, SbomTest.context) ?? crash "render source"
+	bom = without_blueprint(JsonData.decode_with(rendered, JsonData.documents) ?? crash "JSON")
+	subject = (bom.field("metadata") ?? JsonData.Null).field("component") ?? JsonData.Null
+	components = cdx_components(bom)
+	find = |id| components.find_first(|entry| entry.field("bom-ref") == Ok(JsonData.String(id))) ?? crash "missing source component"
+	children = |entry| ((entry.field("components") ?? JsonData.Array([])).array() ?? []).map(|child| child.field("bom-ref") ?? JsonData.Null)
+	library = find("ansi")
+	file = find("ansi-file")
+	compiler = find("roc")
+	dependencies = (bom.field("dependencies") ?? JsonData.Array([])).array() ?? []
+	compositions = (bom.field("compositions") ?? JsonData.Array([])).array() ?? []
+	composition = |aspect, id, status| compositions.any(|entry| entry.field("aggregate") == Ok(JsonData.String(status)) and entry.field(aspect) == Ok(JsonData.Array([JsonData.String(id)])))
+	children(subject) == [JsonData.String("ansi")]
+		and children(library) == [JsonData.String("ansi-file")]
+			and library.field("type") == Ok(JsonData.String("library"))
+				and file.field("type") == Ok(JsonData.String("file"))
+					and compiler.field("type") == Ok(JsonData.String("application"))
+						and compiler.field("scope") == Ok(JsonData.String("excluded"))
+							and file.field("copyright") == Ok(JsonData.String(reviewed_file.copyright))
+								and dependencies.len() == 2
+									and dependencies.any(|entry| entry.field("ref") == Ok(JsonData.String("Subject")) and entry.field("dependsOn") == Ok(JsonData.Array([JsonData.String("roc")])))
+										and dependencies.any(|entry| entry.field("ref") == Ok(JsonData.String("ansi")) and entry.field("dependsOn").is_err())
+											and composition("assemblies", "Subject", "complete")
+												and composition("dependencies", "ansi", "complete")
+													and composition("dependencies", "roc", "unknown")
+}
+
+expect {
+	rendered = Sbom.render_cyclonedx(reviewed_inventory, reviewed_subject, SbomTest.context) ?? crash "render source"
+	["blueprint:kind", "blueprint:attribution", "blueprint:license", "blueprint:license-url"].all(|name| Sbom.read_cyclonedx(rendered.replace_each(name, "removed:declaration")).is_err())
+}
+expect Sbom.render(reviewed_inventory, { ..reviewed_subject, license_url: "https://example.org/terms" }, SbomTest.context).is_err()
+expect Sbom.render_cyclonedx(SbomTest.inventory ?? crash "inventory", { ..SbomTest.subject, license: "LicenseRef-Restricted", license_url: "https://example.org/different-terms" }, SbomTest.context).is_err()
+expect {
+	text = upstream_syft_spdx.replace_each("\"fileName\":", "\"attributionTexts\":[\"Reviewed native file notice\"],\"fileName\":").replace_each("\"copyrightText\":\"NOASSERTION\"", "\"copyrightText\":\"Copyright 2026 File producer\"").replace_each("\"licenseConcluded\":\"NOASSERTION\"", "\"licenseConcluded\":\"MIT\"")
+	graph = Sbom.read(text) ?? crash "native files"
+	file = graph.packages_.find_first(|entry| entry.kind == "file" and entry.name == "Cargo.lock") ?? crash "native file"
+	file.sha256 == "a4e9ab23a342911a43c815ef752a196788fc09bd8130ffb2f82f5794874d9aca" and file.copyright == "Copyright 2026 File producer" and file.attribution == "Reviewed native file notice" and file.license == "NOASSERTION" and graph.gaps.any(|gap| gap.contains("file concluded/observed license"))
+}
+
+# Optional upstream prose is not required to be JSON profile evidence.
+expect {
+	original = Sbom.render_spdx2(SbomTest.inventory ?? crash "inventory", SbomTest.subject, SbomTest.context) ?? crash "render"
+	text = original.replace_each("\"annotations\":[", "\"annotations\":[{\"annotationDate\":\"2026-10-21T00:00:00Z\",\"annotationType\":\"OTHER\",\"annotator\":\"Organization: Supplier\",\"comment\":\"Reviewed upstream prose\"},")
+	imported = { ..imported_document, document: text, sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex() }
+	text != original and inspect({ ..imported_composition, imported_documents: [imported] }).is_ok()
+}
+expect {
+	imported = { ..imported_document, document: fixture_legacy_cdx, sha256: Crypto.SHA256.hash(fixture_legacy_cdx.to_utf8()).to_hex() }
+	inventory = inspect({ ..imported_composition, imported_documents: [imported] }) ?? crash "legacy supplier"
+	inventory.coverage.any(|entry| entry.scope == "import:upstream:native-closure" and entry.component.is_empty() and entry.aspect.is_empty() and entry.reason == "Opaque task lacks remaining native closure metadata" and entry.contact == "https://example.org/support")
+}
+
+# Direct readers enforce the same metadata consistency as import and check.
+expect ["spdx2", "spdx3"].all(
+	|format| {
+		text = (if format == "spdx2" Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) else Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context)) ?? crash "render"
+		copyright_key = if format == "spdx2" "copyrightText" else "software_copyrightText"
+		identity_key = if format == "spdx2" "referenceLocator" else "software_packageUrl"
+		source_key = if format == "spdx2" "sourceInfo" else "software_sourceInfo"
+		copyright_field = "${Json.to_str(copyright_key)}:${Json.to_str(reviewed_library.copyright)}"
+		identity_field = "${Json.to_str(identity_key)}:${Json.to_str(reviewed_library.package_url)}"
+		source_field = "${Json.to_str(source_key)}:${Json.to_str(Json.to_str(reviewed_library.source_refs))}"
+		Sbom.read(text).is_ok() and [
+			text.replace_each(copyright_field, "${Json.to_str(copyright_key)}:\"Contradictory notice\""),
+			text.replace_each(identity_field, "${Json.to_str(identity_key)}:\"pkg:generic/different@1\""),
+			text.replace_each(source_field, "${Json.to_str(source_key)}:\"[]\""),
+		].all(|broken| broken != text and Sbom.read(broken).is_err())
+	},
+)
+expect {
+	text = Sbom.render_cyclonedx(reviewed_inventory, reviewed_subject, SbomTest.context) ?? crash "render"
+	broken = text.replace_each("https://example.org/roc-ansi/tree/abcdef0123456789", "https://user:secret@example.org/roc-ansi")
+	Sbom.read_cyclonedx(broken).is_err() and Sbom.read(broken).is_err()
+}
+
+# Supplier-document availability cannot override reviewed closure assessments.
+expect ["unknown", "verified-empty", "complete"].all(
+	|status| {
+		composition = { ..locked_composition, components: locked_composition.components.map(|entry| if entry.id == "program" { ..entry, kind: "application" } else entry), coverage: [claim("compiler-reviewed", "program", "dependencies", status)] }
+		inventory = inspect_locked(composition) ?? crash "reviewed locked compiler coverage"
+		three = Sidecar.check(Sbom.render(inventory, SbomTest.subject, SbomTest.context) ?? crash "SPDX3") ?? crash "read SPDX3"
+		two = Sidecar.check(Sbom.render_spdx2(inventory, SbomTest.subject, SbomTest.context) ?? crash "SPDX2") ?? crash "read SPDX2"
+		text = Sbom.render_cyclonedx(inventory, SbomTest.subject, SbomTest.context) ?? crash "CycloneDX"
+		cdx = Sidecar.check(text) ?? crash "read CycloneDX"
+		standard = without_blueprint(JsonData.decode_with(text, JsonData.documents) ?? crash "JSON")
+		dependencies = (standard.field("dependencies") ?? JsonData.Array([])).array() ?? []
+		compositions = (standard.field("compositions") ?? JsonData.Array([])).array() ?? []
+		gaps = inventory.coverage.keep_if(|entry| entry.scope.starts_with("sbom:"))
+		gaps.len() == 2 and gaps.all(|entry| entry.component.is_empty() and entry.aspect.is_empty() and entry.status == "incomplete")
+			and inventory.coverage.any(|entry| entry.component == "program" and entry.aspect == "dependencies" and entry.status == status)
+				and dependencies.any(|entry| entry.field("ref") == Ok(JsonData.String("program"))) == (status != "unknown")
+					and compositions.len() == 1
+						and compositions.any(|entry| entry.field("dependencies") == Ok(JsonData.Array([JsonData.String("program")])) and entry.field("aggregate") == Ok(JsonData.String(if status == "unknown" "unknown" else "complete")))
+							and Sidecar.same_graph(three, two) and Sidecar.same_graph(three, cdx)
+								and [three, two, cdx].all(|checked| Sidecar.against_inventory(checked, inventory).is_ok())
+	},
+)
