@@ -12,7 +12,7 @@ import Script
 ## executable. Only the macOS compiler archive ships that sysroot, so the
 ## compiler is the flake's `roc-cross` package: the Linux archive with the
 ## macOS archive's sysroot beside it, for the nightly in `blueprint-cli/compiler-version`, each
-## fetched by the URL and hash the flake's locked roc-overlay records.
+## fetched by the official URL and hash recorded in the flake.
 Release := [].{
 
 	## A released system: Nix's name for it and Roc's target.
@@ -35,6 +35,7 @@ Release := [].{
 		{ source: "blueprint-cli/main.roc", name: "blueprint" },
 		{ source: "scripts/sbom.roc", name: "blueprint-sbom" },
 		{ source: "scripts/smoke_binary.roc", name: "smoke" },
+		{ source: "scripts/test_release.roc", name: "test-release" },
 	]
 
 	## The programs a release publishes, in the order `blueprint.sha256`
@@ -108,7 +109,7 @@ build! = |root, roc| {
 	compiled?
 	# The SBOM tool embeds no compiler, so it compiles like the smoke
 	# program: every target at once.
-	compile_together!(roc, root, Release.files("blueprint-sbom", dist).concat(Release.files("smoke", dist)))?
+	compile_together!(roc, root, Release.files("blueprint-sbom", dist).concat(Release.files("smoke", dist)).concat(Release.files("test-release", dist)))?
 
 	var $sums = ""
 	for program in Release.published {
@@ -127,6 +128,8 @@ compile_blueprints! : Str, Str, Str => Try({}, _)
 compile_blueprints! = |roc, root, dist| {
 	for released in Release.systems {
 		Process.passthrough!(Process.command("roc-stable", ["scripts/embed_compiler.roc", released.system], root))?
+		extension = if released.system == "x86_64-windows" "zip" else "tar.gz"
+		Path.copy!(Path.utf8("${root}/blueprint-cli/compiler-archive"), Path.utf8("${dist}/roc-${released.system}.${extension}"))?
 		files = Release.files("blueprint", dist).keep_if(|file| file.target == released.target)
 		compile_together!(roc, root, files)?
 	}
@@ -182,7 +185,7 @@ expect Release.files("smoke", "/repo/dist") == [
 ]
 expect Release.files("blueprint-sbom", "dist").map(|file| file.output) == ["dist/blueprint-sbom-x86_64-linux", "dist/blueprint-sbom-aarch64-linux", "dist/blueprint-sbom-aarch64-darwin", "dist/blueprint-sbom-x86_64-windows.exe"]
 expect Release.files("blueprint-sbom", "dist").all(|file| file.source == "scripts/sbom.roc")
-expect Release.programs.map(|program| program.name) == ["blueprint", "blueprint-sbom", "smoke"] and Release.files("other", "dist").is_empty()
+expect Release.programs.map(|program| program.name) == ["blueprint", "blueprint-sbom", "smoke", "test-release"] and Release.files("other", "dist").is_empty()
 
 # The checksum file lists the CLI and then the SBOM tool, for every system;
 # the smoke program is built but not released.

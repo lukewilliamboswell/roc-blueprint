@@ -8,7 +8,7 @@ import Script
 import FlakeLock
 import StandaloneRunner
 import BuildHarness
-import "../../blueprint-cli/compiler-version" as compiler_version : Str
+import "../../fixtures/roc-inputs.lock.json" as roc_inputs : Str
 
 ## An end-to-end test of the `RocPackages` setting against the real
 ## `./blueprint` and real Nix. A task or a shell has its bundles downloaded by
@@ -24,8 +24,8 @@ RocPackagesTest := [].{
 	## basic-cli depends on this; a project must list it too.
 	http = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"
 
-	## Exercise the product's pinned compiler, from the reviewed overlay pin.
-	roc_tag = compiler_version.trim()
+	## Exercise the fixture compiler available in the reviewed overlay pin.
+	roc_tag = FlakeLock.compiler_pin(roc_inputs) ?? ""
 
 	greeting = "Hello from locked packages"
 

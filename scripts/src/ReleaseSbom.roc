@@ -52,7 +52,7 @@ ReleaseSbom := [].{
 		native : Native
 		native = Json.parse(native_json.replace_each("\"targets\"", "\"artifacts\"")).map_err(|_| Invalid("invalid linker-input authority"))?
 		actual_tag = Path.read_utf8!(Path.utf8("${root}/blueprint-cli/compiler-version"))?
-		if actual_tag.trim() != "nightly-2026-10-21-5349569" {
+		if actual_tag.trim() != "nightly-2026-10-27-de79a0f" {
 			return Err(Invalid("compiler changed: review full source revision and native closure declaration"))
 		}
 		if native.source.sha != "5db8f9b9e661f5cbde0254d3520366ef4eab8bd4" {

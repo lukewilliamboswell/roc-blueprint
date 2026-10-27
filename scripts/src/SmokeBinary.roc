@@ -7,6 +7,7 @@ import FlakeLock
 import Process
 import Script
 import "../../blueprint-cli/compiler-version" as roc_version : Str
+import "../../fixtures/roc-inputs.lock.json" as roc_inputs : Str
 import "../../flake.lock" as flake_lock : Str
 import "../../fixtures/consumer/inputs.lock" as fixture_lock : Str
 
@@ -23,7 +24,8 @@ import "../../fixtures/consumer/inputs.lock" as fixture_lock : Str
 ## on this repository and not on what moved upstream that day: packages at the
 ## nixpkgs revision of `fixtures/consumer/inputs.lock`, the overlay at the
 ## roc-overlay revision of `flake.lock` (the two the real-Nix scenarios use)
-## and the compiler at the nightly in `blueprint-cli/compiler-version`. The three files are
+## and the Nix compiler in `fixtures/roc-inputs.lock.json`. The embedded compiler
+## is pinned separately in `blueprint-cli/compiler-version`. These files are
 ## compiled into this program, so they cannot disagree with it and a machine
 ## that runs it needs none of them. `Floating` writes instead what a new
 ## user's project holds, for the weekly run that watches upstream.
@@ -148,7 +150,7 @@ SmokeBinary := [].{
 
 	## The pins of the committed files, or which of them has none.
 	pinned : Try(References, [NoPin(Str)])
-	pinned = references(fixture_lock, flake_lock, roc_version)
+	pinned = references(fixture_lock, flake_lock, FlakeLock.compiler_pin(roc_inputs) ?? "")
 
 	references : Str, Str, Str -> Try(References, [NoPin(Str)])
 	references = |packages_lock, overlay_lock, version| {
@@ -424,11 +426,11 @@ expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).starts_
 expect SmokeBinary.blueprint_roc("../pf/main.roc", SmokeBinary.floating).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly\")")
 
 sample_pins : SmokeBinary.References
-sample_pins = { source: "github:NixOS/nixpkgs/abc", overlay: "github:roc-lang/roc-overlay/def", compiler: "rocpkgs.nightly-2026-10-21-5349569" }
+sample_pins = { source: "github:NixOS/nixpkgs/abc", overlay: "github:roc-lang/roc-overlay/def", compiler: "rocpkgs.nightly-2026-10-27-de79a0f" }
 
 # The pinned project names a revision or tag for everything it resolves.
 expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("\tName(\"smoke\"),\n\tPackages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\"))),\n\tInput(\"roc\", \"github:roc-lang/roc-overlay/def\"),\n")
-expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly-2026-10-21-5349569\")")
+expect SmokeBinary.blueprint_roc("../pf/main.roc", sample_pins).contains("Command(\"roc-stable\", \"default#rocpkgs.nightly-2026-10-27-de79a0f\")")
 
 lock_sample : Str, Str, Str -> Str
 lock_sample = |node, repo, rev| "{\n  \"nodes\": {\n    \"${node}\": {\n      \"locked\": {\n        \"narHash\": \"sha256-AAAA\",\n        \"owner\": \"o\",\n        \"repo\": \"${repo}\",\n        \"rev\": \"${rev}\",\n        \"type\": \"github\"\n      }\n    }\n  }\n}\n"
@@ -459,8 +461,8 @@ expect [[], ["--floating"], ["--no-nix"], ["--pinned", "blueprint"], ["blueprint
 # The Nix-free project names no package source, overlay or tool of one: its
 # compiler is a fetched program and git is the machine's.
 expect {
-	text = SmokeBinary.no_nix_roc("../pf/main.roc", "nightly-2026-10-21-5349569", False)
-	text.starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tSystems([\"x86_64-linux\", \"aarch64-linux\", \"aarch64-darwin\", \"x86_64-windows\"]),\n\tEnvironment(\"dev\", [\n\t\tPrograms([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-10-21-5349569\"))]),\n\t\tExpect([\"git\"]),\n\t\tRocPackages([\"https://github.com/roc-lang/basic-cli/")
+	text = SmokeBinary.no_nix_roc("../pf/main.roc", "nightly-2026-10-27-de79a0f", False)
+	text.starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tSystems([\"x86_64-linux\", \"aarch64-linux\", \"aarch64-darwin\", \"x86_64-windows\"]),\n\tEnvironment(\"dev\", [\n\t\tPrograms([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-10-27-de79a0f\"))]),\n\t\tExpect([\"git\"]),\n\t\tRocPackages([\"https://github.com/roc-lang/basic-cli/")
 		and ["NixPackages", "Input(", "Tools(", "Command(", "#"].all(|part| !text.contains(part))
 }
 expect SmokeBinary.linked_script.starts_with("#!/usr/bin/env roc-stable\napp [main!] { cli: platform \"https://github.com/roc-lang/basic-cli/releases/download/")

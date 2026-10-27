@@ -78,7 +78,7 @@ ConfigTest := [].{
 				"(programs ",
 				"(environment_programs ",
 				"(expects ",
-				"(urls (\"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-21-5349569/roc_nightly-linux_x86_64-2026-10-21-5349569.tar.gz\"))",
+				"(urls (\"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-27-de79a0f/roc_nightly-linux_x86_64-2026-10-21-5349569.tar.gz\"))",
 				"(unpack TarGz)",
 				"(path \"roc_nightly-windows_x86_64-2026-10-21-5349569/roc.exe\")",
 				"(unpack Zip)",
@@ -708,7 +708,7 @@ recipe_definition =
 	\\		_ => Unavailable
 	\\	}
 	\\
-	\\roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-21-5349569"))
+	\\roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-27-de79a0f"))
 
 ## Fetched programs and expected tools: what is accepted, and each mistake
 ## with the check that refuses it. A quoted value is refused by its own type
@@ -743,7 +743,7 @@ program_fixtures = [
 	rejected(
 		"UnavailableEverywhere",
 		"Fetch roc-stable: its recipe answers Unavailable",
-		\\[Name("invalid"), Systems(["riscv64-linux"]), Environment("dev", [Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-21-5349569"))])])]
+		\\[Name("invalid"), Systems(["riscv64-linux"]), Environment("dev", [Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-27-de79a0f"))])])]
 		,
 	),
 	rejected(
@@ -768,7 +768,7 @@ program_fixtures = [
 	rejected(
 		"ProgramAndCommand",
 		"has roc-stable as both",
-		\\[Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Command("roc-stable", "nix#rocpkgs.nightly")]), Environment("dev", [Extend("base"), Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-21-5349569"))])])]
+		\\[Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Command("roc-stable", "nix#rocpkgs.nightly")]), Environment("dev", [Extend("base"), Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-27-de79a0f"))])])]
 		,
 	),
 	rejected(
