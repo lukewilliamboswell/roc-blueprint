@@ -78,9 +78,9 @@ ConfigTest := [].{
 				"(programs ",
 				"(environment_programs ",
 				"(expects ",
-				"(urls (\"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-27-de79a0f/roc_nightly-linux_x86_64-2026-10-21-5349569.tar.gz\"))",
+				"(urls (\"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-27-de79a0f/roc_nightly-linux_x86_64-2026-10-27-de79a0f.tar.gz\"))",
 				"(unpack TarGz)",
-				"(path \"roc_nightly-windows_x86_64-2026-10-21-5349569/roc.exe\")",
+				"(path \"roc_nightly-windows_x86_64-2026-10-27-de79a0f/roc.exe\")",
 				"(unpack Zip)",
 				"(urls (\"https://example.test/1.0/tool-linux\" \"https://mirror.example.test/1.0/tool-linux\"))",
 				"(urls (\"https://example.test/windows/notes-x86_64\"))",
@@ -860,7 +860,7 @@ program_fixtures = [
 	# misspelt is not in scope.
 	refused(
 		"NameForProgram",
-		"from_quote",
+		"[Fetch(ProgramName,",
 		\\[Name("bad"), Environment("dev", [Programs(["roc-stable"])])]
 		,
 	),

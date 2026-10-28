@@ -55,7 +55,12 @@
           roc = roc-overlay.packages.${system}.nightly.overrideAttrs (previous: {
             version = rocTag;
             src = rocArchive system;
-            passthru = previous.passthru // { tag = rocTag; compilerVersion = rocTag; };
+            passthru = previous.passthru // {
+              tag = rocTag;
+              compilerVersion = rocTag;
+              compilerCommit = "de79a0f6f7a2e94fcc6433a2e829af11d61809af";
+              source = compilerArchives.${system};
+            };
           });
 
           # The compiler the scripts in scripts/ run on, under the command name
