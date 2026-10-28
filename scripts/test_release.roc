@@ -9,6 +9,7 @@ import cli.Path
 import cli.Stderr
 import src/Bundle
 import src/Examples
+import src/Process
 
 ## Test what a release ships, as a user will get it. Run from the repository
 ## root after `scripts/bundle.roc` and `scripts/package_examples.roc` with the
@@ -44,8 +45,8 @@ main! = |args| {
 }
 
 run! = |version, given| {
-	root = Path.to_str(Path.canonicalize!(Env.cwd!()?)?)?
+	root = Process.portable(Path.to_str(Path.canonicalize!(Env.cwd!()?)?)?)
 	# The binary runs in each example's directory.
-	binary = if given.is_empty() "" else Path.to_str(Path.canonicalize!(Path.utf8(given))?)?
+	binary = if given.is_empty() "" else Process.portable(Path.to_str(Path.canonicalize!(Path.utf8(given))?)?)
 	Examples.test!(root, version, binary)
 }

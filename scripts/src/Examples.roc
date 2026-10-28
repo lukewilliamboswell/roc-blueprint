@@ -106,7 +106,7 @@ Examples := [].{
 	## `scripts/bundle.roc` made for `version`.
 	package! : Str, Str => Try({}, _)
 	package! = |root, version| {
-		work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-examples-")?)?)?
+		work = Process.portable(Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-examples-")?)?)?)
 		result = staged!(root, version, work)
 		_ = Path.delete_all!(Path.utf8(work))
 		result
@@ -116,7 +116,7 @@ Examples := [].{
 	## `dist/`; with a `binary`, run that `blueprint` on each project too.
 	test! : Str, Str, Str => Try({}, _)
 	test! = |root, version, binary| {
-		work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-release-")?)?)?
+		work = Process.portable(Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-release-")?)?)?)
 		server = Serve.open!()?
 		result = unpacked!(root, version, binary, work, server)
 		_ = server.shut!()
@@ -223,21 +223,22 @@ unpacked! = |root, version, binary, work, idle| {
 	server = idle.with_route(route(bundled.platform_archive), Path.read_bytes!(Path.utf8("${root}/dist/${bundled.platform_archive}"))?).with_route(route(bundled.core_archive), Path.read_bytes!(Path.utf8("${root}/dist/${bundled.core_archive}"))?)
 	arguments = Bundle.replacing(bundled.platform_url, server.url(route(bundled.platform_archive))).concat(Bundle.replacing(bundled.core_url, server.url(route(bundled.core_archive))))
 	# Its own package cache, empty: the bundles must come from this process.
-	environment = [("XDG_CACHE_HOME", "${work}/cache")]
+	environment = [("XDG_CACHE_HOME", if windows "${work}/cache".replace_each("/", "\\") else "${work}/cache")]
 	roc = Process.roc!()
 
 	Script.info!("==>", "Each archived example checks and prints its recorded Spec against the served bundles")?
 	projects = Examples.projects(files)
 	for project in projects {
 		directory = "${top}/examples/${project}"
-		compiler = |args| Process.with_env(Process.command(roc, args.concat(arguments).concat(["Blueprint.roc"]), directory), environment)
+		compiler = |args| Process.with_env(Process.command(roc, args.concat(["--no-cache"]).concat(arguments).concat(["Blueprint.roc"]), directory), environment)
 		recorded = expected!(suite, project)?
 		match server.drive!([compiler(["check"])])? {
 			[checked] => Process.check!(checked.code == 0, "${checked.stdout}${checked.stderr}\nroc check of the archived ${project} example exited with code ${checked.code.to_str()}")?
 			_ => return Script.fail!("roc check did not report a result")
 		}
 		executable = "${work}/example${if windows ".exe" else ""}"
-		match server.drive!([compiler(["build", "--output=${executable}"])])? {
+		native_executable = if windows executable.replace_each("/", "\\") else executable
+		match server.drive!([compiler(["build", "--output=${native_executable}"])])? {
 			[built] => Process.check!(built.code == 0, "${built.stdout}${built.stderr}")?
 			_ => return Script.fail!("build did not report a result")
 		}

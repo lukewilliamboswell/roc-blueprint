@@ -123,7 +123,13 @@ Process := [].{
 
 	## Canonical OS paths as portable text.
 	portable : Str -> Str
-	portable = |value| value.replace_each("\\", "/").drop_prefix("//?/")
+	portable = |value| {
+		plain = value.drop_prefix("\\\\?\\")
+		match plain.to_utf8() {
+			[letter, ':', separator, ..] if ((letter >= 'A' and letter <= 'Z') or (letter >= 'a' and letter <= 'z')) and (separator == '\\' or separator == '/') => plain.replace_each("\\", "/")
+			_ => value
+		}
+	}
 
 	## The directories of `PATH`, in order.
 	search_path! : () => List(Str)
@@ -161,7 +167,7 @@ Process := [].{
 
 	## The lines of `text` that are not empty.
 	lines : Str -> List(Str)
-	lines = |text| text.split_on("\n").keep_if(|line| !line.is_empty())
+	lines = |text| text.split_on("\n").map(|line| line.drop_suffix("\r")).keep_if(|line| !line.is_empty())
 
 	## The strings in byte order, so a directory listing has one order.
 	sorted : List(Str) -> List(Str)
@@ -200,3 +206,11 @@ expect Process.outcome(Cmd.Output.{ command: "test", status: Exited(3), stdout_b
 expect Process.outcome(Cmd.Output.{ command: "test", status: Signaled(9), stdout_bytes: [], stderr_bytes: [] }).code == 137
 expect Process.command("/repo/blueprint", ["run", "hello"], "/tmp").label == "blueprint run hello"
 expect Process.sorted(["b", "ab", "a", "Z", "a"]) == ["Z", "a", "a", "ab", "b"]
+
+# Canonical Windows drive paths become portable; POSIX backslashes remain names.
+expect Process.portable("D:\\work\\repo") == "D:/work/repo"
+expect Process.portable("\\\\?\\D:\\work\\repo") == "D:/work/repo"
+expect Process.portable("/tmp/a\\b") == "/tmp/a\\b"
+
+expect Process.lines("one\r\ntwo\r\n\r\n") == ["one", "two"]
+expect Process.lines(" one \r\n") == [" one "]
