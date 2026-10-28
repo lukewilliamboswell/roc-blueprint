@@ -22,6 +22,7 @@ CliBootstrapTest := [].{
 
 cases! : CliHarness.Bench => Try({}, _)
 cases! = |bench| {
+	lookup!(bench)?
 	compiler_version!(bench)?
 	bootstrap!(bench)
 }
@@ -141,3 +142,18 @@ system_of = |machine|
 		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
 		_ => "x86_64-linux"
 	}
+
+## PATH lookup follows executable links and rejects broken/non-executable entries.
+lookup! : CliHarness.Bench => Try({}, _)
+lookup! = |bench| {
+	directory = "${bench.work}/lookup"
+	Path.create_all!(Path.utf8("${directory}/directory"))?
+	Path.write_utf8!(Path.utf8("${directory}/plain"), "not executable")?
+	CliHarness.tool!(["ln", "-s", "../stub-tool", "${directory}/linked"])?
+	CliHarness.tool!(["ln", "-s", "absent", "${directory}/broken"])?
+	CliHarness.check!(CliHarness.which!("linked", directory) == Ok("${directory}/linked"), "PATH lookup did not follow an executable symlink")?
+	for name in ["broken", "plain", "directory"] {
+		CliHarness.check!(CliHarness.which!(name, directory) == Err(NotFound), "PATH lookup accepted ${name}")?
+	}
+	Script.pass!("PATH lookup follows executable symlinks and rejects broken links, non-executable files and directories")
+}

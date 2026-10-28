@@ -55,11 +55,18 @@
           roc = roc-overlay.packages.${system}.nightly.overrideAttrs (previous: {
             version = rocTag;
             src = rocArchive system;
+            meta = previous.meta // {
+              changelog = "https://github.com/roc-lang/nightlies/releases/tag/${rocTag}";
+            };
             passthru = previous.passthru // {
               tag = rocTag;
               compilerVersion = rocTag;
               compilerCommit = "de79a0f6f7a2e94fcc6433a2e829af11d61809af";
-              source = compilerArchives.${system};
+              source = {
+                inherit (compilerArchives.${system}) url;
+                sha256 = compilerArchives.${system}.hash;
+                asset = builtins.baseNameOf compilerArchives.${system}.url;
+              };
             };
           });
 
@@ -77,7 +84,7 @@
           # `darwin/` sysroot of the Apple Silicon archive beside it. Roc links
           # macOS programs against that sysroot and looks for it next to its own
           # executable, so `roc` is not wrapped or moved. Only the macOS archive
-          # ships the sysroot. Each archive is pinned below from the official nightly release,
+          # ships the sysroot. Each archive is pinned explicitly from the official nightly release,
           # independently of when roc-overlay inventories that release.
           rocArchive = archiveSystem: pkgs.fetchurl compilerArchives.${archiveSystem};
           rocCross = pkgs.runCommand "roc-cross-${rocTag}" { } ''
