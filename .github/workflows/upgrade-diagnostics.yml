@@ -14,7 +14,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/toolchain
-      - run: nix develop -c roc build scripts/test_release.roc --target=x64win --output=dist/test-release-x86_64-windows.exe
+      - run: |
+          mkdir -p dist
+          nix develop -c roc build scripts/test_release.roc --target=x64win --output=dist/test-release-x86_64-windows.exe
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: windows-archive-helper
