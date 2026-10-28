@@ -167,7 +167,7 @@ Process := [].{
 
 	## The lines of `text` that are not empty.
 	lines : Str -> List(Str)
-	lines = |text| text.split_on("\n").keep_if(|line| !line.is_empty())
+	lines = |text| text.split_on("\n").map(|line| line.drop_suffix("\r")).keep_if(|line| !line.is_empty())
 
 	## The strings in byte order, so a directory listing has one order.
 	sorted : List(Str) -> List(Str)
@@ -211,3 +211,6 @@ expect Process.sorted(["b", "ab", "a", "Z", "a"]) == ["Z", "a", "a", "ab", "b"]
 expect Process.portable("D:\\work\\repo") == "D:/work/repo"
 expect Process.portable("\\\\?\\D:\\work\\repo") == "D:/work/repo"
 expect Process.portable("/tmp/a\\b") == "/tmp/a\\b"
+
+expect Process.lines("one\r\ntwo\r\n\r\n") == ["one", "two"]
+expect Process.lines(" one \r\n") == [" one "]
