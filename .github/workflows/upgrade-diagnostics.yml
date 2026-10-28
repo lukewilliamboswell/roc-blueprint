@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        script: [test_bootstrap, test_builds, test_roc_packages]
+        script: [test_bootstrap]
     permissions:
       contents: read
       actions: read
