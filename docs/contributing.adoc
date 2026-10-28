@@ -437,8 +437,8 @@ The manual is the AsciiDoc in `docs/`. `index.adoc` is a book that includes
 one chapter per top-level `.adoc` file; `.github/workflows/docs.yml` renders
 it as a site and a PDF with the shared
 https://lukewilliamboswell.github.io/roc-automation/actions.html#build-docs[`build-docs`]
-action, on every pull request, and deploys the site from `main`. The action
-and renderer are paired at `tools-0.6.0`; `flake.nix` checks the released
+action, on every pull request, and deploys the site from `main`. The action is pinned to a reviewed roc-automation main revision; the renderer
+is released as `tools-0.6.0`. `flake.nix` checks the released
 renderer binary's SHA-256 for each supported host. Rendering uses the native
 Roc utility. API generation uses this repository's pinned Roc compiler.
 

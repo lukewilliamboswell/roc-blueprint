@@ -94,8 +94,8 @@
             cp -r sysroot/darwin "$out/darwin"
           '';
 
-          # Released native documentation renderer, paired with the shared
-          # build-docs action at the tools-0.6.0 release commit. Never
+          # Released native documentation renderer, compatible with the reviewed
+          # shared build-docs action. Never
           # patch its bytes: these hashes identify the published executables.
           rocDocsVersion = "0.6.0";
           rocDocsHashes = {
