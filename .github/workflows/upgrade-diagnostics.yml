@@ -4,14 +4,9 @@ on:
     branches: [diagnosis/blueprint-upgrade]
 permissions: {}
 jobs:
-  integration:
-    name: Diagnostics (${{ matrix.script }})
+  bundle:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        script: [test]
     permissions:
       contents: read
       actions: read
@@ -25,8 +20,44 @@ jobs:
           name: blueprint-binaries
           run-id: '40606371807'
           github-token: ${{ github.token }}
-      - run: install -m 755 dist/blueprint-x86_64-linux blueprint
-      - name: Diagnose integration suite
-        env:
-          BLUEPRINT_PREBUILT: "1"
-        run: nix develop -c scripts/test.roc cli
+      - name: Prepare exact candidate archive and native Windows harness
+        run: |
+          nix develop -c scripts/link_inputs.roc fetch
+          nix develop -c scripts/bundle.roc 0.0.1-dry-run
+          nix develop -c scripts/package_examples.roc 0.0.1-dry-run
+          nix develop -c roc build scripts/test_release.roc --target=x64win --output=dist/test-release-x86_64-windows.exe
+          nix develop -c scripts/embed_compiler.roc x86_64-windows
+          cp blueprint-cli/compiler-archive dist/roc-x86_64-windows.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-archive-diagnostic
+          path: |
+            dist/bundles.txt
+            dist/*.tar.zst
+            dist/roc-blueprint-examples-0.0.1-dry-run.zip
+            dist/blueprint-x86_64-windows.exe
+            dist/test-release-x86_64-windows.exe
+            dist/roc-x86_64-windows.zip
+  windows:
+    needs: bundle
+    runs-on: windows-2025
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: windows-archive-diagnostic
+          path: dist
+      - name: Run native archive harness
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/compiler | Out-Null
+          tar.exe -xf dist/roc-x86_64-windows.zip --strip-components=1 -C dist/compiler
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:ROC = Join-Path $pwd 'dist/compiler/roc.exe'
+          ./dist/test-release-x86_64-windows.exe 0.0.1-dry-run dist/blueprint-x86_64-windows.exe
+          exit $LASTEXITCODE
