@@ -1,0 +1,39 @@
+= roc-blueprint 0.10.0
+
+This release adds a `blueprint` binary for Intel macOS. A project's tasks run
+there without Nix, as they do on Windows, so CI on `macos-15-intel` runners and
+maintainers on Intel Macs use the same `Blueprint.roc` as everyone else.
+
+== Use 0.10.0
+
+[source,roc,snippet=unchecked]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+The importable core package is `{core-url}`. The `blueprint` and
+`blueprint-sbom` binaries ship for x86_64 Linux, arm64 Linux, Apple Silicon
+and Intel macOS, and x86_64 Windows, with SHA-256 sums in `blueprint.sha256`.
+Spec major 3 and Lock 2 are unchanged.
+
+== Intel macOS
+
+`blueprint-x86_64-darwin` and `blueprint-sbom-x86_64-darwin` are new release
+assets. Before this release, `blueprint` stopped on an Intel Mac with a message
+naming the supported systems; it now runs there. Current nixpkgs no longer
+builds for Intel macOS, so tasks there take nothing from a provider: they use
+fetched programs, expected tools and Roc packages, and `Recipes.roc_nightly`
+selects the nightly's `macos_x86_64` archive. Tools from Nix and sandboxed
+builds remain unavailable there. See xref:no-provider.adoc#intel-macos[Intel macOS].
+
+`x86_64-darwin` was already in the default `Systems`, so a project that does
+not list its systems already locks fetched programs for it.
+
+The checksum file lists five CLI binaries and then five SBOM tool binaries.
+The existing asset names are unchanged; the Intel binaries are additions.
+
+== Compiler
+
+The embedded compiler that reads `Blueprint.roc` moves to
+`nightly-2026-10-28-bad769b`. A project that fetches that nightly as
+`roc-stable` holds one download for both.

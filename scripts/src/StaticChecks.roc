@@ -108,7 +108,7 @@ StaticChecks := [].{
 	}
 
 	## The Systems `blueprint` runs on (`supported_host` in the CLI).
-	host_systems = ["x86_64-linux", "aarch64-linux", "aarch64-darwin", "x86_64-windows"]
+	host_systems = ["x86_64-linux", "aarch64-linux", "aarch64-darwin", "x86_64-darwin", "x86_64-windows"]
 
 	## With no compatible compiler at hand, the CLI downloads the nightly it
 	## evaluates with by a digest it records itself. There must be an entry
@@ -296,7 +296,7 @@ expect StaticChecks.provider_references("a = Locks.decode\nb = NixProvider.plan(
 expect StaticChecks.provider_references("Locks.") == ["Locks"]
 
 expect StaticChecks.bootstrap_problem("nightly-1\n", StaticChecks.host_systems.map(|system| "\t\t\ttag: \"nightly-1\",\n\t\t\tsystem: \"${system}\",\n").fold("", Str.concat)) == ""
-expect StaticChecks.bootstrap_problem("nightly-2\n", "\t\t\ttag: \"nightly-1\",\n\t\t\tsystem: \"x86_64-linux\",\n\t\t\ttag: \"nightly-2\",\n\t\t\tsystem: \"x86_64-linux\",\n") == "record the download of the nightly-2 compiler for aarch64-linux, aarch64-darwin, x86_64-windows in compilers in blueprint-cli/Bootstrap.roc"
+expect StaticChecks.bootstrap_problem("nightly-2\n", "\t\t\ttag: \"nightly-1\",\n\t\t\tsystem: \"x86_64-linux\",\n\t\t\ttag: \"nightly-2\",\n\t\t\tsystem: \"x86_64-linux\",\n") == "record the download of the nightly-2 compiler for aarch64-linux, aarch64-darwin, x86_64-darwin, x86_64-windows in compilers in blueprint-cli/Bootstrap.roc"
 
 pin_sample = "scripts/test.roc:\troc: \"nightly-1\",\n"
 

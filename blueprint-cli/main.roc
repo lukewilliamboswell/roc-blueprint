@@ -47,7 +47,7 @@ import "compiler-version" as compiler_version : Str
 import "compiler-archive" as compiler_archive : List(U8)
 
 version : Str
-version = "0.9.0"
+version = "0.10.0"
 
 ## The providers a request may be planned with. This is the only reference to
 ## a concrete provider: everything else uses the Provider contract
@@ -676,17 +676,17 @@ context! = || {
 	})
 }
 
-## The System a machine is, when `blueprint` runs on it: the three a binary is
-## released for, and x86_64 Windows, where tasks that need no provider run.
-## Intel macOS is not one: current nixpkgs has dropped that
-## system, so no environment could be entered there. `x86_64-darwin` remains
-## a System a configuration may declare.
+## The System a machine is, when `blueprint` runs on it: every system a binary
+## is released for. On Intel macOS and x86_64 Windows only tasks that need no
+## provider run: current nixpkgs has dropped Intel macOS, and Nix does not run
+## on Windows.
 supported_host : _ -> Try(Str, [UnsupportedHost])
 supported_host = |machine|
 	match machine {
 		{ arch: X64, os: LINUX } => Ok("x86_64-linux")
 		{ arch: AARCH64, os: LINUX } => Ok("aarch64-linux")
 		{ arch: AARCH64, os: MACOS } => Ok("aarch64-darwin")
+		{ arch: X64, os: MACOS } => Ok("x86_64-darwin")
 		{ arch: X64, os: WINDOWS } => Ok("x86_64-windows")
 		_ => Err(UnsupportedHost)
 	}
@@ -694,7 +694,7 @@ supported_host = |machine|
 expect supported_host({ arch: X64, os: LINUX }) == Ok("x86_64-linux")
 expect supported_host({ arch: AARCH64, os: LINUX }) == Ok("aarch64-linux")
 expect supported_host({ arch: AARCH64, os: MACOS }) == Ok("aarch64-darwin")
-expect supported_host({ arch: X64, os: MACOS }) == Err(UnsupportedHost)
+expect supported_host({ arch: X64, os: MACOS }) == Ok("x86_64-darwin")
 expect supported_host({ arch: X64, os: WINDOWS }) == Ok("x86_64-windows")
 expect supported_host({ arch: AARCH64, os: WINDOWS }) == Err(UnsupportedHost)
 
@@ -1010,8 +1010,8 @@ fetch_programs! = |steps| {
 source_is_embedded_compiler : Str, Str -> Bool
 source_is_embedded_compiler = |sha256, system| Bootstrap.compiler(compiler_version.trim(), system).map_ok(|program| program.sha256 == sha256) ?? False
 
-expect source_is_embedded_compiler("1efa0bf74d93964c270e60761ed6148f2e132c3adfcc5361149b518ef8488649", "x86_64-linux")
-expect !source_is_embedded_compiler("1efa0bf74d93964c270e60761ed6148f2e132c3adfcc5361149b518ef8488649", "aarch64-darwin")
+expect source_is_embedded_compiler("aeacbeb60f273ea85657a003e2ec39461595f3261bb69c9e16ea18a6563ae8d9", "x86_64-linux")
+expect !source_is_embedded_compiler("aeacbeb60f273ea85657a003e2ec39461595f3261bb69c9e16ea18a6563ae8d9", "aarch64-darwin")
 expect !source_is_embedded_compiler("different bytes", "x86_64-linux")
 
 ## One consumer-owned executor for standalone requests and workflow steps.

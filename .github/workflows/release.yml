@@ -6,7 +6,7 @@ name: Release
 #
 # One release holds the platform, core and standalone SBOM app bundles; the
 # `blueprint` and `blueprint-sbom` binaries for x86_64 Linux, arm64 Linux,
-# Apple Silicon macOS and x86_64 Windows with checksums; artifact-bound SPDX
+# Apple Silicon and Intel macOS, and x86_64 Windows with checksums; artifact-bound SPDX
 # sidecars; the examples, documentation and manual. Everything is built once,
 # tested as those exact files on each kind of machine, and only then
 # published, in one step.
@@ -190,6 +190,9 @@ jobs:
           - { runner: ubuntu-latest, system: x86_64-linux, archive: true }
           - { runner: ubuntu-24.04-arm, system: aarch64-linux, archive: true }
           - { runner: macos-latest, system: aarch64-darwin, archive: true }
+          # Intel macOS has no Nix (nixpkgs dropped it), so it is tested as
+          # Windows is: a project that takes nothing from a provider.
+          - { runner: macos-15-intel, system: x86_64-darwin, archive: true, no-nix: true }
           - { runner: windows-latest, system: x86_64-windows, archive: true }
     name: Test on ${{ matrix.system }}
     runs-on: ${{ matrix.runner }}
@@ -204,7 +207,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Nix
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && !matrix.no-nix
         uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -213,10 +216,16 @@ jobs:
 
       # No Roc here: the smoke test is a program the build job cross-built.
       - name: Smoke test the binary
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && !matrix.no-nix
         run: |
           chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
           dist/smoke-${{ matrix.system }} dist/blueprint-${{ matrix.system }}
+
+      - name: Smoke test the binary without Nix
+        if: runner.os != 'Windows' && matrix.no-nix
+        run: |
+          chmod +x dist/blueprint-${{ matrix.system }} dist/smoke-${{ matrix.system }}
+          dist/smoke-${{ matrix.system }} --no-nix dist/blueprint-${{ matrix.system }}
 
       - name: Smoke test Windows without Nix
         if: runner.os == 'Windows'
@@ -277,10 +286,10 @@ jobs:
         working-directory: dist/release
         run: |
           set -euo pipefail
-          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-windows.exe blueprint-sbom-x86_64-linux blueprint-sbom-aarch64-linux blueprint-sbom-aarch64-darwin blueprint-sbom-x86_64-windows.exe blueprint.sha256; do
+          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-darwin blueprint-x86_64-windows.exe blueprint-sbom-x86_64-linux blueprint-sbom-aarch64-linux blueprint-sbom-aarch64-darwin blueprint-sbom-x86_64-darwin blueprint-sbom-x86_64-windows.exe blueprint.sha256; do
             test -f "$name"
           done
-          test "$(find . -type f -name 'blueprint*' ! -name '*.spdx.json' ! -name '*.spdx-2.3.json' ! -name '*.cdx.json' ! -name '*.sbom-manifest.json' | wc -l)" = 9
+          test "$(find . -type f -name 'blueprint*' ! -name '*.spdx.json' ! -name '*.spdx-2.3.json' ! -name '*.cdx.json' ! -name '*.sbom-manifest.json' | wc -l)" = 11
           sha256sum -c blueprint.sha256
           test "$(LC_ALL=C ls)" = "$(cat ../release-assets.txt)"
 
@@ -301,7 +310,7 @@ jobs:
         run: |
           set -euo pipefail
           cp "$BUNDLE" dist/release/roc-blueprint-provenance.sigstore.json
-          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-windows.exe blueprint-sbom-x86_64-linux blueprint-sbom-aarch64-linux blueprint-sbom-aarch64-darwin blueprint-sbom-x86_64-windows.exe; do
+          for name in blueprint-x86_64-linux blueprint-aarch64-linux blueprint-aarch64-darwin blueprint-x86_64-darwin blueprint-x86_64-windows.exe blueprint-sbom-x86_64-linux blueprint-sbom-aarch64-linux blueprint-sbom-aarch64-darwin blueprint-sbom-x86_64-darwin blueprint-sbom-x86_64-windows.exe; do
             policy=(--repo "$GH_REPO" --signer-workflow "$GH_REPO/.github/workflows/release.yml" --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners)
             gh attestation verify "dist/release/$name" "${policy[@]}" --bundle "$BUNDLE"
             gh attestation verify "dist/release/$name" "${policy[@]}"

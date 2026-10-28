@@ -20,7 +20,7 @@ import pf.Recipes
 config = [
 	Name("my-package"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-27-de79a0f"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-28-bad769b"))]),
 		Expect(["git"]),
 		RocPackages([
 			"https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
@@ -243,6 +243,21 @@ whatever the project expects:
   for every task until someone with that provider runs `blueprint update` and
   commits the result; after that, the tasks that use no provider tool again
   run without it.
+
+[#intel-macos]
+== Intel macOS
+
+The release includes `blueprint-x86_64-darwin`, built for the platform's
+`x64mac` target. Current nixpkgs no longer builds for Intel macOS, so a
+project's tasks run there without a provider: from fetched programs, expected
+tools and Roc packages. `Recipes.roc_nightly` selects the nightly's
+`macos_x86_64` archive. The `no-nix` CI job and the release's tests run the
+binary on `macos-15-intel`: installing the embedded compiler, writing a lock,
+reporting requirements, and building and running a basic-cli program.
+
+`x86_64-darwin` is in the default `Systems`, so fetched programs are locked
+for it unless a project lists its systems without it. Provider tools and
+sandboxed builds remain unavailable.
 
 == Windows
 

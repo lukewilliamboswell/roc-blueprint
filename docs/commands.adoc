@@ -479,7 +479,7 @@ never asks GitHub anything.
 
 [source]
 ----
-blueprint: could not ask for the digests roc-lang/nightlies publishes for its release nightly-2026-10-27-de79a0f: HTTP 403 from https://api.github.com/repos/roc-lang/nightlies/releases/tags/nightly-2026-10-27-de79a0f (1 attempt). GitHub answers 60 such requests an hour from one address when no token is sent, and blueprint sends none. The digests of its downloads are computed by downloading each of them instead, and Blueprint.lock records them as computed
+blueprint: could not ask for the digests roc-lang/nightlies publishes for its release nightly-2026-10-28-bad769b: HTTP 403 from https://api.github.com/repos/roc-lang/nightlies/releases/tags/nightly-2026-10-28-bad769b (1 attempt). GitHub answers 60 such requests an hour from one address when no token is sent, and blueprint sends none. The digests of its downloads are computed by downloading each of them instead, and Blueprint.lock records them as computed
 ----
 
 Such an update downloads the program for every declared system, where one

@@ -324,6 +324,7 @@ host_system! = ||
 	match Env.platform!() {
 		{ arch: AARCH64, os: LINUX } => "aarch64-linux"
 		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
+		{ arch: X64, os: MACOS } => "x86_64-darwin"
 		{ arch: X64, os: WINDOWS } => "x86_64-windows"
 		_ => "x86_64-linux"
 	}
@@ -414,8 +415,9 @@ packaged! = |context| {
 	Process.check!(StaticChecks.constant(flake, "version") == Ok(reported), "the packaged blueprint reports version ${reported}, not the version in flake.nix")?
 
 	step!("Nix flake: every system's outputs evaluate (no build)")?
-	# Nix outputs cover the Unix release systems; Windows uses the binary.
-	for released in Release.systems.keep_if(|released| released.target != "x64win") {
+	# Nix outputs cover the release systems nixpkgs builds for. Intel macOS,
+	# which nixpkgs dropped, and Windows use the binary.
+	for released in Release.systems.keep_if(|released| released.target != "x64win" and released.target != "x64mac") {
 		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#packages.${released.system}.blueprint.drvPath"], context.root))?
 		_ = Process.succeed!(Process.command("nix", ["eval", "--raw", ".#devShells.${released.system}.default.drvPath"], context.root))?
 	}

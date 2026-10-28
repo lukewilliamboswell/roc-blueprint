@@ -59,7 +59,7 @@ import pf.Recipes
 config = [
 	Name("my-project"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-27-de79a0f"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-28-bad769b"))]),
 		Expect(["git"]),
 	]),
 	Shell("default", [Use("dev")]),
@@ -364,23 +364,27 @@ repository and its tests.
 | Yes
 | No
 
-| x86_64 Windows
+| Intel macOS
 | Tasks only
 | No
 | No
 
-| Intel macOS
-| Not supported
-| Not supported
-| Not supported
+| x86_64 Windows
+| Tasks only
+| No
+| No
 |===
 
-Each release has a `blueprint` binary for the first four systems. It carries
+Each release has a `blueprint` binary for each of these systems. It carries
 the Roc compiler that reads `Blueprint.roc`, so you do not need Roc
 installed. It needs https://nixos.org/download[Nix], with flakes enabled,
 only for tools from Nix and for builds. On Linux and macOS it uses `tar`,
-`ln` and `chmod` to unpack and link downloads. On Intel macOS it stops with a
-message naming the supported systems.
+`ln` and `chmod` to unpack and link downloads. On any other system it stops
+with a message naming the supported systems.
+
+On Intel macOS, tasks use downloaded programs, expected tools and Roc packages,
+without Nix: current nixpkgs no longer builds for that system. See
+xref:no-provider.adoc#intel-macos[Intel macOS].
 
 On Windows, tasks use downloaded programs and expected tools, without Nix. A
 task names its script's interpreter, because Windows does not use the `#!`

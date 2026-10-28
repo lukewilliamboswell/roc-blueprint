@@ -393,7 +393,7 @@ pins in the Lock: `nix-lock-decode`) and local records (build records:
 Every suite above runs where Nix is installed, and replaces it with a stub
 where it must not be started. One job of `.github/workflows/ci.yml` runs on
 machines that have no Nix at all: `no-nix`, on `ubuntu-latest`,
-`ubuntu-24.04-arm` and `macos-latest`, with the binaries and platform hosts
+`ubuntu-24.04-arm`, `macos-latest`, `macos-15-intel` and `windows-latest`, with the binaries and platform hosts
 the `build` job produced and no step that installs anything. It runs
 `dist/smoke-<system> --no-nix dist/blueprint-<system>`, the `NoNix` mode of
 `scripts/src/SmokeBinary.roc`, which:

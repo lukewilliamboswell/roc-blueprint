@@ -24,6 +24,7 @@ Release := [].{
 		{ system: "x86_64-linux", target: "x64musl" },
 		{ system: "aarch64-linux", target: "arm64musl" },
 		{ system: "aarch64-darwin", target: "arm64mac" },
+		{ system: "x86_64-darwin", target: "x64mac" },
 		{ system: "x86_64-windows", target: "x64win" },
 	]
 
@@ -171,19 +172,20 @@ finish_each! = |files, jobs, outcomes|
 
 # The format of `sha256sum`: digest, two spaces, name.
 expect Release.checksum_line("blueprint-x86_64-linux", "abc".to_utf8()) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  blueprint-x86_64-linux\n"
-expect Release.systems.map(|released| released.system) == ["x86_64-linux", "aarch64-linux", "aarch64-darwin", "x86_64-windows"]
+expect Release.systems.map(|released| released.system) == ["x86_64-linux", "aarch64-linux", "aarch64-darwin", "x86_64-darwin", "x86_64-windows"]
 
 expect Release.build_args("blueprint-cli/main.roc", "x64musl", "dist/blueprint-x86_64-linux") == ["build", "blueprint-cli/main.roc", "--target=x64musl", "--output=dist/blueprint-x86_64-linux"]
 
 # Each program is built for every released system, in the systems' order.
-expect Release.files("blueprint", "dist").map(|file| file.output) == ["dist/blueprint-x86_64-linux", "dist/blueprint-aarch64-linux", "dist/blueprint-aarch64-darwin", "dist/blueprint-x86_64-windows.exe"]
+expect Release.files("blueprint", "dist").map(|file| file.output) == ["dist/blueprint-x86_64-linux", "dist/blueprint-aarch64-linux", "dist/blueprint-aarch64-darwin", "dist/blueprint-x86_64-darwin", "dist/blueprint-x86_64-windows.exe"]
 expect Release.files("smoke", "/repo/dist") == [
 	{ source: "scripts/smoke_binary.roc", target: "x64musl", output: "/repo/dist/smoke-x86_64-linux" },
 	{ source: "scripts/smoke_binary.roc", target: "arm64musl", output: "/repo/dist/smoke-aarch64-linux" },
 	{ source: "scripts/smoke_binary.roc", target: "arm64mac", output: "/repo/dist/smoke-aarch64-darwin" },
+	{ source: "scripts/smoke_binary.roc", target: "x64mac", output: "/repo/dist/smoke-x86_64-darwin" },
 	{ source: "scripts/smoke_binary.roc", target: "x64win", output: "/repo/dist/smoke-x86_64-windows.exe" },
 ]
-expect Release.files("blueprint-sbom", "dist").map(|file| file.output) == ["dist/blueprint-sbom-x86_64-linux", "dist/blueprint-sbom-aarch64-linux", "dist/blueprint-sbom-aarch64-darwin", "dist/blueprint-sbom-x86_64-windows.exe"]
+expect Release.files("blueprint-sbom", "dist").map(|file| file.output) == ["dist/blueprint-sbom-x86_64-linux", "dist/blueprint-sbom-aarch64-linux", "dist/blueprint-sbom-aarch64-darwin", "dist/blueprint-sbom-x86_64-darwin", "dist/blueprint-sbom-x86_64-windows.exe"]
 expect Release.files("blueprint-sbom", "dist").all(|file| file.source == "scripts/sbom.roc")
 expect Release.programs.map(|program| program.name) == ["blueprint", "blueprint-sbom", "smoke", "test-release"] and Release.files("other", "dist").is_empty()
 
