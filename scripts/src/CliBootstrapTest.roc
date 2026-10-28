@@ -151,7 +151,7 @@ lookup! = |bench| {
 	Path.write_utf8!(Path.utf8("${directory}/plain"), "not executable")?
 	CliHarness.tool!(["ln", "-s", "../stub-tool", "${directory}/linked"])?
 	CliHarness.tool!(["ln", "-s", "absent", "${directory}/broken"])?
-	CliHarness.check!(CliHarness.which!("linked", directory) == Ok("${bench.work}/stub-tool"), "PATH lookup did not follow an executable symlink")?
+	CliHarness.check!(CliHarness.which!("linked", directory) == Ok("${directory}/linked"), "PATH lookup did not follow an executable symlink")?
 	for name in ["broken", "plain", "directory"] {
 		CliHarness.check!(CliHarness.which!(name, directory) == Err(NotFound), "PATH lookup accepted ${name}")?
 	}

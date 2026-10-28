@@ -228,7 +228,7 @@ CliHarness := [].{
 		Ok("${Integrity.digest(bytes)} ${stat!("%i %y", file)?}")
 	}
 
-	## Where a program name resolves on a search path, with links followed.
+	## Verify executable symlink targets while preserving the invocation name.
 	which! : Str, Str => Try(Str, [NotFound])
 	which! = |name, search| {
 		candidates = if name.contains("/") [name] else search.split_on(":").keep_if(|part| !part.is_empty()).map(|part| "${part}/${name}")
@@ -236,7 +236,7 @@ CliHarness := [].{
 			match Path.canonicalize!(Path.utf8(candidate)) {
 				Ok(resolved) => {
 					if (Path.is_file!(resolved) ?? False) and (Path.is_executable!(resolved) ?? False) {
-						return Ok(Path.display(resolved))
+						return Path.absolute!(Path.utf8(candidate)).map_ok(Path.display).map_err(|_| NotFound)
 					}
 				}
 				Err(_) => {}
