@@ -87,7 +87,7 @@ The required checks are listed under
 the workflows when changing CI.
 
 basic-cli 0.26.0-rc2 requires the October 12 nightly or later. This repository
-pins `nightly-2026-10-27-de79a0f` for the product and
+pins `nightly-2026-10-28-bad769b` for the product and
 `nightly-2026-10-13-b17d287` for maintenance scripts, with roc-fuzz 0.4.3.
 
 The complete suite requires x86_64 Linux and a running Nix daemon; the
