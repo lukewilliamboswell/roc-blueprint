@@ -1,16 +1,17 @@
 name: Upgrade diagnostics
 on:
-  pull_request:
-    paths:
-      - scripts/src/CliBootstrapTest.roc
-      - scripts/src/ReproducibleGates.roc
-      - scripts/src/RocPackagesTest.roc
-      - .github/workflows/upgrade-diagnostics.yml
+  push:
+    branches: [diagnosis/blueprint-upgrade]
 permissions: {}
 jobs:
   integration:
+    name: Diagnostics (${{ matrix.script }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        script: [test_bootstrap, test_builds, test_roc_packages]
     permissions:
       contents: read
       actions: read
@@ -25,11 +26,5 @@ jobs:
           run-id: '40606371807'
           github-token: ${{ github.token }}
       - run: install -m 755 dist/blueprint-x86_64-linux blueprint
-      - name: Bootstrap diagnostics
-        run: nix develop -c scripts/test_bootstrap.roc
-      - name: Namespace integration diagnostics
-        if: always()
-        run: nix develop -c scripts/test_builds.roc
-      - name: Package cache diagnostics
-        if: always()
-        run: nix develop -c scripts/test_roc_packages.roc
+      - name: Diagnose integration suite
+        run: nix develop -c scripts/${{ matrix.script }}.roc
