@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        script: [test_bootstrap]
+        script: [test]
     permissions:
       contents: read
       actions: read
@@ -27,4 +27,6 @@ jobs:
           github-token: ${{ github.token }}
       - run: install -m 755 dist/blueprint-x86_64-linux blueprint
       - name: Diagnose integration suite
-        run: nix develop -c scripts/${{ matrix.script }}.roc
+        env:
+          BLUEPRINT_PREBUILT: "1"
+        run: nix develop -c scripts/test.roc cli
