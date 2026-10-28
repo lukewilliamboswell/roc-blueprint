@@ -94,3 +94,13 @@ original subject, inventory and sidecar digests. New bindings write v2
 manifests. Native SPDX file imports keep copyright, attribution and exact
 hashes; observed or concluded file licenses are reported as import gaps
 rather than promoted into a declared license.
+
+== Published-release compatibility
+
+A daily shared nightly checks all four release targets against the latest Roc.
+The examples ZIP now keeps projects under `examples/` and includes a root
+`spec.json` with reviewed expected outputs. This replaces `expected/*.spec.scm`;
+users extracting a project should open `examples/<project>/`.
+Every release checks and builds these applications and compares native execution
+with the same manifest before publication, including Windows without Nix.
+The documentation action and verified renderer advance to tools-0.6.0.

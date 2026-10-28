@@ -129,12 +129,12 @@ jobs:
 
       - id: docs
         name: Render the manual as a site and a PDF
-        uses: lukewilliamboswell/roc-automation/actions/build-docs@dec2d52a5cb6cd251fd188ad1d797f400ee1bb6e # tools-0.1.0-rc.1
+        uses: lukewilliamboswell/roc-automation/actions/build-docs@a25b5129340b9b2ad1744d20330b8ee4d38a1849 # reviewed main; tools-0.6.0 renderer
         with:
-          backend: roc
+          site-url: https://lukewilliamboswell.github.io/roc-blueprint/
           renderer-binary: ${{ steps.roc.outputs.renderer }}
           pdf-filename: roc-blueprint.pdf
-          pdf-image-dpi: "300"
+          pdf-image-dpi: "240"
           docs-version: ${{ needs.validate.outputs.version }}
           api-entrypoint: blueprint-platform/main.roc
           roc-command: ${{ steps.roc.outputs.command }}
@@ -190,7 +190,7 @@ jobs:
           - { runner: ubuntu-latest, system: x86_64-linux, archive: true }
           - { runner: ubuntu-24.04-arm, system: aarch64-linux, archive: true }
           - { runner: macos-latest, system: aarch64-darwin, archive: true }
-          - { runner: windows-latest, system: x86_64-windows, archive: false }
+          - { runner: windows-latest, system: x86_64-windows, archive: true }
     name: Test on ${{ matrix.system }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -233,8 +233,24 @@ jobs:
       # The compiler and then this binary load each archived example from the
       # two bundles, served from localhost with an empty package cache.
       - name: Test the examples archive against the bundles
-        if: matrix.archive
-        run: nix develop -c scripts/test_release.roc "$VERSION" dist/blueprint-${{ matrix.system }}
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist/compiler
+          tar -xzf dist/roc-${{ matrix.system }}.tar.gz --strip-components=1 -C dist/compiler
+          chmod +x dist/test-release-${{ matrix.system }}
+          ROC="$PWD/dist/compiler/roc" dist/test-release-${{ matrix.system }} "$VERSION" dist/blueprint-${{ matrix.system }}
+
+      - name: Test the Windows examples archive against the bundles
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/compiler | Out-Null
+          tar.exe -xf dist/roc-x86_64-windows.zip --strip-components=1 -C dist/compiler
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:ROC = Join-Path $pwd 'dist/compiler/roc.exe'
+          ./dist/test-release-x86_64-windows.exe "$env:VERSION" dist/blueprint-x86_64-windows.exe
+          exit $LASTEXITCODE
 
   # Holds the permission to publish, checks out nothing and runs no script of
   # the repository: it uploads what the jobs above built and tested.

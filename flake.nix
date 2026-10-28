@@ -35,9 +35,40 @@
 
           # The compiler the product is built with and that a released
           # `blueprint` embeds: the nightly in blueprint-cli/compiler-version,
-          # from roc-overlay.
+          # from the official release archives pinned below.
           rocTag = lib.trim (builtins.readFile ./blueprint-cli/compiler-version);
-          roc = roc-overlay.packages.${system}.${rocTag};
+          # Official archives can precede their roc-overlay inventory entry.
+          compilerArchives = {
+            "x86_64-linux" = {
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-27-de79a0f/roc_nightly-linux_x86_64-2026-10-27-de79a0f.tar.gz";
+              hash = "sha256-HvoL902TlkwnDmB2HtYUjy4TLDrfzFNhFJtRjvhIhkk=";
+            };
+            "aarch64-linux" = {
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-27-de79a0f/roc_nightly-linux_arm64-2026-10-27-de79a0f.tar.gz";
+              hash = "sha256-mdP+WKeZXmGmcqixn/gsb57fpbHQmfG8z4QYEh6+9iw=";
+            };
+            "aarch64-darwin" = {
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-27-de79a0f/roc_nightly-macos_apple_silicon-2026-10-27-de79a0f.tar.gz";
+              hash = "sha256-fe4ijnAkRyskBAH7Zp8wqOE8NyhuG7cQJ3IRT+WkwJQ=";
+            };
+          };
+          roc = roc-overlay.packages.${system}.nightly.overrideAttrs (previous: {
+            version = rocTag;
+            src = rocArchive system;
+            meta = previous.meta // {
+              changelog = "https://github.com/roc-lang/nightlies/releases/tag/${rocTag}";
+            };
+            passthru = previous.passthru // {
+              tag = rocTag;
+              compilerVersion = rocTag;
+              compilerCommit = "de79a0f6f7a2e94fcc6433a2e829af11d61809af";
+              source = {
+                inherit (compilerArchives.${system}) url;
+                sha256 = compilerArchives.${system}.hash;
+                asset = builtins.baseNameOf compilerArchives.${system}.url;
+              };
+            };
+          });
 
           # The compiler the scripts in scripts/ run on, under the command name
           # `roc-stable` alone. It moves only by a reviewed edit here, so the
@@ -53,18 +84,9 @@
           # `darwin/` sysroot of the Apple Silicon archive beside it. Roc links
           # macOS programs against that sysroot and looks for it next to its own
           # executable, so `roc` is not wrapped or moved. Only the macOS archive
-          # ships the sysroot. Each archive's URL and hash are the ones
-          # roc-overlay records for the tag; they are fetched again here because
-          # the overlay's own macOS source is a derivation for a Darwin builder.
-          rocArchive =
-            archiveSystem:
-            let
-              src = roc-overlay.packages.${archiveSystem}.${rocTag}.src;
-            in
-            pkgs.fetchurl {
-              inherit (src) url;
-              hash = src.outputHash;
-            };
+          # ships the sysroot. Each archive is pinned explicitly from the official nightly release,
+          # independently of when roc-overlay inventories that release.
+          rocArchive = archiveSystem: pkgs.fetchurl compilerArchives.${archiveSystem};
           rocCross = pkgs.runCommand "roc-cross-${rocTag}" { } ''
             mkdir -p "$out" sysroot
             tar -xzf ${rocArchive "x86_64-linux"} -C "$out" --strip-components=1
@@ -72,14 +94,14 @@
             cp -r sysroot/darwin "$out/darwin"
           '';
 
-          # Released native documentation renderer, paired with the shared
-          # build-docs action at the tools-0.1.0-rc.1 release commit. Never
+          # Released native documentation renderer, compatible with the reviewed
+          # shared build-docs action. Never
           # patch its bytes: these hashes identify the published executables.
-          rocDocsVersion = "0.1.0-rc.1";
+          rocDocsVersion = "0.6.0";
           rocDocsHashes = {
-            "x86_64-linux" = "sha256-lpuU3rMVjp3yMbmJmF6HIlV4h56bb3+59KtGsor01YY=";
-            "aarch64-linux" = "sha256-AIQ4qz/ON3zXw7Vy2nLQKz9y/nk0W8Fx0iG8DwVKcLI=";
-            "aarch64-darwin" = "sha256-gGiXT38sIgM/EspTfiv1ZYr7RVTuL1G3XS4OQ3ZJWho=";
+            "x86_64-linux" = "sha256-Pl71JKoX7rgVOMY5rUlZv0aQsXiJiTDqCkKizYv3MS0=";
+            "aarch64-linux" = "sha256-qPgvFWXYuul7lW310ZA9qOYhFK9X64tA6xqtCEUYtfc=";
+            "aarch64-darwin" = "sha256-GBgXoGc/UDa3XT0pcH72ZbRep/PM/pu8NTYqcmObQPw=";
           };
           rocDocsArchive = pkgs.fetchurl {
             url = "https://github.com/lukewilliamboswell/roc-automation/releases/download/tools-${rocDocsVersion}/roc-docs-${system}";
@@ -101,7 +123,7 @@
               {
                 src = pkgs.fetchurl {
                   url = "https://github.com/roc-lang/nightlies/releases/download/${rocTag}/roc_nightly-source-${lib.removePrefix "nightly-" rocTag}.tar.gz";
-                  hash = "sha256-yQLLcwXQb5TNklI/tYSY9gclVzYYX8MEU1pFjSaoJhM=";
+                  hash = "sha256-rjcDlEBg4AOQPQxUL4JvQRP6W7QMzWj0DyC3gvm2kds=";
                 };
               }
               ''

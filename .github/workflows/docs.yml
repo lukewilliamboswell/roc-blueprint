@@ -48,12 +48,12 @@ jobs:
 
       - id: docs
         name: Render the manual as a site and a PDF
-        uses: lukewilliamboswell/roc-automation/actions/build-docs@dec2d52a5cb6cd251fd188ad1d797f400ee1bb6e # tools-0.1.0-rc.1
+        uses: lukewilliamboswell/roc-automation/actions/build-docs@a25b5129340b9b2ad1744d20330b8ee4d38a1849 # reviewed main; tools-0.6.0 renderer
         with:
-          backend: roc
+          site-url: https://lukewilliamboswell.github.io/roc-blueprint/
           renderer-binary: ${{ steps.roc.outputs.renderer }}
           pdf-filename: roc-blueprint.pdf
-          pdf-image-dpi: "300"
+          pdf-image-dpi: "240"
           docs-version: ${{ github.event_name == 'pull_request' && format('main (pull request {0})', github.event.number) || 'main' }}
           api-entrypoint: blueprint-platform/main.roc
           roc-command: ${{ steps.roc.outputs.command }}

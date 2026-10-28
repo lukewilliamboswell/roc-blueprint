@@ -22,6 +22,7 @@ CliBootstrapTest := [].{
 
 cases! : CliHarness.Bench => Try({}, _)
 cases! = |bench| {
+	lookup!(bench)?
 	compiler_version!(bench)?
 	bootstrap!(bench)
 }
@@ -71,7 +72,10 @@ bootstrap! = |bench| {
 	Path.create_all!(Path.utf8(bin))?
 	search = Env.var_str!(OsStr.from_str("PATH")) ?? ""
 	for name in ["tar", "chmod", "gzip"] {
-		tool = CliHarness.which!(name, search)?
+		tool = match CliHarness.which!(name, search) {
+			Ok(found) => found
+			Err(_) => return Script.fail!("bootstrap prerequisite ${name} not found on PATH: ${search}")
+		}
 		CliHarness.tool!(["ln", "-s", tool, "${bin}/${name}"])?
 	}
 	cache = "${bench.work}/bootstrap-cache"
@@ -82,6 +86,7 @@ bootstrap! = |bench| {
 	platform_path = RocPackagesTest.relative(cwd, "${bench.root}/blueprint-platform/main.roc")
 	Path.write_utf8!(Path.utf8("${cwd}/Blueprint.roc"), "app [config] { pf: platform \"${platform_path}\" }\nconfig = [Name(\"bootstrap\"), Environment(\"dev\", [])]\n")?
 	call = { program: bench.blueprint, args: ["check"], cwd, env }
+	Script.info!("==>", "Cold bootstrap with isolated PATH")?
 	cold = CliHarness.invoke!(call)?
 	CliHarness.exited!(cold, 0, "embedded compiler bootstrap")?
 	CliHarness.contains!(cold.stderr, "installing embedded Roc compiler", "cold bootstrap")?
@@ -89,6 +94,7 @@ bootstrap! = |bench| {
 	program = Bootstrap.compiler(compiler_version.trim(), system_of(Env.platform!()))?
 	artifact = "${store}/v1/artifacts/sha256/${program.sha256}"
 	tree = "${store}/v1/trees/sha256/${program.sha256}.tar.gz"
+	CliHarness.check!(CliHarness.present!(artifact), "embedded compiler artifact missing: ${artifact}; stored artifacts: ${Str.inspect(CliHarness.names!("${store}/v1/artifacts/sha256")?)}")?
 	CliHarness.check!(Integrity.digest(Path.read_bytes!(Path.utf8(artifact))?) == program.sha256, "embedded compiler has the wrong digest")?
 	# Check the actual executable extracted from the verified embedded archive,
 	# with no roc available on PATH and a cache owned by this test.
@@ -136,3 +142,18 @@ system_of = |machine|
 		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
 		_ => "x86_64-linux"
 	}
+
+## PATH lookup follows executable links and rejects broken/non-executable entries.
+lookup! : CliHarness.Bench => Try({}, _)
+lookup! = |bench| {
+	directory = "${bench.work}/lookup"
+	Path.create_all!(Path.utf8("${directory}/directory"))?
+	Path.write_utf8!(Path.utf8("${directory}/plain"), "not executable")?
+	CliHarness.tool!(["ln", "-s", "../stub-tool", "${directory}/linked"])?
+	CliHarness.tool!(["ln", "-s", "absent", "${directory}/broken"])?
+	CliHarness.check!(CliHarness.which!("linked", directory) == Ok("${directory}/linked"), "PATH lookup did not follow an executable symlink")?
+	for name in ["broken", "plain", "directory"] {
+		CliHarness.check!(CliHarness.which!(name, directory) == Err(NotFound), "PATH lookup accepted ${name}")?
+	}
+	Script.pass!("PATH lookup follows executable symlinks and rejects broken links, non-executable files and directories")
+}

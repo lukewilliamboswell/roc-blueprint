@@ -1,6 +1,11 @@
 ## The pins of a Nix `flake.lock`, read from the text Nix writes: two-space
 ## indentation, one key per line.
 FlakeLock := [].{
+
+	## Compiler selected for real-Nix fixtures, independent of the embedded compiler.
+	compiler_pin : Str -> Try(Str, [NotFound])
+	compiler_pin = |text| field(text, "compiler")
+
 	Pin : { owner : Str, repo : Str, rev : Str, nar_hash : Str }
 
 	## The locked GitHub revision of the input node `name`.

@@ -114,7 +114,8 @@ ReproducibleGates := [].{
 		setpriv = BuildHarness.which!("setpriv")?
 		uid = Cmd.new("id").arg("-u").capture!()?.trim()
 		gid = Cmd.new("id").arg("-g").capture!()?.trim()
-		# sudo's secure_path replaces PATH even with -E. Restore the suite's
+		# Preserve only the test context: sudo-rs ignores whole-environment -E.
+		# sudo's secure_path still replaces PATH. Restore the suite's
 		# declared recorder/tools path explicitly before the unprivileged caller.
 		(_, path_value) = suite.variables.find_first(|(name, _)| name == OsStr.from_str("PATH"))?
 		caller_path = OsStr.to_str_try(path_value)?
@@ -124,7 +125,7 @@ ReproducibleGates := [].{
 		separated = BuildHarness.command!(
 			suite,
 			{
-				argv: ["sudo", "-n", "-E", "--", env, "PATH=${caller_path}", unshare, "--mount", "--net", "--", setpriv, "--reuid=${uid}", "--regid=${gid}", "--clear-groups", bridge, "--caller", observed, suite.blueprint, "build", "one", "--json"],
+				argv: ["sudo", "-n", "--preserve-env=HOME,USER,LOGNAME,ROC,XDG_CACHE_HOME,NIX_CONFIG,NO_COLOR,NIX_RECORDER_EVENTS,NIX_RECORDER_REAL,NIX_RECORDER_ONLINE,BLUEPRINT_ROOT,BLUEPRINT_WORKSPACE,BLUEPRINT_GENERATED_ROOT,BLUEPRINT_LOCK,ROC_BUILD_RUNNER_READLINK", "--", env, "PATH=${caller_path}", unshare, "--mount", "--net", "--", setpriv, "--reuid=${uid}", "--regid=${gid}", "--clear-groups", bridge, "--caller", observed, suite.blueprint, "build", "one", "--json"],
 				cwd: suite.caller,
 				extra: [("BLUEPRINT_ROOT", root), ("BLUEPRINT_WORKSPACE", place.workspace), ("BLUEPRINT_GENERATED_ROOT", place.generated), ("BLUEPRINT_LOCK", "authority.lock"), ("ROC_BUILD_RUNNER_READLINK", readlink)],
 				stdin: [],

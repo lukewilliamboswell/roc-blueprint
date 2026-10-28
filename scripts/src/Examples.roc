@@ -15,6 +15,25 @@ import Serve
 ## paths the release will give them.
 Examples := [].{
 
+	Case : { name : Str, args : List(Str), stdin : Str, stdout : Str, stderr : Str, exit_code : I32 }
+	App : { path : Str, cases : List(Case) }
+	Suite : { schema_version : U64, release : Str, dependencies : List(Str), apps : List(App) }
+
+	manifest : Suite, Str, List(Str) -> Str
+	manifest = |suite, version, dependencies| Json.to_str({ ..suite, release: version, dependencies })
+
+	valid_suite : Suite, List(Str) -> Bool
+	valid_suite = |suite, projects|
+		suite.schema_version == 1 and suite.release == "working-tree" and suite.dependencies.is_empty()
+			and Process.sorted(suite.apps.map(|example| example.path)) == Process.sorted(projects.map(|project| "examples/${project}/Blueprint.roc"))
+				and !projects.is_empty()
+					and suite.apps.all(
+						|example| match example.cases {
+							[case] => case.name == "spec" and case.args.is_empty() and case.stdin == "" and case.stderr == "" and case.exit_code == 0
+							_ => Bool.False
+						},
+					)
+
 	## What an example in this repository names as its platform.
 	local_platform = "platform \"../../blueprint-platform/main.roc\""
 
@@ -46,13 +65,9 @@ Examples := [].{
 			Err(NoLocalPlatform)
 		}
 
-	## Where the archive keeps the Spec a project printed.
-	expected : Str -> Str
-	expected = |project| "expected/${project}.spec.scm"
-
 	## Every file the archive holds, below its top directory.
 	contents : List(Str) -> List(Str)
-	contents = |files| Process.sorted(["README.md"].concat(projects(files).map(expected)).concat(files))
+	contents = |files| Process.sorted(["README.md", "spec.json"].concat(files.map(|file| "examples/${file}")))
 
 	readme : { version : Str, platform_url : Str, projects : List(Str) } -> Str
 	readme = |release|
@@ -78,8 +93,8 @@ Examples := [].{
 				"blueprint tasks     # list what the project can run",
 				"```",
 				"",
-				"`expected/<project>.spec.scm` is the Spec that project printed when the",
-				"release was made; `blueprint spec` prints it again. The `extensions`",
+				"`spec.json` records the reviewed expected Spec output for each project.",
+				"Projects are under `examples/`; `blueprint spec` prints their Spec. The `extensions`",
 				"project declares extensions no provider implements, so `blueprint check`",
 				"refuses it with `needs features: extensions`: that is what it shows.",
 				"",
@@ -91,7 +106,7 @@ Examples := [].{
 	## `scripts/bundle.roc` made for `version`.
 	package! : Str, Str => Try({}, _)
 	package! = |root, version| {
-		work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-examples-")?)?)?
+		work = Process.portable(Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-examples-")?)?)?)
 		result = staged!(root, version, work)
 		_ = Path.delete_all!(Path.utf8(work))
 		result
@@ -101,7 +116,7 @@ Examples := [].{
 	## `dist/`; with a `binary`, run that `blueprint` on each project too.
 	test! : Str, Str, Str => Try({}, _)
 	test! = |root, version, binary| {
-		work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-release-")?)?)?
+		work = Process.portable(Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-release-")?)?)?)
 		server = Serve.open!()?
 		result = unpacked!(root, version, binary, work, server)
 		_ = server.shut!()
@@ -148,7 +163,7 @@ staged! = |root, version, work| {
 
 	Script.info!("==>", "Staging the examples for ${bundled.platform_url}")?
 	for file in files {
-		target = "${top}/${file}"
+		target = "${top}/examples/${file}"
 		Path.create_all!(Path.utf8(parent(target)))?
 		if file.ends_with("/Blueprint.roc") {
 			source = Path.read_utf8!(Path.utf8("${root}/examples/${file}"))?
@@ -161,14 +176,9 @@ staged! = |root, version, work| {
 		}
 	}
 
-	# The Spec is recorded from the working tree: the archive's test then
-	# shows the released platform prints the same one.
-	Path.create_all!(Path.utf8("${top}/expected"))?
 	projects = Examples.projects(files)
-	for project in projects {
-		ran = Process.succeed!(Process.command(Process.roc!(), ["Blueprint.roc"], "${root}/examples/${project}"))?
-		Path.write_utf8!(Path.utf8("${top}/${Examples.expected(project)}"), ran.stdout)?
-	}
+	suite = suite!(root, projects)?
+	Path.write_utf8!(Path.utf8("${top}/spec.json"), Examples.manifest(suite, version, [bundled.platform_url, bundled.core_url]))?
 	Path.write_utf8!(Path.utf8("${top}/README.md"), Examples.readme({ version, platform_url: bundled.platform_url, projects }))?
 
 	archive = "${root}/dist/${name}.zip"
@@ -188,14 +198,18 @@ unpacked! = |root, version, binary, work, idle| {
 	top = "${work}/${name}"
 
 	Script.info!("==>", "The archive holds the examples with only the platform changed")?
-	listed = Process.succeed!(Process.command("unzip", ["-Z1", archive], root))?
+	windows = (Env.platform!()).os == WINDOWS
+	listed = Process.succeed!(Process.command(if windows "tar" else "unzip", if windows ["-tf", archive] else ["-Z1", archive], root))?
 	held = Process.sorted(Process.lines(listed.stdout).keep_if(|entry| !entry.ends_with("/")))
 	wanted = Examples.contents(files).map(|file| "${name}/${file}")
 	Process.check!(held == wanted, "dist/${name}.zip holds:\n${Str.join_with(held, "\n")}\nexpected:\n${Str.join_with(wanted, "\n")}")?
-	_ = Process.succeed!(Process.command("unzip", ["-q", archive, "-d", work], root))?
+	_ = Process.succeed!(Process.command(if windows "tar" else "unzip", if windows ["-xf", archive, "-C", work] else ["-q", archive, "-d", work], root))?
+	suite = suite!(root, Examples.projects(files))?
+	manifest = Path.read_utf8!(Path.utf8("${top}/spec.json"))?
+	Process.check!(manifest == Examples.manifest(suite, version, [bundled.platform_url, bundled.core_url]), "archived suite differs from reviewed expectations")?
 	for file in files {
 		ours = Path.read_bytes!(Path.utf8("${root}/examples/${file}"))?
-		theirs = Path.read_bytes!(Path.utf8("${top}/${file}"))?
+		theirs = Path.read_bytes!(Path.utf8("${top}/examples/${file}"))?
 		same = if file.ends_with("/Blueprint.roc") {
 			Examples.released(Str.from_utf8_lossy(ours), bundled.platform_url) == Ok(Str.from_utf8_lossy(theirs))
 		} else {
@@ -209,21 +223,27 @@ unpacked! = |root, version, binary, work, idle| {
 	server = idle.with_route(route(bundled.platform_archive), Path.read_bytes!(Path.utf8("${root}/dist/${bundled.platform_archive}"))?).with_route(route(bundled.core_archive), Path.read_bytes!(Path.utf8("${root}/dist/${bundled.core_archive}"))?)
 	arguments = Bundle.replacing(bundled.platform_url, server.url(route(bundled.platform_archive))).concat(Bundle.replacing(bundled.core_url, server.url(route(bundled.core_archive))))
 	# Its own package cache, empty: the bundles must come from this process.
-	environment = [("XDG_CACHE_HOME", "${work}/cache")]
+	environment = [("XDG_CACHE_HOME", if windows "${work}/cache".replace_each("/", "\\") else "${work}/cache")]
 	roc = Process.roc!()
 
 	Script.info!("==>", "Each archived example checks and prints its recorded Spec against the served bundles")?
 	projects = Examples.projects(files)
 	for project in projects {
-		directory = "${top}/${project}"
-		compiler = |args| Process.with_env(Process.command(roc, args.concat(arguments).concat(["Blueprint.roc"]), directory), environment)
-		recorded = Path.read_utf8!(Path.utf8("${top}/${Examples.expected(project)}"))?
+		directory = "${top}/examples/${project}"
+		compiler = |args| Process.with_env(Process.command(roc, args.concat(["--no-cache"]).concat(arguments).concat(["Blueprint.roc"]), directory), environment)
+		recorded = expected!(suite, project)?
 		match server.drive!([compiler(["check"])])? {
 			[checked] => Process.check!(checked.code == 0, "${checked.stdout}${checked.stderr}\nroc check of the archived ${project} example exited with code ${checked.code.to_str()}")?
 			_ => return Script.fail!("roc check did not report a result")
 		}
-		match server.drive!([compiler([])])? {
-			[ran] => Process.check!(ran.code == 0 and ran.stdout == recorded, "${ran.stdout}${ran.stderr}\nthe archived ${project} example did not print its recorded Spec (exit ${ran.code.to_str()})")?
+		executable = "${work}/example${if windows ".exe" else ""}"
+		native_executable = if windows executable.replace_each("/", "\\") else executable
+		match server.drive!([compiler(["build", "--output=${native_executable}"])])? {
+			[built] => Process.check!(built.code == 0, "${built.stdout}${built.stderr}")?
+			_ => return Script.fail!("build did not report a result")
+		}
+		match server.drive!([Process.with_env(Process.command(executable, [], directory), environment)])? {
+			[ran] => Process.check!(ran.code == 0 and ran.stdout == recorded and ran.stderr == "", "${ran.stdout}${ran.stderr}\nthe archived ${project} example did not print its recorded Spec (exit ${ran.code.to_str()})")?
 			_ => return Script.fail!("the archived ${project} example did not report a result")
 		}
 		Script.info!("   ", project)?
@@ -237,8 +257,8 @@ unpacked! = |root, version, binary, work, idle| {
 	# is. The cache now holds both, by hash, so it needs no server.
 	Script.info!("==>", "${binary} loads each archived example from the downloaded bundles")?
 	for project in projects {
-		directory = "${top}/${project}"
-		recorded = Path.read_utf8!(Path.utf8("${top}/${Examples.expected(project)}"))?
+		directory = "${top}/examples/${project}"
+		recorded = expected!(suite, project)?
 		printed = Process.traced!(Process.with_env(Process.command(binary, ["spec"], directory), environment))?
 		match Examples.refused.find_first(|(refused_project, _)| refused_project == project) {
 			Ok((_, reason)) => Process.check!(printed.code != 0 and printed.stderr.contains(reason), "${printed.stdout}${printed.stderr}\nblueprint was expected to refuse the archived ${project} example with: ${reason} (exit ${printed.code.to_str()})")?
@@ -260,7 +280,40 @@ expect Examples.projects(["artifacts/scripts/Blueprint.roc"]).is_empty()
 expect Examples.released("app [config] { pf: platform \"../../blueprint-platform/main.roc\" }\n", "https://example.test/a.tar.zst") == Ok("app [config] { pf: platform \"https://example.test/a.tar.zst\" }\n")
 expect Examples.released("app [config] { pf: platform \"../platform/main.roc\" }\n", "https://example.test/a.tar.zst") == Err(NoLocalPlatform)
 
-expect Examples.contents(["composition/Blueprint.roc", "composition/ProjectTasks.roc"]) == ["README.md", "composition/Blueprint.roc", "composition/ProjectTasks.roc", "expected/composition.spec.scm"]
+expect Examples.contents(["composition/Blueprint.roc", "composition/ProjectTasks.roc"]) == ["README.md", "examples/composition/Blueprint.roc", "examples/composition/ProjectTasks.roc", "spec.json"]
 
 expect Examples.readme({ version: "0.5.0", platform_url: "https://example.test/a.tar.zst", projects: ["one", "two"] }).contains("app [config] { pf: platform \"https://example.test/a.tar.zst\" }\n")
 expect Examples.readme({ version: "0.5.0", platform_url: "u", projects: ["one", "two"] }).contains("Projects: one, two.\n")
+
+## Expectations are reviewed source, never inferred while packaging a release.
+suite! : Str, List(Str) => Try(Examples.Suite, _)
+suite! = |root, projects| {
+	text = Path.read_utf8!(Path.utf8("${root}/tests/spec.json"))?
+	parsed : Try(Examples.Suite, _)
+	parsed = Json.parse(text)
+	suite = parsed.map_err(|_| ScriptFailed)?
+	Process.check!(Examples.valid_suite(suite, projects), "suite must declare one runnable Spec case per Blueprint and use working-tree release with no dependencies")?
+	Ok(suite)
+}
+
+expected! : Examples.Suite, Str => Try(Str, _)
+expected! = |suite, project| {
+	selected = suite.apps.find_first(|example| example.path == "examples/${project}/Blueprint.roc").map_err(|_| ScriptFailed)?
+	case = selected.cases.first().map_err(|_| ScriptFailed)?
+	Ok(case.stdout)
+}
+
+suite_case = { name: "spec", args: [], stdin: "", stdout: "(spec \"quoted\")\n", stderr: "", exit_code: 0 }
+
+suite_sample = { schema_version: 1, release: "working-tree", dependencies: [], apps: [{ path: "examples/one/Blueprint.roc", cases: [suite_case] }] }
+expect Examples.valid_suite(suite_sample, ["one"])
+expect !Examples.valid_suite(suite_sample, ["one", "two"])
+expect !Examples.valid_suite({ ..suite_sample, apps: suite_sample.apps.concat(suite_sample.apps) }, ["one"])
+expect !Examples.valid_suite({ ..suite_sample, release: "1.0.0" }, ["one"])
+expect !Examples.valid_suite({ ..suite_sample, apps: [{ path: "examples/one/Blueprint.roc", cases: [] }] }, ["one"])
+expect !Examples.valid_suite({ ..suite_sample, apps: [{ path: "examples/one/Blueprint.roc", cases: [{ ..suite_case, exit_code: 1 }] }] }, ["one"])
+expect {
+	parsed : Try(Examples.Suite, _)
+	parsed = Json.parse(Examples.manifest(suite_sample, "0.9.0", ["https://example.test/core.tar.zst"]))
+	parsed == Ok({ ..suite_sample, release: "0.9.0", dependencies: ["https://example.test/core.tar.zst"] })
+}

@@ -11,8 +11,11 @@ To move the product compiler:
 . Replace the entries of `compilers` in `blueprint-cli/Bootstrap.roc` (see
    <<the-bootstrap-table>>) with the nightly's.
 . If the locked roc-overlay predates that nightly, run
-   `nix flake update roc-overlay`.
-. Set the compiler and overlay in `fixtures/roc-inputs.lock.json` to match.
+   `nix flake update roc-overlay`. Update `compilerArchives` in the flake
+   from the official release metadata even if the overlay has not indexed it yet.
+. Set the overlay and a compiler it actually inventories in
+   `fixtures/roc-inputs.lock.json`. This Nix-fixture compiler is independent
+   of the product compiler when the overlay inventory lags the official nightly.
 . Move the basic-cli release in `blueprint-cli/main.roc`, the fixtures, the
    examples, `scripts/src/SmokeBinary.roc` and `rocPackages` in `flake.nix`
    if the nightly needs a newer one.
@@ -84,7 +87,7 @@ The required checks are listed under
 the workflows when changing CI.
 
 basic-cli 0.26.0-rc2 requires the October 12 nightly or later. This repository
-pins `nightly-2026-10-21-5349569` for the product and
+pins `nightly-2026-10-27-de79a0f` for the product and
 `nightly-2026-10-13-b17d287` for maintenance scripts, with roc-fuzz 0.4.3.
 
 The complete suite requires x86_64 Linux and a running Nix daemon; the
@@ -189,7 +192,7 @@ is the x86_64 Linux compiler archive of the nightly in
 `blueprint-cli/compiler-version` with the
 `darwin/` sysroot of the Apple Silicon archive beside it, which Roc needs to
 link macOS programs. Both are fetched by the URL and hash the locked
-roc-overlay records. The cross compiler is not in the development shell.
+the flake records. The cross compiler is not in the development shell.
 
 The CLI binaries are compiled sequentially. Before each compilation,
 `scripts/embed_compiler.roc <system>` stages that target's complete archive as
@@ -219,7 +222,7 @@ The file opens with `= roc-blueprint X.Y.Z` and names the bundles as
 exist until the release builds them. `scripts/release_notes.roc X.Y.Z
 dist/notes.md` renders the notes as the release body with the real URLs, and
 adds what the release was built from: the Roc nightly and the Zig version, the
-roc-overlay revision and the hashes of the two compiler archives it supplied,
+roc-overlay revision and the hashes of the two official compiler archives,
 the flake's nixpkgs revision, the core bundle, the standalone SBOM tool as
 the `blueprint-sbom-<system>` binaries (the recommended way for CI to run
 it) and as its app bundle URL, the Roc packages compiled into

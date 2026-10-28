@@ -8,7 +8,7 @@ import Script
 import FlakeLock
 import StandaloneRunner
 import BuildHarness
-import "../../blueprint-cli/compiler-version" as compiler_version : Str
+import "../../fixtures/roc-inputs.lock.json" as roc_inputs : Str
 
 ## An end-to-end test of the `RocPackages` setting against the real
 ## `./blueprint` and real Nix. A task or a shell has its bundles downloaded by
@@ -24,8 +24,8 @@ RocPackagesTest := [].{
 	## basic-cli depends on this; a project must list it too.
 	http = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"
 
-	## Exercise the product's pinned compiler, from the reviewed overlay pin.
-	roc_tag = compiler_version.trim()
+	## Exercise the fixture compiler available in the reviewed overlay pin.
+	roc_tag = FlakeLock.compiler_pin(roc_inputs) ?? ""
 
 	greeting = "Hello from locked packages"
 
@@ -189,7 +189,7 @@ check_clean! : Str, List(Str), Str => Try({}, _)
 check_clean! = |package_dir, hashes, when| {
 	entries = names!(package_dir)?
 	check!(
-		entries.all(|name| hashes.contains(name) or hashes.contains(name.drop_suffix(".deps.json"))) and !entries.any(leftover),
+		entries.all(|name| cache_entry(hashes, name)) and !entries.any(leftover),
 		"${when}, the package cache holds something unexpected: ${Str.join_with(entries, " ")}",
 	)
 }
@@ -482,3 +482,9 @@ expect same_names(["a", "b"], ["b", "a"]) and !same_names(["a"], ["a", "b"])
 expect RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", ["https://e.test/a.tar.zst", "https://e.test/b.tar.zst"], WithBuild).contains("RocPackages([\"https://e.test/a.tar.zst\", \"https://e.test/b.tar.zst\"])")
 expect RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", [], WithBuild).contains("Build(\"offline\"") and !RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", [], TasksOnly).contains("Build(")
 expect RocPackagesTest.blueprint_roc("../p/main.roc", "github:roc-lang/roc-overlay/pinned", [], WithBuild).contains("Input(\"roc\", \"github:roc-lang/roc-overlay/pinned\")")
+
+## Only sidecars of the declared packages are admitted; staging debris is not.
+cache_entry : List(Str), Str -> Bool
+cache_entry = |hashes, name| hashes.contains(name) or hashes.contains(name.drop_suffix(".deps.json")) or hashes.contains(name.drop_suffix(".deps"))
+expect cache_entry(["known"], "known") and cache_entry(["known"], "known.deps.json") and cache_entry(["known"], "known.deps")
+expect !cache_entry(["known"], "other.deps") and !cache_entry(["known"], "known.deps.tmp") and !cache_entry(["known"], "blueprint-incomplete")

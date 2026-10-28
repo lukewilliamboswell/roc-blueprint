@@ -437,8 +437,8 @@ The manual is the AsciiDoc in `docs/`. `index.adoc` is a book that includes
 one chapter per top-level `.adoc` file; `.github/workflows/docs.yml` renders
 it as a site and a PDF with the shared
 https://lukewilliamboswell.github.io/roc-automation/actions.html#build-docs[`build-docs`]
-action, on every pull request, and deploys the site from `main`. The action
-and renderer are paired at `tools-0.1.0-rc.1`; `flake.nix` checks the released
+action, on every pull request, and deploys the site from `main`. The action is pinned to a reviewed roc-automation main revision; the renderer
+is released as `tools-0.6.0`. `flake.nix` checks the released
 renderer binary's SHA-256 for each supported host. Rendering uses the native
 Roc utility. API generation uses this repository's pinned Roc compiler.
 
@@ -449,15 +449,15 @@ To render the same outputs locally, inside `nix develop`:
 scripts/docs_snippet.roc    # docs/generated/, from the latest release; needs a logged-in gh
 renderer=$(nix build .#roc-docs --no-link --print-out-paths)/bin/roc-docs
 "$renderer" build --workspace "$PWD" --pdf-filename roc-blueprint.pdf \
-  --pdf-image-dpi 300 \
+  --pdf-image-dpi 240 --site-url https://lukewilliamboswell.github.io/roc-blueprint/ \
   --docs-version main --api-entrypoint blueprint-platform/main.roc \
   --roc-command "$(command -v roc)"
 ----
 
 The site is `.docs-out/site/` and the PDF `.docs-out/roc-blueprint.pdf`;
-neither is committed. Both workflows use 300 DPI for PDF image preparation
+neither is committed. Both workflows use 240 DPI for PDF image preparation
 so the architecture diagram retains detail when zoomed. Publication links use explicit URLs; this action and
-renderer pair does not need a `site-url` option.
+renderer pair uses `site-url` for publication links and Markdown discovery.
 
 Keep PSV table cells on complete physical lines. HTML honours the declared
 column proportions; this renderer release's PDF sizes earlier columns to

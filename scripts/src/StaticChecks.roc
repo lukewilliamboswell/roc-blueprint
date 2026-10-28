@@ -161,7 +161,7 @@ StaticChecks := [].{
 	## `roc-stable`'s nightly would stop them the day the two compilers
 	## differ, so they name none; the bundled SBOM app gets the product pin
 	## when it is staged (scripts/src/Bundle.roc).
-	product_built = ["scripts/sbom.roc", "scripts/smoke_binary.roc", "scripts/stubs/tool.roc"]
+	product_built = ["scripts/test_release.roc", "scripts/sbom.roc", "scripts/smoke_binary.roc", "scripts/stubs/tool.roc"]
 
 	## Each file and nightly in what `git grep` prints for `roc` header
 	## fields: lines of `<file>:<indent>roc: "<tag>",`.
