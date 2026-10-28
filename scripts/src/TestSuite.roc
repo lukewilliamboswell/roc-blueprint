@@ -324,6 +324,7 @@ host_system! = ||
 	match Env.platform!() {
 		{ arch: AARCH64, os: LINUX } => "aarch64-linux"
 		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
+		{ arch: X64, os: MACOS } => "x86_64-darwin"
 		{ arch: X64, os: WINDOWS } => "x86_64-windows"
 		_ => "x86_64-linux"
 	}

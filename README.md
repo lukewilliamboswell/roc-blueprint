@@ -55,7 +55,7 @@ See the [architecture](docs/architecture.adoc) and the [0.9.0 release notes](doc
 Each
 [release](https://github.com/lukewilliamboswell/roc-blueprint/releases/latest)
 attaches a `blueprint` binary for x86_64 Linux, arm64 Linux, Apple Silicon
-macOS and x86_64 Windows, with SHA-256 sums in `blueprint.sha256` and build
+and Intel macOS, and x86_64 Windows, with SHA-256 sums in `blueprint.sha256` and build
 provenance in `roc-blueprint-provenance.sigstore.json`. It needs no Roc: it embeds
 the compiler that reads `Blueprint.roc` and installs it into its cache on first use. [Nix](https://nixos.org/download)
 with flakes enabled is needed for tools from a Nix package source and for
@@ -66,8 +66,8 @@ flake:
 nix run github:lukewilliamboswell/roc-blueprint/<version> -- --help
 ```
 
-Use each release's binary with that release's platform URL. Intel macOS is not
-supported. Sandboxed builds run on x86_64 Linux only.
+Use each release's binary with that release's platform URL. On Intel macOS and
+Windows, tasks run without Nix. Sandboxed builds run on x86_64 Linux only.
 
 ## Examples
 

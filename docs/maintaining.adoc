@@ -111,7 +111,7 @@ pull request runs the same workflow as a dry run, under the version
 
 . In one pull request, move the product compiler to the latest official Roc
   nightly using the steps above. Resolve any compatibility failures and run
-  the complete suite, including native and Nix-free checks on all four
+  the complete suite, including native and Nix-free checks on all five
   released systems. Set `version` in `blueprint-cli/main.roc` and
   `flake.nix` to the release, and write its notes (see
   <<write-the-release-notes>>). Merge it.
@@ -158,7 +158,7 @@ against the two bundles.
 publish::
 The only job that may write to the repository. It checks out nothing and
 runs no script of the repository. It attests the tested assets and verifies
-the source and workflow identity of all four native binaries, retaining the
+the source and workflow identity of all five native binaries, retaining the
 attestation bundle as a release asset. It creates a draft release at the tested
 commit, uploads every asset, downloads each back and compares it with the
 tested file, and only then publishes. It rechecks the latest nightly before
@@ -184,7 +184,7 @@ which resolves what a new user's project would: a branch of nixpkgs, the
 overlay's default branch and its newest nightly.
 With `--no-nix` the same program writes a project that takes nothing from
 Nix and requires a machine that has none; the `no-nix` job of `ci.yml` runs
-it on all four released systems (see
+it on all five released systems (see
 xref:contributing.adoc#the-job-with-no-nix[The job with no Nix]).
 
 `build_release.roc` takes its compiler from the flake: `nix build .#roc-cross`
@@ -200,7 +200,7 @@ The CLI binaries are compiled sequentially. Before each compilation,
 `Bootstrap.roc`. Downloads are cached in `.cache/compilers/`; the staged
 archive is ignored by Git. The local host's archive is restored afterwards,
 including when compilation fails. The SBOM tool embeds no compiler, so its
-four binaries compile in parallel with the smoke programs.
+five binaries compile in parallel with the smoke programs.
 
 Each binary embeds only its own system's archive. On first use it installs
 that archive into the existing per-user store and verifies its recorded
@@ -307,18 +307,17 @@ of that type's identity, so the two versions move together.
 The names of the binaries and of their checksum file are a contract.
 roc-automation's
 https://lukewilliamboswell.github.io/roc-automation/actions.html#setup-blueprint[`setup-blueprint`]
-action downloads `blueprint-x86_64-linux`, `blueprint-aarch64-linux` and
-`blueprint-aarch64-darwin` from the release a caller names, exactly as
-published. This release also includes `blueprint-x86_64-windows.exe`; the
-setup action does not yet install it. Callers copy the SHA-256 values from
-`blueprint.sha256`.
+action downloads `blueprint-x86_64-linux`, `blueprint-aarch64-linux`,
+`blueprint-aarch64-darwin`, `blueprint-x86_64-darwin` and
+`blueprint-x86_64-windows.exe` from the release a caller names, exactly as
+published. Callers copy the SHA-256 values from `blueprint.sha256`.
 Renaming an asset, archiving the binaries or changing the checksum file breaks
 every caller. `scripts/release_assets.roc` fails the build unless exactly
-those five names and the four `blueprint-sbom-<system>` binaries are
+those six names and the five `blueprint-sbom-<system>` binaries are
 present, and the publish job checks again before it uploads. A binary for
 another system is an addition; it does not change these.
 
-`blueprint.sha256` lists the four CLI binaries first, then the four SBOM
+`blueprint.sha256` lists the five CLI binaries first, then the five SBOM
 tool binaries. The setup action never reads the file: it admits
 `blueprint-<system>` by a digest reviewed into its own `releases.json`, so
 the lines that follow the CLI's are safe for it, and a maintainer copying

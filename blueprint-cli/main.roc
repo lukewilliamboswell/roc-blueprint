@@ -47,7 +47,7 @@ import "compiler-version" as compiler_version : Str
 import "compiler-archive" as compiler_archive : List(U8)
 
 version : Str
-version = "0.9.0"
+version = "0.10.0"
 
 ## The providers a request may be planned with. This is the only reference to
 ## a concrete provider: everything else uses the Provider contract
@@ -676,17 +676,17 @@ context! = || {
 	})
 }
 
-## The System a machine is, when `blueprint` runs on it: the three a binary is
-## released for, and x86_64 Windows, where tasks that need no provider run.
-## Intel macOS is not one: current nixpkgs has dropped that
-## system, so no environment could be entered there. `x86_64-darwin` remains
-## a System a configuration may declare.
+## The System a machine is, when `blueprint` runs on it: every system a binary
+## is released for. On Intel macOS and x86_64 Windows only tasks that need no
+## provider run: current nixpkgs has dropped Intel macOS, and Nix does not run
+## on Windows.
 supported_host : _ -> Try(Str, [UnsupportedHost])
 supported_host = |machine|
 	match machine {
 		{ arch: X64, os: LINUX } => Ok("x86_64-linux")
 		{ arch: AARCH64, os: LINUX } => Ok("aarch64-linux")
 		{ arch: AARCH64, os: MACOS } => Ok("aarch64-darwin")
+		{ arch: X64, os: MACOS } => Ok("x86_64-darwin")
 		{ arch: X64, os: WINDOWS } => Ok("x86_64-windows")
 		_ => Err(UnsupportedHost)
 	}
@@ -694,7 +694,7 @@ supported_host = |machine|
 expect supported_host({ arch: X64, os: LINUX }) == Ok("x86_64-linux")
 expect supported_host({ arch: AARCH64, os: LINUX }) == Ok("aarch64-linux")
 expect supported_host({ arch: AARCH64, os: MACOS }) == Ok("aarch64-darwin")
-expect supported_host({ arch: X64, os: MACOS }) == Err(UnsupportedHost)
+expect supported_host({ arch: X64, os: MACOS }) == Ok("x86_64-darwin")
 expect supported_host({ arch: X64, os: WINDOWS }) == Ok("x86_64-windows")
 expect supported_host({ arch: AARCH64, os: WINDOWS }) == Err(UnsupportedHost)
 

@@ -244,6 +244,21 @@ whatever the project expects:
   commits the result; after that, the tasks that use no provider tool again
   run without it.
 
+[#intel-macos]
+== Intel macOS
+
+The release includes `blueprint-x86_64-darwin`, built for the platform's
+`x64mac` target. Current nixpkgs no longer builds for Intel macOS, so a
+project's tasks run there without a provider: from fetched programs, expected
+tools and Roc packages. `Recipes.roc_nightly` selects the nightly's
+`macos_x86_64` archive. The `no-nix` CI job and the release's tests run the
+binary on `macos-15-intel`: installing the embedded compiler, writing a lock,
+reporting requirements, and building and running a basic-cli program.
+
+`x86_64-darwin` is in the default `Systems`, so fetched programs are locked
+for it unless a project lists its systems without it. Provider tools and
+sandboxed builds remain unavailable.
+
 == Windows
 
 The release includes `blueprint-x86_64-windows.exe` and the platform's
