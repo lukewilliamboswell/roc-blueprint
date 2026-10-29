@@ -7,6 +7,7 @@ import cli.Env
 import cli.OsStr
 import cli.Stderr
 import src/SmokeBinary
+import src/MixedProject
 
 ## Run a built `blueprint` binary with no Roc and no Python of its own. Run
 ## from the repository root, where the platform's hosts and linker inputs are.
@@ -36,6 +37,21 @@ main! = |args| {
 	if SmokeBinary.is_python(program) {
 		return SmokeBinary.python!(arguments)
 	}
+	result = match arguments {
+		["--mixed-producer", binary] => MixedProject.run!(binary, True)
+		["--mixed-consumer", binary] => MixedProject.run!(binary, False)
+		_ => ordinary!(arguments)
+	}
+	match result {
+		Ok({}) => Ok({})
+		Err(other) => {
+			_ = Stderr.line!("error: ${Str.inspect(other)}")
+			Err(Exit(1))
+		}
+	}
+}
+
+ordinary! = |arguments| {
 	result = match SmokeBinary.requested(arguments) {
 		Ok(request) => SmokeBinary.run!(request.binary, request.mode)
 		Err(Usage) => {

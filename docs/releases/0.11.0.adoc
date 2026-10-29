@@ -1,0 +1,41 @@
+= roc-blueprint 0.11.0
+
+Unix environments that take tools from Nix can now share a project and lock
+with provider-free Windows tasks. This fixes
+https://github.com/lukewilliamboswell/roc-blueprint/issues/76[#76].
+
+== Use 0.11.0
+
+[source,roc,snippet=unchecked]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+The importable core package is `{core-url}`. The five CLI and five SBOM tool
+binaries retain their existing names, checksums and release provenance.
+The configuration API, Spec major 3 and Lock 2 are unchanged.
+
+== Mixed systems
+
+`Systems` remains the authoritative list for fetched programs. Nix shell
+outputs cover supported Unix systems; Windows is accepted when its applicable
+environments need no Nix tools. Use `ToolsFor` for Unix tools, including in
+inherited environments. Unscoped `Tools`, commands and configured tools apply
+to every system and are refused when they require Nix on Windows.
+
+Selected tasks and shells validate their requested system and environment
+closure. An unrelated system cannot prevent a supported Unix task from running.
+Full rendering still validates the whole project structure and refuses Nix
+tools that actually apply to an unsupported system.
+
+Sandboxed build outputs are emitted only for Linux x64, the existing supported
+executor target. An explicit build on another system fails before provisioning
+or execution. This release does not add Windows Nix support or cross builds.
+
+Create and update a mixed project's Nix lock on a supported Unix host, then
+commit that one lock for Windows to consume. Windows can execute provider-free
+tasks from it without Nix; updates requiring Nix resolution remain unsupported.
+CI verifies a Linux Nix task and a Windows portable task using the same
+Linux-produced project and lock, with native pre-effect refusal tests.
+
+The embedded compiler remains `nightly-2026-10-28-bad769b`.
