@@ -105,6 +105,9 @@ NixProvider :: [].{
 	## is named with them: Nix reads its tree again, as the Core hashes it again.
 	resolve : Spec, Str, Layout, Provider.Update -> Try(Provider.Resolution, Str)
 	resolve = |spec, target, layout, update| {
+		if !supported_systems.contains(target) {
+			return Err("Nix resolution requires a supported Unix host; unsupported Nix target ${target}")
+		}
 		files = update_files(spec, target, layout)?
 		locals = local_checks(spec, target, layout)?
 		native_lock = "${layout.generated_root}/flake.lock"
@@ -3621,3 +3624,7 @@ expect {
 	NixProvider.render(mixed_systems) == NixProvider.render(project)
 		and mixed_systems.systems == ["x86_64-linux", "x86_64-windows"]
 }
+
+# Windows consumes Unix-produced authority; resolving Nix there is refused
+# in the pure boundary even if a program called nix happens to be on PATH.
+expect (NixProvider.provider.resolve)(mixed_systems, "x86_64-windows", TestData.layout, All) == Err("Nix resolution requires a supported Unix host; unsupported Nix target x86_64-windows")

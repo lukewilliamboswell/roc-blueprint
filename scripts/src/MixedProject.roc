@@ -60,6 +60,9 @@ MixedProject := [].{
 			# Remove local execution products before each refusal. A real ambient
 			# Git exists on the runner; it must never mask an unsupported tool.
 			Path.delete_all!(Path.utf8("${project}/.blueprint"))?
+			update = Process.capture!(Process.command(blueprint, ["update"], project))?
+			Process.check!(update.code != 0 and update.stderr.contains("Nix resolution requires a supported Unix host"), "Windows update tried Nix resolution: ${update.stdout}${update.stderr}")?
+			Process.check!(!Path.exists!(Path.utf8("${project}/.blueprint"))? and lock_path.read_utf8!()? == before, "Windows update changed workspace or authority")?
 			for (args, diagnostic) in [
 				(["build", "artifact"], "sandboxed builds currently require target x86_64-linux"),
 				(["run", "git"], "unsupported Nix target x86_64-windows"),
