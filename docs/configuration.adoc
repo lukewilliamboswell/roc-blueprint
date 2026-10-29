@@ -379,8 +379,23 @@ source intent and pure capability validation exist, but there is *no Guix
 renderer or executor*.
 An incompatible requested environment fails; it never retries another provider.
 Missing native packages and unavailable target packages fail in Nix rather than
-being silently filtered out. Unsupported Nix target declarations fail before
-file writes or provider execution.
+being silently filtered out. Nix tools applicable to unsupported targets fail
+before file writes or provider execution. `Systems` remains authoritative for
+fetched programs: a mixed project can include Windows alongside Unix when its
+Windows environments need no Nix tools. Scope Unix tools with `ToolsFor`;
+unscoped tools, commands and configured tools apply to every declared system.
+Inherited system scopes are preserved. An unused Nix source does not require
+Nix outputs for Windows.
+
+Full rendering checks all used environments and their applicable systems.
+Selected tasks and shells check the requested system and environment closure;
+unrelated systems do not invalidate a supported Unix operation. Sandboxed
+build outputs cover only `x86_64-linux`, the existing executor target. Explicit
+build requests elsewhere fail before provisioning or execution.
+
+Create and update locks requiring Nix resolution on a supported Unix host.
+Windows consumes that same committed lock for provider-free tasks without Nix;
+Windows updates requiring Nix remain unsupported.
 
 == Add tools for one system
 

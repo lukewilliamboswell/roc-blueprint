@@ -230,6 +230,7 @@ NixProvider :: [].{
 					inputs = Locks.inputs(project)?
 					_ = render_selected(
 						project,
+						[target],
 						[],
 						[],
 						Unplanned,
@@ -340,6 +341,7 @@ NixProvider :: [].{
 		}
 		contents = render_selected(
 			project,
+			if (request == Request.Generate) project.systems else [target],
 			$names,
 			$builds,
 			source,
@@ -526,6 +528,7 @@ NixProvider :: [].{
 		names = whole(project)
 		contents = render_selected(
 			project,
+			project.systems,
 			names,
 			project.builds,
 			Unplanned,
@@ -580,7 +583,7 @@ NixProvider :: [].{
 	render = |spec| {
 		project = Project.validate(spec)?
 		_ = Locks.inputs(project)?
-		render_selected(project, whole(project), project.builds, Unplanned, None, Unlimited)
+		render_selected(project, project.systems, whole(project), project.builds, Unplanned, None, Unlimited)
 	}
 
 	## A Shell/Run consumer selects one environment before staging any effects.
@@ -594,7 +597,7 @@ NixProvider :: [].{
 
 	render_closure : Spec, List(Str) -> Try(Str, Str)
 	render_closure = |spec, names|
-		render_selected(spec, names, [], Unplanned, None, Unlimited)
+		render_selected(spec, spec.systems, names, [], Unplanned, None, Unlimited)
 
 	## Charge exact emitted UTF-8 bytes before retaining a renderer chunk.
 	## Unlimited keeps standalone/inspection rendering on this same code path.
@@ -625,6 +628,7 @@ NixProvider :: [].{
 	## stable input set and explicit project source; inspection never guesses one.
 	render_selected : Spec,
 	List(Str),
+	List(Str),
 	List(Spec.Build),
 	Source,
 	[
@@ -632,7 +636,7 @@ NixProvider :: [].{
 		Some({ inputs : List(Locks.Input), layout : Layout }),
 	],
 	RenderBudget -> Try(Str, Str)
-	render_selected = |input_spec, names, builds, copied, staging, budget| {
+	render_selected = |input_spec, systems, names, builds, copied, staging, budget| {
 		# What the Core plans itself is not this provider's to refuse.
 		missing = input_spec.unsupported_features(provider.features.concat(Realise.features))
 		if !missing.is_empty() {
@@ -649,11 +653,6 @@ NixProvider :: [].{
 					.concat("Blueprint.roc uses ${Str.join_with(kinds, ", ")}"),
 			)
 		}
-		for system in spec.systems {
-			if !supported_systems.contains(system) {
-				return Err("unsupported Nix target ${system}")
-			}
-		}
 		selected_names = names.fold(
 			[],
 			|seen, name| if (seen.contains(name)) seen else seen.append(name),
@@ -662,6 +661,21 @@ NixProvider :: [].{
 			Native.check_environment(spec, Nix, name)?
 		}
 		environments = spec.environments.keep_if(|e| names.contains(e.name))
+		# Builds own an executor domain, independent of project tool downloads.
+		# Shell/task environments must reject real tools on unsupported systems.
+		shell_environment = |name| !builds.any(|build| build.environment == name)
+			or spec.shells.any(|shell| shell.environment == name)
+			or spec.tasks.any(|task| task.environment == name)
+		for system in systems {
+			if !supported_systems.contains(system) {
+				for environment in environments.keep_if(|e| shell_environment(e.name)) {
+					if !(Project.environment_use(spec, environment.name, system)?.tools.is_empty()) {
+						return Err("unsupported Nix target ${system}")
+					}
+				}
+			}
+		}
+
 		shells = spec.shells.keep_if(|s| names.contains(s.environment))
 		builder = builder_source(spec)
 		for environment in environments {
@@ -808,7 +822,7 @@ NixProvider :: [].{
 				"      devShells = {",
 			]),
 		)?
-		for system in spec.systems {
+		for system in systems.keep_if(|system| supported_systems.contains(system)) {
 			$rendered = append_rendered(
 				$rendered,
 				lines([
@@ -839,7 +853,7 @@ NixProvider :: [].{
 		$rendered = append_rendered($rendered, "      };\n")?
 		if !builds.is_empty() {
 			$rendered = append_rendered($rendered, render_source(copied))?
-			for system in spec.systems {
+			for system in systems.keep_if(|system| system == "x86_64-linux") {
 				$rendered = append_rendered(
 					$rendered,
 					"        ${quote(system)} = let artifacts = {\n",
@@ -1723,13 +1737,13 @@ expect {
 # Unknown requests fail before a caller can generate files or invoke Nix.
 expect NixProvider.render_environment(mk(simple), "missing").is_err()
 
-# All supported target shapes are explicit; unsupported declarations are errors.
+# Supported Nix output shapes are explicit; a system with no tools needs none.
 expect NixProvider.render(
 	mk({
 		..simple,
 		systems: NixProvider.supported_systems,
 	}),
-).is_ok() and rejects({ ..simple, systems: ["riscv64-linux"] }, "target")
+).is_ok() and NixProvider.render(mk({ ..simple, systems: ["riscv64-linux"] })).is_ok()
 
 # Native missing attributes survive rendering and fail later in Nix itself.
 expect match NixProvider.render(
@@ -2059,7 +2073,7 @@ expect NixProvider.preflight(
 	Request.Shell("default"),
 	"x86_64-linux",
 	TestData.layout,
-) == Err("unsupported Nix target riscv64-linux")
+) == Err("target x86_64-linux is not declared by the project")
 
 # A build plans dependency-first artifacts and exact, immutable sandbox argv.
 expect match plan_fixture(Request.Build("app")) {
@@ -2455,7 +2469,6 @@ expect match plan_locks {
 	Ok(locks) => {
 		bad = [
 			{ ..TestData.data, requires_: ["sources", "builds", "future"] },
-			{ ..TestData.data, systems: ["x86_64-linux", "riscv64-linux"] },
 			{
 				..TestData.data,
 				sources: [{ name: "default", provider: { name: "guix", version: 1, ref: "channels" } }],
@@ -3315,7 +3328,6 @@ expect {
 			..project,
 			extensions: [{ kind: "service", name: "db", value: Value.Attrs([]) }],
 		},
-		{ ..project, systems: ["x86_64-linux", "riscv64-linux"] },
 		{ ..project, tasks: [{ name: "bad", environment: "missing", run: ["x"] }] },
 	].all(
 		|invalid| NixProvider.preflight(
@@ -3551,3 +3563,61 @@ expect {
 }
 expect NixProvider.activation("{\"variables\":{\"PATH\":{\"type\":\"exported\",\"value\":\"/nix/store/a-git/bin:/nix/store/b-zig/bin\"},\"NIX_CFLAGS\":{\"type\":\"exported\",\"value\":\"-O2\"},\"HOME\":{\"type\":\"exported\",\"value\":\"/homeless\"},\"local\":{\"type\":\"var\",\"value\":\"x\"},\"fn\":{\"type\":\"function\"}}}") == Ok({ path: [{ directory: "/nix/store/a-git/bin", origin: "nix" }, { directory: "/nix/store/b-zig/bin", origin: "nix" }], variables: [{ name: "NIX_CFLAGS", value: "-O2", origin: "nix" }] })
 expect NixProvider.activation("{}").is_err() and NixProvider.activation("not json").is_err()
+
+# Project systems retain Windows for fetched programs; Nix outputs use only
+# supported systems. Scoped tools survive inherited environment normalization.
+mixed_systems : Spec
+mixed_systems = {
+	..mk(simple),
+	systems: ["x86_64-linux", "x86_64-windows"],
+	requires_: ["system-tools"],
+	environments: [{ ..base, name: "parent", tools: [] }, { ..base, tools: [], parents: ["parent"] }],
+	system_tools: [{ environment: "parent", system: "x86_64-linux", tools: [{ source: "default", name: "git" }] }],
+}
+
+expect {
+	text = NixProvider.render(mixed_systems)?
+	text.contains("\"x86_64-linux\" = let") and !text.contains("\"x86_64-windows\" = let")
+		and text.contains("sets.\"default\".\"git\"")
+		and NixProvider.preflight(mixed_systems, Request.Shell("default"), "x86_64-linux", TestData.layout).is_ok()
+		and NixProvider.update_files(mixed_systems, "x86_64-linux", TestData.layout).is_ok()
+}
+
+# A declared but unused Nix source does not turn Windows into a Nix system.
+expect NixProvider.render({ ..mixed_systems, environments: [{ ..base, tools: [] }], system_tools: [] }).is_ok()
+
+# Global tools really apply to Windows, so full rendering refuses them. A
+# selected Unix operation must not validate unrelated Windows capabilities.
+expect {
+	project = { ..mk(simple), systems: mixed_systems.systems, environments: [{ ..base, tools: [{ source: "default", name: "git" }] }] }
+	NixProvider.render(project) == Err("unsupported Nix target x86_64-windows")
+		and NixProvider.preflight(project, Request.Shell("default"), "x86_64-linux", TestData.layout).is_ok()
+		and NixProvider.preflight(project, Request.Shell("default"), "x86_64-windows", TestData.layout) == Err("unsupported Nix target x86_64-windows")
+}
+
+# A Windows-scoped tool cannot be silently discarded or replaced by PATH.
+expect {
+	project = { ..mixed_systems, system_tools: [{ environment: "parent", system: "x86_64-windows", tools: [{ source: "default", name: "git" }] }] }
+	NixProvider.render(project) == Err("unsupported Nix target x86_64-windows")
+		and NixProvider.preflight(project, Request.Shell("default"), "x86_64-windows", TestData.layout).is_err()
+}
+
+# Provider-owned builds render only their executor's supported domain, even
+# when the same project locks portable downloads for macOS and Windows.
+expect {
+	project = { ..TestData.project(TestData.data), systems: ["x86_64-linux", "aarch64-darwin", "x86_64-windows"], tasks: [], shells: [] }
+	text = NixProvider.render(project)?
+	outputs = text.split_on("      packages = {").last()?
+	outputs.contains("\"x86_64-linux\" = let artifacts")
+		and !outputs.contains("\"aarch64-darwin\" = let artifacts")
+		and !outputs.contains("\"x86_64-windows\" = let artifacts")
+		and ["aarch64-darwin", "x86_64-windows"].all(|target| NixProvider.preflight(project, Request.Build("app"), target, TestData.layout) == Err("sandboxed builds currently require target x86_64-linux"))
+}
+
+# A Unix-only project's generated bytes remain stable when adding provider-free
+# Windows support. The global Systems declaration itself stays authoritative.
+expect {
+	project = { ..mixed_systems, systems: ["x86_64-linux"] }
+	NixProvider.render(mixed_systems) == NixProvider.render(project)
+		and mixed_systems.systems == ["x86_64-linux", "x86_64-windows"]
+}
