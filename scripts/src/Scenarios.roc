@@ -237,6 +237,10 @@ Scenarios := [].{
 				Cli(["run", "script"], Says("Hello from a roc-stable script")),
 				Launchers("path", ["greet", "roc-stable"]),
 				LockedBash("devShells.x86_64-linux.default", packages_ref),
+				# Selected execution renders only its requested system. Regenerate
+				# the whole project before evaluating another system's output.
+				Eval("devShells.aarch64-darwin.default.drvPath", FailsWith("does not provide attribute")),
+				Cli([], Succeeds),
 				Eval("devShells.aarch64-darwin.default.drvPath", Succeeds),
 			],
 		},
