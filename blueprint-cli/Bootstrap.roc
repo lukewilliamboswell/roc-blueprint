@@ -14,63 +14,63 @@ Bootstrap := [].{
 	compilers : List(Compiler)
 	compilers = [
 		{
-			tag: "nightly-2026-10-28-bad769b",
+			tag: "nightly-2026-11-01-48d3369",
 			system: "x86_64-linux",
 			program: {
 				name: "roc",
-				urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-linux_x86_64-2026-10-28-bad769b.tar.gz"],
-				sha256: "aeacbeb60f273ea85657a003e2ec39461595f3261bb69c9e16ea18a6563ae8d9",
-				size: 74712401,
+				urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-01-48d3369/roc_nightly-linux_x86_64-2026-11-01-48d3369.tar.gz"],
+				sha256: "110ade54087cabc3102bb1b4a749312fa01422e442f3249b695d7133347d70c5",
+				size: 80249287,
 				unpack: TarGz,
-				path: "roc_nightly-linux_x86_64-2026-10-28-bad769b/roc",
+				path: "roc_nightly-linux_x86_64-2026-11-01-48d3369/roc",
 			},
 		},
 		{
-			tag: "nightly-2026-10-28-bad769b",
+			tag: "nightly-2026-11-01-48d3369",
 			system: "aarch64-linux",
 			program: {
 				name: "roc",
-				urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-linux_arm64-2026-10-28-bad769b.tar.gz"],
-				sha256: "0f51a80492b70b4c282f0b9577d74d29ead4000024bc7db04a308d6102e82aef",
-				size: 71511095,
+				urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-01-48d3369/roc_nightly-linux_arm64-2026-11-01-48d3369.tar.gz"],
+				sha256: "7d0279aeab475fe6c25bf653154da315bfe63e580b82d6a0c271592948d0fdbe",
+				size: 76988483,
 				unpack: TarGz,
-				path: "roc_nightly-linux_arm64-2026-10-28-bad769b/roc",
+				path: "roc_nightly-linux_arm64-2026-11-01-48d3369/roc",
 			},
 		},
 		{
-			tag: "nightly-2026-10-28-bad769b",
+			tag: "nightly-2026-11-01-48d3369",
 			system: "aarch64-darwin",
 			program: {
 				name: "roc",
-				urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-macos_apple_silicon-2026-10-28-bad769b.tar.gz"],
-				sha256: "69939f3535b2977465379e806a196affedbc65310545479d5a638ef6d15304c7",
-				size: 71588923,
+				urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-01-48d3369/roc_nightly-macos_apple_silicon-2026-11-01-48d3369.tar.gz"],
+				sha256: "cc2e88b05e130bd27d61df6d63f32351b42d70fb41b39d103eeb148a56d3a16f",
+				size: 77071423,
 				unpack: TarGz,
-				path: "roc_nightly-macos_apple_silicon-2026-10-28-bad769b/roc",
+				path: "roc_nightly-macos_apple_silicon-2026-11-01-48d3369/roc",
 			},
 		},
 		{
-			tag: "nightly-2026-10-28-bad769b",
+			tag: "nightly-2026-11-01-48d3369",
 			system: "x86_64-darwin",
 			program: {
 				name: "roc",
-				urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-macos_x86_64-2026-10-28-bad769b.tar.gz"],
-				sha256: "292c8059591819468ba07dc694c8248685ddd76e259d031cbd07e7c6c9dea16a",
-				size: 75658583,
+				urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-01-48d3369/roc_nightly-macos_x86_64-2026-11-01-48d3369.tar.gz"],
+				sha256: "99681a092d50e738b5f4f60269ecaf00482c2f7529caed55d4d2e26146fdb440",
+				size: 81212748,
 				unpack: TarGz,
-				path: "roc_nightly-macos_x86_64-2026-10-28-bad769b/roc",
+				path: "roc_nightly-macos_x86_64-2026-11-01-48d3369/roc",
 			},
 		},
 		{
-			tag: "nightly-2026-10-28-bad769b",
+			tag: "nightly-2026-11-01-48d3369",
 			system: "x86_64-windows",
 			program: {
 				name: "roc",
-				urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-windows_x86_64-2026-10-28-bad769b.zip"],
-				sha256: "1edc79e8366939d1d981e0608dfdfa42dd32183270656b57cc50f2c73ba96828",
-				size: 72464557,
+				urls: ["https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-01-48d3369/roc_nightly-windows_x86_64-2026-11-01-48d3369.zip"],
+				sha256: "ebf091589b61854cf3f0a92a484918b6f31961d1e957f002c230edeac6a9f14d",
+				size: 77924383,
 				unpack: Zip,
-				path: "roc_nightly-windows_x86_64-2026-10-28-bad769b/roc.exe",
+				path: "roc_nightly-windows_x86_64-2026-11-01-48d3369/roc.exe",
 			},
 		},
 	]
@@ -103,14 +103,14 @@ expect Bootstrap.compilers.all(|entry| Bootstrap.compilers.keep_if(|other| other
 expect Bootstrap.compilers.all(|entry| entry.program.sha256.to_utf8().len() == 64 and entry.program.sha256.to_utf8().all(|b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f')) and entry.program.size > 0)
 expect Bootstrap.compilers.all(|entry| entry.program.urls.all(|url| url.starts_with("https://github.com/roc-lang/nightlies/releases/download/${entry.tag}/")))
 
-expect Bootstrap.compiler("nightly-2026-10-28-bad769b", "aarch64-darwin").map_ok(|program| program.path) == Ok("roc_nightly-macos_apple_silicon-2026-10-28-bad769b/roc")
-expect Bootstrap.compiler("nightly-2026-10-28-bad769b", "riscv64-linux") == Err(NotRecorded) and Bootstrap.compiler("nightly-2026-10-03-c507926", "x86_64-linux") == Err(NotRecorded)
+expect Bootstrap.compiler("nightly-2026-11-01-48d3369", "aarch64-darwin").map_ok(|program| program.path) == Ok("roc_nightly-macos_apple_silicon-2026-11-01-48d3369/roc")
+expect Bootstrap.compiler("nightly-2026-11-01-48d3369", "riscv64-linux") == Err(NotRecorded) and Bootstrap.compiler("nightly-2026-10-03-c507926", "x86_64-linux") == Err(NotRecorded)
 
 # A program whose first URL is a compiler's download is that download; a
 # mirror first, another URL or no URL is not.
 expect {
-	url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-linux_arm64-2026-10-28-bad769b.tar.gz"
-	Bootstrap.serving([url, "https://mirror.example.org/roc.tar.gz"]).map_ok(|program| program.sha256) == Ok("0f51a80492b70b4c282f0b9577d74d29ead4000024bc7db04a308d6102e82aef")
+	url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-01-48d3369/roc_nightly-linux_arm64-2026-11-01-48d3369.tar.gz"
+	Bootstrap.serving([url, "https://mirror.example.org/roc.tar.gz"]).map_ok(|program| program.sha256) == Ok("7d0279aeab475fe6c25bf653154da315bfe63e580b82d6a0c271592948d0fdbe")
 		and Bootstrap.serving(["https://mirror.example.org/roc.tar.gz", url]) == Err(NotRecorded)
 		and Bootstrap.serving(["${url}.sig"]) == Err(NotRecorded)
 		and Bootstrap.serving([]) == Err(NotRecorded)
