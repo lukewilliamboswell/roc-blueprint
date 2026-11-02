@@ -144,7 +144,8 @@ Sbom := [].{
 			.concat(spec.system_tools.keep_if(|entry| entry.system == target or target == "source").fold([], |all, entry| all.concat(entry.tools.map(|tool| "tool:${tool.source}#${tool.name}"))))
 		entries = spec.roc_packages.map(|bundle| "roc-package:${bundle.name}")
 		builds = spec.build_sources.map(|source| "build-source:${source.name}")
-		unique(sources.concat(programs).concat(tools).concat(entries).concat(builds).concat(spec.tasks.map(|task| "task:${task.name}")).concat(spec.builds.map(|build| "build:${build.name}")))
+		files = spec.build_files.fold([], |all, entry| all.concat(entry.paths.map(|path| "build-file:${entry.build}:${path}")))
+		unique(sources.concat(programs).concat(tools).concat(entries).concat(builds).concat(files).concat(spec.tasks.map(|task| "task:${task.name}")).concat(spec.builds.map(|build| "build:${build.name}")))
 	}
 
 	## Resolve only reviewed source/program references. A component never chooses
@@ -175,7 +176,7 @@ Sbom := [].{
 		if unique(lock.sources.map(|entry| entry.name)).len() != lock.sources.len() or unique(lock.fetched.map(|entry| "${entry.name}:${entry.system}")).len() != lock.fetched.len() {
 			return Err("duplicate authoritative locked identity")
 		}
-		unsupported = spec.unsupported_features(["explicit-sources", "sources", "programs", "expects", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools", "raw", "source-files"])
+		unsupported = spec.unsupported_features(["explicit-sources", "sources", "programs", "expects", "builds", "workflows", "system-tools", "commands", "roc-packages", "configured-tools", "raw", "source-files", "build-files"])
 		if !unsupported.is_empty() {
 			return Err("unsupported required inventory feature: ${Str.join_with(unsupported, ", ")}")
 		}

@@ -1435,3 +1435,19 @@ expect ["unknown", "verified-empty", "complete"].all(
 								and [three, two, cdx].all(|checked| Sidecar.against_inventory(checked, inventory).is_ok())
 	},
 )
+
+# A declared build's original file inputs are known inventory inputs, even
+# when its outputs are excluded from this deliverable. No provider is invoked.
+expect {
+	declared = { ..SbomTest.spec, requires_: ["build-files"], build_files: [{ build: "native", paths: ["recipe.json", "scripts/build.roc"] }] }
+	omitted = Sbom.inspect(declared, SbomTest.lock, "x86_64-linux", SbomTest.composition)
+	accounted = {
+		..SbomTest.composition,
+		inputs: SbomTest.composition.inputs.concat([
+			{ input: "build-file:native:recipe.json", component: "", reason: "Reviewed build recipe; no source bytes are shipped" },
+			{ input: "build-file:native:scripts/build.roc", component: "", reason: "Build orchestration, not delivered code" },
+		]),
+	}
+	complete = Sbom.inspect(declared, SbomTest.lock, "x86_64-linux", accounted)
+	omitted.is_err() and complete.map_ok(|inventory| inventory.inspected.contains("build-file:native:recipe.json") and inventory.inspected.contains("build-file:native:scripts/build.roc")) == Ok(True)
+}
