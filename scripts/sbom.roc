@@ -37,7 +37,7 @@ import core.Sidecar
 ## With `--manifest`, the sidecars MANIFEST lists are checked too, and the
 ## manifest is held to the files: the subject in DIR (or beside the manifest),
 ## each listed sidecar beside the manifest, and INVENTORY, rehashed.
-## JSON input files are bounded to 1MiB. Output sidecars are separate from assets.
+## JSON input files are bounded to 16MiB. Output sidecars are separate from assets.
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	result = run!(args.map(OsStr.display))

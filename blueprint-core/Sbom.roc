@@ -3,6 +3,7 @@ import Lock
 import Project
 import CycloneDx
 import JsonData
+import SbomJson
 import Lookup
 import SbomLicenses
 import Spdx2
@@ -56,10 +57,10 @@ Sbom := [].{
 	normalize_input : Str -> Try(Str, Str)
 	normalize_input = |input| {
 		if !json_within_bounds(input) {
-			return Err("SBOM input exceeds 1MiB or depth 64")
+			return Err("SBOM input exceeds 16MiB or depth 64")
 		}
-		tree = JsonData.decode_with(input, JsonData.documents).map_err(JsonData.message)?
-		JsonData.encode_with(migrate_input(tree), JsonData.documents).map_err(JsonData.message)
+		tree = SbomJson.decode(input).map_err(JsonData.message)?
+		SbomJson.encode(migrate_input(tree)).map_err(JsonData.message)
 	}
 
 	## Existing optional Spec extension seam: Custom("sbom-v1", SUBJECT, Str(JSON)).
@@ -69,47 +70,19 @@ Sbom := [].{
 		matches = spec.extensions.keep_if(|extension| extension.kind == "sbom-v1" and extension.name == name)
 		match matches {
 			[extension] => match extension.value {
-				Str(text) => if (!json_within_bounds(text)) Err("SBOM composition exceeds 1MiB") else Json.parse(normalize_input(text)?).map_err(|_| "invalid SBOM composition JSON")
+				Str(text) => if (!json_within_bounds(text)) Err("SBOM composition exceeds 16MiB") else Json.parse(normalize_input(text)?).map_err(|_| "invalid SBOM composition JSON")
 				_ => Err("sbom-v1 extension must hold JSON in Str")
 			}
 			_ => Err("expected exactly one sbom-v1 extension for subject")
 		}
 	}
 
-	## Preflight recursive JSON before built-in decoding, including ignored keys.
+	## Inclusive UTF-8 wire budget, including an emitted terminating newline.
+	max_json_bytes : U64
+	max_json_bytes = SbomJson.max_bytes
+
 	json_within_bounds : Str -> Bool
-	json_within_bounds = |text| {
-		if text.to_utf8().len() > 1024 * 1024 {
-			return False
-		}
-		var $depth = 0.U64
-		var $quoted = not_analyzed
-		var $escaped = not_analyzed
-		for byte in text.to_utf8() {
-			if $quoted {
-				if $escaped {
-					$escaped = False
-				} else if byte == '\\' {
-					$escaped = True
-				} else if byte == '"' {
-					$quoted = False
-				}
-			} else if byte == '"' {
-				$quoted = True
-			} else if byte == '{' or byte == '[' {
-				$depth = $depth + 1
-				if $depth > 64 {
-					return False
-				}
-			} else if byte == '}' or byte == ']' {
-				if $depth == 0 {
-					return False
-				}
-				$depth = $depth - 1
-			}
-		}
-		$depth == 0 and !$quoted
-	}
+	json_within_bounds = SbomJson.within_bounds
 
 	profile = "blueprint-spdx-3.0-v2"
 
@@ -511,7 +484,7 @@ Sbom := [].{
 	render : Inventory, Subject, Context -> Try(Str, Str)
 	render = |inventory, subject, context| {
 		bindable(inventory, subject, context)?
-		text = "${JsonData.encode_with(spdx3(inventory, subject, context), JsonData.documents).map_err(JsonData.message)?}\n"
+		text = "${SbomJson.encode(spdx3(inventory, subject, context)).map_err(JsonData.message)?}\n"
 		_ = Spdx3.validate(text).map_err(|problem| "rendered SPDX 3.0.1 is invalid: ${problem}")?
 		no_leaks(text)
 	}
@@ -521,7 +494,7 @@ Sbom := [].{
 	render_spdx2 = |inventory, subject, context| {
 		bindable(inventory, subject, context)?
 		text = spdx2(inventory, subject, context)
-		_ = Spdx2.validate(JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?).map_err(|problem| "rendered SPDX 2.3 is invalid: ${problem}")?
+		_ = Spdx2.validate(SbomJson.decode(text).map_err(JsonData.message)?).map_err(|problem| "rendered SPDX 2.3 is invalid: ${problem}")?
 		no_leaks(text)
 	}
 
@@ -542,7 +515,7 @@ Sbom := [].{
 	render_cyclonedx = |inventory, subject, context| {
 		bindable(inventory, subject, context)?
 		containment(inventory.relationships)?
-		text = "${JsonData.encode_with(cyclonedx(inventory, subject, context), JsonData.documents).map_err(JsonData.message)?}\n"
+		text = "${SbomJson.encode(cyclonedx(inventory, subject, context)).map_err(JsonData.message)?}\n"
 		_ = CycloneDx.validate(text).map_err(|problem| "rendered CycloneDX ${CycloneDx.version} is invalid: ${problem}")?
 		no_leaks(text)
 	}
@@ -554,7 +527,7 @@ Sbom := [].{
 	read_cyclonedx : Str -> Try(Document, Str)
 	read_cyclonedx = |text| {
 		if !json_within_bounds(text) {
-			return Err("CycloneDX document exceeds 1MiB or nests deeper than 64 levels")
+			return Err("CycloneDX document exceeds 16MiB or nests deeper than 64 levels")
 		}
 		document = read_bom(CycloneDx.validate(text)?)?
 		for entry in document.packages_ {
@@ -571,9 +544,9 @@ Sbom := [].{
 	read : Str -> Try(Document, Str)
 	read = |text| {
 		if !json_within_bounds(text) {
-			return Err("SPDX document exceeds 1MiB or nests deeper than 64 levels")
+			return Err("SPDX document exceeds 16MiB or nests deeper than 64 levels")
 		}
-		tree = JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?
+		tree = SbomJson.decode(text).map_err(JsonData.message)?
 		decoded = if tree.field("@context").is_ok() {
 			read_spdx3(Spdx3.check(tree)?)
 		} else if tree.field("spdxVersion").is_ok() {
@@ -1701,7 +1674,7 @@ read_bom = |tree| {
 		return Err("a blueprint:relationship has a lifecycle scope outside dependsOn")
 	}
 	if legacy {
-		legacy_evidence = JsonData.decode_with(only(metadata, "blueprint:evidence")?, JsonData.documents).map_err(JsonData.message)?
+		legacy_evidence = SbomJson.decode(only(metadata, "blueprint:evidence")?).map_err(JsonData.message)?
 		if !listed(tree, "compositions").is_empty() or listed(legacy_evidence, "coverage").any(|claim| !field_text(claim, "component").is_empty() or !field_text(claim, "aspect").is_empty()) {
 			return Err("legacy Blueprint CycloneDX cannot carry compositions or addressed coverage; use the standard-containment-v1 profile")
 		}
@@ -1830,7 +1803,7 @@ local_ref : Str -> Str
 local_ref = |ref| {
 	kept = Str.from_utf8_lossy(ref.to_utf8().map(|byte| if ((byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z') or (byte >= '0' and byte <= '9') or byte == '-' or byte == '.') byte else '-'))
 	trimmed = Str.from_utf8_lossy(kept.to_utf8().take_first(64))
-	if (kept == ref and !ref.is_empty() and kept.to_utf8().len() <= 64) ref else "${if (trimmed.is_empty()) "ref" else trimmed}-${Str.from_utf8_lossy(Crypto.SHA256.hash(ref.to_utf8()).to_hex().to_utf8().take_first(12))}"
+	if (kept == ref and !ref.is_empty() and kept.to_utf8().len() <= 256) ref else "${if (trimmed.is_empty()) "ref" else trimmed}-${Str.from_utf8_lossy(Crypto.SHA256.hash(ref.to_utf8()).to_hex().to_utf8().take_first(12))}"
 }
 
 Flat : { tree : JsonData, parent : Str, id : Str }

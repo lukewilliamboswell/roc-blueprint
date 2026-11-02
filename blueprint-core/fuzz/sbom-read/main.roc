@@ -12,7 +12,7 @@ import core.Sbom
 import core.Spec
 import core.Spdx3
 
-## For any text, `JsonData.decode_with` and `Sbom.read` return a result rather than
+## For any text, `JsonData.decode_bounded` and `Sbom.read` return a result rather than
 ## crash or hang. JSON the tree accepts re-encodes to text that parses to the
 ## same tree. A document `Sbom.read` accepts is a sound package graph: package
 ## identifiers are unique local names, every relationship and root names a
@@ -34,11 +34,11 @@ test = |bytes|
 	match Str.from_utf8(bytes) {
 		Err(_) => Fuzz.reject
 		Ok(text) => {
-			match JsonData.decode_with(text, JsonData.documents) {
+			match JsonData.decode_bounded(text, JsonData.documents, Sbom.max_json_bytes) {
 				Ok(tree) =>
-					match JsonData.encode_with(tree, JsonData.documents) {
+					match JsonData.encode_bounded(tree, JsonData.documents, Sbom.max_json_bytes) {
 						Ok(encoded) =>
-							if JsonData.decode_with(encoded, JsonData.documents) != Ok(tree) {
+							if JsonData.decode_bounded(encoded, JsonData.documents, Sbom.max_json_bytes) != Ok(tree) {
 								crash "accepted JSON did not survive a re-encode"
 							}
 						Err(problem) => crash "accepted JSON does not encode: ${JsonData.message(problem)}"

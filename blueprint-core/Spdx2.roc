@@ -1,4 +1,5 @@
 import JsonData
+import SbomJson
 import Lookup
 import SbomLicenses
 import Spdx3
@@ -336,7 +337,7 @@ minimal : Str
 minimal = "{\"spdxVersion\":\"SPDX-2.3\",\"dataLicense\":\"CC0-1.0\",\"SPDXID\":\"SPDXRef-DOCUMENT\",\"name\":\"d\",\"documentNamespace\":\"https://e.org/d\",\"creationInfo\":{\"created\":\"2026-10-21T00:00:00Z\",\"creators\":[\"Tool: t\"]},\"packages\":[{\"SPDXID\":\"SPDXRef-p\",\"name\":\"p\",\"downloadLocation\":\"NOASSERTION\",\"licenseDeclared\":\"MIT\",\"checksums\":[{\"algorithm\":\"SHA256\",\"checksumValue\":\"${Str.join_with(List.repeat("a", 64), "")}\"}]}],\"relationships\":[{\"spdxElementId\":\"SPDXRef-DOCUMENT\",\"relatedSpdxElement\":\"SPDXRef-p\",\"relationshipType\":\"DESCRIBES\"}]}"
 
 check : Str -> Try({}, Str)
-check = |text| Spdx2.validate(JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?)
+check = |text| Spdx2.validate(SbomJson.decode(text).map_err(JsonData.message)?)
 
 expect check(minimal).is_ok()
 expect check(minimal.replace_each("SPDX-2.3", "SPDX-2.2")).is_err()

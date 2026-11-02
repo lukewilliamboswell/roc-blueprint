@@ -736,7 +736,7 @@ The importer is tested against what Syft and Trivy write, in both CycloneDX and
 SPDX (`tests/sbom/fixtures/upstream/`), and the `sbom-read` fuzz target requires
 that every document Blueprint can read also imports.
 
-Inputs are limited to 1 MiB, JSON nesting to 64 levels, imports to 16,
+Inputs and emitted JSON files are limited to 16 MiB, JSON nesting to 64 levels, imports to 16,
 components to 4,096 and relationships to 16,384. Licenses and exceptions are
 checked against the pinned SPDX License List 3.26.0 and expression grammar.
 

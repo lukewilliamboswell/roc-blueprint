@@ -1451,3 +1451,36 @@ expect {
 	complete = Sbom.inspect(declared, SbomTest.lock, "x86_64-linux", accounted)
 	omitted.is_err() and complete.map_ok(|inventory| inventory.inspected.contains("build-file:native:recipe.json") and inventory.inspected.contains("build-file:native:scripts/build.roc")) == Ok(True)
 }
+
+# Real multi-target platform compositions exceed 1 MiB without exceeding the
+# graph profile. The byte guard retains its exact wire bound and depth guard.
+expect {
+	padding = Str.from_utf8(List.repeat(' ', 1024 * 1024)) ?? crash "ASCII padding"
+	Sbom.json_within_bounds("{${padding}}")
+}
+expect {
+	padding = Str.from_utf8(List.repeat(' ', Sbom.max_json_bytes - 2)) ?? crash "ASCII padding"
+	at_limit = "{${padding}}"
+	Sbom.json_within_bounds(at_limit) and !Sbom.json_within_bounds("${at_limit}\n")
+}
+
+# Profile-valid local IDs retain their full spelling in every standard format.
+# Native archive member IDs and prefixed imports can exceed 64 bytes.
+expect {
+	original = SbomTest.inventory ?? crash "inventory"
+	first = original.components.first() ?? crash "component"
+	long_id = Str.from_utf8(List.repeat('a', 256)) ?? crash "ASCII ID"
+	rename = |id| if id == first.id long_id else id
+	inventory = {
+		..original,
+		components: original.components.map(|entry| { ..entry, id: rename(entry.id) }),
+		inputs: original.inputs.map(|entry| { ..entry, component: rename(entry.component) }),
+		coverage: original.coverage.map(|entry| { ..entry, component: rename(entry.component) }),
+		relationships: original.relationships.map(|entry| { ..entry, from: rename(entry.from), to: rename(entry.to) }),
+	}
+	three = Sidecar.check(Sbom.render(inventory, SbomTest.subject, SbomTest.context) ?? crash "SPDX3") ?? crash "read SPDX3"
+	two = Sidecar.check(Sbom.render_spdx2(inventory, SbomTest.subject, SbomTest.context) ?? crash "SPDX2") ?? crash "read SPDX2"
+	cdx = Sidecar.check(Sbom.render_cyclonedx(inventory, SbomTest.subject, SbomTest.context) ?? crash "CycloneDX") ?? crash "read CycloneDX"
+	[three, two, cdx].all(|checked| Sidecar.against_inventory(checked, inventory).is_ok())
+		and Sidecar.same_graph(three, two) and Sidecar.same_graph(three, cdx)
+}

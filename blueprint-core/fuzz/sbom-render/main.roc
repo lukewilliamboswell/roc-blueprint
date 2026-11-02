@@ -43,7 +43,7 @@ test = |input| {
 		Ok(text) => text
 		Err(problem) => crash "render_spdx2 refused what render accepted: ${problem}"
 	}
-	tree = match JsonData.decode_with(three, JsonData.documents) {
+	tree = match JsonData.decode_bounded(three, JsonData.documents, Sbom.max_json_bytes) {
 		Ok(parsed) => parsed
 		Err(problem) => crash "SPDX 3.0.1 rendering is not JSON: ${JsonData.message(problem)}"
 	}
@@ -73,7 +73,7 @@ test = |input| {
 	if !representable(inventory.relationships) {
 		crash "CycloneDX silently rendered unrepresentable containment"
 	}
-	bom = match JsonData.decode_with(bom_text, JsonData.documents) {
+	bom = match JsonData.decode_bounded(bom_text, JsonData.documents, Sbom.max_json_bytes) {
 		Ok(parsed) => parsed
 		Err(problem) => crash "CycloneDX rendering is not JSON: ${JsonData.message(problem)}"
 	}
@@ -101,7 +101,7 @@ test = |input| {
 	if Sbom.read(encoded(with_file_3)) != Ok({ ..wanted, packages_: wanted.packages_.append(native_file), relationships: wanted.relationships.append({ from: "Subject", to: "File-added", relation: "contains", scope: "", basis: "" }) }) {
 		crash "SPDX 3.0.1 with a file reads differently: ${Str.inspect(Sbom.read(encoded(with_file_3)))}"
 	}
-	two_tree = JsonData.decode_with(two, JsonData.documents) ?? crash "SPDX 2.3 rendering is not JSON"
+	two_tree = JsonData.decode_bounded(two, JsonData.documents, Sbom.max_json_bytes) ?? crash "SPDX 2.3 rendering is not JSON"
 	if Sbom.read(encoded(add_file_2(two_tree))) != Ok({ ..wanted, version: "SPDX-2.3", packages_: wanted.packages_.append(native_file), relationships: wanted.relationships.append({ from: "Subject", to: "File-added", relation: "contains", scope: "", basis: "" }) }) {
 		crash "SPDX 2.3 with a file reads differently: ${Str.inspect(Sbom.read(encoded(add_file_2(two_tree))))}"
 	}
@@ -438,7 +438,7 @@ composition_of = |input| {
 ## Blueprint reads documents with.
 encoded : JsonData -> Str
 encoded = |tree|
-	match JsonData.encode_with(tree, JsonData.documents) {
+	match JsonData.encode_bounded(tree, JsonData.documents, Sbom.max_json_bytes) {
 		Ok(text) => text
 		Err(problem) => crash "a built document does not encode: ${JsonData.message(problem)}"
 	}

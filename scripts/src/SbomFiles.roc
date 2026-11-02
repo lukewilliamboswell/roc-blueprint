@@ -3,6 +3,7 @@ import cli.Env
 import cli.File
 import cli.OsStr
 import cli.Path
+import core.Sbom
 
 ## The only filesystem boundary in SBOM reporting: regular inputs, bounded
 ## metadata reads, streaming final-byte SHA256 and size, exclusive new
@@ -18,11 +19,11 @@ SbomFiles := [].{
 		var $bytes = []
 		var $done = False
 		while !$done {
-			remaining = 1024 * 1024 + 1 - $bytes.len()
+			remaining = Sbom.max_json_bytes + 1 - $bytes.len()
 			match reader.read_up_to!(if remaining < 65536 remaining else 65536) {
 				Ok(chunk) => {
 					$bytes = $bytes.concat(chunk)
-					if $bytes.len() > 1024 * 1024 {
+					if $bytes.len() > Sbom.max_json_bytes {
 						return Err(InputTooLarge)
 					}
 				}
@@ -66,7 +67,13 @@ SbomFiles := [].{
 	}
 
 	write_new! : Str, Str => Try({}, _)
-	write_new! = |output, text| File.with_writer!(Path.utf8(output), RequireNew, |writer| writer.write_utf8!(text))
+	write_new! = |output, text| {
+		# Count the exact emitted bytes, including the terminating newline.
+		if text.to_utf8().len() > Sbom.max_json_bytes {
+			return Err(InputTooLarge)
+		}
+		File.with_writer!(Path.utf8(output), RequireNew, |writer| writer.write_utf8!(text))
+	}
 
 	## The members of a `.tar.zst` archive, a `roc bundle` for one: each
 	## regular file's name, size and SHA-256, in archive order. The system
