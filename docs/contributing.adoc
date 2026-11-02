@@ -469,21 +469,15 @@ outputs after changing a table; column proportions alone do not establish
 that its PDF is readable.
 
 Stable explicit anchors preserve links when a heading's wording changes.
-Invariant headings use words before their numbers because numeric-leading
-headings exceed this release's native inline profile. The historical
-`use-this-release-2` release anchor remains explicit. Prepared figures replace
-render-time Mermaid and JPEG conversion, with their source and asset digests
-recorded below. These are authoring changes, rather than renderer patches.
+The historical `use-this-release-2` release anchor remains explicit. Mermaid
+source stays in the manual and the released renderer draws its SVG and PDF
+output directly. Commit source blocks; generated diagram assets belong in the
+build output. Unsupported diagram syntax fails the ordinary documentation
+build instead of requiring an external browser or diagram conversion step.
 
 Native images are non-interlaced RGB/RGBA PNGs. The manual's illustration is
 converted from the original JPEG; its source hash and conversion command are
-in `docs/images/blueprint-illustration.provenance.json`. The architecture flow
-uses the checked-in published SVG and its prepared PNG, with provenance in
-`docs/images/blueprint-flow.provenance.json`. Its Mermaid source stays in
-`architecture.adoc`; `docs/prepared-diagrams.json` binds its exact source and
-PNG hashes. Update the figure and registration together when editing the
-Mermaid block. These prepared assets let ordinary documentation builds run
-without a browser, image converter or diagram tool.
+in `docs/images/blueprint-illustration.provenance.json`.
 
 The manual describes the tool as it is: one recommended way to do each thing,
 in the present tense. What changed between versions belongs in the release

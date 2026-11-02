@@ -97,11 +97,11 @@
           # Released native documentation renderer, compatible with the reviewed
           # shared build-docs action. Never
           # patch its bytes: these hashes identify the published executables.
-          rocDocsVersion = "0.6.0";
+          rocDocsVersion = "0.9.0";
           rocDocsHashes = {
-            "x86_64-linux" = "sha256-Pl71JKoX7rgVOMY5rUlZv0aQsXiJiTDqCkKizYv3MS0=";
-            "aarch64-linux" = "sha256-qPgvFWXYuul7lW310ZA9qOYhFK9X64tA6xqtCEUYtfc=";
-            "aarch64-darwin" = "sha256-GBgXoGc/UDa3XT0pcH72ZbRep/PM/pu8NTYqcmObQPw=";
+            "x86_64-linux" = "sha256-DSAoLzvBTbfpNksLY/o6KMuxZqSl/6AOwjLNzjsaAhk=";
+            "aarch64-linux" = "sha256-3NAKMBqHXa2XxpfEWFrFu9okQpFYfOkXsS+dKa7/hs8=";
+            "aarch64-darwin" = "sha256-gjnoltg1cypJ/7PtDU5NfR9EdOj1/nqNvjjnAmzbKS4=";
           };
           rocDocsArchive = pkgs.fetchurl {
             url = "https://github.com/lukewilliamboswell/roc-automation/releases/download/tools-${rocDocsVersion}/roc-docs-${system}";
