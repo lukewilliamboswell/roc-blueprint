@@ -2,6 +2,8 @@
 = Release notes
 
 [#use-this-release-2]
+== Upgrade instructions
+
 Read the https://github.com/lukewilliamboswell/roc-blueprint/releases[published releases]
 for version-specific changes and upgrade instructions.
 

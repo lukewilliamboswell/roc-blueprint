@@ -23,7 +23,6 @@ https://lukewilliamboswell.github.io/roc-blueprint/api/index.html[Platform API r
 https://github.com/lukewilliamboswell/roc-blueprint[View roc-blueprint on GitHub].
 endif::[]
 
-[#use-this-release-2]
 .How to use this manual
 ****
 New to Blueprint, or deciding whether to use it:: Start with
@@ -41,8 +40,13 @@ Writing a provider or judging a design change:: Read
 <<understand-the-architecture>> and <<the-spec-the-lock-and-providers>>.
 Changing roc-blueprint itself:: Read <<contribute>>.
 Releasing or looking after the repository:: Read <<maintain-and-release>>.
-Upgrading:: Read the https://github.com/lukewilliamboswell/roc-blueprint/releases[published release notes].
 ****
+
+[#use-this-release-2]
+== Upgrade
+
+Read the https://github.com/lukewilliamboswell/roc-blueprint/releases[published releases]
+for version-specific changes and upgrade instructions.
 
 include::overview.adoc[leveloffset=+1]
 
