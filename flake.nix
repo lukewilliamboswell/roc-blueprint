@@ -196,6 +196,7 @@
                 ./blueprint-core/Lock.roc
                 ./blueprint-core/Tree.roc
                 ./blueprint-core/Sbom.roc
+                ./blueprint-core/SbomJson.roc
                 ./blueprint-core/SbomLicenses.roc
                 ./blueprint-core/Sidecar.roc
                 ./blueprint-core/Manifest.roc
