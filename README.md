@@ -50,6 +50,29 @@ inputs, dependencies, an executor and a declared artifact output; compilation
 and packaging stay in your scripts. Providers own native execution and caching.
 See the [architecture](docs/architecture.adoc) and the [0.9.0 release notes](docs/releases/0.9.0.adoc).
 
+## Intent
+
+Blueprint began as a way to support Brandon Lucas’s exploration of generic
+determinate systems, described in [his writing](https://blu.cx/writing/)
+and developed through [Kai](https://kai.nix.fun/).
+
+The goal is to learn by building and experimenting. My Roc packages and
+platforms serve as pilots: practical use exposes issues, informs Blueprint’s
+design, and provides ideas and experience reports to share with Brandon.
+As features and approaches mature, they can be contributed upstream to Kai.
+
+Blueprint is experimental. With few downstream users and no commitment to
+preserve its APIs or functionality, we can move quickly and revise ideas
+based on experience. That includes exploring compromises beyond the original
+vision: [No-Provider support](docs/no-provider.adoc), for example, grew out
+of using Blueprint with pure Roc packages.
+
+Interested in the broader vision? Join Brandon’s Discord to discuss Kai’s
+roadmap and explore ideas for determinate computing. In the meantime, you’re
+welcome to use Blueprint for your own projects; experience reports and
+contributions are welcome. We recommend pinning Blueprint to a specific Git
+commit SHA, as changes are expected.
+
 ## Install
 
 Each
