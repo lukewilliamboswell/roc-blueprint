@@ -404,56 +404,15 @@ in `flake.nix` with the new URL and hash (`nix store prefetch-file <url>`). Add
 any new transitive dependency to the same list. Rerun `scripts/test.roc`.
 If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
 
-== What remains for Windows
-
-https://github.com/lukewilliamboswell/roc-blueprint/issues/40[Issue #40] asks
-for `blueprint run` on Windows. What needs nothing from upstream is in place:
-a task whose environment has no Nix tool runs with no provider, from fetched
-programs, expected tools and Roc packages, and the planner, the store's
-location and `Recipes.roc_nightly` have their Windows forms. The Windows
-target and release binary are built in CI; the Nix-free smoke test runs on
-Linux, macOS and Windows.
-
-The upstream prerequisites are now released: basic-cli 0.26.0-rc2 supplies
-its Windows MSVC host and runtime, the pinned Roc nightly links from listed
-inputs, and the locked roc-platform-template-zig release supplies this
-platform's startup and import libraries.
+== Validate Windows releases
 
 `zig build` builds `targets/x64win/host.lib`; the platform bundle carries it
 and the verified Windows linker inputs. `scripts/build_release.roc` builds
-`blueprint-x86_64-windows.exe` and its smoke program. The `no-nix` CI job runs
-that program on `windows-latest`, fetching the compiler, updating a lock,
-reporting requirements and building and running a basic-cli program twice.
-Windows skips `chmod` and exposes fetched programs as copies, since a
-symbolic link needs a privilege there and a hard link would let a consumer
-write into the store. Archives use the machine's bsdtar.
+`blueprint-x86_64-windows.exe` and its smoke program. The `no-nix` CI job checks
+compiler installation, lock updates, requirements and a basic-cli program on
+Windows Server.
 
-The full Nix suites remain Linux-only. Windows 10 and 11 desktop execution
-has not been verified here; the CI runner checks Windows Server. Tasks must
-invoke their interpreter explicitly, for example `Run(["roc-stable", "hello.roc"])`.
-
-== Upstream workarounds still in place
-
-Compile-time configuration lowering is restored with Roc
-`nightly-2026-09-23-c7852fd`: `roc check Blueprint.roc` now rejects whole-config
-errors, including a missing `Name` or duplicate shells. Older compilers
-crashed while bundling a top-level constant dependent on the app's `config`;
-the local-Spec and released-Spec bundle tests guard against that regression.
-`blueprint check` retains a compiler check for diagnostics and reuses the Spec
-already loaded for CLI parsing, rather than running the configuration again.
-The loaded Spec is still needed for shared semantic validation and provider
-compatibility checks. Runtime validation also protects consumers from external
-Spec; it does not make major-1 platforms compatible with the current CLI. Loading the
-Spec still executes Roc, so retain embedded compiler bootstrap and support
-for the `ROC` override. The Nix wrapper supplies the archive tools bootstrap
-needs, including on a machine whose `PATH` holds only Nix.
-
-These remaining dependencies and workarounds still apply:
-
-* *Pinned Roc.* `blueprint-cli/compiler-version` selects the compiler, and the basic-cli
-  release in `blueprint-cli/main.roc` must be compatible with it.
-* **`roc bundle --output-dir` must be on the same filesystem as the working
-  directory.** Otherwise the bundler fails with `CrossDevice`.
-* **Error unions in `blueprint-core/Sexpr.roc` use a named extension
-  (`..others`).** These preserve open error types without the compiler
-  warning about a redundant bare `..`.
+Windows tasks invoke their interpreter explicitly, for example
+`Run(["roc-stable", "hello.roc"])`. Fetched programs are exposed as copies so
+consumer writes cannot modify the store. Nix suites require a supported Linux
+host with enforced sandboxing.
