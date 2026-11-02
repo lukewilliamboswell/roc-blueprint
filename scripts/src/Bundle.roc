@@ -456,7 +456,7 @@ bundle_sbom! = |root, paths, core_server, release, core, cache| {
 	workspace = "${paths.stage}/sbom-workspace"
 	copy!("${root}/tests/sbom/fixtures/input", workspace, ["Spec", "Lock", "composition.json", "subject.json", "context.json", "sample-artifact"])?
 	Path.write_utf8!(Path.utf8("${workspace}/Blueprint.roc"), "INVALID PROJECT MUST NOT BE EVALUATED\n")?
-	base = ["run"].concat(Bundle.replacing(core_url, server.url(Bundle.release_path(release.repository, release.version, core)))).concat([server.url(route), "--"])
+	base = ["run"].concat(Bundle.replacing(core_url, server.url(Bundle.release_path(release.repository, release.version, core)))).concat([server.url(route)])
 	roc = Process.roc!()
 	invoke = |args| Process.with_env(Process.command(roc, base.concat(args), workspace), [("XDG_CACHE_HOME", cache)])
 	for args in [["inspect", "Spec", "Lock", "composition.json", "x86_64-linux", "inventory.json"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact", "sample-artifact.spdx-2.3.json", "--spdx-2.3"]] {
