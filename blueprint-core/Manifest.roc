@@ -2,6 +2,7 @@ import JsonData
 import Project
 import Sbom
 import Sidecar
+import CycloneDx
 
 ## The evidence manifest `bind` writes beside the sidecars of one subject:
 ## which files it wrote, from which inventory, with the digest and size of
@@ -30,8 +31,19 @@ Manifest := [].{
 	## The manifest of `subject` sits beside its sidecars as `<subject>.sbom-manifest.json`.
 	suffix = ".sbom-manifest.json"
 
-	## The formats a listed sidecar may have: the renderings `bind` writes.
-	formats = ["spdx-3.0.1", "spdx-2.3", "cyclonedx-1.7"]
+	## One authoritative set for generation, conventional names and checking.
+	renderings : List({ format : Str, suffix : Str })
+	renderings = [
+		{ format: "spdx-3.0.1", suffix: ".spdx.json" },
+		{ format: "spdx-2.3", suffix: ".spdx-2.3.json" },
+		{ format: "cyclonedx-1.7", suffix: ".cdx.json" },
+	]
+
+	formats = renderings.map(|rendering| rendering.format)
+
+	## All standard sidecars for an artifact, in deterministic generation order.
+	outputs : Str -> List((Str, Str))
+	outputs = |artifact| renderings.map(|rendering| ("${artifact}${rendering.suffix}", rendering.format))
 
 	## The manifest's name for the format a sidecar reads back as
 	## (`Sbom.Document.version`).
@@ -90,7 +102,7 @@ Manifest := [].{
 
 	## A manifest from its text, refused unless it is one `render` writes:
 	## this profile, files named by name only, lowercase SHA-256 digests, a
-	## namespace ending in its revision, and at least one sidecar of a known
+	## revision-qualified HTTPS or UUID namespace, and at least one sidecar of a known
 	## format, each listed once.
 	read : Str -> Try(Manifest.Manifest, Str)
 	read = |text| {
@@ -100,6 +112,8 @@ Manifest := [].{
 		if leaks(text) {
 			return Err("the manifest holds a developer path or credential")
 		}
+		# Refuse duplicate keys before builtin typed decoding can discard them.
+		_ = JsonData.decode_bounded(text, JsonData.defaults, 65536).map_err(JsonData.message)?
 		decoded : Try(Manifest.Manifest, _)
 		decoded = Json.parse(text)
 		manifest = decoded.map_err(|_| "the manifest is not an evidence manifest")?
@@ -107,12 +121,29 @@ Manifest := [].{
 		Ok(manifest)
 	}
 
-	## The manifest, if what a checker measured is what it states: the
-	## subject's digest and size, each listed sidecar present with its digest
-	## and size, and the inventory's digest when one was measured.
+	## Check the exact observed sidecar set. A filesystem caller must include
+	## adjacent conventional sidecars in its observations, not just listed files.
+	## Unlisted observations and ambiguous duplicate observations are refused.
 	check : Str, Manifest.Observed -> Try(Manifest.Manifest, Str)
 	check = |text, observed| {
+		manifest = check_listed(text, observed)?
+		for found in observed.sidecars {
+			if !manifest.sidecars.any(|entry| entry.filename == found.filename) {
+				return Err("${found.filename} is present but not listed in the manifest")
+			}
+		}
+		Ok(manifest)
+	}
+
+	## Explicitly scoped legacy verification: verify the subject, inventory
+	## when observed, and only declared sidecars. This proves no complete set.
+	check_listed : Str, Manifest.Observed -> Try(Manifest.Manifest, Str)
+	check_listed = |text, observed| {
 		manifest = read(text)?
+		names = observed.sidecars.map(|entry| entry.filename)
+		if names.len() != names.fold([], |all, name| if (all.contains(name)) all else all.append(name)).len() {
+			return Err("a sidecar was observed twice")
+		}
 		if observed.subject.sha256 != manifest.subject.sha256 {
 			return Err("the subject's bytes differ from what the manifest states")
 		}
@@ -145,7 +176,7 @@ Manifest := [].{
 		}
 		match manifest.sidecars.find_first(|entry| entry.filename == filename) {
 			Ok(listed) => if (format_of(checked.document.version) == Ok(listed.format)) Ok({}) else Err("${filename} is a ${checked.document.version} document, not the ${listed.format} sidecar the manifest lists")
-			Err(_) => Ok({})
+			Err(_) => if (filename.is_empty()) Ok({}) else Err("${filename} is not listed in the manifest")
 		}
 	}
 }
@@ -168,8 +199,8 @@ valid = |manifest| {
 	if !lowercase_sha256(manifest.inventory_sha256) {
 		return Err("the inventory digest must be a lowercase SHA-256")
 	}
-	if manifest.context.revision.is_empty() or !manifest.context.namespace.ends_with("revision-${manifest.context.revision}") {
-		return Err("namespace does not end with its revision")
+	if manifest.context.revision.is_empty() or !(CycloneDx.serial_number(manifest.context.namespace) or (manifest.context.namespace.starts_with("https://") and manifest.context.namespace.ends_with("revision-${manifest.context.revision}"))) {
+		return Err("namespace must be a UUID URN or HTTPS namespace ending with its revision")
 	}
 	if manifest.context.created.is_empty() or manifest.context.generator.is_empty() {
 		return Err("the context needs a creation time and a generator")
@@ -180,6 +211,10 @@ valid = |manifest| {
 	names = manifest.sidecars.map(|entry| entry.filename)
 	if names.fold([], |all, name| if (all.contains(name)) all else all.append(name)).len() != names.len() {
 		return Err("the manifest lists a sidecar twice")
+	}
+	listed_formats = manifest.sidecars.map(|entry| entry.format)
+	if listed_formats.fold([], |all, format| if (all.contains(format)) all else all.append(format)).len() != listed_formats.len() {
+		return Err("the manifest lists a format twice")
 	}
 	for entry in manifest.sidecars {
 		if !file_name(entry.filename) or entry.filename == subject.filename {
@@ -204,3 +239,37 @@ lowercase_sha256 = |value| value.to_utf8().len() == 64 and value.to_utf8().all(|
 
 leaks : Str -> Bool
 leaks = |text| ["/Users/", "/home/", "/private/", "/tmp/", "/var/", "/nix/store/", "C:\\\\Users\\\\", "token=", "password=", "ghp_", "github_pat_", "BEGIN PRIVATE KEY"].any(|marker| text.contains(marker))
+
+# A caller must supply the actual observed set. The explicit legacy method
+# remains available, but strict checking cannot silently omit another format.
+manifest_example : Manifest.Manifest
+manifest_example = {
+	profile: Sbom.profile,
+	subject: { filename: "app.tar.zst", version: "1.0.0", target: "source", sha256: "a".repeat(64), size: 100 },
+	inventory_sha256: "b".repeat(64),
+	context: { namespace: "https://example.org/sbom/revision-1", revision: "1", created: "2026-11-04T00:00:00Z", generator: "Tool: blueprint-sbom" },
+	sidecars: [{ filename: "app.tar.zst.spdx.json", format: "spdx-3.0.1", sha256: "c".repeat(64), size: 10 }],
+}
+
+manifest_example_text = Manifest.render(manifest_example) ?? crash "example manifest"
+
+manifest_example_observed : Manifest.Observed
+manifest_example_observed = {
+	subject: { sha256: "a".repeat(64), size: 100 },
+	inventory: Measured("b".repeat(64)),
+	sidecars: [{ filename: "app.tar.zst.spdx.json", sha256: "c".repeat(64), size: 10 }],
+}
+
+expect Manifest.outputs("app.tar.zst") == [("app.tar.zst.spdx.json", "spdx-3.0.1"), ("app.tar.zst.spdx-2.3.json", "spdx-2.3"), ("app.tar.zst.cdx.json", "cyclonedx-1.7")]
+expect {
+	extra = { filename: "app.tar.zst.spdx-2.3.json", sha256: "d".repeat(64), size: 20 }
+	observed = { ..manifest_example_observed, sidecars: manifest_example_observed.sidecars.append(extra) }
+	Manifest.check(manifest_example_text, observed) == Err("app.tar.zst.spdx-2.3.json is present but not listed in the manifest")
+		and Manifest.check_listed(manifest_example_text, observed) == Ok(manifest_example)
+}
+expect Manifest.check(manifest_example_text, { ..manifest_example_observed, sidecars: manifest_example_observed.sidecars.concat(manifest_example_observed.sidecars) }) == Err("a sidecar was observed twice")
+expect Manifest.render({ ..manifest_example, sidecars: manifest_example.sidecars.append({ filename: "another.spdx.json", format: "spdx-3.0.1", sha256: "d".repeat(64), size: 20 }) }) == Err("the manifest lists a format twice")
+expect Manifest.read(manifest_example_text.replace_each("\"inventory_sha256\":", "\"inventory_sha256\":\"${"d".repeat(64)}\",\"inventory_sha256\":")).is_err()
+
+expect Manifest.render({ ..manifest_example, context: { ..manifest_example.context, namespace: "urn:uuid:7bd0b7ae-19a2-8fed-9240-d791b640377b" } }).is_ok()
+expect Manifest.render({ ..manifest_example, context: { ..manifest_example.context, namespace: "urn:uuid:invalid" } }).is_err()

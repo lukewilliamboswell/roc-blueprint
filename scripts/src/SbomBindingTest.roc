@@ -110,10 +110,14 @@ cases! = |tool, fixtures, work| {
 	if three != rendering!("native-linux.spdx.json")? or two != rendering!("native-linux.spdx-2.3.json")? {
 		return Script.fail!("bind of tests/sbom/fixtures/input does not write the committed native-linux renderings")
 	}
-	# Without an output, bind writes SPDX 3.0.1 and CycloneDX beside the artifact.
+	# Without an output, bind writes every standard rendering beside the artifact.
 	call!(base, True)?
 	beside = Path.read_utf8!(Path.utf8("${work}/sample-artifact.spdx.json"))?
 	bom = Path.read_utf8!(Path.utf8("${work}/sample-artifact.cdx.json"))?
+	default_two = Path.read_utf8!(Path.utf8("${work}/sample-artifact.spdx-2.3.json"))?
+	if default_two != two {
+		return Script.fail!("the default SPDX 2.3 sidecar differs from an explicit one")
+	}
 	if beside != three {
 		return Script.fail!("the default SPDX sidecar differs from an explicit one")
 	}
@@ -129,7 +133,7 @@ cases! = |tool, fixtures, work| {
 	}
 
 	# `bind` also writes the evidence manifest beside the sidecars: the subject,
-	# both sidecars and the inventory by digest and size, files by name alone.
+	# all sidecars and the inventory by digest and size, files by name alone.
 	manifest_name = "sample-artifact${Manifest.suffix}"
 	manifest_text = Path.read_utf8!(Path.utf8("${work}/${manifest_name}"))?
 	manifest = match Manifest.read(manifest_text) {
@@ -138,7 +142,7 @@ cases! = |tool, fixtures, work| {
 	}
 	sha = |text| Crypto.SHA256.hash(text.to_utf8()).to_hex()
 	listed = manifest.sidecars.map(|entry| (entry.filename, entry.format, entry.sha256, entry.size))
-	if manifest.subject != { filename: "sample-artifact", version: "1.0.0", target: "x86_64-linux", sha256: sha("fixture subject\n"), size: 16 } or manifest.inventory_sha256 != sha(Path.read_utf8!(Path.utf8("${work}/inventory.json"))?) or listed != [("sample-artifact.cdx.json", "cyclonedx-1.7", sha(bom), bom.to_utf8().len()), ("sample-artifact.spdx.json", "spdx-3.0.1", sha(beside), beside.to_utf8().len())] {
+	if manifest.subject != { filename: "sample-artifact", version: "1.0.0", target: "x86_64-linux", sha256: sha("fixture subject\n"), size: 16 } or manifest.inventory_sha256 != sha(Path.read_utf8!(Path.utf8("${work}/inventory.json"))?) or listed != [("sample-artifact.cdx.json", "cyclonedx-1.7", sha(bom), bom.to_utf8().len()), ("sample-artifact.spdx-2.3.json", "spdx-2.3", sha(two), two.to_utf8().len()), ("sample-artifact.spdx.json", "spdx-3.0.1", sha(beside), beside.to_utf8().len())] {
 		return Script.fail!("the manifest does not state the subject, sidecars and inventory bind used")
 	}
 	if manifest_text.contains(work) or manifest.sidecars.map(|entry| entry.filename).append(manifest.subject.filename).any(|name| name.contains("/") or name.contains("\\")) {
@@ -153,7 +157,7 @@ cases! = |tool, fixtures, work| {
 	call!(["check", "--manifest", manifest_name], True)?
 	variant! = |name, artifact_text, bom_text, body| {
 		Path.create_all!(Path.utf8("${work}/${name}"))?
-		for (file, text) in [("sample-artifact", artifact_text), ("sample-artifact.spdx.json", three), ("sample-artifact.cdx.json", bom_text), (manifest_name, body)] {
+		for (file, text) in [("sample-artifact", artifact_text), ("sample-artifact.spdx.json", three), ("sample-artifact.spdx-2.3.json", two), ("sample-artifact.cdx.json", bom_text), (manifest_name, body)] {
 			Path.write_utf8!(Path.utf8("${work}/${name}/${file}"), text)?
 		}
 		Ok("${name}/${manifest_name}")
@@ -168,6 +172,18 @@ cases! = |tool, fixtures, work| {
 	missing = variant!("missing", "fixture subject\n", bom, manifest_text)?
 	Path.delete!(Path.utf8("${work}/missing/sample-artifact.cdx.json"))?
 	refused!(["check", "--manifest", missing, "--artifacts", "missing"], "which is absent")?
+	# Legacy manifests remain readable, but an adjacent advertised format
+	# cannot evade the default checker by being dropped from the sidecar list.
+	legacy = { ..manifest, sidecars: manifest.sidecars.drop_if(|entry| entry.format == "spdx-2.3") }
+	legacy_text = Manifest.render(legacy) ?? crash "legacy partial manifest"
+	omitted = variant!("omitted-format", "fixture subject\n", bom, legacy_text)?
+	refused!(["check", "--manifest", omitted, "--artifacts", "omitted-format"], "sample-artifact.spdx-2.3.json is present but not listed")?
+	call!(["check", "--manifest", omitted, "--listed-only", "--artifacts", "omitted-format"], True)?
+	Path.delete!(Path.utf8("${work}/omitted-format/sample-artifact.spdx-2.3.json"))?
+	call!(["check", "--manifest", omitted, "--artifacts", "omitted-format"], True)?
+	Path.create_all!(Path.utf8("${work}/omitted-format/sample-artifact.spdx-2.3.json"))?
+	refused!(["check", "--manifest", omitted, "--artifacts", "omitted-format"], "sample-artifact.spdx-2.3.json is present but not a readable regular file")?
+	call!(["check", "--manifest", omitted, "--listed-only", "--artifacts", "omitted-format"], True)?
 	# A named output takes `--manifest` for a manifest of that one sidecar,
 	# beside it, which never overwrites the subject or a sidecar.
 	call!(base.concat(["explicit.spdx-2.3.json", "--spdx-2.3", "--manifest", "explicit${Manifest.suffix}"]), True)?
@@ -175,7 +191,9 @@ cases! = |tool, fixtures, work| {
 	if explicit.map_ok(|read| read.sidecars.map(|entry| (entry.filename, entry.format))) != Ok([("explicit.spdx-2.3.json", "spdx-2.3")]) {
 		return Script.fail!("the manifest of a named output does not list exactly that sidecar")
 	}
-	call!(["check", "--manifest", "explicit${Manifest.suffix}", "--artifacts", ".", "--inventory", "inventory.json"], True)?
+	refused!(["check", "--manifest", "explicit${Manifest.suffix}", "--artifacts", ".", "--inventory", "inventory.json"], "present but not listed")?
+	call!(["check", "--manifest", "explicit${Manifest.suffix}", "--listed-only", "--artifacts", ".", "--inventory", "inventory.json"], True)?
+	refused!(["check", "--listed-only", "new.spdx.json"], "--listed-only requires --manifest")?
 	refused!(base.concat(["refused.cdx.json", "--cyclonedx", "--manifest", "sample-artifact"]), "overwrite subject")?
 	refused!(base.concat(["refused.cdx.json", "--cyclonedx", "--manifest", "refused.cdx.json"]), "overwrite a sidecar")?
 	refused!(base.concat(["refused.cdx.json", "--cyclonedx", "--manifest", "other/refused${Manifest.suffix}"]), "beside")?
@@ -197,6 +215,17 @@ cases! = |tool, fixtures, work| {
 		return Script.fail!("the default CycloneDX sidecar differs from an explicit one")
 	}
 
+	# A collision in a later default format must be found before any earlier
+	# sidecar is written. The original pre-existing file is untouched.
+	Path.create_all!(Path.utf8("${work}/collision"))?
+	for file in ["sample-artifact", "inventory.json", "subject.json", "context.json"] {
+		Path.write_utf8!(Path.utf8("${work}/collision/${file}"), Path.read_utf8!(Path.utf8("${work}/${file}"))?)?
+	}
+	Path.write_utf8!(Path.utf8("${work}/collision/sample-artifact.cdx.json"), "retained")?
+	refused!(["bind", "collision/inventory.json", "collision/subject.json", "collision/context.json", "collision/sample-artifact"], "OutputExists")?
+	if Path.exists!(Path.utf8("${work}/collision/sample-artifact.spdx.json"))? or Path.exists!(Path.utf8("${work}/collision/sample-artifact.spdx-2.3.json"))? or Path.read_utf8!(Path.utf8("${work}/collision/sample-artifact.cdx.json"))? != "retained" {
+		return Script.fail!("a late output collision left partial sidecars or changed existing bytes")
+	}
 	# An existing sidecar, or any input, is never replaced.
 	call!(base.append("new.spdx.json"), False)?
 	for name in ["sample-artifact", "inventory.json", "subject.json", "context.json"] {

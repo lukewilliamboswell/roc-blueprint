@@ -4,6 +4,7 @@ import cli.File
 import cli.OsStr
 import cli.Path
 import core.Sbom
+import core.Manifest
 
 ## The only filesystem boundary in SBOM reporting: regular inputs, bounded
 ## metadata reads, streaming final-byte SHA256 and size, exclusive new
@@ -64,6 +65,38 @@ SbomFiles := [].{
 			}
 		}
 		Ok({ sha256: $hasher.finish().to_hex(), size: $size })
+	}
+
+	## Measure declared sidecars and every existing conventional sidecar of the
+	## same subject. Missing declared files remain absent for Manifest.check to
+	## diagnose; a present unreadable/nonregular canonical candidate is refused.
+	## `listed_only` is an explicit legacy/subset policy, not a completeness check.
+	observe_sidecars! : Str, Manifest.Manifest, Bool => Try(List({ filename : Str, sha256 : Str, size : U64 }), _)
+	observe_sidecars! = |manifest_path, manifest, listed_only| {
+		declared = manifest.sidecars.map(|entry| entry.filename)
+		canonical = if listed_only [] else Manifest.outputs(manifest.subject.filename).map(|(name, _)| name)
+		names = declared.concat(canonical).fold([], |all, name| if (all.contains(name)) all else all.append(name))
+		var $observed = []
+		for name in names {
+			path = Manifest.beside(manifest_path, name)
+			if Path.exists!(Path.utf8(path))? {
+				measured = measure!(path).map_err(|_| Invalid("sidecar ${name} is present but not a readable regular file"))?
+				$observed = $observed.append({ filename: name, sha256: measured.sha256, size: measured.size })
+			}
+		}
+		Ok($observed)
+	}
+
+	## Check the complete intended set before writing its first member. Writers
+	## still use RequireNew to protect against a collision after this check.
+	require_new_outputs! : List(Str) => Try({}, _)
+	require_new_outputs! = |paths| {
+		for path in paths {
+			if Path.exists!(Path.utf8(path))? {
+				return Err(OutputExists(path))
+			}
+		}
+		Ok({})
 	}
 
 	write_new! : Str, Str => Try({}, _)
