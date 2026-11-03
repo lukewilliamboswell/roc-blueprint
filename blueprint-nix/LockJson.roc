@@ -31,43 +31,21 @@ LockJson := [
 		Null => Null
 	}
 
-	encode : LockJson -> Str
-	encode = |value| match value {
-		Object(fields) => {
-			items = fields.map(|f| "${quote(f.name)}:${encode(f.value)}")
-			"{${Str.join_with(items, ",")}}"
-		}
-		Array(items) => "[${Str.join_with(items.map(encode), ",")}]"
-		String(text) => quote(text)
-		Number(text) => text
-		Boolean(value_) => if (value_) "true" else "false"
-		Null => "null"
+	to_data : LockJson -> JsonData
+	to_data = |value| match value {
+		Object(fields) => JsonData.Object(fields.map(|field| { name: field.name, value: to_data(field.value) }))
+		Array(items) => JsonData.Array(items.map(to_data))
+		String(text) => JsonData.String(text)
+		Number(text) => JsonData.Number(text)
+		Boolean(flag) => JsonData.Boolean(flag)
+		Null => JsonData.Null
 	}
 
+	encode : LockJson -> Str
+	encode = |value| JsonData.encode_with(to_data(value), JsonData.documents) ?? crash "invalid constructed lock JSON"
+
 	quote : Str -> Str
-	quote = |text| {
-		var $bytes = ['"']
-		for byte in text.to_utf8() {
-			$bytes = $bytes.concat(
-				match byte {
-					'"' => ['\\', '"']
-					'\\' => ['\\', '\\']
-					_ => if byte < 32 {
-						digits = "0123456789abcdef".to_utf8()
-						[
-							'\\',
-							'u',
-							'0',
-							'0',
-							digits.get(byte.to_u64() // 16) ?? '0',
-							digits.get(byte.to_u64() % 16) ?? '0',
-						]
-					} else [byte]
-				},
-			)
-		}
-		Str.from_utf8($bytes.append('"')) ?? "\"\""
-	}
+	quote = JsonData.quote
 
 	field : LockJson, Str -> Try(LockJson, Str)
 	field = |value, name| {
@@ -167,7 +145,7 @@ expect {
 
 expect LockJson.decode("{\"b\":[{\"z\":1,\"a\":2}],\"a\":{\"d\":\"x\",\"c\":true}}").map_ok(|value| LockJson.encode(LockJson.sorted(value))) == Ok("{\"a\":{\"c\":true,\"d\":\"x\"},\"b\":[{\"a\":2,\"z\":1}]}")
 
-# Compatibility facade retains the old data constructors, errors and bytes.
-expect LockJson.decode("true false") == Err("trailing data in lock JSON")
-expect LockJson.decode("{\"a\":1 \"b\":2}") == Err("expected comma in lock JSON object")
-expect LockJson.decode("{\"a\":1,\"a\":2}") == Err("duplicate lock JSON key: a")
+# Compatibility facade retains constructors and forwards upstream diagnostics.
+expect LockJson.decode("true false") == Err("unexpected content after the JSON value")
+expect LockJson.decode("{\"a\":1 \"b\":2}") == Err("expected ',' or '}' after an object member")
+expect LockJson.decode("{\"a\":1,\"a\":2}") == Err("duplicate key \"a\"")

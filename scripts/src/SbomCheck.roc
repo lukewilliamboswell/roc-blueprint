@@ -93,7 +93,7 @@ SbomCheck := [].{
 				}
 			}
 			fetched = if tool_source ["core"] else []
-			if !["basic-cli", "http", "sqlite", "rust-std"].concat(fetched).all(|id| ids.contains(id)) or ids.contains("roc-embedded") {
+			if !["basic-cli", "http", "sqlite", "rust-std", "roc-parser"].concat(fetched).all(|id| ids.contains(id)) or ids.contains("roc-embedded") {
 				return Err(Invalid("standalone tool inventory omits a dependency or claims the compiler ships"))
 			}
 		}
@@ -109,7 +109,7 @@ SbomCheck := [].{
 			}
 		}
 		if evidence.target != "source" and !tool_binary {
-			if !["basic-cli", "http", "weaver", "roc-embedded", "sqlite"].all(|id| ids.contains(id)) {
+			if !["basic-cli", "http", "weaver", "roc-embedded", "sqlite", "roc-parser"].all(|id| ids.contains(id)) {
 				return Err(Invalid("known shipped/native input omitted"))
 			}
 			archive = Bootstrap.compiler(tag, evidence.target).map_err(|_| Invalid("no embedded compiler for ${evidence.target}"))?

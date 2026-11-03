@@ -134,9 +134,17 @@
           # Roc packages blueprint-cli/main.roc downloads. Fetched here and unpacked into
           # Roc's package cache so the sandboxed build needs no network.
           # These are the `pf:` and `weaver:` URLs in blueprint-cli/main.roc plus
-          # transitive dependencies (http, roc-ansi, path). A missing one shows
+          # transitive dependencies (http, roc-ansi, path, roc-parser, unicode). A missing one shows
           # up as "package download failed" in `nix build .#blueprint`.
           rocPackages = [
+            {
+              url = "https://github.com/roc-lang/unicode/releases/download/4.3.0/7HGaK8HUHMs5judroSmUoS4TjPGZ1kAjPTyPDSCWiSKM.tar.zst";
+              hash = "sha256-0zpWbAxba/ssKUUAWAsn06KekBXAE85Z48eChycWC4E=";
+            }
+            {
+              url = "https://github.com/lukewilliamboswell/roc-parser/releases/download/4.0.0/FZVf39nPJLaMEmchcwTU5rWtMrcipBGbGsTk3nHzvjzk.tar.zst";
+              hash = "sha256-K2h4kWv5jaGd2eHhEI8xxD4lmQRGNPqqJG0WSoz4cOo=";
+            }
             {
               url = "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst";
               hash = "sha256-V3jm3ANU1ef7Wwcl7/jgTaPI1lYEnGO0PjzCdevvr4s=";
