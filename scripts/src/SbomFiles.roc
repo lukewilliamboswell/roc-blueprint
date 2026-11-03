@@ -5,6 +5,7 @@ import cli.OsStr
 import cli.Path
 import core.Sbom
 import core.Manifest
+import core.Project
 
 ## The only filesystem boundary in SBOM reporting: regular inputs, bounded
 ## metadata reads, streaming final-byte SHA256 and size, exclusive new
@@ -74,7 +75,17 @@ SbomFiles := [].{
 	observe_sidecars! : Str, Manifest.Manifest, Bool => Try(List({ filename : Str, sha256 : Str, size : U64 }), _)
 	observe_sidecars! = |manifest_path, manifest, listed_only| {
 		declared = manifest.sidecars.map(|entry| entry.filename)
-		canonical = if listed_only [] else Manifest.outputs(manifest.subject.filename).map(|(name, _)| name)
+		var $canonical = []
+		if !listed_only {
+			directory = Manifest.directory_of(manifest_path)
+			for entry in Path.list!(Path.utf8(if (directory.is_empty()) "." else directory))? {
+				name = Manifest.file_name_of(Path.to_str(entry) ?? "")
+				if Manifest.is_standard_sidecar(manifest.subject.filename, name) {
+					$canonical = $canonical.append(name)
+				}
+			}
+		}
+		canonical = $canonical.sort_with(Project.bytewise)
 		names = declared.concat(canonical).fold([], |all, name| if (all.contains(name)) all else all.append(name))
 		var $observed = []
 		for name in names {

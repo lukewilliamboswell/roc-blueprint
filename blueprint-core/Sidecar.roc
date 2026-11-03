@@ -1,4 +1,5 @@
 import Project
+import ArtifactName
 import Sbom
 import CycloneDx
 import JsonData
@@ -29,7 +30,7 @@ Sidecar := [].{
 			return Err("the document must describe exactly its delivered subject")
 		}
 		subject = document.packages_.find_first(|entry| entry.id == "Subject").map_err(|_| "missing delivered subject")?
-		if subject.name.is_empty() or subject.name.contains("/") or subject.name.contains("\\") or subject.version.is_empty() or !lowercase_sha256(subject.sha256) {
+		if !ArtifactName.valid(subject.name) or subject.version.is_empty() or !lowercase_sha256(subject.sha256) {
 			return Err("the subject needs a file name, a version and a lowercase SHA-256")
 		}
 		subject_meta : Try({ target : Str, digest_kind : Str }, _)

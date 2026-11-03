@@ -172,6 +172,18 @@ cases! = |tool, fixtures, work| {
 	missing = variant!("missing", "fixture subject\n", bom, manifest_text)?
 	Path.delete!(Path.utf8("${work}/missing/sample-artifact.cdx.json"))?
 	refused!(["check", "--manifest", missing, "--artifacts", "missing"], "which is absent")?
+	# The manifest must describe the same target and generation identity as
+	# its byte-bound documents, not merely name the same artifact bytes.
+	wrong_target = variant!("manifest-target", "fixture subject\n", bom, Manifest.render({ ..manifest, subject: { ..manifest.subject, target: "source" } }) ?? crash "target manifest")?
+	refused!(["check", "--manifest", wrong_target, "--artifacts", "manifest-target"], "sidecar target differs")?
+	wrong_namespace = variant!("manifest-namespace", "fixture subject\n", bom, Manifest.render({ ..manifest, context: { ..manifest.context, namespace: "urn:uuid:7bd0b7ae-19a2-8fed-9240-d791b640377b" } }) ?? crash "namespace manifest")?
+	refused!(["check", "--manifest", wrong_namespace, "--artifacts", "manifest-namespace"], "sidecar namespace differs")?
+	wrong_revision = variant!("manifest-revision", "fixture subject\n", bom, Manifest.render({ ..manifest, context: { ..manifest.context, revision: "2", namespace: "https://example.org/sbom/revision-2" } }) ?? crash "revision manifest")?
+	refused!(["check", "--manifest", wrong_revision, "--artifacts", "manifest-revision"], "sidecar revision differs")?
+	wrong_created = variant!("manifest-created", "fixture subject\n", bom, Manifest.render({ ..manifest, context: { ..manifest.context, created: "2026-11-05T00:00:00Z" } }) ?? crash "created manifest")?
+	refused!(["check", "--manifest", wrong_created, "--artifacts", "manifest-created"], "sidecar creation time differs")?
+	wrong_generator = variant!("manifest-generator", "fixture subject\n", bom, Manifest.render({ ..manifest, context: { ..manifest.context, generator: "Tool: different-generator" } }) ?? crash "generator manifest")?
+	refused!(["check", "--manifest", wrong_generator, "--artifacts", "manifest-generator"], "sidecar generator differs")?
 	# Legacy manifests remain readable, but an adjacent advertised format
 	# cannot evade the default checker by being dropped from the sidecar list.
 	legacy = { ..manifest, sidecars: manifest.sidecars.drop_if(|entry| entry.format == "spdx-2.3") }
@@ -179,7 +191,9 @@ cases! = |tool, fixtures, work| {
 	omitted = variant!("omitted-format", "fixture subject\n", bom, legacy_text)?
 	refused!(["check", "--manifest", omitted, "--artifacts", "omitted-format"], "sample-artifact.spdx-2.3.json is present but not listed")?
 	call!(["check", "--manifest", omitted, "--listed-only", "--artifacts", "omitted-format"], True)?
-	Path.delete!(Path.utf8("${work}/omitted-format/sample-artifact.spdx-2.3.json"))?
+	Path.rename!(Path.utf8("${work}/omitted-format/sample-artifact.spdx-2.3.json"), Path.utf8("${work}/omitted-format/SAMPLE-ARTIFACT.SPDX-2.3.JSON"))?
+	refused!(["check", "--manifest", omitted, "--artifacts", "omitted-format"], "SAMPLE-ARTIFACT.SPDX-2.3.JSON is present but not listed")?
+	Path.delete!(Path.utf8("${work}/omitted-format/SAMPLE-ARTIFACT.SPDX-2.3.JSON"))?
 	call!(["check", "--manifest", omitted, "--artifacts", "omitted-format"], True)?
 	Path.create_all!(Path.utf8("${work}/omitted-format/sample-artifact.spdx-2.3.json"))?
 	refused!(["check", "--manifest", omitted, "--artifacts", "omitted-format"], "sample-artifact.spdx-2.3.json is present but not a readable regular file")?
@@ -226,6 +240,8 @@ cases! = |tool, fixtures, work| {
 	if Path.exists!(Path.utf8("${work}/collision/sample-artifact.spdx.json"))? or Path.exists!(Path.utf8("${work}/collision/sample-artifact.spdx-2.3.json"))? or Path.read_utf8!(Path.utf8("${work}/collision/sample-artifact.cdx.json"))? != "retained" {
 		return Script.fail!("a late output collision left partial sidecars or changed existing bytes")
 	}
+	Path.write_utf8!(Path.utf8("${work}/nonportable-subject.spdx.json"), three.replace_each("sample-artifact", "C:artifact"))?
+	refused!(["check", "--artifacts", ".", "nonportable-subject.spdx.json"], "subject needs a file name")?
 	# An existing sidecar, or any input, is never replaced.
 	call!(base.append("new.spdx.json"), False)?
 	for name in ["sample-artifact", "inventory.json", "subject.json", "context.json"] {

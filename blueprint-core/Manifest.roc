@@ -3,6 +3,8 @@ import Project
 import Sbom
 import Sidecar
 import CycloneDx
+import Spdx3
+import ArtifactName
 
 ## The evidence manifest `bind` writes beside the sidecars of one subject:
 ## which files it wrote, from which inventory, with the digest and size of
@@ -44,6 +46,11 @@ Manifest := [].{
 	## All standard sidecars for an artifact, in deterministic generation order.
 	outputs : Str -> List((Str, Str))
 	outputs = |artifact| renderings.map(|rendering| ("${artifact}${rendering.suffix}", rendering.format))
+
+	## Directory discovery uses actual entry spelling, including ASCII case
+	## variants of supported conventional names; it does not probe aliases twice.
+	is_standard_sidecar : Str, Str -> Bool
+	is_standard_sidecar = |artifact, candidate| outputs(artifact).any(|(name, _)| ArtifactName.key(name) == ArtifactName.key(candidate))
 
 	## The manifest's name for the format a sidecar reads back as
 	## (`Sbom.Document.version`).
@@ -140,7 +147,7 @@ Manifest := [].{
 	check_listed : Str, Manifest.Observed -> Try(Manifest.Manifest, Str)
 	check_listed = |text, observed| {
 		manifest = read(text)?
-		names = observed.sidecars.map(|entry| entry.filename)
+		names = observed.sidecars.map(|entry| ArtifactName.key(entry.filename))
 		if names.len() != names.fold([], |all, name| if (all.contains(name)) all else all.append(name)).len() {
 			return Err("a sidecar was observed twice")
 		}
@@ -174,6 +181,21 @@ Manifest := [].{
 		if subject.name != manifest.subject.filename or subject.version != manifest.subject.version or subject.sha256 != manifest.subject.sha256 {
 			return Err("the sidecar describes ${subject.name} ${subject.version}, not the manifest's ${manifest.subject.filename} ${manifest.subject.version}")
 		}
+		if checked.evidence.target != manifest.subject.target {
+			return Err("the sidecar target differs from the manifest's subject target")
+		}
+		if checked.evidence.revision != manifest.context.revision {
+			return Err("the sidecar revision differs from the manifest's context revision")
+		}
+		if checked.document.namespace != manifest.context.namespace {
+			return Err("the sidecar namespace differs from the manifest's context namespace")
+		}
+		if checked.context.created != manifest.context.created {
+			return Err("the sidecar creation time differs from the manifest's context time")
+		}
+		if checked.context.generator != manifest.context.generator {
+			return Err("the sidecar generator differs from the manifest's context generator")
+		}
 		match manifest.sidecars.find_first(|entry| entry.filename == filename) {
 			Ok(listed) => if (format_of(checked.document.version) == Ok(listed.format)) Ok({}) else Err("${filename} is a ${checked.document.version} document, not the ${listed.format} sidecar the manifest lists")
 			Err(_) => if (filename.is_empty()) Ok({}) else Err("${filename} is not listed in the manifest")
@@ -190,7 +212,7 @@ valid = |manifest| {
 	if ![Sbom.profile, "blueprint-spdx-3.0-v1"].contains(manifest.profile) {
 		return Err("the manifest names profile ${manifest.profile}, not ${Sbom.profile}")
 	}
-	if !file_name(subject.filename) {
+	if !ArtifactName.valid(subject.filename) {
 		return Err("the manifest must name its subject by file name alone")
 	}
 	if subject.version.is_empty() or subject.target.is_empty() or !lowercase_sha256(subject.sha256) {
@@ -202,13 +224,13 @@ valid = |manifest| {
 	if manifest.context.revision.is_empty() or !(CycloneDx.serial_number(manifest.context.namespace) or (manifest.context.namespace.starts_with("https://") and manifest.context.namespace.ends_with("revision-${manifest.context.revision}"))) {
 		return Err("namespace must be a UUID URN or HTTPS namespace ending with its revision")
 	}
-	if manifest.context.created.is_empty() or manifest.context.generator.is_empty() {
-		return Err("the context needs a creation time and a generator")
+	if !Spdx3.timestamp(manifest.context.created) or !manifest.context.generator.starts_with("Tool: ") or manifest.context.generator == "Tool: " {
+		return Err("the context needs a UTC creation time and a Tool: generator")
 	}
 	if manifest.sidecars.is_empty() {
 		return Err("the manifest lists no sidecar")
 	}
-	names = manifest.sidecars.map(|entry| entry.filename)
+	names = manifest.sidecars.map(|entry| ArtifactName.key(entry.filename))
 	if names.fold([], |all, name| if (all.contains(name)) all else all.append(name)).len() != names.len() {
 		return Err("the manifest lists a sidecar twice")
 	}
@@ -217,7 +239,7 @@ valid = |manifest| {
 		return Err("the manifest lists a format twice")
 	}
 	for entry in manifest.sidecars {
-		if !file_name(entry.filename) or entry.filename == subject.filename {
+		if !ArtifactName.valid(entry.filename) or ArtifactName.key(entry.filename) == ArtifactName.key(subject.filename) {
 			return Err("the manifest must name each sidecar by file name alone, apart from its subject")
 		}
 		if !Manifest.formats.contains(entry.format) {
@@ -229,10 +251,6 @@ valid = |manifest| {
 	}
 	Ok({})
 }
-
-## A name within one directory: no separator, no parent reference.
-file_name : Str -> Bool
-file_name = |name| !name.is_empty() and name != "." and name != ".." and !name.contains("/") and !name.contains("\\")
 
 lowercase_sha256 : Str -> Bool
 lowercase_sha256 = |value| value.to_utf8().len() == 64 and value.to_utf8().all(|byte| (byte >= '0' and byte <= '9') or (byte >= 'a' and byte <= 'f'))
@@ -273,3 +291,14 @@ expect Manifest.read(manifest_example_text.replace_each("\"inventory_sha256\":",
 
 expect Manifest.render({ ..manifest_example, context: { ..manifest_example.context, namespace: "urn:uuid:7bd0b7ae-19a2-8fed-9240-d791b640377b" } }).is_ok()
 expect Manifest.render({ ..manifest_example, context: { ..manifest_example.context, namespace: "urn:uuid:invalid" } }).is_err()
+
+expect ["C:sidecar.json", "artifact:stream", "NUL", "cOn.txt", "COM¹.log", "LPT9.tar.gz", "report?x.json", "report*.json", "report|x.json", "report<.json", "report>.json", "report\".json", "report.", "report ", "bad\nname", "bad\u(0000)name", "bad\u(007f)name"].all(|name| Manifest.render({ ..manifest_example, sidecars: [{ ..manifest_example.sidecars.first() ?? crash "entry", filename: name }] }).is_err())
+expect Manifest.render({ ..manifest_example, subject: { ..manifest_example.subject, filename: "C:artifact" } }).is_err()
+expect Manifest.render({ ..manifest_example, sidecars: [{ ..manifest_example.sidecars.first() ?? crash "entry", filename: "révision 中文 report.spdx.json" }] }).is_ok()
+expect Manifest.render({ ..manifest_example, sidecars: [{ ..manifest_example.sidecars.first() ?? crash "entry", filename: "APP.TAR.ZST" }] }).is_err()
+expect Manifest.render({ ..manifest_example, sidecars: manifest_example.sidecars.append({ filename: "APP.TAR.ZST.SPDX.JSON", format: "spdx-2.3", sha256: "d".repeat(64), size: 20 }) }) == Err("the manifest lists a sidecar twice")
+expect Manifest.check(manifest_example_text, { ..manifest_example_observed, sidecars: manifest_example_observed.sidecars.append({ filename: "APP.TAR.ZST.SPDX.JSON", sha256: "d".repeat(64), size: 20 }) }) == Err("a sidecar was observed twice")
+
+expect Manifest.is_standard_sidecar("app.tar.zst", "APP.TAR.ZST.SPDX-2.3.JSON") and !Manifest.is_standard_sidecar("app.tar.zst", "unrelated.spdx-2.3.json")
+expect Manifest.render({ ..manifest_example, context: { ..manifest_example.context, created: "not a timestamp" } }).is_err()
+expect ["", "Tool: ", "different-generator"].all(|generator| Manifest.render({ ..manifest_example, context: { ..manifest_example.context, generator } }).is_err())
