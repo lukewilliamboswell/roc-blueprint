@@ -1,0 +1,27 @@
+= Native supplier SPDX conformance cases
+
+These small first-party fixtures reproduce specification defects found in
+published native/runtime/linker SBOMs during the 2026-11-04 downstream review.
+They do not copy supplier source or claim to fix historical releases.
+
+`valid-native.spdx.json` describes the exact bytes of `hello.txt`, with both
+SHA1 and SHA256 and the SHA1 of the sorted concatenated file SHA1 strings as its
+package verification code. Negative cases change one aspect: required File
+SHA1, analyzed-package consistency, identifier alphabet, verification code, or
+LicenseRef declarations. `valid-custom-license.spdx.json` gives a matching
+extracted-license example with deliberately test-only license text.
+
+`cases.json` records the outcomes. `valid` is the required Blueprint behavior.
+`independent_valid`, when present, documents a known limitation of SPDX tools
+0.8.5; it does not relax Blueprint's own check. The same cases run in
+`scripts/test_sbom_conformance.roc` and the independent validator tests. Keep
+those imports/expectations and the case manifest together when adding a case.
+
+Run the Roc side with `roc-stable test scripts/test_sbom_conformance.roc`.
+Run the independent side after installing its pinned requirements:
+
+[source,shell]
+----
+python3 scripts/sbom-conformance/validate.py \
+  --fixture-cases tests/sbom/conformance/cases.json
+----

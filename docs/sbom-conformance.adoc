@@ -1,0 +1,112 @@
+[#check-sbom-conformance-independently]
+= Check SBOM conformance independently
+
+Blueprint's pure Roc validators run before importing or emitting SBOM data.
+The independent checks in `scripts/sbom-conformance/` add a second implementation:
+the SPDX project's Python SDK for SPDX 2.2/2.3 semantics, and the publishers'
+vendored JSON schemas for SPDX 3.0.1 and CycloneDX 1.7. They are development and
+release checks. Neither Python nor these packages are a runtime dependency of
+`blueprint` or `blueprint-sbom`.
+
+== Run the independent check
+
+Install the pinned validators into a dedicated Python environment, then validate
+the actual JSON files a consumer will download:
+
+[source,shell]
+----
+python3 -m venv .cache/sbom-conformance
+.cache/sbom-conformance/bin/python -m pip install --only-binary=:all: --require-hashes \
+  -r scripts/sbom-conformance/requirements.txt
+.cache/sbom-conformance/bin/python scripts/sbom-conformance/validate.py \
+  --patterns 'dist/*.spdx.json dist/*.spdx-2.3.json dist/*.cdx.json' \
+  --output .cache/sbom-conformance.json
+----
+
+The complete dependency closure is version-pinned with publisher-distribution
+hashes. The installation can use a prepopulated wheel cache. Once installed,
+validation is offline: schema hashes are checked and transitive schema references
+resolve only to the vendored publisher files in `tests/sbom/schema/`.
+`--patterns` expands quoted file patterns without executing a shell. An unmatched
+pattern, unknown format/version or unavailable validator fails rather than being
+silently skipped. Explicit file arguments work as well.
+
+The JSON report records tool versions, the validation level, and errors per file.
+Exit status is 0 for success, 1 for invalid input and 2 for unsupported input or a
+tool/configuration error. Files are limited to 16 MiB of input, including trailing
+whitespace, and 64 levels of container nesting before parsing. Duplicate JSON keys and non-JSON numeric constants are refused before
+a third-party parser runs.
+
+The local `.github/actions/sbom-conformance` action installs the same hash-pinned
+tools, runs the shared regression cases, and checks its `patterns` input. CI generates canonical fixtures with the checkout's renderer and checks them
+alongside the retained third-party corpus; the release workflow additionally
+checks freshly generated sidecars before collecting publication assets. The
+ordinary Roc unit suite also checks the native supplier cases through `Spdx2`.
+
+A downstream producer can use the same action from a reviewed full Blueprint
+commit SHA, supplying its final-output patterns and report path. The action
+loads its validators, schemas and regression cases from its own pinned action
+source; the supplied patterns resolve in the caller's workspace. It does not
+install or invoke the Blueprint product binary, fetch supplier SBOMs, or
+publish anything. This lets independent native generators adopt the guard
+without first adopting Blueprint's SBOM renderer.
+
+== Native SPDX 2 producers: migration checklist
+
+The 2026-11 downstream review found the same defects in independently written
+native/runtime/linker generators. The compact cases in
+`tests/sbom/conformance/` preserve these rules without depending on a moving
+upstream release or downloading a native archive in unit tests.
+
+* An SPDX *File* requires exactly one SHA1 checksum. Keep SHA256 as well for
+  modern artifact integrity and binding. SHA1 here is a requirement of the
+  SPDX 2 file representation, not a replacement for SHA256 security checks.
+* An analyzed package uses `filesAnalyzed:true` (also the default when omitted),
+  a valid package verification code, and its actual contained file list.
+  `filesAnalyzed:false` cannot coexist with `hasFiles`, `CONTAINS` or reverse
+  `CONTAINED_BY` relationships to File entries, a package verification code, or
+  `licenseInfoFromFiles`. Containing other *packages* does not require analyzing
+  their files.
+* Compute the package verification code from the sorted SHA1 strings of its
+  actual included files, honoring the documented excluded files; do not hash the
+  tarball or substitute its SHA256. The fixture's `hello.txt` gives one small
+  reproducible example.
+* Use `SPDXRef-` identifiers containing only ASCII letters, digits, period and
+  hyphen; underscores are not allowed. Use the same spelling in every reference.
+* Define every local `LicenseRef-` with its extracted license text. The
+  definition's identifier obeys the same alphabet, is unique, and matches the
+  expressions in packages, Files and snippets. An external
+  `DocumentRef-...:LicenseRef-...` names a declared external document; it does not
+  need a duplicate local definition.
+
+SPDX's authoritative rules are the
+https://spdx.github.io/spdx-spec/v2.3/file-information/#84-file-checksum-field[File checksum clause],
+https://spdx.github.io/spdx-spec/v2.3/package-information/[package information]
+and https://spdx.github.io/spdx-spec/v2.3/how-to-use/[package verification guidance].
+A producer should regenerate these values from its exact retained archive/files,
+validate a candidate, and publish a corrected new release. Editing an immutable
+historical SBOM without updating its subject/binding evidence is not a migration.
+This repository supplies shared validation and fixtures; separate repositories'
+generator upgrades belong in their own reviewed changes.
+
+== What passing establishes
+
+SPDX 2.3 receives publisher-schema and SDK semantic validation; SPDX 2.2 receives
+the SDK's version-specific semantics. SPDX 3.0.1 and CycloneDX 1.7 receive
+publisher-schema validation. JSON Schema does not prove full JSON-LD/RDF
+semantics, native binary inclusion, complete dependencies, license conclusions,
+artifact authenticity or vulnerability absence. Keep Blueprint's graph/profile
+checks and exact subject/sidecar binding checks alongside this independent pass.
+
+A quality score is neither a conformance certificate nor a substitute for those
+checks. In the review, schema-only tools accepted SPDX 2 Files with missing SHA1
+and contradictory package file-analysis declarations. Scores can also penalize
+missing concluded licenses even when truthful declared license expressions exist.
+Do not fabricate conclusions or identifiers to improve a score.
+
+There are limits in the independent SDK too. Version 0.8.5 accepts duplicate File
+SHA1 entries, duplicate extracted LicenseRef definitions and missing analyzed
+package verification codes. Blueprint rejects those prose-rule violations.
+`cases.json` records the SDK's expected outcomes separately from Blueprint's
+required outcomes, so an upstream behavior change prompts review instead of
+silently weakening the product validator.

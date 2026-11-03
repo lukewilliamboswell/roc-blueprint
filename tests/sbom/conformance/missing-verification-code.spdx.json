@@ -1,0 +1,58 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "Native supplier conformance fixture",
+  "documentNamespace": "https://example.test/spdx/native-conformance-v1",
+  "creationInfo": {
+    "created": "2026-11-04T00:00:00Z",
+    "creators": [
+      "Organization: Blueprint conformance tests"
+    ]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-archive",
+      "name": "native-archive",
+      "versionInfo": "1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": true,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    }
+  ],
+  "files": [
+    {
+      "SPDXID": "SPDXRef-file-0",
+      "fileName": "./hello.txt",
+      "checksums": [
+        {
+          "algorithm": "SHA1",
+          "checksumValue": "f572d396fae9206628714fb2ce00f72e94f2258f"
+        },
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseInfoInFiles": [
+        "MIT"
+      ],
+      "copyrightText": "NOASSERTION"
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relatedSpdxElement": "SPDXRef-archive",
+      "relationshipType": "DESCRIBES"
+    },
+    {
+      "spdxElementId": "SPDXRef-archive",
+      "relatedSpdxElement": "SPDXRef-file-0",
+      "relationshipType": "CONTAINS"
+    }
+  ]
+}
