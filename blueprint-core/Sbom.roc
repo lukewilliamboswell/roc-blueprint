@@ -1578,7 +1578,7 @@ coverage_compositions = |coverage| coverage.keep_if(|claim| !claim.component.is_
 			),
 		])
 	},
-)
+).fold([], |all, composition| if (all.contains(composition)) all else all.append(composition))
 
 cyclonedx : Sbom.Inventory, Sbom.Subject, Sbom.Context -> JsonData
 cyclonedx = |inventory, subject, context| {

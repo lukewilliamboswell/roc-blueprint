@@ -1621,3 +1621,18 @@ expect {
 # Published v1 scope semantics stay readable; the new runtime-evidence view is
 # selected by its explicit profile marker rather than reinterpreting old BOMs.
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("standard-evidence-v2", "standard-containment-v1")).is_ok()
+
+# Several independently documented scopes can assess the same component and
+# aspect. Keep their private reasons, but serialize each standard aggregate
+# once (CycloneDX compositions has uniqueItems:true).
+expect {
+	composition = { ..SbomTest.composition, coverage: [claim("assembly-a", "Subject", "assembly", "complete"), claim("assembly-b", "Subject", "assembly", "complete")] }
+	inventory = inspect(composition) ?? crash "overlapping assessments"
+	text = Sbom.render_cyclonedx(inventory, SbomTest.subject, SbomTest.context) ?? crash "BOM"
+	tree = JsonData.decode_with(text, JsonData.documents) ?? crash "JSON"
+	((tree.field("compositions") ?? JsonData.Array([])).array() ?? []).len() == 1
+		and match Sidecar.check(text) {
+			Ok(checked) => checked.evidence.coverage.len() == 2 and Sidecar.against_inventory(checked, inventory).is_ok()
+			Err(_) => False
+		}
+}

@@ -115,3 +115,20 @@ The component-ID length and existing per-component, document, depth and graph
 bounds still apply. A six-hop regression carries quote- and backslash-heavy
 original modification notes exactly once while preserving all standard
 metadata, local graph nodes and relationships.
+
+== Measured representation change
+
+Re-rendering the published Blueprint 0.11.0 Linux SPDX 3 document's checked
+inventory and evidence preserves all 122 canonical packages. The original
+626,563-byte document becomes 589,475 bytes with compact metadata and short
+internal node suffixes while keeping its old namespace, or 372,927 bytes with
+the generated UUID namespace: a 40.5% raw-byte reduction overall. The resulting
+SPDX 2.3 and CycloneDX documents are 224,255 and 209,729 bytes respectively.
+These are representation-size measurements, not throughput benchmarks.
+
+The new CycloneDX standard view contains 17 components including the subject;
+105 resolution candidates remain explicit unresolved-component evidence.
+Blueprint reconstructs all 122. This changes what a generic runtime scanner
+is asked to analyze, without hiding that the larger candidate set exists.
+The derived documents passed CycloneDX CLI 0.33.1, SPDX tools Python 0.8.5 and
+independent official SPDX 3.0.1 schema validation with jsonschema-rs 0.60.3.
