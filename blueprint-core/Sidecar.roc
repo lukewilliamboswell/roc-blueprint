@@ -1,5 +1,8 @@
 import Project
 import Sbom
+import CycloneDx
+import JsonData
+import SbomJson
 
 ## Checks of a written SBOM sidecar, SPDX 3.0.1, SPDX 2.3 or CycloneDX 1.7,
 ## that anyone can run on what they received or are about to publish. `check`
@@ -11,7 +14,9 @@ import Sbom
 Sidecar := [].{
 	Evidence : { profile : Str, revision : Str, target : Str, coverage : List(Sbom.Coverage), inspected : List(Str), dispositions : List(Sbom.Disposition) }
 
-	Checked : { document : Sbom.Document, evidence : Sidecar.Evidence, subject : Sbom.Package }
+	Context : { created : Str, generator : Str }
+
+	Checked : { document : Sbom.Document, evidence : Sidecar.Evidence, subject : Sbom.Package, context : Sidecar.Context }
 
 	check : Str -> Try(Sidecar.Checked, Str)
 	check = |text| {
@@ -69,7 +74,7 @@ Sidecar := [].{
 		if evidence.target != meta.target {
 			return Err("evidence target differs from the subject's")
 		}
-		if !document.namespace.ends_with("revision-${evidence.revision}") {
+		if !CycloneDx.serial_number(document.namespace) and !document.namespace.ends_with("revision-${evidence.revision}") {
 			return Err("namespace does not end with its evidence revision")
 		}
 		if evidence.coverage.is_empty() {
@@ -103,7 +108,7 @@ Sidecar := [].{
 		if ["/Users/", "/home/", "/private/", "/tmp/", "/nix/store/", "github_pat_", "ghp_", "BEGIN PRIVATE KEY"].any(|marker| text.contains(marker)) {
 			return Err("the document holds a developer path or credential")
 		}
-		Ok({ document, evidence, subject })
+		Ok({ document, evidence, subject, context: actual_context(text)? })
 	}
 
 	## The inventory a sidecar was bound from is what its evidence states.
@@ -125,6 +130,46 @@ Sidecar := [].{
 	same_graph : Sidecar.Checked, Sidecar.Checked -> Bool
 	same_graph = |a, b| { ..a.document, version: "" } == { ..b.document, version: "" }
 
+}
+
+# These are standard creation fields from the actual sidecar, never the
+# manifest's claims. For SPDX3 follow the document's CreationInfo and its
+# createdUsing reference; an unrelated Tool must not become the generator.
+actual_context : Str -> Try(Sidecar.Context, Str)
+actual_context = |text| {
+	tree = SbomJson.decode(text).map_err(JsonData.message)?
+	field = |object, key| (object.field(key) ?? JsonData.Null).string() ?? ""
+	listed = |object, key| (object.field(key) ?? JsonData.Array([])).array() ?? []
+	if tree.field("@graph").is_ok() {
+		nodes = listed(tree, "@graph")
+		document = nodes.find_first(|node| field(node, "type") == "SpdxDocument").map_err(|_| "missing standard document creation context")?
+		creation = nodes.find_first(|node| field(node, "type") == "CreationInfo" and field(node, "@id") == field(document, "creationInfo")).map_err(|_| "missing referenced CreationInfo")?
+		tool = match listed(creation, "createdUsing") {
+			[reference] => nodes.find_first(|node| field(node, "type") == "Tool" and field(node, "spdxId") == (reference.string() ?? "")).map_err(|_| "missing referenced generator Tool")?
+			_ => return Err("a Blueprint sidecar needs exactly one standard generator")
+		}
+		if field(tool, "name").is_empty() {
+			return Err("the standard generator has no name")
+		}
+		Ok({ created: field(creation, "created"), generator: "Tool: ${field(tool, "name")}" })
+	} else if tree.field("spdxVersion").is_ok() {
+		creation = tree.field("creationInfo") ?? JsonData.Null
+		generator = match listed(creation, "creators").map(|creator| creator.string() ?? "").keep_if(|creator| creator.starts_with("Tool: ") and creator != "Tool: ") {
+			[only] => only
+			_ => return Err("a Blueprint sidecar needs exactly one standard generator")
+		}
+		Ok({ created: field(creation, "created"), generator })
+	} else {
+		metadata = tree.field("metadata") ?? JsonData.Null
+		tool = match listed(metadata.field("tools") ?? JsonData.Null, "components") {
+			[only] => only
+			_ => return Err("a Blueprint sidecar needs exactly one standard generator")
+		}
+		if field(tool, "name").is_empty() or field(metadata, "timestamp").is_empty() {
+			return Err("missing standard creation time or generator")
+		}
+		Ok({ created: field(metadata, "timestamp"), generator: "Tool: ${field(tool, "name")}" })
+	}
 }
 
 unique : List(Str) -> List(Str)

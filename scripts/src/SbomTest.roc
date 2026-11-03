@@ -720,7 +720,7 @@ expect {
 }
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"bom-ref\":\"native\"", "\"bom-ref\":\"platform\"")).is_err()
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"dependsOn\":[\"compiler\"]", "\"dependsOn\":[\"compiler\",\"platform\"]")).is_err()
-expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("standard-containment-v1", "unsupported-profile")).is_err()
+expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("standard-evidence-v2", "unsupported-profile")).is_err()
 expect Sbom.read_cyclonedx(fixture_legacy_cdx).is_ok()
 expect Sbom.read_cyclonedx(fixture_legacy_cdx.replace_each("blueprint:namespace", "blueprint:cyclonedx-profile")).is_err()
 
@@ -995,7 +995,7 @@ expect Manifest.read(manifest_text) == Ok(manifest_listed)
 expect Manifest.check(manifest_text.replace_each(Sbom.profile, "blueprint-spdx-3.0-v1"), manifest_observed) == Ok({ ..manifest_listed, profile: "blueprint-spdx-3.0-v1" })
 expect Manifest.check(manifest_text, manifest_observed) == Ok(manifest_listed)
 expect Manifest.check(manifest_text, { ..manifest_observed, inventory: Unmeasured }) == Ok(manifest_listed)
-expect Manifest.check(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.prepend({ filename: "sample-artifact.spdx-2.3.json", sha256: manifest_digest("two"), size: 9 }) }) == Ok(manifest_listed)
+expect Manifest.check_listed(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.prepend({ filename: "sample-artifact.spdx-2.3.json", sha256: manifest_digest("two"), size: 9 }) }) == Ok(manifest_listed)
 expect Manifest.formats == ["spdx-3.0.1", "spdx-2.3", "cyclonedx-1.7"] and Manifest.suffix == ".sbom-manifest.json"
 expect Manifest.format_of("SPDX-3.0.1") == Ok("spdx-3.0.1") and Manifest.format_of("SPDX-2.3") == Ok("spdx-2.3") and Manifest.format_of("CycloneDX-1.7") == Ok("cyclonedx-1.7") and Manifest.format_of("SPDX-2.2").is_err()
 
@@ -1024,7 +1024,7 @@ expect Manifest.render({ ..manifest_sample, sidecars: manifest_sample.sidecars.m
 expect Manifest.render({ ..manifest_sample, sidecars: manifest_sample.sidecars.map(|entry| { ..entry, sha256: Str.join_with(List.repeat("A", 64), "") }) }) == Err("sample-artifact.spdx.json needs a lowercase SHA-256")
 expect Manifest.render({ ..manifest_sample, inventory_sha256: "" }) == Err("the inventory digest must be a lowercase SHA-256")
 expect Manifest.render({ ..manifest_sample, subject: { ..manifest_sample.subject, target: "" } }) == Err("the subject needs a version, a target and a lowercase SHA-256")
-expect Manifest.render({ ..manifest_sample, context: { ..manifest_sample.context, revision: "2" } }) == Err("namespace does not end with its revision")
+expect Manifest.render({ ..manifest_sample, context: { ..manifest_sample.context, revision: "2" } }) == Err("namespace must be a UUID URN or HTTPS namespace ending with its revision")
 expect Manifest.read("{\"profile\":\"${Sbom.profile}\"}").is_err() and Manifest.read("not json").is_err()
 
 # A checked sidecar describes the manifest's subject, in the listed format.
@@ -1390,7 +1390,8 @@ expect {
 	inventory.coverage.any(|entry| entry.scope == "import:upstream:native-closure" and entry.component.is_empty() and entry.aspect.is_empty() and entry.reason == "Opaque task lacks remaining native closure metadata" and entry.contact == "https://example.org/support")
 }
 
-# Direct readers enforce the same metadata consistency as import and check.
+# Standard fields are authoritative in compact comments. The final binding
+# comparison, rather than a duplicated JSON assertion, detects changed facts.
 expect ["spdx2", "spdx3"].all(
 	|format| {
 		text = (if format == "spdx2" Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) else Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context)) ?? crash "render"
@@ -1404,7 +1405,12 @@ expect ["spdx2", "spdx3"].all(
 			text.replace_each(copyright_field, "${Json.to_str(copyright_key)}:\"Contradictory notice\""),
 			text.replace_each(identity_field, "${Json.to_str(identity_key)}:\"pkg:generic/different@1\""),
 			text.replace_each(source_field, "${Json.to_str(source_key)}:\"[]\""),
-		].all(|broken| broken != text and Sbom.read(broken).is_err())
+		].all(
+			|broken| broken != text and match Sidecar.check(broken) {
+				Ok(checked) => Sidecar.against_inventory(checked, reviewed_inventory).is_err()
+				Err(_) => True
+			},
+		)
 	},
 )
 expect {
@@ -1484,3 +1490,134 @@ expect {
 	[three, two, cdx].all(|checked| Sidecar.against_inventory(checked, inventory).is_ok())
 		and Sidecar.same_graph(three, two) and Sidecar.same_graph(three, cdx)
 }
+
+# Unknown inclusion never becomes runtime optionality. The portable view has
+# proved runtime/build facts and explicitly unknown assembly completeness;
+# Blueprint retains the complete candidate graph without inventing roles.
+expect {
+	candidate = { ..component("candidate", "unresolved-library", "1"), target: "source" }
+	child = { ..component("candidate-child", "unresolved-child", "1"), target: "source" }
+	composition = { ..SbomTest.composition, components: [candidate, child], relationships: [edge("Subject", candidate.id, "other"), edge(candidate.id, child.id, "dependsOn")] }
+	inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", composition) ?? crash "candidate inventory"
+	subject = { ..SbomTest.subject, target: "source" }
+	text = Sbom.render_cyclonedx(inventory, subject, SbomTest.context) ?? crash "candidate BOM"
+	bom = JsonData.decode_with(text, JsonData.documents) ?? crash "candidate JSON"
+	standard = without_blueprint(bom)
+	three = Sidecar.check(Sbom.render(inventory, subject, SbomTest.context) ?? crash "candidate SPDX3") ?? crash "read SPDX3"
+	two = Sidecar.check(Sbom.render_spdx2(inventory, subject, SbomTest.context) ?? crash "candidate SPDX2") ?? crash "read SPDX2"
+	checked = Sidecar.check(text) ?? crash "read candidate BOM"
+	cdx_components(standard).is_empty()
+		and ((standard.field("dependencies") ?? JsonData.Array([])).array() ?? []).is_empty()
+			and ((standard.field("compositions") ?? JsonData.Array([])).array() ?? []).any(|aggregate| aggregate.field("aggregate") == Ok(JsonData.String("unknown")) and aggregate.field("assemblies") == Ok(JsonData.Array([JsonData.String("Subject")])))
+				and checked.document.packages_.len() == 3
+					and Sidecar.same_graph(checked, three) and Sidecar.same_graph(checked, two)
+						and Sidecar.against_inventory(checked, inventory).is_ok()
+							and Sbom.read_cyclonedx(text.replace_each("\"value\":\"2\"", "\"value\":\"1\"")).is_err()
+}
+
+# Build context propagates through transitive runtime dependencies of tooling;
+# a library also reached by the delivered application's runtime remains required.
+expect {
+	compiler = { ..component("build-tool", "build-tool", "1"), target: "source" }
+	private_lib = { ..component("tool-lib", "tool-lib", "1"), target: "source" }
+	shared = { ..component("shared-lib", "shared-lib", "1"), target: "source" }
+	composition = { ..SbomTest.composition, components: [compiler, private_lib, shared], relationships: [{ ..edge("Subject", compiler.id, "dependsOn"), scope: "build" }, edge(compiler.id, private_lib.id, "dependsOn"), edge(compiler.id, shared.id, "dependsOn"), edge("Subject", shared.id, "dependsOn")] }
+	inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", composition) ?? crash "build inventory"
+	bom = JsonData.decode_with(Sbom.render_cyclonedx(inventory, { ..SbomTest.subject, target: "source" }, SbomTest.context) ?? crash "build BOM", JsonData.documents) ?? crash "BOM JSON"
+	components = cdx_components(bom)
+	scope = |id| (components.find_first(|entry| entry.field("bom-ref") == Ok(JsonData.String(id))) ?? JsonData.Null).field("scope")
+	scope(compiler.id) == Ok(JsonData.String("excluded")) and scope(private_lib.id) == Ok(JsonData.String("excluded")) and scope(shared.id) == Ok(JsonData.String("required"))
+}
+
+# Generated namespaces are bounded valid UUID identities, change with generation
+# facts and keep the canonical graph/evidence consistent across all formats.
+expect {
+	inventory = SbomTest.inventory ?? crash "inventory"
+	identity = { revision: SbomTest.context.revision, created: SbomTest.context.created, author: SbomTest.context.author, generator: SbomTest.context.generator }
+	namespace = Sbom.document_namespace(inventory, SbomTest.subject, identity)
+	context = { ..SbomTest.context, namespace }
+	outputs = [Sbom.render(inventory, SbomTest.subject, context), Sbom.render_spdx2(inventory, SbomTest.subject, context), Sbom.render_cyclonedx(inventory, SbomTest.subject, context)]
+	CycloneDx.serial_number(namespace) and namespace.count_utf8_bytes() == 45
+		and namespace == Sbom.document_namespace(inventory, SbomTest.subject, identity)
+			and namespace != Sbom.document_namespace(inventory, SbomTest.subject, { ..identity, revision: "2" })
+				and namespace != Sbom.document_namespace(inventory, { ..SbomTest.subject, version: "2" }, identity)
+					and outputs.all(
+						|output| match output {
+							Ok(text) => match Sidecar.check(text) {
+								Ok(checked) => checked.document.namespace == namespace and Sidecar.against_inventory(checked, inventory).is_ok()
+								Err(_) => False
+							}
+							Err(_) => False
+						},
+					)
+}
+
+# Compact wire metadata and the old duplicate-field metadata read to the same
+# canonical Package. Legacy conflicting duplicate assertions still fail closed.
+expect {
+	text = Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context) ?? crash "SPDX3"
+	tree = JsonData.decode_with(text, JsonData.documents) ?? crash "JSON"
+	node = ((tree.field("@graph") ?? JsonData.Array([])).array() ?? []).find_first(|entry| entry.field("name") == Ok(JsonData.String(reviewed_library.name))) ?? crash "package"
+	compact = (node.field("comment") ?? JsonData.Null).string() ?? crash "comment"
+	canonical = Sbom.package_of(reviewed_library).comment
+	legacy = text.replace_each(Json.to_str(compact), Json.to_str(canonical))
+	compact != canonical and Sbom.read(legacy) == Sbom.read(text)
+		and Sbom.read(legacy.replace_each("\"software_copyrightText\":${Json.to_str(reviewed_library.copyright)}", "\"software_copyrightText\":\"Conflicting standard copyright\"")).is_err()
+}
+
+# Re-importing an escaped modification note carries it once. Each hop records
+# its direct immutable supplier document instead of recursively copying JSON.
+expect {
+	original = "Original \"notice\" with \\slashes. ".repeat(20)
+	leaf = { ..component("leaf", "leaf", "1"), target: "source", modified: original }
+	initial = { ..SbomTest.composition, components: [leaf], relationships: [edge("Subject", leaf.id, "contains")] }
+	var $inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", initial) ?? crash "initial inventory"
+	var $subject = { ..SbomTest.subject, target: "source" }
+	var $context = SbomTest.context
+	var $hop = 0.U64
+	var $valid = True
+	while $hop < 6 {
+		text = Sbom.render($inventory, $subject, $context) ?? crash "supplier rendering"
+		imported = { subject: { component: "", filename: $subject.filename, version: $subject.version, sha256: $subject.sha256 }, id: "upstream", url: "https://example.org/supplier/document.json", sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), namespace: $context.namespace, target: "source", document: text, relation: "contains", basis: "Reviewed supplier source", contact: "https://example.org/support" }
+		composition = { ..SbomTest.composition, components: [], relationships: [], imported_documents: [imported] }
+		$inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", composition) ?? crash "reimported inventory"
+		retained = $inventory.components.find_first(|entry| entry.name == "leaf") ?? crash "retained leaf"
+		note : Try({ format : Str, modifications : Str }, _)
+		note = Json.parse(retained.modified)
+		$valid = $valid and note == Ok({ format: "blueprint-import-v1", modifications: original }) and retained.modified.count_utf8_bytes() < Json.to_str(original).count_utf8_bytes() + 600
+		$hop = $hop + 1
+		$subject = { ..$subject, filename: "hop-${$hop.to_str()}.tar" }
+		$context = { ..$context, namespace: Sbom.document_namespace($inventory, $subject, { revision: $context.revision, created: $context.created, author: $context.author, generator: $context.generator }) }
+	}
+	$valid
+}
+
+# Bindings compare generation context from standard fields, not merely from
+# what their manifest claims. Every rendering exposes the actual same context.
+expect SbomTest.cases.all(
+	|case| [Sbom.render(case.inventory, case.subject, case.context), Sbom.render_spdx2(case.inventory, case.subject, case.context), Sbom.render_cyclonedx(case.inventory, case.subject, case.context)].all(
+		|text| match Sidecar.check(text ?? crash "render context") {
+			Ok(checked) => checked.context == { created: case.context.created, generator: case.context.generator }
+			Err(_) => False
+		},
+	),
+)
+
+# Unreferenced tools are not the document's generator. Follow createdUsing.
+expect {
+	text = SbomTest.output ?? crash "fixture render"
+	tree = JsonData.decode_with(text, JsonData.documents) ?? crash "JSON"
+	nodes = (tree.field("@graph") ?? JsonData.Array([])).array() ?? []
+	document = nodes.find_first(|node| node.field("type") == Ok(JsonData.String("SpdxDocument"))) ?? crash "document"
+	creation = document.field("creationInfo") ?? crash "creation ref"
+	unrelated = JsonData.Object([{ name: "type", value: JsonData.String("Tool") }, { name: "name", value: JsonData.String("Unrelated first tool") }, { name: "spdxId", value: JsonData.String("${SbomTest.context.namespace}#unrelated/tool") }, { name: "creationInfo", value: creation }])
+	changed = tree.set("@graph", JsonData.Array(nodes.prepend(unrelated))) ?? crash "graph"
+	match Sidecar.check(JsonData.encode_with(changed, JsonData.documents) ?? crash "encode") {
+		Ok(checked) => checked.context == { created: SbomTest.context.created, generator: SbomTest.context.generator }
+		Err(_) => False
+	}
+}
+
+# Published v1 scope semantics stay readable; the new runtime-evidence view is
+# selected by its explicit profile marker rather than reinterpreting old BOMs.
+expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("standard-evidence-v2", "standard-containment-v1")).is_ok()
