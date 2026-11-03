@@ -93,9 +93,6 @@ Blueprint. Review shared-contract changes against it:
 
 Protocol changes need a shared semantic reason and the existing versioning
 rules. They must not make every provider adopt one ecosystem's native format.
-Production support for a second provider and general resolver composition
-remain follow-up work tracked in
-https://github.com/lukewilliamboswell/roc-blueprint/issues/56[the additional-provider follow-up].
 
 Review changes against the ownership table in the architecture chapter. Scripts
 own build algorithms; the pure core owns validation and plans; the host owns
@@ -433,12 +430,15 @@ env PATH=/usr/bin:/bin /tmp/smoke --no-nix ./blueprint
 
 == Write the manual
 
+Keep documentation focused on current reader tasks. Remove superseded guidance and status narratives; keep release changes in release records and investigations or unresolved work in issues. Follow the
+https://lukewilliamboswell.github.io/roc-automation/documentation.html#write-project-documentation[shared documentation guide].
+
 The manual is the AsciiDoc in `docs/`. `index.adoc` is a book that includes
 one chapter per top-level `.adoc` file; `.github/workflows/docs.yml` renders
 it as a site and a PDF with the shared
 https://lukewilliamboswell.github.io/roc-automation/actions.html#build-docs[`build-docs`]
 action, on every pull request, and deploys the site from `main`. The action is pinned to a reviewed roc-automation main revision; the renderer
-is released as `tools-0.6.0`. `flake.nix` checks the released
+is pinned in `flake.nix`. `flake.nix` checks the released
 renderer binary's SHA-256 for each supported host. Rendering uses the native
 Roc utility. API generation uses this repository's pinned Roc compiler.
 
@@ -456,34 +456,21 @@ renderer=$(nix build .#roc-docs --no-link --print-out-paths)/bin/roc-docs
 
 The site is `.docs-out/site/` and the PDF `.docs-out/roc-blueprint.pdf`;
 neither is committed. Both workflows use 240 DPI for PDF image preparation
-so the architecture diagram retains detail when zoomed. Publication links use explicit URLs; this action and
-renderer pair uses `site-url` for publication links and Markdown discovery.
+for prepared raster images. Use `site-url` for publication links and Markdown discovery.
 
-Keep PSV table cells on complete physical lines. HTML honours the declared
-column proportions; this renderer release's PDF sizes earlier columns to
-their content and gives the last column the remaining space. Keep long
-explanations together: the overview combines each source and its version pin,
-and the configuration checks use labelled paragraphs. Stage responsibilities
-use separate input/output, execution and invariant tables. Review both
-outputs after changing a table; column proportions alone do not establish
-that its PDF is readable.
+Keep PSV table cells on complete physical lines, and review tables in both
+HTML and PDF. Keep long explanations beside their table rather than inside
+cells whose text becomes hard to read.
 
 Stable explicit anchors preserve links when a heading's wording changes.
-Invariant headings use words before their numbers because numeric-leading
-headings exceed this release's native inline profile. The historical
-`use-this-release-2` release anchor remains explicit. Prepared figures replace
-render-time Mermaid and JPEG conversion, with their source and asset digests
-recorded below. These are authoring changes, rather than renderer patches.
+Mermaid source stays in the manual and the released renderer draws its SVG and PDF
+output directly. Commit source blocks; generated diagram assets belong in the
+build output. Unsupported diagram syntax fails the ordinary documentation
+build instead of requiring an external browser or diagram conversion step.
 
 Native images are non-interlaced RGB/RGBA PNGs. The manual's illustration is
 converted from the original JPEG; its source hash and conversion command are
-in `docs/images/blueprint-illustration.provenance.json`. The architecture flow
-uses the checked-in published SVG and its prepared PNG, with provenance in
-`docs/images/blueprint-flow.provenance.json`. Its Mermaid source stays in
-`architecture.adoc`; `docs/prepared-diagrams.json` binds its exact source and
-PNG hashes. Update the figure and registration together when editing the
-Mermaid block. These prepared assets let ordinary documentation builds run
-without a browser, image converter or diagram tool.
+in `docs/images/blueprint-illustration.provenance.json`.
 
 The manual describes the tool as it is: one recommended way to do each thing,
 in the present tense. What changed between versions belongs in the release

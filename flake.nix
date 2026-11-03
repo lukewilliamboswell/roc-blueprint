@@ -40,16 +40,16 @@
           # Official archives can precede their roc-overlay inventory entry.
           compilerArchives = {
             "x86_64-linux" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-linux_x86_64-2026-10-28-bad769b.tar.gz";
-              hash = "sha256-rqy+tg8nPqhWV6AD4uw5RhWV8yYbtpyeFuoYplY66Nk=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-01-48d3369/roc_nightly-linux_x86_64-2026-11-01-48d3369.tar.gz";
+              hash = "sha256-EQreVAh8q8MQK7G0p0kxL6AUIuRC8ySbaV1xMzR9cMU=";
             };
             "aarch64-linux" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-linux_arm64-2026-10-28-bad769b.tar.gz";
-              hash = "sha256-D1GoBJK3C0woLwuVd9dNKerUAAAkvH2wSjCNYQLoKu8=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-01-48d3369/roc_nightly-linux_arm64-2026-11-01-48d3369.tar.gz";
+              hash = "sha256-fQJ5rqtHX+bCW/ZTFU2jFb/mPlgLgtagwnFZKUjQ/b4=";
             };
             "aarch64-darwin" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-macos_apple_silicon-2026-10-28-bad769b.tar.gz";
-              hash = "sha256-aZOfNTWyl3RlN56Aahlq/+28ZTEFRUedWmOO9tFTBMc=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-01-48d3369/roc_nightly-macos_apple_silicon-2026-11-01-48d3369.tar.gz";
+              hash = "sha256-zC6IsF4TC9J9Yd9tY/MjUbQtcPtBs50QPusUilbToW8=";
             };
           };
           roc = roc-overlay.packages.${system}.nightly.overrideAttrs (previous: {
@@ -61,7 +61,7 @@
             passthru = previous.passthru // {
               tag = rocTag;
               compilerVersion = rocTag;
-              compilerCommit = "bad769be8e8855fa90e08800e31a75bfed1fb128";
+              compilerCommit = "48d3369dd29958f3d1600c0b4b1386fa96e6ffec";
               source = {
                 inherit (compilerArchives.${system}) url;
                 sha256 = compilerArchives.${system}.hash;
@@ -97,11 +97,11 @@
           # Released native documentation renderer, compatible with the reviewed
           # shared build-docs action. Never
           # patch its bytes: these hashes identify the published executables.
-          rocDocsVersion = "0.6.0";
+          rocDocsVersion = "0.9.0";
           rocDocsHashes = {
-            "x86_64-linux" = "sha256-Pl71JKoX7rgVOMY5rUlZv0aQsXiJiTDqCkKizYv3MS0=";
-            "aarch64-linux" = "sha256-qPgvFWXYuul7lW310ZA9qOYhFK9X64tA6xqtCEUYtfc=";
-            "aarch64-darwin" = "sha256-GBgXoGc/UDa3XT0pcH72ZbRep/PM/pu8NTYqcmObQPw=";
+            "x86_64-linux" = "sha256-DSAoLzvBTbfpNksLY/o6KMuxZqSl/6AOwjLNzjsaAhk=";
+            "aarch64-linux" = "sha256-3NAKMBqHXa2XxpfEWFrFu9okQpFYfOkXsS+dKa7/hs8=";
+            "aarch64-darwin" = "sha256-gjnoltg1cypJ/7PtDU5NfR9EdOj1/nqNvjjnAmzbKS4=";
           };
           rocDocsArchive = pkgs.fetchurl {
             url = "https://github.com/lukewilliamboswell/roc-automation/releases/download/tools-${rocDocsVersion}/roc-docs-${system}";
@@ -123,7 +123,7 @@
               {
                 src = pkgs.fetchurl {
                   url = "https://github.com/roc-lang/nightlies/releases/download/${rocTag}/roc_nightly-source-${lib.removePrefix "nightly-" rocTag}.tar.gz";
-                  hash = "sha256-5gWOAmcaXtaQ6cOXeJ1LW7srmrUyUoG/E4wfWWUHOUY=";
+                  hash = "sha256-HaKKLo0QJsyjZukE5W8dW6l2x+1eX4nsx1lQuLnRveE=";
                 };
               }
               ''

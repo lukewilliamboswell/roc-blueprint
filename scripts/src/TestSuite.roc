@@ -311,7 +311,7 @@ unit! = |context| {
 	# The pinned compiler's native test backend crashes on the embedded
 	# archive's large byte constant. The interpreter runs the same expects;
 	# CLI integration tests exercise the actual native executable.
-	compiler!(context, ["test", "--opt=interpreter", "blueprint-cli/main.roc"])?
+	compiler!(context, ["test", "--opt=interpreter", "--no-cache", "blueprint-cli/main.roc"])?
 
 	step!("Independent library consumer")?
 	compiler!(context, ["check", "fixtures/consumer/main.roc"])?

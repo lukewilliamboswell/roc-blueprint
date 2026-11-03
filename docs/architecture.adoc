@@ -235,7 +235,7 @@ flowchart LR
 
     subgraph Decision["Decision (committed, trust boundary)"]
         SRC[("Sources")]
-        LOCK[("Lock<br/>pins · digests · verification")]
+        LOCK[("Lock: pins · digests · verification")]
     end
     SPEC -->|Resolve| LOCK
     SRC --> LOCK
