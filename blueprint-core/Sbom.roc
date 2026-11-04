@@ -731,7 +731,7 @@ normalize_comment = |entry| {
 		Ok("standard-fields-v1") => {
 			# This explicitly versioned record is closed. Unknown keys may be
 			# supplier notices and cannot be silently discarded on normalization.
-			names = if entry.id == subject_id ["blueprint_metadata_format", "kind", "target", "digest_kind"] else ["blueprint_metadata_format", "kind", "identity", "origin", "target", "modifications"]
+			names = if (entry.id == subject_id) ["blueprint_metadata_format", "kind", "target", "digest_kind"] else ["blueprint_metadata_format", "kind", "identity", "origin", "target", "modifications"]
 			if tree.keys().len() != names.len() or tree.keys().any(|name| !names.contains(name)) {
 				return Err("unsupported keys in compact standard-fields-v1 metadata")
 			}
