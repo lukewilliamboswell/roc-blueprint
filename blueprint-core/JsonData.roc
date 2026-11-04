@@ -1,6 +1,7 @@
 # Bounded JSON data codec for inert data; numbers retain their exact JSON lexemes.
 # Duplicate keys, malformed Unicode and trailing input fail before planning.
 import Project
+import parser.JsonValue
 
 JsonData := [
 	Object(List({ name : Str, value : JsonData })),
@@ -14,8 +15,8 @@ JsonData := [
 
 	is_eq : _
 
-	## How much a document may hold, besides the 8 MiB and 128-level bounds
-	## every document has, and what a key repeated in one object means:
+	## Collection and duplicate rules, independent of the byte budget. Every
+	## decode/encode has a 128-level bound. A key repeated in one object means:
 	## `Reject` refuses it, and `CollapseIdentical` keeps one copy of a key
 	## repeated with an equal value and refuses one repeated with another.
 	Rules : { max_items : U64, duplicates : [Reject, CollapseIdentical] }
@@ -33,32 +34,46 @@ JsonData := [
 	decode = |text| JsonData.decode_with(text, defaults)
 
 	decode_with : Str, Rules -> Try(JsonData, Error)
-	decode_with = |text, rules| {
-		if text.to_utf8().len() > 8388608 {
-			return Err(LimitExceeded("JSON exceeds 8 MiB"))
+	decode_with = |text, rules| JsonData.decode_bounded(text, rules, 8388608)
+
+	## An inclusive UTF-8 byte budget; depth and collection rules stay fixed.
+	## Zero admits no valid JSON, and every explicit budget remains finite.
+	decode_bounded : Str, Rules, U64 -> Try(JsonData, Error)
+	decode_bounded = |text, rules, max_bytes| {
+		options : JsonValue.Options
+		options = {
+			max_bytes: max_bytes,
+			max_depth: 128,
+			max_items: rules.max_items,
+			duplicates: match rules.duplicates {
+				Reject => Reject
+				CollapseIdentical => CollapseIdentical
+			},
 		}
-		parsed = parse(text.to_utf8(), 0, 0, rules)?
-		if whitespace(text.to_utf8(), parsed.next) != text.to_utf8().len() {
-			return Err(InvalidJson("trailing data in JSON"))
-		}
-		Ok(parsed.value)
+		JsonValue.parse_with(text, options)
+			.map_ok(from_parser)
+			.map_err(|InvalidJsonValue(error)| read_error(error.message, rules, max_bytes))
 	}
 
 	encode : JsonData -> Try(Str, Error)
 	encode = |value| JsonData.encode_with(value, defaults)
 
 	encode_with : JsonData, Rules -> Try(Str, Error)
-	encode_with = |value, rules| {
-		_ = within(value, 0, rules)?
-		text = encoded(value)
-		if text.to_utf8().len() > 8388608 {
-			return Err(LimitExceeded("JSON exceeds 8 MiB"))
-		}
-		parsed = JsonData.decode_with(text, { ..rules, duplicates: Reject })?
-		if parsed != value {
-			return Err(InvalidJson("invalid constructed JSON number or object"))
-		}
-		Ok(text)
+	encode_with = |value, rules| JsonData.encode_bounded(value, rules, 8388608)
+
+	## Size escaped output before allocation, then apply the same inclusive
+	## byte budget to the output through roc-parser’s checked writer.
+	encode_bounded : JsonData, Rules, U64 -> Try(Str, Error)
+	encode_bounded = |value, rules, max_bytes| {
+		converted = to_parser(value, 0, rules)?
+		JsonValue.to_str_with(converted, { max_bytes: max_bytes }).map_err(
+			|error| match error {
+				TooLarge(_) => byte_limit(max_bytes)
+				TooDeep => LimitExceeded("JSON exceeds 128 levels")
+				DuplicateKey(key) => InvalidJson("duplicate JSON key: ${key}")
+				InvalidNumber(text) => InvalidJson("invalid JSON number: ${text}")
+			},
+		)
 	}
 
 	## A JSON number lexeme with no fractional part, as JSON Schema counts an
@@ -93,29 +108,7 @@ JsonData := [
 		}
 
 	quote : Str -> Str
-	quote = |text| {
-		var $bytes = ['"']
-		for byte in text.to_utf8() {
-			$bytes = $bytes.concat(
-				match byte {
-					'"' => ['\\', '"']
-					'\\' => ['\\', '\\']
-					_ => if byte < 32 {
-						digits = "0123456789abcdef".to_utf8()
-						[
-							'\\',
-							'u',
-							'0',
-							'0',
-							digits.get(byte.to_u64() // 16) ?? '0',
-							digits.get(byte.to_u64() % 16) ?? '0',
-						]
-					} else [byte]
-				},
-			)
-		}
-		Str.from_utf8($bytes.append('"')) ?? "\"\""
-	}
+	quote = |text| JsonValue.to_str(JsonValue.String(text)) ?? crash "JSON string exceeds addressable output size"
 
 	field : JsonData, Str -> Try(JsonData, Error)
 	field = |value, name| {
@@ -168,335 +161,75 @@ JsonData := [
 
 }
 
-# Private parser cursors and unchecked encoder are not public methods.
+# Blueprint keeps its public value shape and collection policy; roc-parser owns
+# JSON syntax, Unicode, duplicate detection, and sizing before serialization.
+from_parser : JsonValue -> JsonData
+from_parser = |value| match value {
+	Object(fields) => JsonData.Object(fields.map(|f| { name: f.key, value: from_parser(f.value) }))
+	Array(items) => JsonData.Array(items.map(from_parser))
+	String(text) => JsonData.String(text)
+	Number(text) => JsonData.Number(text)
+	Bool(flag) => JsonData.Boolean(flag)
+	Null => JsonData.Null
+}
 
-## Compute exact encoded length before allocating output; nested construction
-## cannot bypass the same byte/depth/collection bounds as decoding.
-within : JsonData, U64, JsonData.Rules -> Try(U64, JsonData.Error)
-within = |value, depth, rules| {
-	if depth > 128 {
-		return Err(LimitExceeded("JSON exceeds 128 levels"))
-	}
-	var $size = 0
+# Bound recursion before converting an untrusted constructed tree. The upstream
+# writer validates numbers, duplicate keys and output bytes without a readback.
+to_parser : JsonData, U64, JsonData.Rules -> Try(JsonValue, JsonData.Error)
+to_parser = |value, depth, rules| {
 	match value {
 		Object(fields) => {
+			if depth >= 128 {
+				return Err(LimitExceeded("JSON exceeds 128 levels"))
+			}
 			if fields.len() > rules.max_items {
 				return Err(LimitExceeded("JSON object exceeds ${rules.max_items.to_str()} fields"))
 			}
-			$size = 2
-			var $names = []
+			var $out = []
 			for field in fields {
-				if $names.contains(field.name) {
-					return Err(InvalidJson("duplicate JSON key: ${field.name}"))
-				}
-				if !$names.is_empty() {
-					$size = $size + 1
-				}
-				$names = $names.append(field.name)
-				$size = $size + quoted_size(field.name) + 1 + within(field.value, depth + 1, rules)?
-				if $size > 8388608 {
-					return Err(LimitExceeded("JSON exceeds 8 MiB"))
-				}
+				$out = $out.append({ key: field.name, value: to_parser(field.value, depth + 1, rules)? })
 			}
+			Ok(JsonValue.Object($out))
 		}
 		Array(items) => {
+			if depth >= 128 {
+				return Err(LimitExceeded("JSON exceeds 128 levels"))
+			}
 			if items.len() > rules.max_items {
 				return Err(LimitExceeded("JSON array exceeds ${rules.max_items.to_str()} items"))
 			}
-			$size = 2 + (if (items.is_empty()) 0 else items.len() - 1)
+			var $out = []
 			for item in items {
-				$size = $size + within(item, depth + 1, rules)?
-				if $size > 8388608 {
-					return Err(LimitExceeded("JSON exceeds 8 MiB"))
-				}
+				$out = $out.append(to_parser(item, depth + 1, rules)?)
 			}
+			Ok(JsonValue.Array($out))
 		}
-		String(text) => {
-			$size = quoted_size(text)
-		}
-		Number(text) => {
-			$size = text.to_utf8().len()
-		}
-		Boolean(boolean) => {
-			$size = if (boolean) 4 else 5
-		}
-		Null => {
-			$size = 4
-		}
-	}
-	if $size > 8388608 {
-		return Err(LimitExceeded("JSON exceeds 8 MiB"))
-	}
-	Ok($size)
-}
-
-quoted_size : Str -> U64
-quoted_size = |text| {
-	if text.to_utf8().len() > 8388606 {
-		return 8388609
-	}
-	text.to_utf8().fold(2, |size, byte| size + (if (byte < 32) 6 else if (byte == '"' or byte == '\\') 2 else 1))
-}
-
-encoded : JsonData -> Str
-encoded = |value| match value {
-	Object(fields) => {
-		items = fields.map(|f| "${JsonData.quote(f.name)}:${encoded(f.value)}")
-		"{${Str.join_with(items, ",")}}"
-	}
-	Array(items) => "[${Str.join_with(items.map(encoded), ",")}]"
-	String(text) => JsonData.quote(text)
-	Number(text) => text
-	Boolean(value_) => if (value_) "true" else "false"
-	Null => "null"
-}
-
-Parsed : { value : JsonData, next : U64 }
-
-parse : List(U8), U64, U64, JsonData.Rules -> Try(Parsed, JsonData.Error)
-parse = |bytes, offset, depth, rules| {
-	if depth > 128 {
-		return Err(LimitExceeded("JSON exceeds 128 levels"))
-	}
-	i = whitespace(bytes, offset)
-	match bytes.get(i) {
-		Ok('"') => {
-			parsed = read_string(bytes, i + 1)?
-			Ok({ value: String(parsed.text), next: parsed.next })
-		}
-		Ok('{') => {
-			var $fields = []
-			var $next = whitespace(bytes, i + 1)
-			if bytes.get($next) == Ok('}') {
-				return Ok({ value: Object([]), next: $next + 1 })
-			}
-			while True {
-				if $fields.len() >= rules.max_items {
-					return Err(LimitExceeded("JSON object exceeds ${rules.max_items.to_str()} fields"))
-				}
-				if bytes.get($next) != Ok('"') {
-					return Err(InvalidJson("expected JSON object key"))
-				}
-				key = read_string(bytes, $next + 1)?
-				colon = whitespace(bytes, key.next)
-				if bytes.get(colon) != Ok(':') {
-					return Err(InvalidJson("expected colon in JSON"))
-				}
-				item = parse(bytes, colon + 1, depth + 1, rules)?
-				match ($fields.find_first(|f| f.name == key.text), rules.duplicates) {
-					(Err(_), _) => {
-						$fields = $fields.append({ name: key.text, value: item.value })
-					}
-					(Ok(earlier), CollapseIdentical) if earlier.value == item.value => {}
-					_ => return Err(InvalidJson("duplicate JSON key: ${key.text}"))
-				}
-				$next = whitespace(bytes, item.next)
-				if bytes.get($next) == Ok('}') {
-					return Ok({ value: Object($fields), next: $next + 1 })
-				}
-				if bytes.get($next) != Ok(',') {
-					return Err(InvalidJson("expected comma in JSON object"))
-				}
-				$next = whitespace(bytes, $next + 1)
-			}
-		}
-		Ok('[') => {
-			var $items = []
-			var $next = whitespace(bytes, i + 1)
-			if bytes.get($next) == Ok(']') {
-				return Ok({ value: Array([]), next: $next + 1 })
-			}
-			while True {
-				if $items.len() >= rules.max_items {
-					return Err(LimitExceeded("JSON array exceeds ${rules.max_items.to_str()} items"))
-				}
-				item = parse(bytes, $next, depth + 1, rules)?
-				$items = $items.append(item.value)
-				$next = whitespace(bytes, item.next)
-				if bytes.get($next) == Ok(']') {
-					return Ok({ value: Array($items), next: $next + 1 })
-				}
-				if bytes.get($next) != Ok(',') {
-					return Err(InvalidJson("expected comma in JSON array"))
-				}
-				$next = whitespace(bytes, $next + 1)
-			}
-		}
-		Ok('t') => literal(bytes, i, "true", Boolean(True))
-		Ok('f') => literal(bytes, i, "false", Boolean(False))
-		Ok('n') => literal(bytes, i, "null", Null)
-		Ok(_) => number(bytes, i)
-		Err(_) => Err(InvalidJson("unexpected end of JSON"))
+		String(text) => Ok(JsonValue.String(text))
+		Number(text) => Ok(JsonValue.Number(text))
+		Boolean(flag) => Ok(JsonValue.Bool(flag))
+		Null => Ok(JsonValue.Null)
 	}
 }
 
-literal : List(U8), U64, Str, JsonData -> Try(Parsed, JsonData.Error)
-literal = |bytes, i, text, value| {
-	if bytes.drop_first(i).take_first(text.to_utf8().len()) == text.to_utf8() {
-		Ok({ value, next: i + text.to_utf8().len() })
-	} else Err(InvalidJson("invalid JSON literal"))
-}
+byte_limit : U64 -> JsonData.Error
+byte_limit = |max_bytes| LimitExceeded(if (max_bytes == 8388608) "JSON exceeds 8 MiB" else "JSON exceeds ${max_bytes.to_str()} bytes")
 
-whitespace : List(U8), U64 -> U64
-whitespace = |bytes, offset| {
-	var $i = offset
-	while match bytes.get($i) {
-		Ok(byte) => [' ', '\n', '\r', '\t'].contains(byte)
-		Err(_) => False
-	} {
-		$i = $i + 1
+read_error : Str, JsonData.Rules, U64 -> JsonData.Error
+read_error = |message, rules, max_bytes| {
+	if message == "document exceeds the limit of ${max_bytes.to_str()} bytes" {
+		byte_limit(max_bytes)
 	}
-	$i
-}
-
-digit : U8 -> Bool
-digit = |byte| byte >= '0' and byte <= '9'
-
-number : List(U8), U64 -> Try(Parsed, JsonData.Error)
-number = |bytes, start| {
-	var $i = start
-	if bytes.get($i) == Ok('-') {
-		$i = $i + 1
+	else if message == "nesting exceeds the limit of 128 levels" {
+		LimitExceeded("JSON exceeds 128 levels")
 	}
-	if bytes.get($i) == Ok('0') {
-		$i = $i + 1
-	} else {
-		if !digit(bytes.get($i) ?? 0) {
-			return Err(InvalidJson("invalid JSON number"))
-		}
-		while digit(bytes.get($i) ?? 0) {
-			$i = $i + 1
-		}
+	else if message == "array has more than ${rules.max_items.to_str()} items" {
+		LimitExceeded("JSON array exceeds ${rules.max_items.to_str()} items")
 	}
-	if bytes.get($i) == Ok('.') {
-		$i = $i + 1
-		if !digit(bytes.get($i) ?? 0) {
-			return Err(InvalidJson("invalid JSON fraction"))
-		}
-		while digit(bytes.get($i) ?? 0) {
-			$i = $i + 1
-		}
+	else if message == "object has more than ${rules.max_items.to_str()} members" {
+		LimitExceeded("JSON object exceeds ${rules.max_items.to_str()} fields")
 	}
-	if ['e', 'E'].contains(bytes.get($i) ?? 0) {
-		$i = $i + 1
-		if ['+', '-'].contains(bytes.get($i) ?? 0) {
-			$i = $i + 1
-		}
-		if !digit(bytes.get($i) ?? 0) {
-			return Err(InvalidJson("invalid JSON exponent"))
-		}
-		while digit(bytes.get($i) ?? 0) {
-			$i = $i + 1
-		}
-	}
-	text = Str.from_utf8(bytes.drop_first(start).take_first($i - start))
-		.map_err(|_| InvalidJson("invalid UTF-8 number"))?
-	Ok({ value: Number(text), next: $i })
-}
-
-read_string : List(U8), U64 -> Try({ text : Str, next : U64 }, JsonData.Error)
-read_string = |bytes, offset| {
-	var $i = offset
-	var $out = []
-	while $i < bytes.len() {
-		byte = bytes.get($i) ?? 0
-		$i = $i + 1
-		if byte == '"' {
-			text = Str.from_utf8($out).map_err(|_| InvalidJson("invalid UTF-8 JSON string"))?
-			return Ok({ text, next: $i })
-		} else if byte == '\\' {
-			escaped = bytes.get($i).map_err(|_| InvalidJson("unfinished JSON escape"))?
-			$i = $i + 1
-			match escaped {
-				'"' => {
-					$out = $out.append('"')
-				}
-				'\\' => {
-					$out = $out.append('\\')
-				}
-				'/' => {
-					$out = $out.append('/')
-				}
-				'b' => {
-					$out = $out.append(8)
-				}
-				'f' => {
-					$out = $out.append(12)
-				}
-				'n' => {
-					$out = $out.append('\n')
-				}
-				'r' => {
-					$out = $out.append('\r')
-				}
-				't' => {
-					$out = $out.append('\t')
-				}
-				'u' => {
-					var $point = hex4(bytes, $i)?
-					$i = $i + 4
-					if $point >= 0xD800 and $point <= 0xDBFF {
-						if bytes.get($i) != Ok('\\') or bytes.get($i + 1) != Ok('u') {
-							return Err(InvalidJson("unpaired JSON Unicode surrogate"))
-						}
-						low = hex4(bytes, $i + 2)?
-						if low < 0xDC00 or low > 0xDFFF {
-							return Err(InvalidJson("invalid JSON Unicode surrogate pair"))
-						}
-						$point = 0x10000 + ($point - 0xD800) * 1024 + low - 0xDC00
-						$i = $i + 6
-					} else if $point >= 0xDC00 and $point <= 0xDFFF {
-						return Err(InvalidJson("unpaired JSON Unicode surrogate"))
-					}
-					$out = $out.concat(utf8($point))
-				}
-				_ => return Err(InvalidJson("invalid JSON string escape"))
-			}
-		} else if byte < 32 {
-			return Err(InvalidJson("unescaped control byte in JSON string"))
-		} else {
-			$out = $out.append(byte)
-		}
-	}
-	Err(InvalidJson("unterminated JSON string"))
-}
-
-hex4 : List(U8), U64 -> Try(U32, JsonData.Error)
-hex4 = |bytes, offset| {
-	var $value = 0.U32
-	var $i = offset
-	while $i < offset + 4 {
-		byte = bytes.get($i).map_err(|_| InvalidJson("short JSON Unicode escape"))?
-		digit_ = if (byte >= '0' and byte <= '9') byte - '0'
-		else if (byte >= 'a' and byte <= 'f') byte - 'a' + 10
-		else if (byte >= 'A' and byte <= 'F') byte - 'A' + 10
-		else return Err(InvalidJson("invalid JSON Unicode escape"))
-		$value = $value * 16 + digit_.to_u32()
-		$i = $i + 1
-	}
-	Ok($value)
-}
-
-utf8 : U32 -> List(U8)
-utf8 = |point| {
-	if point < 128 {
-		[point.to_u8_wrap()]
-	}
-	else if point < 2048 {
-		[(192 + point // 64).to_u8_wrap(), (128 + point % 64).to_u8_wrap()]
-	} else if point < 65536 {
-		[
-			(224 + point // 4096).to_u8_wrap(),
-			(128 + point // 64 % 64).to_u8_wrap(),
-			(128 + point % 64).to_u8_wrap(),
-		]
-	} else {
-		[
-			(240 + point // 262144).to_u8_wrap(),
-			(128 + point // 4096 % 64).to_u8_wrap(),
-			(128 + point // 64 % 64).to_u8_wrap(),
-			(128 + point % 64).to_u8_wrap(),
-		]
+	else {
+		InvalidJson(message)
 	}
 }
 
@@ -594,3 +327,69 @@ expect JsonData.decode_with("{\"a\":[1],\"b\":2,\"a\":[1]}", { ..JsonData.docume
 expect JsonData.decode_with("{\"a\":1,\"a\":2}", { ..JsonData.documents, duplicates: CollapseIdentical }).is_err()
 expect JsonData.keys(JsonData.Object([{ name: "x", value: JsonData.Null }])) == ["x"] and JsonData.message(InvalidJson("bad")) == "bad"
 expect JsonData.whole("0") and JsonData.whole("12") and JsonData.whole("3.00") and !JsonData.whole("01") and !JsonData.whole("1.5") and !JsonData.whole("-1") and !JsonData.whole("1e3")
+
+# Inclusive budgets account for whitespace, UTF-8 and escaped output.
+expect JsonData.decode_bounded("null", JsonData.defaults, 4) == Ok(JsonData.Null)
+expect JsonData.decode_bounded("null ", JsonData.defaults, 4) == Err(LimitExceeded("JSON exceeds 4 bytes"))
+expect JsonData.encode_bounded(JsonData.String(""), JsonData.defaults, 2) == Ok("\"\"")
+expect JsonData.encode_bounded(JsonData.String(""), JsonData.defaults, 1) == Err(LimitExceeded("JSON exceeds 1 bytes"))
+expect JsonData.encode_bounded(JsonData.Array([]), JsonData.defaults, 0) == Err(LimitExceeded("JSON exceeds 0 bytes"))
+expect JsonData.decode_bounded("0", JsonData.defaults, 0) == Err(LimitExceeded("JSON exceeds 0 bytes"))
+expect JsonData.decode_bounded("", JsonData.defaults, 0).is_err()
+expect JsonData.encode_bounded(JsonData.String("\u(0001)"), JsonData.defaults, 7).is_err()
+expect JsonData.encode_bounded(JsonData.String("\u(0001)"), JsonData.defaults, 8).map_ok(|text| text.to_utf8().len()) == Ok(8)
+expect JsonData.encode_bounded(JsonData.String("é"), JsonData.defaults, 4).map_ok(|text| text.to_utf8().len()) == Ok(4)
+expect JsonData.encode_bounded(JsonData.Object([{ name: "\u(0001)", value: JsonData.Null }]), JsonData.defaults, 14).is_err()
+expect JsonData.encode_bounded(JsonData.Object([{ name: "\u(0001)", value: JsonData.Null }]), JsonData.defaults, 15).is_ok()
+expect JsonData.encode_bounded(JsonData.Array([JsonData.Null, JsonData.Null]), JsonData.defaults, 10) == Err(LimitExceeded("JSON exceeds 10 bytes"))
+expect JsonData.encode_bounded(JsonData.Array([JsonData.Null, JsonData.Null]), JsonData.defaults, 11) == Ok("[null,null]")
+expect JsonData.encode_bounded(JsonData.Number("NaN"), JsonData.defaults, 100).is_err()
+expect JsonData.decode_bounded("{\"x\":0,\"x\":0}", JsonData.documents, 100).is_err()
+expect JsonData.decode_bounded("[0,0]", { ..JsonData.documents, max_items: 1 }, 100).is_err()
+expect JsonData.encode_bounded(JsonData.Null, JsonData.defaults, 18446744073709551615) == Ok("null")
+
+# A larger explicit budget reaches escaping and allocation;
+# the existing public entrypoints retain their original 8 MiB errors.
+expect {
+	value = JsonData.String("a".repeat(8388607))
+	JsonData.encode_with(value, JsonData.documents) == Err(LimitExceeded("JSON exceeds 8 MiB"))
+		and match JsonData.encode_bounded(value, JsonData.documents, 8388609) {
+			Ok(text) => JsonData.decode_with(text, JsonData.documents) == Err(LimitExceeded("JSON exceeds 8 MiB")) and JsonData.decode_bounded(text, JsonData.documents, 8388609) == Ok(value)
+			Err(_) => False
+		}
+}
+
+expect {
+	var $tree = JsonData.Null
+	var $text = "null"
+	var $depth = 0
+	while $depth < 129 {
+		$tree = JsonData.Array([$tree])
+		$text = "[${$text}]"
+		$depth = $depth + 1
+	}
+	JsonData.encode_bounded($tree, JsonData.documents, 16777216) == Err(LimitExceeded("JSON exceeds 128 levels"))
+		and JsonData.decode_bounded($text, JsonData.documents, 16777216) == Err(LimitExceeded("JSON exceeds 128 levels"))
+}
+expect JsonData.encode_bounded(JsonData.Object([{ name: "a", value: JsonData.Null }, { name: "a", value: JsonData.Null }]), { ..JsonData.documents, duplicates: CollapseIdentical }, 100).is_err()
+expect JsonData.encode_bounded(JsonData.Array([JsonData.Null, JsonData.Null]), { ..JsonData.documents, max_items: 1 }, 100).is_err()
+expect JsonData.encode_bounded(JsonData.Array([JsonData.Object([{ name: "a", value: JsonData.Null }])]), JsonData.documents, 11).is_err()
+
+# Upstream uses short escapes where JSON defines them; budgets count those
+# emitted bytes, while other controls still need six-byte Unicode escapes.
+expect JsonData.encode_bounded(JsonData.String("\n"), JsonData.defaults, 4) == Ok("\"\\n\"")
+expect JsonData.encode_bounded(JsonData.String("\n"), JsonData.defaults, 3) == Err(LimitExceeded("JSON exceeds 3 bytes"))
+expect JsonData.decode_bounded("[0,0]", { ..JsonData.defaults, max_items: 1 }, 100) == Err(LimitExceeded("JSON array exceeds 1 items"))
+
+# The inclusive 128-container limit agrees in the value adapter and parser.
+expect {
+	var $tree = JsonData.Null
+	var $text = "null"
+	var $depth = 0
+	while $depth < 128 {
+		$tree = JsonData.Array([$tree])
+		$text = "[${$text}]"
+		$depth = $depth + 1
+	}
+	JsonData.encode($tree) == Ok($text) and JsonData.decode($text) == Ok($tree)
+}

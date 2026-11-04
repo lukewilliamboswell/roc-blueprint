@@ -1,0 +1,98 @@
+[
+  {
+    "file": "valid-native.spdx.json",
+    "valid": true,
+    "rule": null
+  },
+  {
+    "file": "missing-file-sha1.spdx.json",
+    "valid": false,
+    "rule": "File SHA1"
+  },
+  {
+    "file": "duplicate-file-sha1.spdx.json",
+    "valid": false,
+    "rule": "File SHA1 cardinality",
+    "independent_valid": true,
+    "independent_limit": "spdx-tools 0.8.5 does not enforce this prose invariant; Blueprint still rejects it."
+  },
+  {
+    "file": "false-file-containment.spdx.json",
+    "valid": false,
+    "rule": "filesAnalyzed containment"
+  },
+  {
+    "file": "false-reverse-containment.spdx.json",
+    "valid": false,
+    "rule": "filesAnalyzed reverse containment"
+  },
+  {
+    "file": "false-has-files.spdx.json",
+    "valid": false,
+    "rule": "filesAnalyzed hasFiles"
+  },
+  {
+    "file": "false-verification-code.spdx.json",
+    "valid": false,
+    "rule": "filesAnalyzed verification code"
+  },
+  {
+    "file": "false-file-licenses.spdx.json",
+    "valid": false,
+    "rule": "filesAnalyzed licenseInfoFromFiles"
+  },
+  {
+    "file": "missing-verification-code.spdx.json",
+    "valid": false,
+    "rule": "analyzed package verification code",
+    "independent_valid": true,
+    "independent_limit": "spdx-tools 0.8.5 does not enforce this prose invariant; Blueprint still rejects it."
+  },
+  {
+    "file": "malformed-verification-code.spdx.json",
+    "valid": false,
+    "rule": "verification code syntax"
+  },
+  {
+    "file": "invalid-id.spdx.json",
+    "valid": false,
+    "rule": "identifier alphabet"
+  },
+  {
+    "file": "undefined-package-license.spdx.json",
+    "valid": false,
+    "rule": "LicenseRef declaration"
+  },
+  {
+    "file": "undefined-file-license.spdx.json",
+    "valid": false,
+    "rule": "File LicenseRef declaration"
+  },
+  {
+    "file": "malformed-license-id.spdx.json",
+    "valid": false,
+    "rule": "LicenseRef identifier alphabet"
+  },
+  {
+    "file": "duplicate-license-id.spdx.json",
+    "valid": false,
+    "rule": "LicenseRef uniqueness",
+    "independent_valid": true,
+    "independent_limit": "spdx-tools 0.8.5 does not enforce this prose invariant; Blueprint still rejects it."
+  },
+  {
+    "file": "valid-custom-license.spdx.json",
+    "valid": true,
+    "rule": null
+  },
+  {
+    "file": "valid-external-license.spdx.json",
+    "valid": true,
+    "rule": "Declared external LicenseRef"
+  },
+  {
+    "file": "undefined-snippet-license.spdx.json",
+    "valid": false,
+    "rule": "Snippet LicenseRef declaration"
+  }
+]

@@ -1,4 +1,5 @@
 import JsonData
+import SbomJson
 import Lookup
 import SbomLicenses
 import Spdx3
@@ -9,7 +10,8 @@ import Spdx3
 ## members. It also applies the specification's prose rules: an `SPDXRef-`
 ## identifier is unique, a relationship names elements in the document, a
 ## `LicenseRef-` in a license expression is declared in
-## `hasExtractedLicensingInfos`, a checksum has its algorithm's length, and
+## `hasExtractedLicensingInfos`, a checksum has its algorithm's length, every File has exactly one SHA1,
+## package file-analysis declarations agree with containment and verification, and
 ## creators and suppliers use the `Person:`/`Organization:`/`Tool:` syntax, a
 ## snippet and a package's files name files in the document, and an external
 ## `DocumentRef-` is declared before a relationship uses it.
@@ -78,10 +80,22 @@ Spdx2 := [].{
 			return Err("an element cannot be SPDXRef-DOCUMENT")
 		}
 		external = listed("externalDocumentRefs").map(|reference| (reference.field("externalDocumentId") ?? JsonData.Null).string() ?? "")
-		if external.any(|id| !id.starts_with("DocumentRef-") or id == "DocumentRef-") or external.len() != external.fold([], |all, id| if (all.contains(id)) all else all.append(id)).len() {
+		if external.any(|id| !reference_id("DocumentRef-", id)) or external.len() != external.fold([], |all, id| if (all.contains(id)) all else all.append(id)).len() {
 			return Err("externalDocumentId must be a unique DocumentRef- identifier")
 		}
 		files = Lookup.index(file_ids.map(|id| { key: id, value: id }))
+		var $file_containers = []
+		for relationship in listed("relationships") {
+			from = (relationship.field("spdxElementId") ?? JsonData.Null).string() ?? ""
+			to = (relationship.field("relatedSpdxElement") ?? JsonData.Null).string() ?? ""
+			type = (relationship.field("relationshipType") ?? JsonData.Null).string() ?? ""
+			if type == "CONTAINS" and Lookup.contains(files, to) {
+				$file_containers = $file_containers.append({ key: from, value: from })
+			} else if type == "CONTAINED_BY" and Lookup.contains(files, from) {
+				$file_containers = $file_containers.append({ key: to, value: to })
+			}
+		}
+		file_containers = Lookup.index($file_containers)
 		for snippet in listed("snippets") {
 			from_file = (snippet.field("snippetFromFile") ?? JsonData.Null).string() ?? ""
 			pointers = ((snippet.field("ranges") ?? JsonData.Array([])).array() ?? []).fold([], |all, range| all.concat(["startPointer", "endPointer"].map(|end| ((range.field(end) ?? JsonData.Null).field("reference") ?? JsonData.Null).string() ?? "")))
@@ -94,18 +108,38 @@ Spdx2 := [].{
 			_ => False
 		}
 		declared = ((tree.field("hasExtractedLicensingInfos") ?? JsonData.Array([])).array() ?? []).map(|info| (info.field("licenseId") ?? JsonData.Null).string() ?? "")
+		if declared.len() != declared.fold([], |all, id| if (all.contains(id)) all else all.append(id)).len() {
+			return Err("duplicate extracted LicenseRef- identifier")
+		}
+		for element in entries.concat(listed("files")).concat(listed("snippets")) {
+			check_licenses(element, declared, external)?
+		}
+		for file in listed("files") {
+			checksums = (file.field("checksums") ?? JsonData.Array([])).array() ?? []
+			if checksums.keep_if(|checksum| checksum.field("algorithm") == Ok(JsonData.String("SHA1"))).len() != 1 {
+				return Err("${spdx_id(file)}: an SPDX File requires exactly one SHA1 checksum")
+			}
+		}
+
 		for entry in entries {
 			if version == "SPDX-2.2" and ["licenseConcluded", "licenseDeclared", "copyrightText"].any(|name| entry.field(name).is_err()) {
 				return Err("SPDX-2.2 packages require licenseConcluded, licenseDeclared and copyrightText")
 			}
-			for name in ["licenseConcluded", "licenseDeclared"] {
-				expression = (entry.field(name) ?? JsonData.String("NOASSERTION")).string() ?? ""
-				if SbomLicenses.custom_ids(expression).any(|id| !declared.contains(id)) {
-					return Err("${name} names a LicenseRef- that hasExtractedLicensingInfos does not declare")
-				}
-			}
 			if ((entry.field("hasFiles") ?? JsonData.Array([])).array() ?? []).any(|file| !Lookup.contains(files, file.string() ?? "")) {
 				return Err("hasFiles names a file outside the document")
+			}
+			analyzed = entry.field("filesAnalyzed") != Ok(JsonData.Boolean(False))
+			verification = entry.field("packageVerificationCode")
+			if analyzed and verification.is_err() {
+				return Err("${spdx_id(entry)}: analyzed packages require packageVerificationCode; set filesAnalyzed:false when files were not analyzed")
+			}
+			if !analyzed {
+				if verification.is_ok() or !((entry.field("hasFiles") ?? JsonData.Array([])).array() ?? []).is_empty() or !((entry.field("licenseInfoFromFiles") ?? JsonData.Array([])).array() ?? []).is_empty() {
+					return Err("${spdx_id(entry)}: filesAnalyzed:false forbids verification codes, hasFiles and licenseInfoFromFiles")
+				}
+				if Lookup.contains(file_containers, spdx_id(entry)) {
+					return Err("${spdx_id(entry)}: filesAnalyzed:false forbids contained SPDX File entries")
+				}
 			}
 		}
 		for relationship in (tree.field("relationships") ?? JsonData.Array([])).array() ?? [] {
@@ -284,6 +318,22 @@ check_object = |tree, kind| {
 			}
 		}
 	}
+	if kind == "extractedLicense" {
+		id = (tree.field("licenseId") ?? JsonData.Null).string() ?? ""
+		if !reference_id("LicenseRef-", id) {
+			return Err("${id} is not a LicenseRef- identifier")
+		}
+	}
+	if kind == "verificationCode" {
+		value = (tree.field("packageVerificationCodeValue") ?? JsonData.Null).string() ?? ""
+		if value.to_utf8().len() != 40 or !value.to_utf8().all(|byte| (byte >= '0' and byte <= '9') or (byte >= 'a' and byte <= 'f')) {
+			return Err("packageVerificationCodeValue must be 40 lowercase hex digits")
+		}
+		if ((tree.field("packageVerificationCodeExcludedFiles") ?? JsonData.Array([])).array() ?? []).any(|file| (file.string() ?? "").starts_with("/")) {
+			return Err("packageVerificationCodeExcludedFiles must use relative file names")
+		}
+	}
+
 	if kind == "checksum" {
 		algorithm = (tree.field("algorithm") ?? JsonData.Null).string() ?? ""
 		value = (tree.field("checksumValue") ?? JsonData.Null).string() ?? ""
@@ -315,7 +365,7 @@ check_value = |value, kind|
 		(Download, String(text)) => if (text == "NONE" or text == "NOASSERTION" or (text.contains(":") and !text.to_utf8().any(|byte| byte <= 32))) Ok({}) else Err("not a location, NONE or NOASSERTION")
 		(Enum(allowed), String(text)) => if (allowed.contains(text)) Ok({}) else Err("${text} is not a permitted value")
 		(SpdxRef, String(text)) => if (spdx_ref(text)) Ok({}) else Err("${text} is not an SPDXRef- identifier")
-		(Expression, String(text)) => if (text == "NONE" or text == "NOASSERTION" or SbomLicenses.expression(text)) Ok({}) else Err("invalid license expression ${Json.to_str(text)}")
+		(Expression, String(text)) => if (text == "NONE" or text == "NOASSERTION" or license_expression(text)) Ok({}) else Err("invalid license expression ${Json.to_str(text)}")
 		(Agent, String(text)) => if (text == "NOASSERTION" or agent(text, ["Person: ", "Organization: "])) Ok({}) else Err("not a Person: or Organization: agent")
 		(Creator, String(text)) => if (agent(text, ["Person: ", "Organization: ", "Tool: "])) Ok({}) else Err("not a Person:, Organization: or Tool: creator")
 		(ListVersion, String(text)) => match text.split_on(".") {
@@ -326,17 +376,62 @@ check_value = |value, kind|
 		_ => Err("wrong JSON kind")
 	}
 
+# A qualified license may name an extracted license in a declared external
+# document. Validate its syntax here; validate() checks that document exists.
+license_expression : Str -> Bool
+license_expression = |text| {
+	var $tokens = []
+	for token in text.replace_each("(", " ( ").replace_each(")", " ) ").split_on(" ") {
+		if token.contains(":") {
+			match token.split_on(":") {
+				[document, license] if reference_id("DocumentRef-", document) and reference_id("LicenseRef-", license) => {
+					$tokens = $tokens.append(license)
+				}
+				_ => return False
+			}
+		} else {
+			$tokens = $tokens.append(token)
+		}
+	}
+	SbomLicenses.expression(Str.join_with($tokens, " "))
+}
+
+check_licenses : JsonData, List(Str), List(Str) -> Try({}, Str)
+check_licenses = |element, declared, external| {
+	var $expressions = ["licenseConcluded", "licenseDeclared"].map(|name| (element.field(name) ?? JsonData.String("NOASSERTION")).string() ?? "")
+	for name in ["licenseInfoFromFiles", "licenseInfoInFiles", "licenseInfoInSnippets"] {
+		$expressions = $expressions.concat(((element.field(name) ?? JsonData.Array([])).array() ?? []).map(|value| value.string() ?? ""))
+	}
+	for expression in $expressions {
+		for token in expression.replace_each("(", " ").replace_each(")", " ").split_on(" ") {
+			if token.starts_with("LicenseRef-") and !declared.contains(token) {
+				return Err("${token} is not declared in hasExtractedLicensingInfos")
+			}
+			if token.starts_with("DocumentRef-") {
+				match token.split_on(":") {
+					[document, _] if external.contains(document) => {}
+					_ => return Err("${token} names an undeclared external document")
+				}
+			}
+		}
+	}
+	Ok({})
+}
+
+reference_id : Str, Str -> Bool
+reference_id = |prefix, text| text.starts_with(prefix) and text != prefix and text.to_utf8().all(|byte| (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z') or (byte >= '0' and byte <= '9') or byte == '-' or byte == '.')
+
 spdx_ref : Str -> Bool
-spdx_ref = |text| text.starts_with("SPDXRef-") and text != "SPDXRef-" and text.to_utf8().all(|byte| (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z') or (byte >= '0' and byte <= '9') or byte == '-' or byte == '.')
+spdx_ref = |text| reference_id("SPDXRef-", text)
 
 agent : Str, List(Str) -> Bool
 agent = |text, prefixes| prefixes.any(|prefix| text.starts_with(prefix) and text != prefix)
 
 minimal : Str
-minimal = "{\"spdxVersion\":\"SPDX-2.3\",\"dataLicense\":\"CC0-1.0\",\"SPDXID\":\"SPDXRef-DOCUMENT\",\"name\":\"d\",\"documentNamespace\":\"https://e.org/d\",\"creationInfo\":{\"created\":\"2026-10-21T00:00:00Z\",\"creators\":[\"Tool: t\"]},\"packages\":[{\"SPDXID\":\"SPDXRef-p\",\"name\":\"p\",\"downloadLocation\":\"NOASSERTION\",\"licenseDeclared\":\"MIT\",\"checksums\":[{\"algorithm\":\"SHA256\",\"checksumValue\":\"${Str.join_with(List.repeat("a", 64), "")}\"}]}],\"relationships\":[{\"spdxElementId\":\"SPDXRef-DOCUMENT\",\"relatedSpdxElement\":\"SPDXRef-p\",\"relationshipType\":\"DESCRIBES\"}]}"
+minimal = "{\"spdxVersion\":\"SPDX-2.3\",\"dataLicense\":\"CC0-1.0\",\"SPDXID\":\"SPDXRef-DOCUMENT\",\"name\":\"d\",\"documentNamespace\":\"https://e.org/d\",\"creationInfo\":{\"created\":\"2026-10-21T00:00:00Z\",\"creators\":[\"Tool: t\"]},\"packages\":[{\"SPDXID\":\"SPDXRef-p\",\"name\":\"p\",\"downloadLocation\":\"NOASSERTION\",\"filesAnalyzed\":false,\"licenseDeclared\":\"MIT\",\"checksums\":[{\"algorithm\":\"SHA256\",\"checksumValue\":\"${Str.join_with(List.repeat("a", 64), "")}\"}]}],\"relationships\":[{\"spdxElementId\":\"SPDXRef-DOCUMENT\",\"relatedSpdxElement\":\"SPDXRef-p\",\"relationshipType\":\"DESCRIBES\"}]}"
 
 check : Str -> Try({}, Str)
-check = |text| Spdx2.validate(JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?)
+check = |text| Spdx2.validate(SbomJson.decode(text).map_err(JsonData.message)?)
 
 expect check(minimal).is_ok()
 expect check(minimal.replace_each("SPDX-2.3", "SPDX-2.2")).is_err()

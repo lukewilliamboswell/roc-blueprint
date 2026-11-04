@@ -1,0 +1,924 @@
+{
+  "reviewed": "2026-11-04",
+  "source": "https://github.com/lukewilliamboswell/roc-automation/blob/main/README.md",
+  "scope": "All standard sidecars of eight latest releases and latest runtime/linker supplier sidecars of Go/Rust/Zig; historic immutable evidence, not current-source acceptance expectations. SPDX3 validation is schema-only.",
+  "projects": [
+    {
+      "repo": "basic-ssg",
+      "tag": "0.14.1",
+      "url": "https://github.com/lukewilliamboswell/basic-ssg/releases/tag/0.14.1"
+    },
+    {
+      "repo": "plume",
+      "tag": "0.5.0",
+      "url": "https://github.com/lukewilliamboswell/plume/releases/tag/0.5.0"
+    },
+    {
+      "repo": "roc-ansi",
+      "tag": "0.13.4",
+      "url": "https://github.com/lukewilliamboswell/roc-ansi/releases/tag/0.13.4"
+    },
+    {
+      "repo": "roc-blueprint",
+      "tag": "0.11.0",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/tag/0.11.0"
+    },
+    {
+      "repo": "roc-fuzz",
+      "tag": "0.5.0",
+      "url": "https://github.com/lukewilliamboswell/roc-fuzz/releases/tag/0.5.0"
+    },
+    {
+      "repo": "roc-graph-layout",
+      "tag": "0.2.0",
+      "url": "https://github.com/lukewilliamboswell/roc-graph-layout/releases/tag/0.2.0"
+    },
+    {
+      "repo": "roc-gui",
+      "tag": "link-inputs-sha256-3d2cc39731caa3221b26bd277ecac8be58633a3c900ae88dcd99ca7348954c95",
+      "url": "https://github.com/lukewilliamboswell/roc-gui/releases/tag/link-inputs-sha256-3d2cc39731caa3221b26bd277ecac8be58633a3c900ae88dcd99ca7348954c95"
+    },
+    {
+      "repo": "roc-pandoc",
+      "tag": "0.2.2",
+      "url": "https://github.com/lukewilliamboswell/roc-pandoc/releases/tag/0.2.2"
+    },
+    {
+      "repo": "roc-parser",
+      "tag": "4.0.0",
+      "url": "https://github.com/lukewilliamboswell/roc-parser/releases/tag/4.0.0"
+    },
+    {
+      "repo": "roc-pdf",
+      "tag": "0.2.0",
+      "url": "https://github.com/lukewilliamboswell/roc-pdf/releases/tag/0.2.0"
+    },
+    {
+      "repo": "roc-platform-template-go",
+      "tag": "0.1.0",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-go/releases/tag/0.1.0"
+    },
+    {
+      "repo": "roc-platform-template-rust",
+      "tag": "1.2.0",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-rust/releases/tag/1.2.0"
+    },
+    {
+      "repo": "roc-platform-template-zig",
+      "tag": "1.1.2",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/tag/1.1.2"
+    },
+    {
+      "repo": "roc-ray",
+      "tag": "0.12.0",
+      "url": "https://github.com/lukewilliamboswell/roc-ray/releases/tag/0.12.0"
+    },
+    {
+      "repo": "roc-signals",
+      "tag": "0.2.0",
+      "url": "https://github.com/lukewilliamboswell/roc-signals/releases/tag/0.2.0"
+    },
+    {
+      "repo": "roc-time",
+      "tag": "0.3.2",
+      "url": "https://github.com/lukewilliamboswell/roc-time/releases/tag/0.3.2"
+    },
+    {
+      "repo": "roc-wasm4",
+      "tag": "0.8.0",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/tag/0.8.0"
+    },
+    {
+      "repo": "weaver",
+      "tag": "0.10.1",
+      "url": "https://github.com/lukewilliamboswell/weaver/releases/tag/0.10.1"
+    }
+  ],
+  "artifacts": [
+    {
+      "file": "roc-ansi/BioPdu7WjVhTB2j1HaomKMi8htxsuwqwr79GbXY5nAUf.tar.zst.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-ansi/releases/download/0.13.4/BioPdu7WjVhTB2j1HaomKMi8htxsuwqwr79GbXY5nAUf.tar.zst.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 21238,
+      "sha256": "ce75ef37806576c67a79d66e8850af4a2e672b22d05bf28ef671593638eb7770",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-ansi/BioPdu7WjVhTB2j1HaomKMi8htxsuwqwr79GbXY5nAUf.tar.zst.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-ansi/releases/download/0.13.4/BioPdu7WjVhTB2j1HaomKMi8htxsuwqwr79GbXY5nAUf.tar.zst.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 20731,
+      "sha256": "aaf8820aba6f5665a7f4ceb291f61444ec7eac9472db7c7121d406f585dd1888",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-ansi/BioPdu7WjVhTB2j1HaomKMi8htxsuwqwr79GbXY5nAUf.tar.zst.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-ansi/releases/download/0.13.4/BioPdu7WjVhTB2j1HaomKMi8htxsuwqwr79GbXY5nAUf.tar.zst.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 62188,
+      "sha256": "a6a6ed62819a8487cd11005dda30f787c6ee6dcee8a46abcccc89f23aa3ef819",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/EuSPs8vc71qJNFg29YzegvVRL1bR9pKqUYDHFiSCPTQ1.tar.zst.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/EuSPs8vc71qJNFg29YzegvVRL1bR9pKqUYDHFiSCPTQ1.tar.zst.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 161266,
+      "sha256": "d44a0bbe7e49b24ff5db1c535914086c328d8f9c9dbad70547c13936d8ad37a8",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/EuSPs8vc71qJNFg29YzegvVRL1bR9pKqUYDHFiSCPTQ1.tar.zst.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/EuSPs8vc71qJNFg29YzegvVRL1bR9pKqUYDHFiSCPTQ1.tar.zst.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 171052,
+      "sha256": "929f0a74e9cefee33ab2d5e69d818f331701687834fbddd71fd05b3103f7e806",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/EuSPs8vc71qJNFg29YzegvVRL1bR9pKqUYDHFiSCPTQ1.tar.zst.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/EuSPs8vc71qJNFg29YzegvVRL1bR9pKqUYDHFiSCPTQ1.tar.zst.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 414020,
+      "sha256": "579ce6809dc571525be10035d1f64cfb2604314525bd85271ab9bf50be0318c8",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-aarch64-darwin.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-aarch64-darwin.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 216590,
+      "sha256": "f10f0e22c57cb2ac31dbf7e3e25c67296cfe4c99dc13c171b43aa8c3a9d9de95",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-aarch64-darwin.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-aarch64-darwin.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 233482,
+      "sha256": "e75c7d7522eda7047f5d6e61366f95628a7728ad5352dbd38181c0152ab0efed",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-aarch64-darwin.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-aarch64-darwin.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 632193,
+      "sha256": "6fb7e33a0c158206b7fd23bbdaa1092db9a3582586608b1e41660d14793d5ade",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-aarch64-linux.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-aarch64-linux.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 216580,
+      "sha256": "73d8b665f750415c080aecc970e78ef89a43dd54843662e3c38b40e76a7e2de6",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-aarch64-linux.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-aarch64-linux.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 233336,
+      "sha256": "6fec1429c09603b86f1764d0b629f64930468d9f1e1a6d7d0dfea73cd89d2414",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-aarch64-linux.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-aarch64-linux.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 629205,
+      "sha256": "ea53d4cc6f5a51770fa9d2798fea6a84919574124b9703a44f4f2498e8381604",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-aarch64-darwin.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-aarch64-darwin.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 215405,
+      "sha256": "73a7e2d25a8e6ef30c131e72a345425bbddd17b305d32d04abe13496eb9c3b80",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-aarch64-darwin.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-aarch64-darwin.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 232222,
+      "sha256": "a3a11d2697bd7e4a31619eb42bc38e75ed187c0066d3dd2101317410b7dd981e",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-aarch64-darwin.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-aarch64-darwin.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 638328,
+      "sha256": "40402026f3014a9ba3b585e32a7669a6065a62e5eeb804f438fe6b156cceb1c4",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-aarch64-linux.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-aarch64-linux.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 215413,
+      "sha256": "8163e802af555acdea3033167b1cc6ae46b6b2f4586ec496dd9717ce7f018796",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-aarch64-linux.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-aarch64-linux.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 232094,
+      "sha256": "58a9235e7064af2b1cfa9dde695b0c84c5e8d0cb8459ec4763a70ce35aacb3e0",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-aarch64-linux.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-aarch64-linux.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 635380,
+      "sha256": "6c16f2fcaaf99eb74797f2697eb925d7ebf8afe7a50f7b5d55823067f9eadf89",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-x86_64-darwin.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-x86_64-darwin.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 215285,
+      "sha256": "dbc06d08ba89f2f7cd06841d28a67c2c911889c177aa2ca23fe89dac3f88b362",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-x86_64-darwin.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-x86_64-darwin.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 232101,
+      "sha256": "77346199543a55f63f40e0d87a35a6e8aafe38e5aabc9d5709c584a569d7bedc",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-x86_64-darwin.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-x86_64-darwin.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 635720,
+      "sha256": "3d49873ef68667e7d324470b201e468a581c322aa6b1a16210b710140fd38c46",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-x86_64-linux.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-x86_64-linux.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 215289,
+      "sha256": "bc983c3c071e187b6f899c1823a1cb4676efb7a6b11af33c8e04115b7174dda2",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-x86_64-linux.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-x86_64-linux.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 231969,
+      "sha256": "3ef6b990155c309ec717f442e6a23e19f47d81df22fe33ef528e4f3f7f235cc6",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-x86_64-linux.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-x86_64-linux.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 632770,
+      "sha256": "397182e0eea482778bfce32563ec6dbe7176d475df690e60d607e89f6ae69e49",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-x86_64-windows.exe.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-x86_64-windows.exe.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 215450,
+      "sha256": "8b64d996ce1dadd8fd8304f019ea8d29b3caf446e0cc87ae0a65f23e46868567",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-x86_64-windows.exe.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-x86_64-windows.exe.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 232275,
+      "sha256": "cad5db21131ed4817fae78c633512a640f475cb747985c3d17a59a97db824f6c",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-sbom-x86_64-windows.exe.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-sbom-x86_64-windows.exe.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 648327,
+      "sha256": "4b74403a2d00efc69e378c3eac5620baa839e640fb89dbb71ca10e194badff9a",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-x86_64-darwin.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-x86_64-darwin.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 216454,
+      "sha256": "2ed363208a79516415fd908e6f8c2ba9f70e9a25235c543edc102ab2a28436cb",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-x86_64-darwin.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-x86_64-darwin.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 233345,
+      "sha256": "50b91c64557511066101248d19a35117116f958ee93555889456dacb33c5a7e7",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-x86_64-darwin.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-x86_64-darwin.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 629537,
+      "sha256": "f8dc9ae712a5cb9f80ca7ebbe87c246883f7325e6de636a8ad06fffee39d0e29",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-x86_64-linux.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-x86_64-linux.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 216456,
+      "sha256": "5811ef8791295a90ffe53eb2280e25e346456c046b387a4e3cf032c1b89f9892",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-x86_64-linux.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-x86_64-linux.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 233211,
+      "sha256": "8d010746729fedf1457a2f8a3f429f510dfa07eac97563fd9643fc1ced768296",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-x86_64-linux.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-x86_64-linux.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 626563,
+      "sha256": "3db219a0eee880a8df31ab929afa2a021d6393f66f05da3ad330976e5a469820",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-x86_64-windows.exe.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-x86_64-windows.exe.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 216619,
+      "sha256": "1f44534a4fe2a97ce78cc92d8b744f13c051c51413acc617ea4603c3c8a536f0",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-x86_64-windows.exe.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-x86_64-windows.exe.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 233519,
+      "sha256": "4f4015aed8849a5158713c06cd20587e1750d40e6e134271d2176f909a644730",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/blueprint-x86_64-windows.exe.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/blueprint-x86_64-windows.exe.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 642304,
+      "sha256": "c77599fcc695a0af5ba18cdac0631c4f5e1d2d6df5fad6aae9467e883d666b6a",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/roc-blueprint-core-3mh7nRh7hHcVamEwYFCtd7aMUEoP3cdpAk9gLsZMV17m.tar.zst.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/roc-blueprint-core-3mh7nRh7hHcVamEwYFCtd7aMUEoP3cdpAk9gLsZMV17m.tar.zst.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 72159,
+      "sha256": "ffb7533a7ae4d95c38a153db529485d615195e59fffe0f772204bf1a3bd0e154",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/roc-blueprint-core-3mh7nRh7hHcVamEwYFCtd7aMUEoP3cdpAk9gLsZMV17m.tar.zst.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/roc-blueprint-core-3mh7nRh7hHcVamEwYFCtd7aMUEoP3cdpAk9gLsZMV17m.tar.zst.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 76725,
+      "sha256": "c3e9b5305fd09f5db13ab2bb205ac87141852ad4cb2f96178f11010c50f3ba08",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/roc-blueprint-core-3mh7nRh7hHcVamEwYFCtd7aMUEoP3cdpAk9gLsZMV17m.tar.zst.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/roc-blueprint-core-3mh7nRh7hHcVamEwYFCtd7aMUEoP3cdpAk9gLsZMV17m.tar.zst.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 164546,
+      "sha256": "a46dacebbc61e03f56a66ef3daad59a093c5616e5bc2d0886d8a530873cf0a20",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/roc-blueprint-sbom-8t4wEXvghuhdQEgu7QZ1quezhwBzpgMiXFQh1z3aN36f.tar.zst.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/roc-blueprint-sbom-8t4wEXvghuhdQEgu7QZ1quezhwBzpgMiXFQh1z3aN36f.tar.zst.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 215306,
+      "sha256": "7d6bdfbb56198ac9683b3576c828ba1d5303fc2f6c4a8b1309cb93d39040eb3a",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/roc-blueprint-sbom-8t4wEXvghuhdQEgu7QZ1quezhwBzpgMiXFQh1z3aN36f.tar.zst.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/roc-blueprint-sbom-8t4wEXvghuhdQEgu7QZ1quezhwBzpgMiXFQh1z3aN36f.tar.zst.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 232262,
+      "sha256": "07291af852daaec1cc21e589518aa3a1e404f0293ba997e097bf794a5bb6951f",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-blueprint/roc-blueprint-sbom-8t4wEXvghuhdQEgu7QZ1quezhwBzpgMiXFQh1z3aN36f.tar.zst.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.11.0/roc-blueprint-sbom-8t4wEXvghuhdQEgu7QZ1quezhwBzpgMiXFQh1z3aN36f.tar.zst.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 747642,
+      "sha256": "8ad0ce9ab9d55efeb887a3ecf4b797bd5df6138251ecb98039dc09b16c5689f5",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-fuzz/9WT86CuwM7ZJBSs8iTd1jLyrUFTTiGp5hcJE63TwswGE.tar.zst.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.5.0/9WT86CuwM7ZJBSs8iTd1jLyrUFTTiGp5hcJE63TwswGE.tar.zst.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 41366,
+      "sha256": "0f9161f6522927e9cc87b091d72ce6732c738c3ec75624683a30dedea14429bc",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-fuzz/9WT86CuwM7ZJBSs8iTd1jLyrUFTTiGp5hcJE63TwswGE.tar.zst.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.5.0/9WT86CuwM7ZJBSs8iTd1jLyrUFTTiGp5hcJE63TwswGE.tar.zst.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 121696,
+      "sha256": "c2cef19756b90a993e5d9bd6a0d0820cc4ecf4bfd5da3553adc2d661b86c3d03",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-parser/FZVf39nPJLaMEmchcwTU5rWtMrcipBGbGsTk3nHzvjzk.tar.zst.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-parser/releases/download/4.0.0/FZVf39nPJLaMEmchcwTU5rWtMrcipBGbGsTk3nHzvjzk.tar.zst.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 69270,
+      "sha256": "224cf14003dfa6aa68edbd285c25ce10bfc7ee1c9a059b16489ae1b0cf88c6d8",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-parser/FZVf39nPJLaMEmchcwTU5rWtMrcipBGbGsTk3nHzvjzk.tar.zst.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-parser/releases/download/4.0.0/FZVf39nPJLaMEmchcwTU5rWtMrcipBGbGsTk3nHzvjzk.tar.zst.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 71824,
+      "sha256": "9155926575cd11219485023cc08b55fb7314e30261ef600230c78486fdedb338",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-parser/FZVf39nPJLaMEmchcwTU5rWtMrcipBGbGsTk3nHzvjzk.tar.zst.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-parser/releases/download/4.0.0/FZVf39nPJLaMEmchcwTU5rWtMrcipBGbGsTk3nHzvjzk.tar.zst.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 212763,
+      "sha256": "b1cba9fe5a84cc43c5193c56218fbe9fcca8c8405e186ce4dfa59dd3fbdc1fc5",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-platform-template-go/6oMpr7FG877G5UCTGHas9wQw9Yuxqg6JbXe6PfSANCYD.tar.zst.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-go/releases/download/0.1.0/6oMpr7FG877G5UCTGHas9wQw9Yuxqg6JbXe6PfSANCYD.tar.zst.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 97134,
+      "sha256": "64cd01021238f317e6aef1bd06982d92837545c5207a76c75e3643d08b8e966c",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-platform-template-go/6oMpr7FG877G5UCTGHas9wQw9Yuxqg6JbXe6PfSANCYD.tar.zst.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-go/releases/download/0.1.0/6oMpr7FG877G5UCTGHas9wQw9Yuxqg6JbXe6PfSANCYD.tar.zst.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 357373,
+      "sha256": "54e93ce829039c009cf93f52591b1cea6b67fbff6ceeaf8fc51cba15f7c42843",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-platform-template-go/linker-inputs-v1.0.0/linker-inputs.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-go/releases/download/linker-inputs-v1.0.0/linker-inputs.spdx.json",
+      "format": "SPDX-2.3",
+      "bytes": 50328,
+      "sha256": "28ce2520096b553c1ca8232962fcb4555004a78a593bc7e5fbd3e3a0d5475e4d",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 1,
+        "diagnostic_categories": [
+          "package must contain no elements if files_analyzed is False"
+        ]
+      }
+    },
+    {
+      "file": "roc-platform-template-go/roc-platform-template-go-examples-0.1.0.zip.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-go/releases/download/0.1.0/roc-platform-template-go-examples-0.1.0.zip.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 23250,
+      "sha256": "eeeee87455d8b82bd5a0cc07957897cb4b333a46fbbba342fe27b707ee0e20b4",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-platform-template-go/roc-platform-template-go-examples-0.1.0.zip.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-go/releases/download/0.1.0/roc-platform-template-go-examples-0.1.0.zip.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 72439,
+      "sha256": "977091e2c958ecc268179664d1a7d4f9a7f781c885c2026c873bea0ad59d9f77",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-platform-template-go/runtime-v0.1.0/runtime.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-go/releases/download/runtime-v0.1.0/runtime.spdx.json",
+      "format": "SPDX-2.3",
+      "bytes": 80436,
+      "sha256": "62e27e41d4ca8cc2d0a1020e22e9c61e0987ded7aed41cd51f16e0fce430e2fe",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 1,
+        "diagnostic_categories": [
+          "package must contain no elements if files_analyzed is False"
+        ]
+      }
+    },
+    {
+      "file": "roc-platform-template-rust/linker-inputs-v1.0.1/linker-inputs.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-rust/releases/download/linker-inputs-v1.0.1/linker-inputs.spdx.json",
+      "format": "SPDX-2.3",
+      "bytes": 9820,
+      "sha256": "8464ab24c443a76028aac8be1357009068a20394a7866adcfe543d5d3d5f36f0",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 1,
+        "diagnostic_categories": [
+          "checksums mu",
+          "checksums must contain a SHA1 algorithm checksum"
+        ]
+      }
+    },
+    {
+      "file": "roc-platform-template-rust/runtime-v1.0.0/runtime.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-rust/releases/download/runtime-v1.0.0/runtime.spdx.json",
+      "format": "SPDX-2.3",
+      "bytes": 11016,
+      "sha256": "b1d3dd557b8cbd53432829f9817124321a9948e2e241e50dba3c6ae80f23f71d",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 1,
+        "diagnostic_categories": [
+          "package must contain no elements if files_analyzed is False"
+        ]
+      }
+    },
+    {
+      "file": "roc-platform-template-zig/linker-inputs-v1.0.0/linker-inputs.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/linker-inputs-v1.0.0/linker-inputs.spdx.json",
+      "format": "SPDX-2.3",
+      "bytes": 22437,
+      "sha256": "ed3e439c79353c6394f544d8b18cbafa706d1e38c5dd050e89a297080b15aaf7",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 1,
+        "diagnostic_categories": [
+          "package must contain no elements if files_analyzed is False"
+        ]
+      }
+    },
+    {
+      "file": "roc-platform-template-zig/platform.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/1.1.2/platform.spdx.json",
+      "format": "SPDX-2.3",
+      "bytes": 60333,
+      "sha256": "405b18377425f7d191fec7bdb687c720f91ff79e55632af7aeecc5f02ec546f6",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 1,
+        "diagnostic_categories": [
+          "package must contain no elements if files_analyzed is False"
+        ]
+      }
+    },
+    {
+      "file": "roc-platform-template-zig/runtime-1.0.0/runtime.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/runtime-1.0.0/runtime.spdx.json",
+      "format": "SPDX-2.3",
+      "bytes": 9720,
+      "sha256": "d7aae9f81ef2682ff4567746faef109b258af2d951a384ede431c87a010f9d25",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 1,
+        "diagnostic_categories": [
+          "package must contain no elements if files_analyzed is False"
+        ]
+      }
+    },
+    {
+      "file": "roc-wasm4/GM7NT8JuW6TB4X9FAZKiHC4yBJ6nzeNrRwuyjvyZdqMu.tar.zst.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/GM7NT8JuW6TB4X9FAZKiHC4yBJ6nzeNrRwuyjvyZdqMu.tar.zst.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 53423,
+      "sha256": "747d029f5ad446e57b061ef5f76d4f6e6ec24981fbc240d87150ede77f4aafde",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-wasm4/GM7NT8JuW6TB4X9FAZKiHC4yBJ6nzeNrRwuyjvyZdqMu.tar.zst.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/GM7NT8JuW6TB4X9FAZKiHC4yBJ6nzeNrRwuyjvyZdqMu.tar.zst.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 53449,
+      "sha256": "4f7058a9223933489d91871a3d9b4f7cb95f747c590039edd3d5d1232619d05e",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-wasm4/GM7NT8JuW6TB4X9FAZKiHC4yBJ6nzeNrRwuyjvyZdqMu.tar.zst.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/GM7NT8JuW6TB4X9FAZKiHC4yBJ6nzeNrRwuyjvyZdqMu.tar.zst.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 125109,
+      "sha256": "d9b82ac2503d22ada8fa1bbecd05bd3e09a569f8a45766e51fed2e2b29180749",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-wasm4/roc-wasm4-docs-0.8.0.zip.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/roc-wasm4-docs-0.8.0.zip.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 44207,
+      "sha256": "d222ce204ea95a611ed6c0ef65a2ea80bc480428e30a7b1c85025a47af7f3c3e",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-wasm4/roc-wasm4-docs-0.8.0.zip.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/roc-wasm4-docs-0.8.0.zip.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 43046,
+      "sha256": "b3fc9ba1fca26cdc6a1471ce87e451313470363306f77318cd20b1066b369deb",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-wasm4/roc-wasm4-docs-0.8.0.zip.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/roc-wasm4-docs-0.8.0.zip.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 85219,
+      "sha256": "3bcfc261021bc2b0c1fed63bb6345c924b24c988e3307749be58c15fef035b96",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-wasm4/roc-wasm4-examples-0.8.0.zip.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/roc-wasm4-examples-0.8.0.zip.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 46174,
+      "sha256": "57dbabb194f5b1239807773321ce0f13424ca62cc4fe0ff6774c08a56d3ac76f",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-wasm4/roc-wasm4-examples-0.8.0.zip.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/roc-wasm4-examples-0.8.0.zip.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 45146,
+      "sha256": "452473d8c2ea723cf7471bf66f6c53ab4ae130b8dc15e1a9df56dc0d0cab0649",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-wasm4/roc-wasm4-examples-0.8.0.zip.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/roc-wasm4-examples-0.8.0.zip.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 93617,
+      "sha256": "36445c9bf53fca75300fb8c129e6312f5a14ada62e6dbceb62ea8f7eb1108923",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-wasm4/roc-wasm4-manual-0.8.0.pdf.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/roc-wasm4-manual-0.8.0.pdf.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 55880,
+      "sha256": "b4d6c533a4d9602c4eadb03d049d8e02fd2797cef9288aab2ea3fd9dbc39d756",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-wasm4/roc-wasm4-manual-0.8.0.pdf.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/roc-wasm4-manual-0.8.0.pdf.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 55522,
+      "sha256": "d2e3154c89d9586c25d84fe2d9a4e3b310165a3e9596b28fde61ac7b81560043",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "roc-wasm4/roc-wasm4-manual-0.8.0.pdf.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/roc-wasm4/releases/download/0.8.0/roc-wasm4-manual-0.8.0.pdf.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 121839,
+      "sha256": "22869301aca647a73093ae426c3cbc3678d6c90c190ef8e2a11c999befe6f141",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    },
+    {
+      "file": "weaver/7CdYzjBAJmprmnK45oTpmH6BXt76ZASN2Ck5uZQEoWsK.tar.zst.cdx.json",
+      "url": "https://github.com/lukewilliamboswell/weaver/releases/download/0.10.1/7CdYzjBAJmprmnK45oTpmH6BXt76ZASN2Ck5uZQEoWsK.tar.zst.cdx.json",
+      "format": "CDX 1.7",
+      "bytes": 56494,
+      "sha256": "9df2d56344cfac99e76940ea7d7e88d4d7e346484bf9009574333543402e709c",
+      "validation": {
+        "tool": "cyclonedx-cli 0.33.1",
+        "exit": 0
+      }
+    },
+    {
+      "file": "weaver/7CdYzjBAJmprmnK45oTpmH6BXt76ZASN2Ck5uZQEoWsK.tar.zst.spdx-2.3.json",
+      "url": "https://github.com/lukewilliamboswell/weaver/releases/download/0.10.1/7CdYzjBAJmprmnK45oTpmH6BXt76ZASN2Ck5uZQEoWsK.tar.zst.spdx-2.3.json",
+      "format": "SPDX-2.3",
+      "bytes": 59839,
+      "sha256": "7e6e115ec8e5b6cccb9fc1f1d48e4e4f91969e7255ad9f7c8274a46540e3f1cb",
+      "validation": {
+        "tool": "spdx-tools 0.8.5",
+        "exit": 0
+      }
+    },
+    {
+      "file": "weaver/7CdYzjBAJmprmnK45oTpmH6BXt76ZASN2Ck5uZQEoWsK.tar.zst.spdx.json",
+      "url": "https://github.com/lukewilliamboswell/weaver/releases/download/0.10.1/7CdYzjBAJmprmnK45oTpmH6BXt76ZASN2Ck5uZQEoWsK.tar.zst.spdx.json",
+      "format": "SPDX-3.0.1",
+      "bytes": 154291,
+      "sha256": "e825e252345a72628dceeb8590caab52b5fce3c938a4017496d94f7ce1fd2672",
+      "validation": {
+        "tool": "jsonschema-rs 0.60.3 + official SPDX3.0.1 schema",
+        "exit": 0
+      }
+    }
+  ]
+}

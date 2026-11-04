@@ -26,18 +26,20 @@ import core.Sidecar
 ## input disposition `archive-member:NAME:SHA256`.
 ## bind INVENTORY SUBJECT CONTEXT ARTIFACT [OUTPUT [--spdx-2.3 | --cyclonedx] [--manifest MANIFEST]]
 ## Without OUTPUT, `bind` writes ARTIFACT.spdx.json (SPDX 3.0.1 JSON-LD),
-## ARTIFACT.cdx.json (CycloneDX 1.7) and ARTIFACT.sbom-manifest.json, the
-## evidence manifest listing both, beside the artifact. With OUTPUT it writes
+## ARTIFACT.spdx-2.3.json, ARTIFACT.cdx.json (CycloneDX 1.7) and
+## ARTIFACT.sbom-manifest.json listing all three, beside the artifact. With OUTPUT it writes
 ## SPDX 3.0.1 there, or SPDX 2.3 or CycloneDX 1.7 with a flag, and with
 ## `--manifest` the manifest of that one sidecar at MANIFEST, beside it.
-## check [--manifest MANIFEST] [--artifacts DIR] [--inventory INVENTORY] DOCUMENT...
+## check [--manifest MANIFEST [--listed-only]] [--artifacts DIR] [--inventory INVENTORY] DOCUMENT...
 ## `check` holds sidecars to the profile: valid in their format, one described
 ## subject (with `--artifacts`, the file of that name in DIR, byte for byte),
 ## evidence that is INVENTORY's, and one package graph across renderings.
 ## With `--manifest`, the sidecars MANIFEST lists are checked too, and the
 ## manifest is held to the files: the subject in DIR (or beside the manifest),
-## each listed sidecar beside the manifest, and INVENTORY, rehashed.
-## JSON input files are bounded to 1MiB. Output sidecars are separate from assets.
+## each listed sidecar beside the manifest, and INVENTORY, rehashed. An adjacent
+## conventional sidecar omitted from the manifest is refused. `--listed-only`
+## explicitly checks legacy/partial declarations without asserting a full set.
+## JSON input files are bounded to 16MiB. Output sidecars are separate from assets.
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	result = run!(args.map(OsStr.display))
@@ -50,7 +52,7 @@ main! = |args| {
 	}
 }
 
-usage = "usage: scripts/sbom.roc members ARCHIVE OUTPUT | inspect SPEC LOCK COMPOSITION TARGET OUTPUT [--members LISTING] | bind INVENTORY SUBJECT CONTEXT ARTIFACT [OUTPUT [--spdx-2.3 | --cyclonedx] [--manifest MANIFEST]] | check [--manifest MANIFEST] [--artifacts DIR] [--inventory INVENTORY] DOCUMENT..."
+usage = "usage: scripts/sbom.roc members ARCHIVE OUTPUT | inspect SPEC LOCK COMPOSITION TARGET OUTPUT [--members LISTING] | bind INVENTORY SUBJECT CONTEXT ARTIFACT [OUTPUT [--spdx-2.3 | --cyclonedx] [--manifest MANIFEST]] | check [--manifest MANIFEST [--listed-only]] [--artifacts DIR] [--inventory INVENTORY] DOCUMENT..."
 
 read! = |name| {
 	text = SbomFiles.read!(name)?
@@ -73,12 +75,12 @@ run! = |args| match args {
 	}
 	["inspect", spec_path, lock_path, composition_path, target, output] => inspect!(spec_path, lock_path, composition_path, target, output, "")
 	["inspect", spec_path, lock_path, composition_path, target, output, "--members", listing_path] => inspect!(spec_path, lock_path, composition_path, target, output, listing_path)
-	["bind", inventory_path, subject_path, context_path, artifact] => bind!(inventory_path, subject_path, context_path, artifact, [("${artifact}.spdx.json", "spdx-3.0.1"), ("${artifact}.cdx.json", "cyclonedx-1.7")], "${artifact}${Manifest.suffix}")
+	["bind", inventory_path, subject_path, context_path, artifact] => bind!(inventory_path, subject_path, context_path, artifact, Manifest.outputs(artifact), "${artifact}${Manifest.suffix}")
 	["bind", inventory_path, subject_path, context_path, artifact, output, .. as flags] => {
 		options = bind_options(flags, { format: "spdx-3.0.1", manifest: "" })?
 		bind!(inventory_path, subject_path, context_path, artifact, [(output, options.format)], options.manifest)
 	}
-	["check", .. as rest] => check!(rest, { artifacts: "", inventory: "", manifest: "" })
+	["check", .. as rest] => check!(rest, { artifacts: "", inventory: "", manifest: "", listed_only: False })
 	_ => Err(Invalid(usage))
 }
 
@@ -114,6 +116,8 @@ check! = |args, options|
 		["--artifacts", artifacts, .. as rest] => check!(rest, { ..options, artifacts })
 		["--inventory", inventory, .. as rest] => check!(rest, { ..options, inventory })
 		["--manifest", manifest, .. as rest] => check!(rest, { ..options, manifest })
+		["--listed-only", .. as rest] => check!(rest, { ..options, listed_only: True })
+		_ if options.listed_only and options.manifest.is_empty() => Err(Invalid("--listed-only requires --manifest"))
 		[] if options.manifest.is_empty() => Err(Invalid("check needs at least one SBOM document"))
 		documents => {
 			# A manifest is held to the files before its sidecars are read as
@@ -148,7 +152,7 @@ check! = |args, options|
 				Stdout.line!("${path}: ${checked.document.version} sidecar of ${checked.subject.name} checks")?
 			}
 			match manifest {
-				Ok(verified) => Stdout.line!("${options.manifest}: manifest of ${verified.subject.filename} checks")
+				Ok(verified) => Stdout.line!("${options.manifest}: ${if (options.listed_only) "declared sidecars only" else "declared and adjacent standard sidecar set"} of ${verified.subject.filename} checks")
 				Err(NoManifest) => Ok({})
 			}
 		}
@@ -163,21 +167,14 @@ verify_manifest! = |options| {
 	manifest = Manifest.read(text).map_err(|problem| Invalid("${options.manifest}: ${problem}"))?
 	subject_path = if (options.artifacts.is_empty()) Manifest.beside(options.manifest, manifest.subject.filename) else "${options.artifacts}/${manifest.subject.filename}"
 	subject = SbomFiles.measure!(subject_path).map_err(|_| Invalid("${options.manifest}: no regular file ${subject_path} to hold its subject to"))?
-	var $sidecars = []
-	for entry in manifest.sidecars {
-		match SbomFiles.measure!(Manifest.beside(options.manifest, entry.filename)) {
-			Ok(measured) => {
-				$sidecars = $sidecars.append({ filename: entry.filename, sha256: measured.sha256, size: measured.size })
-			}
-			Err(_) => {}
-		}
-	}
+	sidecars = SbomFiles.observe_sidecars!(options.manifest, manifest, options.listed_only)?
 	inventory = if options.inventory.is_empty() Unmeasured else Measured(SbomFiles.digest!(options.inventory)?)
-	Manifest.check(text, { subject, inventory, sidecars: $sidecars }).map_err(|problem| Invalid("${options.manifest}: ${problem}"))
+	checker = if options.listed_only Manifest.check_listed else Manifest.check
+	checker(text, { subject, inventory, sidecars }).map_err(|problem| Invalid("${options.manifest}: ${problem}"))
 }
 
 ## Render every requested document, and the manifest that lists them, before
-## writing any, so a refusal leaves no partial set of sidecars.
+## writing any; check destination collisions before the first exclusive write.
 bind! = |inventory_path, subject_path, context_path, artifact, outputs, manifest_path| {
 	inventory_text = read!(inventory_path)?
 	inventory : Sbom.Inventory
@@ -198,6 +195,7 @@ bind! = |inventory_path, subject_path, context_path, artifact, outputs, manifest
 	if !manifest_path.is_empty() and outputs.any(|(output, _)| Manifest.directory_of(output) != Manifest.directory_of(manifest_path)) {
 		return Err(Invalid("the manifest must sit beside the sidecars it lists"))
 	}
+	SbomFiles.require_new_outputs!(outputs.map(|(output, _)| output).concat(if (manifest_path.is_empty()) [] else [manifest_path]))?
 	measured = SbomFiles.measure!(artifact)?
 	if !subject.sha256.is_empty() and subject.sha256 != measured.sha256 {
 		return Err(Invalid("final subject SHA-256 mismatch"))

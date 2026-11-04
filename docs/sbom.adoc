@@ -4,7 +4,9 @@
 When you ship a file to someone, they may ask what is inside it. Blueprint can
 answer with a software bill of materials (SBOM) for each file you deliver.
 This chapter starts with what an SBOM is and how to publish one. The later
-sections are the reference for each input, rule and format.
+sections are the reference for each input, rule and format. Start with
+<<use-the-released-standalone-tool>> and <<publish-an-sbom>>, or go directly
+to <<what-recipients-do>> or <<upgrade-an-sbom-recipe>>.
 
 [#what-an-sbom-is]
 == What an SBOM is
@@ -13,6 +15,11 @@ An SBOM is a list of the parts that make up one piece of software, and how
 they relate. CISA calls it "a nested inventory, a list of ingredients that
 make up software components". It is a machine-readable file, so tools can
 search it and compare it with other data.
+
+A sidecar is a separate file published beside the release artifact. A binding
+manifest lists the artifact and its SBOM sidecars with their hashes and sizes.
+Coverage records what the producer checked and what remains unknown. A
+closure is a dependency together with the dependencies it brings in.
 
 These terms appear throughout this chapter:
 
@@ -49,27 +56,340 @@ VEX:: Vulnerability Exploitability eXchange. CISA defines a VEX document as
 are affected" by a known vulnerability. A VEX statement is separate from the
 SBOM. Blueprint does not write VEX documents.
 
-[#why-people-ask-for-an-sbom]
-=== Why customers and regulators ask for one
+[#use-the-released-standalone-tool]
+== Install the standalone SBOM tool
 
-* *Security.* When a new vulnerability is announced in a library, the people
-  who run your software need to know whether they are affected. With an SBOM
-  they can check without asking you, and keep checking as new advisories
-  appear.
-* *License compliance.* Licenses travel with code. An SBOM lists each
-  component's license so a legal team can review it.
-* *Procurement and regulation.* Customers may ask for an SBOM before they
-  buy or deploy your software. Some markets also regulate it. For example,
-  the EU Cyber Resilience Act (Regulation (EU) 2024/2847) applies to
-  products with digital elements made available in the EU, wherever they
-  were made, and includes SBOM obligations from 11 December 2027. Whether
-  any such rule applies to you depends on where and how you supply your
-  software; check with your legal team rather than relying on this page.
-  CISA and international partners publish the
-  https://www.cisa.gov/sites/default/files/2026-07/2026_cisa_sbom_minimum_elements_508c.pdf[2026 Minimum Elements for an SBOM],
-  which says what a useful SBOM contains.
+Use the native `blueprint-sbom-<system>` binary from a pinned Blueprint release
+that contains the behavior documented here. This chapter describes the current
+repository revision; an earlier published tool may have different defaults or
+lack these checks. Use a matching producer and checker version.
 
-This page is a guide, not legal advice. Check your own obligations.
+For an unreleased revision, build the native tool from that checkout instead
+of downloading an older release:
+
+[source,console]
+----
+nix develop -c roc build scripts/sbom.roc --output=./blueprint-sbom-x86_64-linux
+----
+
+A released native binary needs no Roc compiler or Nix. Download the binary and `blueprint.sha256`
+from that release, verify the binary's checksum, and make it executable.
+For x86_64 Linux, replace `<version>` with the release tag:
+
+[source,console]
+----
+curl -fsSLO https://github.com/lukewilliamboswell/roc-blueprint/releases/download/<version>/blueprint-sbom-x86_64-linux
+curl -fsSLO https://github.com/lukewilliamboswell/roc-blueprint/releases/download/<version>/blueprint.sha256
+sha256sum --ignore-missing -c blueprint.sha256
+chmod +x blueprint-sbom-x86_64-linux
+----
+
+Confirm that the checksum output includes `blueprint-sbom-x86_64-linux: OK`.
+Pin the release and a reviewed digest in automation. A checksum downloaded
+with a binary checks their consistency; establish trust in the release through
+your normal publisher verification, such as its attestation.
+
+Other binaries are `blueprint-sbom-aarch64-linux`,
+`blueprint-sbom-aarch64-darwin` and `blueprint-sbom-x86_64-windows.exe`.
+The commands below use `./blueprint-sbom-x86_64-linux`; substitute your binary.
+The tool ignores any `Blueprint.roc` in its working directory. It reads only
+the explicit input files, without resolving packages or executing a provider.
+
+[#publish-an-sbom]
+== From a project to published sidecars
+
+This walkthrough publishes an x86_64 Linux executable called `my-app`.
+Install the tool above first. Blueprint projects export the Spec and Lock
+below; another build system must supply equivalent evaluated inputs and
+reviewed composition. A composition is your declaration of what ships and why;
+Blueprint checks and renders that declaration rather than scanning a binary.
+
+*Build the final file.* Build the exact file you will deliver, for example
+  into `dist/my-app`. Do not change it after this point. Any change, even a
+  rebuild with a new timestamp, needs a new SBOM.
+
+*Export the evaluated Spec and the Lock.* The tool reads them, not
+  `Blueprint.roc`. Run `blueprint update` first if the Lock is not current.
+[source,console]
+----
+mkdir -p sbom
+blueprint spec > sbom/Spec
+cp Blueprint.lock sbom/Lock
+----
+For example, this small project declares only the `release` task as an
+accounted input. Its existing `scripts/build-release` script builds `dist/my-app`;
+the environment itself adds no fetched programs or package sources. Use your
+release's platform URL:
+[source,roc]
+----
+app [config] { pf: platform "<the platform URL of a release>" }
+
+config = [
+    Name("my-app"),
+    Environment("release", []),
+    Task("release", [Use("release"), Run(["scripts/build-release"])]),
+]
+----
+
+*Write the reviewed composition.* `sbom/composition.json` says what ships
+  in the file, and why. You write it, and someone who knows the code reviews
+  it. This template describes one shipped library and the compiler that built
+  the file. Replace the example metadata and all `<...>` placeholders with
+  reviewed facts. Its input list assumes the project declares only a task
+  called `release`; adapt that list to your actual Spec and Lock:
+[source,json]
+----
+{
+  "profile": "blueprint-spdx-3.0-v2",
+  "components": [
+    {"id": "parser", "name": "example-parser", "version": "2.4.1",
+     "producer": "Organization: Example Upstream", "license": "MIT", "license_url": "",
+     "identity": "pkg:cargo/example-parser@2.4.1",
+     "download": "https://example.org/example-parser-2.4.1.tar.gz",
+     "sha256": "<sha256 of that archive>", "modified": "",
+     "target": "x86_64-linux", "origin": "reviewed", "kind": "library",
+     "copyright": "NOASSERTION", "attribution": "NOASSERTION",
+     "package_url": "pkg:cargo/example-parser@2.4.1", "source_refs": []},
+    {"id": "compiler", "name": "<compiler name>", "version": "<exact version>",
+     "producer": "Organization: <its supplier>", "license": "<its license expression>",
+     "license_url": "", "identity": "<stable URL of that release>",
+     "download": "<its download URL>", "sha256": "<its sha256>", "modified": "",
+     "target": "x86_64-linux", "origin": "reviewed", "kind": "application",
+     "copyright": "NOASSERTION", "attribution": "NOASSERTION",
+     "package_url": "", "source_refs": []}
+  ],
+  "relationships": [
+    {"from": "Subject", "to": "parser", "relation": "contains", "scope": "",
+     "basis": "Statically linked into my-app"},
+    {"from": "Subject", "to": "compiler", "relation": "dependsOn", "scope": "build",
+     "basis": "Compiles my-app; not shipped"}
+  ],
+  "coverage": [
+    {"scope": "native-closure", "component": "Subject", "aspect": "assembly",
+     "status": "incomplete",
+     "reason": "System libraries linked by the toolchain are not yet listed",
+     "contact": "https://example.org/security"}
+  ],
+  "inputs": [
+    {"input": "task:release", "component": "",
+     "reason": "Runs the release build; the task itself contributes no code"}
+  ],
+  "imported_documents": [],
+  "unavailable_sboms": []
+}
+----
+`inputs` accounts for every known input, including ones that do not ship.
+Read the exported Spec and Lock and add one record per declaration using these
+names: `source:NAME`, `program:NAME:SYSTEM` for the selected target,
+`tool:SOURCE#NAME`, `roc-package:NAME`, `build-source:NAME`,
+`build-file:BUILD:PATH`, `task:NAME` and
+`build:NAME`. A disposition records what happened to an input: name the
+`component` it became, or leave `component` empty and explain its exclusion
+in `reason`. Do not leave the example task entry if your project has no such
+task. Inspection refuses missing, unknown or duplicate input dispositions.
+For a locked dependency, either import its supplier's SBOM or record why it
+is unavailable; see <<chain-sboms-across-dependencies>>. A component can take
+its pin-derived facts directly from the Lock; see
+<<inspect-without-executing-a-provider>>.
+
+*Inspect.* This checks the composition against the Spec and Lock and writes
+  the inventory. It runs nothing and downloads nothing.
+[source,console]
+----
+./blueprint-sbom-x86_64-linux inspect sbom/Spec sbom/Lock \
+  sbom/composition.json x86_64-linux sbom/inventory.json
+----
+If input accounting fails, the diagnostic lists the actual IDs under
+`missing`, `unknown` and `duplicate`. Add dispositions for missing IDs,
+correct unknown IDs and remove duplicates, then inspect again. Other
+refusals name the rule that failed.
+
+*Describe the subject and the document.* `sbom/subject.json` names the
+  file. Leave `sha256` empty and `bind` computes it. `sbom/context.json`
+  identifies this SBOM document.
+[source,json]
+----
+{"filename": "my-app", "version": "1.2.0", "target": "x86_64-linux", "sha256": "",
+ "url": "https://example.org/releases/1.2.0/my-app", "kind": "application",
+ "producer": "Organization: Example Ltd", "license": "NOASSERTION", "license_url": "",
+ "copyright": "NOASSERTION", "attribution": "NOASSERTION"}
+----
+[source,json]
+----
+{"namespace": "https://example.org/sbom/my-app/1.2.0/x86_64-linux/revision-1",
+ "revision": "1", "created": "2026-10-21T00:00:00Z",
+ "author": "Organization: Example Ltd", "generator": "Tool: blueprint-sbom-<version>"}
+----
+
+*Bind the final bytes.* This hashes `dist/my-app` and writes
+  `dist/my-app.spdx.json`, `dist/my-app.spdx-2.3.json`,
+  `dist/my-app.cdx.json` and their binding manifest beside it. It never
+  overwrites an existing file.
+[source,console]
+----
+./blueprint-sbom-x86_64-linux bind sbom/inventory.json \
+  sbom/subject.json sbom/context.json dist/my-app
+----
+
+*Check the complete set.* The manifest connects the final file and all
+  three SBOM sidecars by name, SHA-256 and size. This command checks their
+  bytes, format rules, shared component graph and agreement with your inventory:
+[source,console]
+----
+./blueprint-sbom-x86_64-linux check \
+  --manifest dist/my-app.sbom-manifest.json \
+  --inventory sbom/inventory.json --artifacts dist
+----
+
+*Publish all five files together.* Upload `my-app`, `my-app.spdx.json`,
+  `my-app.spdx-2.3.json`, `my-app.cdx.json` and `my-app.sbom-manifest.json`
+  to the same immutable release location. Keep `composition.json` under
+  review in your repository. Retain the inspected inventory and generation
+  inputs for later checks; recipients do not need your private inventory.
+
+Generate into a fresh staging directory: existing output files are refused.
+For a source archive, use <<inventory-a-source-bundle-from-its-archive>>
+instead of declaring its file membership by hand. An additional development
+or release check is described in
+xref:sbom-conformance.adoc#check-sbom-conformance-independently[Check SBOM conformance independently].
+
+[#what-recipients-do]
+== Verify a downloaded release
+
+Download the artifact, its `.sbom-manifest.json` and all three advertised
+SBOM sidecars into one directory. Install the standalone tool above, then run
+from that directory:
+
+[source,console]
+----
+./blueprint-sbom-x86_64-linux check \
+  --manifest my-app.sbom-manifest.json --artifacts .
+----
+
+You do not need the publisher's inventory. This verifies the subject and
+sidecar hashes and sizes, each document's format and binding context, and
+agreement between the representations. Without `--inventory`, the manifest's
+inventory digest is retained evidence rather than a file you have checked.
+A successful check does not authenticate the publisher: verify signatures or
+release attestations through your normal release-verification process too.
+
+Download every advertised representation. The checker also discovers
+conventional sidecar names beside the manifest and rejects unlisted ones,
+including ASCII case variants. It cannot detect a remote asset you did not
+download, or infer the role of an arbitrarily named advertised file.
+
+Load a supported SBOM format into your scanner for advisory matches, or give
+it to a license reviewer. A scanner match needs investigation; it does not
+establish that the product is exploitable.
+
+[#understand-sbom-unknowns]
+== Understand unknown dependencies and licenses
+
+* *`NOASSERTION` license.* No license determination is stated. Review the
+  upstream terms or ask the supplier. Do not read it as permission to use or
+  redistribute the component, and do not invent a license to silence a warning.
+* *Missing supplier SBOM.* `unavailable_sboms` records missing documentation.
+  It does not establish whether the dependency closure is complete; read the
+  addressed `coverage` assessment for that separate question.
+* *Unresolved dependency candidate.* A dependency resolver knows about the
+  component, but its inclusion or runtime role has not been established.
+  Review target, feature and build evidence before changing it to shipped
+  code or a build dependency. Standard CycloneDX tools see confirmed components
+  and incompleteness declarations; SPDX or Blueprint candidate evidence also
+  exposes the unresolved records.
+* *Unknown or incomplete coverage.* `unknown` means the area has not been
+  examined; `incomplete` means only part is known. Record the component,
+  `assembly` or `dependencies` aspect, reason and contact. Use `verified-empty`
+  only after checking that the addressed area has no relationships.
+* *Vulnerability match.* Check the component identity and affected versions,
+  then whether the relevant code is present and reachable in your product.
+  A separate VEX statement may record the resulting vulnerability assessment.
+
+[#upgrade-an-sbom-recipe]
+== Upgrade an existing publishing recipe
+
+Upgrade the producing tool and Blueprint-based checker together. Current
+readers retain older metadata and CycloneDX profiles; older readers may refuse
+new profile markers even when the documents follow the standard formats.
+
+Remove any separate SPDX 2.3 generation step: default `bind` now writes all
+three representations and one complete manifest. Generate into a fresh
+staging directory, run the manifest check above and publish the five-file set.
+Regenerate the inventory from reviewed inputs to adopt current metadata;
+unknown facts remain unknown. For typed Roc integrations, see
+<<reviewed-component-metadata>>.
+
+Keep immutable historical documents unchanged. If an old manifest deliberately
+lists only a subset of separately published representations, check that limited
+claim explicitly:
+
+[source,console]
+----
+./blueprint-sbom-x86_64-linux check \
+  --manifest old-app.sbom-manifest.json --listed-only --artifacts .
+----
+
+The result says “declared sidecars only”; it makes no claim about omitted
+companions. `--listed-only` requires `--manifest`. Use the complete default set
+for new releases rather than carrying this historical limitation forward.
+
+[#sbom-quality-checklist]
+== Check the quality before you publish
+
+An SBOM is only useful if it is accurate. Before you publish, check:
+
+* *The digest is the final file's.* Bind after the last build, signing
+  or packaging step. A recipient compares the SHA-256 with the file they
+  downloaded.
+* *One SBOM per delivered file.* Each executable, per target, and each
+  source archive gets its own sidecars. Never reuse one file's SBOM for
+  another.
+* *Every component has an exact version.* Not a range, and not "latest".
+* *Suppliers are named.* Use `Organization: ...` or `Person: ...`. Use
+  `NOASSERTION` only when you do not know.
+* *Licenses are real expressions.* `NOASSERTION` means you made no
+  determination, or chose not to say. `NONE` means the component has no
+  license information at all. Neither means "no restrictions". For custom
+  terms, use a `LicenseRef-` name with a `license_url`.
+* *Package URLs are present where they exist.* Scanners match
+  vulnerabilities by purl. Supply the reviewed versioned `package_url`;
+  keep an opaque source or tree `identity` separate.
+* *Your dependencies bring their suppliers' SBOMs.* Pin each dependency
+  file by its SHA-256 and import its supplier's SBOM, bound to it. Where a
+  supplier publishes none, list it in `unavailable_sboms` with the reason;
+  `inspect` refuses an inventory that does neither. See
+  <<chain-sboms-across-dependencies>>.
+* *Build-only tools have build scope.* The compiler used only to build your
+  file is `dependsOn` with scope `build`. A compiler or runtime actually
+  delivered inside the artifact is a contained component.
+* *Gaps are stated, not hidden.* If you do not know part of the
+  inventory, add an addressed `unknown` or `incomplete` coverage entry with
+  a reason and contact. An unexplained omission can mislead recipients. Use
+  `verified-empty` only when you checked and found nothing.
+* *Corrections get a new revision and namespace.* Never replace a
+  published SBOM in place. Publish a corrected one with a new `revision` and
+  a new document namespace. HTTPS namespaces end in that revision;
+  generated UUID namespaces hash the inventory, subject and revision context.
+* *All formats come from one inventory.* Bind every format from the
+  same inventory, subject and context. Do not edit a rendering by hand.
+
+[#what-an-sbom-does-not-prove]
+== What an SBOM does not prove
+
+* *It is not a vulnerability verdict.* Listing a component with a known
+  vulnerability does not mean your product is exploitable. That is what a
+  VEX statement says, and Blueprint does not write one.
+* *It is not build provenance.* It says what the file contains, not who
+  built it, on which machine, or from which commit. Provenance and signed
+  attestations are separate records.
+* *It is only as complete as its coverage.* Blueprint states what was
+  reviewed and what is unknown. Valid SPDX or CycloneDX alone says nothing
+  about whether the list is complete.
+* *It does not prove an opaque tool's output.* If a build step does not
+  disclose what it links in, the SBOM cannot know. Record that as an
+  `incomplete` coverage gap.
+
+The rest of this chapter is reference material for producers and integrations.
 
 [#spdx-and-cyclonedx]
 == SPDX and CycloneDX
@@ -116,13 +436,12 @@ CycloneDX it is the `metadata.component`.
 [#which-format-to-send]
 === Which should I send?
 
-* *By default, send both SPDX 3.0.1 and CycloneDX.* This is what `bind`
-  writes when you give it no output path. Each recipient can read the format
-  their tools understand.
-* *Add SPDX 2.3* only when a recipient's tools cannot read SPDX 3 yet.
-  It states the same graph as the other two.
+* *By default, publish all three formats.* `bind` writes SPDX 3.0.1,
+  SPDX 2.3 and CycloneDX 1.7 and lists all three in the binding manifest.
+  Recipients can choose the representation their tools understand.
 * *If a recipient asks for one format*, send that one. All three come from
-  one inventory, so none says more or less about what ships.
+  one inventory. CycloneDX standard fields expose the confirmed graph;
+  unresolved candidates remain explicit evidence with an incomplete composition.
 
 Do not edit one rendering by hand. Change the inventory and bind again, so
 every format stays the same.
@@ -157,14 +476,19 @@ differently, and CycloneDX cannot spell all of them in its standard fields.
 | Coverage, input dispositions and reasons | an `Annotation` | an `OTHER` annotation | a `blueprint:evidence` property
 |===
 
+For unresolved candidates, the CycloneDX standard-component cells above do
+not apply: their complete facts remain in explicit candidate evidence, while
+standard tools see the confirmed graph and its incompleteness declarations.
+
 Where CycloneDX loses meaning:
 
 * *A dependency is not containment.* Nested `components` state containment;
   CycloneDX `dependencies` state only actual `dependsOn` relationships. Read
   `scope` to tell shipped code from tools:
   `required` is reached through shipped or run-time edges, `excluded` is only
-  a build, test or development dependency, and `optional` is anything else,
-  such as an unresolved resolution candidate.
+  a confirmed build, test or development dependency. Unresolved candidates
+  stay in explicit candidate evidence, with standard incompleteness declarations;
+  they are not labelled as optional runtime components.
 * *Scope belongs to a component, not to an edge.* A component that is a
   build tool for one part and shipped by another is `required`. The
   per-edge scopes are in the `blueprint:relationship` properties.
@@ -187,208 +511,30 @@ What no format claims:
 * `blueprint lock show --json` reports committed pins for scripts. It is not
   an SBOM, and it does not show that a build happened or what it contains.
 
-[#publish-an-sbom]
-== From a project to published sidecars
+[#why-people-ask-for-an-sbom]
+=== Why customers and regulators ask for one
 
-This walkthrough uses the standalone reporting tool, so it works in any
-project. Replace `<tool>` with the immutable tool URL from the Blueprint
-release notes (see <<use-the-released-standalone-tool>>). The example
-publishes an x86_64 Linux executable called `my-app`.
+* *Security.* When a new vulnerability is announced in a library, the people
+  who run your software need to know whether they are affected. With an SBOM
+  they can check without asking you, and keep checking as new advisories
+  appear.
+* *License compliance.* Licenses travel with code. An SBOM lists each
+  component's license so a legal team can review it.
+* *Procurement and regulation.* Customers may ask for an SBOM before they
+  buy or deploy your software. Some markets also regulate it. For example,
+  the EU Cyber Resilience Act (Regulation (EU) 2024/2847) applies to
+  products with digital elements made available in the EU, wherever they
+  were made, and includes SBOM obligations from 11 December 2027. Whether
+  any such rule applies to you depends on where and how you supply your
+  software; check with your legal team rather than relying on this page.
+  CISA and international partners publish the
+  https://www.cisa.gov/sites/default/files/2026-07/2026_cisa_sbom_minimum_elements_508c.pdf[2026 Minimum Elements for an SBOM],
+  which says what a useful SBOM contains.
 
-. *Build the final file.* Build the exact file you will deliver, for example
-  into `dist/my-app`. Do not change it after this point. Any change, even a
-  rebuild with a new timestamp, needs a new SBOM.
-
-. *Export the evaluated Spec and the Lock.* The tool reads them, not
-  `Blueprint.roc`. Run `blueprint update` first if the Lock is not current.
-+
-[source,console]
-----
-mkdir -p sbom
-blueprint spec > sbom/Spec
-cp Blueprint.lock sbom/Lock
-----
-
-. *Write the reviewed composition.* `sbom/composition.json` says what ships
-  in the file, and why. You write it, and someone who knows the code reviews
-  it. A minimal example, with one shipped library and the compiler that built
-  the file:
-+
-[source,json]
-----
-{
-  "profile": "blueprint-spdx-3.0-v2",
-  "components": [
-    {"id": "parser", "name": "example-parser", "version": "2.4.1",
-     "producer": "Organization: Example Upstream", "license": "MIT", "license_url": "",
-     "identity": "pkg:cargo/example-parser@2.4.1",
-     "download": "https://example.org/example-parser-2.4.1.tar.gz",
-     "sha256": "<sha256 of that archive>", "modified": "",
-     "target": "x86_64-linux", "origin": "reviewed"},
-    {"id": "compiler", "name": "<compiler name>", "version": "<exact version>",
-     "producer": "Organization: <its supplier>", "license": "<its license expression>",
-     "license_url": "", "identity": "<stable URL of that release>",
-     "download": "<its download URL>", "sha256": "<its sha256>", "modified": "",
-     "target": "x86_64-linux", "origin": "reviewed"}
-  ],
-  "relationships": [
-    {"from": "Subject", "to": "parser", "relation": "contains", "scope": "",
-     "basis": "Statically linked into my-app"},
-    {"from": "Subject", "to": "compiler", "relation": "dependsOn", "scope": "build",
-     "basis": "Compiles my-app; not shipped"}
-  ],
-  "coverage": [
-    {"scope": "native-closure", "status": "incomplete",
-     "reason": "System libraries linked by the toolchain are not yet listed",
-     "contact": "https://example.org/security"}
-  ],
-  "inputs": [],
-  "imported_documents": [],
-  "unavailable_sboms": []
-}
-----
-+
-`inputs` needs one entry for every input your Spec and Lock know about,
-including ones that do not ship. Names have the form `source:NAME`,
-`program:NAME:SYSTEM`, `tool:SOURCE#NAME`, `roc-package:NAME`,
-`build-source:NAME`, `task:NAME` and `build:NAME`. Give each a `component`
-it became, or an empty `component` and a `reason` it is excluded. A component
-can take its version, identity, download and digest from the Lock instead:
-see <<inspect-without-executing-a-provider>>.
-
-. *Inspect.* This checks the composition against the Spec and Lock and writes
-  the inventory. It runs nothing and downloads nothing.
-+
-[source,console]
-----
-roc run <tool> -- inspect sbom/Spec sbom/Lock sbom/composition.json x86_64-linux sbom/inventory.json
-----
-+
-A refusal names the rule that failed, such as
-`known input omitted or unknown/duplicate input disposition`.
-
-. *Describe the subject and the document.* `sbom/subject.json` names the
-  file. Leave `sha256` empty and `bind` computes it. `sbom/context.json`
-  identifies this SBOM document.
-+
-[source,json]
-----
-{"filename": "my-app", "version": "1.2.0", "target": "x86_64-linux", "sha256": "",
- "url": "https://example.org/releases/1.2.0/my-app"}
-----
-+
-[source,json]
-----
-{"namespace": "https://example.org/sbom/my-app/1.2.0/x86_64-linux/revision-1",
- "revision": "1", "created": "2026-10-21T00:00:00Z",
- "author": "Organization: Example Ltd", "generator": "Tool: blueprint-sbom-0.7.0"}
-----
-
-. *Bind the final bytes.* This hashes `dist/my-app` and writes
-  `dist/my-app.spdx.json` and `dist/my-app.cdx.json` beside it. It never
-  overwrites an existing file. Add the SPDX 2.3 rendering only if a recipient
-  needs it.
-+
-[source,console]
-----
-roc run <tool> -- bind sbom/inventory.json sbom/subject.json sbom/context.json dist/my-app
-roc run <tool> -- bind sbom/inventory.json sbom/subject.json sbom/context.json dist/my-app dist/my-app.spdx-2.3.json --spdx-2.3
-----
-
-. *Check.* `check` holds each sidecar to its format's specification and the
-  profile. With `--artifacts` it confirms each describes the actual file, with
-  `--inventory` that it matches the inventory, and it requires the renderings
-  of one document to state the same graph:
-+
-[source,console]
-----
-roc run <tool> -- check --inventory sbom/inventory.json --artifacts dist dist/my-app.spdx.json dist/my-app.cdx.json
-----
-
-. *Publish beside the artifact.* Upload the sidecars to the same place as
-  the file, under the file's name plus the format suffix: `my-app`,
-  `my-app.spdx.json`, `my-app.cdx.json`. Publish them at the same time as the
-  file, at an immutable location. Keep `composition.json` under review in
-  your repository, so the next release starts from it.
-
-[#sbom-quality-checklist]
-== Check the quality before you publish
-
-An SBOM is only useful if it is accurate. Before you publish, check:
-
-* *The digest is the final file's.* Bind after the last build, signing
-  or packaging step. A recipient compares the SHA-256 with the file they
-  downloaded.
-* *One SBOM per delivered file.* Each executable, per target, and each
-  source archive gets its own sidecars. Never reuse one file's SBOM for
-  another.
-* *Every component has an exact version.* Not a range, and not "latest".
-* *Suppliers are named.* Use `Organization: ...` or `Person: ...`. Use
-  `NOASSERTION` only when you do not know.
-* *Licenses are real expressions.* `NOASSERTION` means you made no
-  determination, or chose not to say. `NONE` means the component has no
-  license information at all. Neither means "no restrictions". For custom
-  terms, use a `LicenseRef-` name with a `license_url`.
-* *Package URLs are present where they exist.* Scanners match
-  vulnerabilities by purl. Use the component's real purl as its `identity`.
-* *Your dependencies bring their suppliers' SBOMs.* Pin each dependency
-  file by its SHA-256 and import its supplier's SBOM, bound to it. Where a
-  supplier publishes none, list it in `unavailable_sboms` with the reason;
-  `inspect` refuses an inventory that does neither. See
-  <<chain-sboms-across-dependencies>>.
-* *Build tools are build dependencies, not shipped code.* A compiler is
-  `dependsOn` with scope `build`. It is never `contains`.
-* *Gaps are stated, not hidden.* If you do not know part of the
-  inventory, add an `incomplete` coverage entry with a reason and a contact.
-  A recipient reads a missing component as "not present". Use
-  `verified-empty` only when you checked and found nothing.
-* *Corrections get a new revision and namespace.* Never replace a
-  published SBOM in place. Publish a corrected one with a new `revision` and
-  a namespace ending in that revision.
-* *All formats come from one inventory.* Bind every format from the
-  same inventory, subject and context. Do not edit a rendering by hand.
-
-[#what-recipients-do]
-== What recipients do with the files
-
-* *Security teams* load the SBOM into a vulnerability scanner or a
-  supply-chain platform. It matches components, usually by purl, against
-  vulnerability advisories. When a new advisory appears, they can check it
-  without asking you.
-* *Legal and compliance teams* read the licenses and the `LicenseRef-`
-  terms to decide whether the software can be used or redistributed.
-* *Procurement teams and regulators* keep the SBOM with the product's
-  records, and may ask for it again later.
-* *Anyone* can compare the SBOM's SHA-256 with the file they have, to be sure
-  the SBOM describes it.
-* *Publishers and signers* that rehash every asset before signing read the
-  evidence manifest beside the sidecars, `<artifact>.sbom-manifest.json`,
-  for the mapping they would otherwise reconstruct by hand: the subject's
-  name, version, target, SHA-256 and size, each sidecar's name, format,
-  SHA-256 and size, and the SHA-256 of the inventory they were bound from.
-  `check --manifest` confirms that mapping against the files (see
-  <<bind-the-final-bytes-separately>>).
-
-[#what-an-sbom-does-not-prove]
-=== What an SBOM does not prove
-
-* *It is not a vulnerability verdict.* Listing a component with a known
-  vulnerability does not mean your product is exploitable. That is what a
-  VEX statement says, and Blueprint does not write one.
-* *It is not build provenance.* It says what the file contains, not who
-  built it, on which machine, or from which commit. Provenance and signed
-  attestations are separate records.
-* *It is only as complete as its coverage.* Blueprint states what was
-  reviewed and what is unknown. Valid SPDX or CycloneDX alone says nothing
-  about whether the list is complete.
-* *It does not prove an opaque tool's output.* If a build step does not
-  disclose what it links in, the SBOM cannot know. Record that as an
-  `incomplete` coverage gap.
-
-The rest of this chapter is reference material.
+This page is a guide, not legal advice. Check your own obligations.
 
 [#build-and-development-environments]
-=== What about build and development environments?
+== What about build and development environments?
 
 An SBOM describes the file you deliver. Your build and development
 environments matter to your supply chain too, but they answer different
@@ -441,48 +587,8 @@ and declared coverage. They do not replace the shared release-policy validator.
 An SBOM is a composition statement; provenance and vulnerability verdicts are
 separate records.
 
-[#use-the-released-standalone-tool]
-== Use the released standalone tool
-
-Each release ships the reporting tool in two forms: a native binary per
-system, `blueprint-sbom-<system>`, beside the `blueprint` binaries, and
-`roc-blueprint-sbom-<content-hash>.tar.zst`, a supported Roc app bundle
-containing the same wrapper and filesystem boundary used here.
-
-The binary is the recommended way for CI to run the tool. A job downloads
-`blueprint-sbom-<system>` from the release (`blueprint-sbom-x86_64-linux`,
-`blueprint-sbom-aarch64-linux`, `blueprint-sbom-aarch64-darwin` or
-`blueprint-sbom-x86_64-windows.exe`), verifies it against the line of that
-name in the release's `blueprint.sha256`, and runs it. It needs no Roc
-compiler and compiles nothing: the core and the native platform host are
-compiled in, and nothing is fetched at run time. Pin the release and the
-reviewed digest in automation, as roc-automation's `setup-blueprint` action
-does for the CLI; the binary's own sidecars and the release attestation cover
-it (see <<blueprints-own-release-evidence>>).
-
-[source,console]
-----
-curl -fsSLO https://github.com/lukewilliamboswell/roc-blueprint/releases/download/<version>/blueprint-sbom-x86_64-linux
-curl -fsSLO https://github.com/lukewilliamboswell/roc-blueprint/releases/download/<version>/blueprint.sha256
-sha256sum --ignore-missing -c blueprint.sha256
-chmod +x blueprint-sbom-x86_64-linux
-./blueprint-sbom-x86_64-linux inspect Spec Blueprint.lock composition.json x86_64-linux inventory.json
-./blueprint-sbom-x86_64-linux members dist/my-package.tar.zst members.json
-./blueprint-sbom-x86_64-linux inspect Spec Blueprint.lock composition.json source inventory.json --members members.json
-./blueprint-sbom-x86_64-linux bind inventory.json subject.json context.json dist/my-binary
-./blueprint-sbom-x86_64-linux bind inventory.json subject.json context.json dist/my-binary dist/my-binary.spdx-2.3.json --spdx-2.3
-./blueprint-sbom-x86_64-linux check --inventory inventory.json --artifacts dist dist/my-binary.spdx.json dist/my-binary.cdx.json dist/my-binary.spdx-2.3.json
-./blueprint-sbom-x86_64-linux check --manifest dist/my-binary.sbom-manifest.json --inventory inventory.json --artifacts dist
-----
-
-The first `bind` writes `dist/my-binary.spdx.json`, `dist/my-binary.cdx.json`
-and the evidence manifest `dist/my-binary.sbom-manifest.json`; the second
-adds the SPDX 2.3 rendering, and the first `check` checks all three. The
-second `check` holds the manifest to the files it lists, and checks those
-sidecars. See <<bind-the-final-bytes-separately>>. `members` and
-`inspect --members` inventory a source archive from its own contents; see
-<<inventory-a-source-bundle-from-its-archive>>. They need only a `tar` that
-reads zstd on `PATH`.
+[#run-the-sbom-source-bundle]
+== Run the tool from its source bundle
 
 The app bundle is the alternative for a machine that has the matching Roc
 compiler and wants the tool as source. The release notes link to its exact
@@ -495,11 +601,6 @@ package cache before execution; materialize those dependencies before taking
 a release job offline. The source app's own sidecar distinguishes its
 contained wrapper/I/O source from the core/platform/compiler dependencies
 fetched separately.
-
-In either form no Blueprint project is required; even an unrelated invalid
-`Blueprint.roc` in the working directory is ignored. Supply the already
-evaluated Spec and Lock paths explicitly. The report itself performs no
-resolution, provider execution or network request.
 
 [#inspect-without-executing-a-provider]
 == Inspect without executing a provider
@@ -524,7 +625,8 @@ nix develop -c scripts/sbom.roc inspect Spec Blueprint.lock composition.json x86
 composition contains these fields:
 
 * `profile`: `blueprint-spdx-3.0-v2`.
-* `components`: reviewed component records with unique local identifiers
+* `components`: reviewed component records (see <<reviewed-component-metadata>>)
+  with unique local identifiers
   (letters, digits, `-` and `.`), canonical `name`, SPDX `producer`
   (`Organization: ...`, `Person: ...`, or `NOASSERTION`), `license`,
   `license_url`, `modified`, `target` and `origin`. An identifier `name`
@@ -696,9 +798,14 @@ An import that would publish an absolute developer path or a credential is
 refused, with the imported component named.
 
 Imported identifiers are prefixed with the entry's `id`, so they cannot
-collide with yours, and every imported component keeps the supplier's
-document identity and SHA-256 in its notes. CycloneDX `bom-ref`s that are not
-valid identifiers are mapped to ones that are, with a short hash so distinct
+collide with yours. Every imported component keeps the direct supplier's
+document identity, URL,
+SHA-256 and component ID in a `blueprint-import-v1` provenance record in its
+`modified` field. On successive imports, the original modification note is
+retained once and the direct supplier reference is updated, rather than
+recursively embedding earlier metadata. Follow the immutable supplier document
+reference for earlier evidence; inspection does not fetch it.
+CycloneDX `bom-ref`s that are not valid identifiers are mapped to ones that are, with a short hash so distinct
 references stay distinct. CycloneDX states no build or test scope for a
 dependency, so imported CycloneDX dependencies carry none. A component a
 CycloneDX BOM lists but relates to nothing is related to its subject as
@@ -736,7 +843,7 @@ The importer is tested against what Syft and Trivy write, in both CycloneDX and
 SPDX (`tests/sbom/fixtures/upstream/`), and the `sbom-read` fuzz target requires
 that every document Blueprint can read also imports.
 
-Inputs are limited to 1 MiB, JSON nesting to 64 levels, imports to 16,
+Inputs and emitted JSON files are limited to 16 MiB, JSON nesting to 64 levels, imports to 16,
 components to 4,096 and relationships to 16,384. Licenses and exceptions are
 checked against the pinned SPDX License List 3.26.0 and expression grammar.
 
@@ -761,7 +868,7 @@ executed from the archive, and no Blueprint project or Nix is needed.
 [source,console]
 ----
 roc bundle main.roc --output-dir dist
-roc run <tool> -- members dist/<hash>.tar.zst sbom/members.json
+./blueprint-sbom-x86_64-linux members dist/<hash>.tar.zst sbom/members.json
 ----
 
 The listing names the archive, its SHA-256 and each member's name, size and
@@ -781,7 +888,7 @@ Pass it to `inspect` with `--members`, for a `source` target:
 
 [source,console]
 ----
-roc run <tool> -- inspect sbom/Spec sbom/Lock sbom/composition.json source sbom/inventory.json --members sbom/members.json
+./blueprint-sbom-x86_64-linux inspect sbom/Spec sbom/Lock sbom/composition.json source sbom/inventory.json --members sbom/members.json
 ----
 
 `inspect` then refuses a composition that does not account for every member.
@@ -879,9 +986,9 @@ say so:
 ]
 ----
 
-Each entry becomes an `incomplete` coverage scope, `sbom:dep`, in every
-rendering, so a recipient can see which dependencies were not covered by
-their supplier and whom to ask. An unbound import does not count: its claims
+Each entry becomes an unaddressed `incomplete` evidence scope, `sbom:dep`,
+in every rendering. It records missing supplier documentation and whom to ask;
+it does not override addressed assembly or dependency coverage assessments. An unbound import does not count: its claims
 are unverified, so the dependency still needs a bound SBOM or an entry.
 
 *Fetch outside Blueprint.* Blueprint never downloads while it reports. Fetch
@@ -903,22 +1010,18 @@ nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json di
 ----
 
 Without an output path, `bind` writes `ARTIFACT.spdx.json` (SPDX 3.0.1),
-`ARTIFACT.cdx.json` (CycloneDX 1.7) and `ARTIFACT.sbom-manifest.json`, the
-evidence manifest listing both, beside the artifact. It renders all three
-before writing any, so an inventory, subject or context that one format
-refuses leaves no file behind. To write a single document to a path of your
-choice, name it, with a flag for a format other than SPDX 3.0.1, and
-`--manifest` for the manifest of that one sidecar, which must sit beside it:
+`ARTIFACT.spdx-2.3.json` (SPDX 2.3), `ARTIFACT.cdx.json` (CycloneDX 1.7)
+and `ARTIFACT.sbom-manifest.json`, the evidence manifest listing all three,
+beside the artifact. To export only one representation, name its output path and use
+`--spdx-2.3` or `--cyclonedx` for a format other than SPDX 3.0.1. Add
+`--manifest PATH` for an explicitly limited manifest beside that output.
+The complete default binding is recommended for publication; a subset check
+uses `--listed-only` as described in <<upgrade-an-sbom-recipe>>.
 
-[source,console]
-----
-nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary out/my-binary.spdx.json
-nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary out/my-binary.spdx-2.3.json --spdx-2.3
-nix develop -c scripts/sbom.roc bind inventory.json subject.json context.json dist/my-binary out/my-binary.cdx.json --cyclonedx --manifest out/my-binary.sbom-manifest.json
-----
-
-Bind every format from the same inventory, subject and context: they are then
-renderings of one document, and `check` requires them to agree (see <<read-the-cyclonedx-rendering>>).
+Every output is rendered and validated, and ordinary destination collisions
+are checked before the first write. Each write exclusively creates a new file.
+This is not an atomic multi-file transaction across crashes or concurrent
+writers: use an isolated staging directory and publish only a complete checked set.
 
 [#the-evidence-manifest]
 === The evidence manifest
@@ -934,8 +1037,9 @@ them once, in one JSON document rendered from the shared types:
 {"profile":"blueprint-spdx-3.0-v2",
  "subject":{"filename":"my-binary","version":"1.0.0","target":"x86_64-linux","sha256":"<sha256>","size":1234},
  "inventory_sha256":"<sha256 of inventory.json>",
- "context":{"namespace":"https://example.org/sbom/my-binary/revision-1","revision":"1","created":"2026-10-21T00:00:00Z","generator":"Tool: blueprint-sbom-0.7.0"},
+ "context":{"namespace":"https://example.org/sbom/my-binary/revision-1","revision":"1","created":"2026-10-21T00:00:00Z","generator":"Tool: blueprint-sbom-<version>"},
  "sidecars":[{"filename":"my-binary.cdx.json","format":"cyclonedx-1.7","sha256":"<sha256>","size":5678},
+             {"filename":"my-binary.spdx-2.3.json","format":"spdx-2.3","sha256":"<sha256>","size":6123},
              {"filename":"my-binary.spdx.json","format":"spdx-3.0.1","sha256":"<sha256>","size":6789}]}
 ----
 
@@ -964,15 +1068,31 @@ digest or size differs or that is absent, an inventory digest that differs
 from `--inventory`, or any file named with a path separator. Each listed
 sidecar must also describe the manifest's subject, in the listed format, and
 passes the same profile, subject, inventory and one-graph checks as any
-named document. Without `--inventory` the inventory digest is recorded but
-not measured.
+named document. The default check also discovers conventional adjacent
+sidecars and rejects any absent from the manifest, including ASCII case variants.
+Subject target, revision, namespace, standard creation time and standard
+generator must match the manifest. Without `--inventory` the inventory digest
+is recorded but not measured.
 
-`subject.json` contains `filename`, `version`, `target`, `sha256` and `url`.
+Duplicate JSON keys, formats, filenames and observations are refused.
+Manifest names follow portable Windows filename rules, including reserved
+punctuation, device names, trailing dots/spaces and ASCII case aliases;
+ordinary Unicode and interior spaces are supported. These checks do not
+resolve filesystem-specific Unicode normalization or concurrent changes.
+
+`subject.json` contains `filename`, `version`, `target`, `sha256` and `url`,
+plus the reviewed kind, supplier, license, copyright and attribution facts
+shown in <<reviewed-component-metadata>>.
 An empty SHA-256 asks the binder to compute it; a supplied digest must match.
 `context.json` contains `namespace`, `revision`, `created`, `author` and
 `generator`. Use a UTC ISO 8601 timestamp, an SPDX person/organization author,
-a `Tool: name-version` generator, and a unique HTTPS namespace ending in
-`revision-<revision>`. Identical context and inputs produce identical bytes
+a `Tool: name-version` generator, and a unique document namespace: either
+an HTTPS namespace ending in `revision-<revision>` or a canonical UUID URN.
+`Sbom.document_namespace(inventory, subject, identity)` derives a deterministic
+UUID version 8 URN from the full inventory, subject and an identity containing
+`revision`, `created`, `author` and `generator`. This identifies the document;
+it does not replace the subject's SHA-256. The shorter namespace avoids
+repeating a long artifact URL in every SPDX reference. Identical context and inputs produce identical bytes
 with stable ordering. A correction changes the document revision and namespace,
 while retaining the unchanged software digest at a new immutable location.
 In CycloneDX the namespace determines the BOM's `serialNumber` (a UUID URN
@@ -987,6 +1107,28 @@ paths are rejected. Generation needs no publication credentials or advisory
 service. Ordinary task outputs and sandboxed build outputs use this same
 binding operation.
 
+=== Integrate a custom publisher or checker
+
+`core.Manifest.renderings` is the supported `{ format, suffix }` table;
+`Manifest.outputs(artifact)` gives all conventional `(path, format)` outputs.
+Build a manifest from the documents actually emitted rather than another
+hard-coded format list.
+
+`Manifest.check(text, observed)` checks the exact observed sidecar set;
+`Manifest.check_listed` explicitly checks a declared subset. Obtain observations
+from the advertised release assets or directory discovery, not merely by
+iterating the manifest's own claims, which cannot reveal an omitted companion.
+Both operations refuse duplicate observations.
+`SbomFiles.observe_sidecars!(manifest_path, manifest, listed_only)` is the
+repository's shared filesystem helper: it measures listed names and, by
+default, conventional adjacent names; it retains missing-file diagnostics and
+refuses present unreadable or nonregular candidates.
+
+Obtain `Sidecar.Checked` from `Sidecar.check`; its `context` carries actual
+standard creation time and generator for manifest comparison. Use
+`Sidecar.same_graph` for cross-format agreement and `Sidecar.against_inventory`
+for the reviewed inventory comparison.
+
 [#read-the-cyclonedx-rendering]
 == Read the CycloneDX rendering
 
@@ -994,12 +1136,13 @@ The CycloneDX BOM has `bomFormat` `CycloneDX` and `specVersion` `1.7`. Its
 `metadata.component` is the subject with its reviewed kind, final
 SHA-256 and distribution URL. `metadata.timestamp`, `metadata.tools`, and
 `metadata.authors` or `metadata.manufacturer` carry the context's creation
-time, generator and author. Each inventory component carries its reviewed
+time, generator and author. Each confirmed standard component carries its reviewed
 kind (`file`, `application` or `library`), and its `bom-ref` is its local
 identifier. Unknown kinds use the documented adapter fallback below. Each
 component has:
 
-* `name`, `version` and a SHA-256 `hashes` entry;
+* `name` and `version`, with a SHA-256 `hashes` entry when the component's
+  own bytes were measured;
 * `supplier` for an `Organization:` producer, or `authors` for a `Person:`
   producer (none for `NOASSERTION`);
 * a `licenses` expression, omitted when the license is `NOASSERTION` or
@@ -1020,16 +1163,11 @@ role for the subject:
 |===
 | `scope` | When
 
-| `required` | The subject reaches the component through `contains`, or through
-`dependsOn` with no scope or scope `runtime`, directly or transitively.
+| `required` | The subject reaches the component through `contains`, or through `dependsOn` with no scope or scope `runtime`, directly or transitively.
 
-| `excluded` | Otherwise, the component is the target of a `dependsOn` with
-scope `build`, `test` or `development`, such as the compiler that built the
-subject.
+| `excluded` | Otherwise, the component is reached only through confirmed build, test or development dependency paths, such as the compiler that built the subject. A component reached by both runtime and build paths is `required`.
 
-| `optional` | Anything else, for example a component reached only through an
-unresolved `other` candidate or a `patchedBy`, `generates` or `hasVariant`
-edge.
+| Unresolved inclusion | No runtime scope is asserted. The candidate and its relationships remain in explicit Blueprint evidence; standard compositions report unknown or incomplete coverage. `optional` is not a substitute for uncertainty.
 |===
 
 Containment is the standard component assembly tree: components contained by
@@ -1048,9 +1186,17 @@ relationship, with its scope and basis, is a `blueprint:relationship`
 property of the BOM; each component carries `blueprint:identity`,
 `blueprint:origin`, `blueprint:target` and `blueprint:modifications`; the
 metadata carries `blueprint:namespace`, `blueprint:evidence` and the
-`blueprint:cyclonedx-profile` marker `standard-containment-v1`.
-A consumer that reads only standard CycloneDX sees what ships, what was only
-used to build it, and what remains unresolved. A consumer that needs the exact
+`blueprint:cyclonedx-profile` marker. The current `standard-evidence-v2` profile records unresolved candidates as
+complete typed `Sbom.Component` values in `blueprint:unresolved-component`
+properties, counted by `blueprint:unresolved-count`. All inventory edges remain
+in `blueprint:relationship` properties, while standard dependencies and
+addressed compositions refer only to standard-visible components. If unresolved
+records exist without an addressed subject assembly assessment, the writer
+emits an `unknown` assembly composition. The reader also accepts the older
+`standard-containment-v1` representation with its original scope rules.
+A consumer that reads only standard CycloneDX sees confirmed components and
+portable incompleteness declarations. It must inspect the candidate evidence
+or SPDX rendering to see the unresolved records themselves. A consumer that needs the exact
 relationships, coverage gaps or evidence reads the properties or the SPDX
 rendering.
 
@@ -1129,12 +1275,15 @@ the release's observed inputs, and state the same package graph as every
 other rendering of the same document (the same namespace); the manifest
 found beside it, or named with `--manifest`, must be what the subject, the
 sidecars and that inventory file hash to, and each document must describe
-the manifest's subject. Conformance is Roc throughout: `core.Spdx3`,
+the manifest's subject. The production conformance checks are pure Roc:
+`core.Spdx3`,
 `core.Spdx2` and `core.CycloneDx` hold the classes or objects, properties, cardinalities,
 enumerations and references of each format, and the test suite holds them to
 the published SPDX 3.0.1 JSON schema, the SPDX 2.3.1 schema and the CycloneDX
-1.7 schema, vendored in `tests/sbom/schema/` and pinned by SHA-256. It
-adds no publication permission. Examples/documentation archives are not
+1.7 schema, vendored in `tests/sbom/schema/` and pinned by SHA-256.
+Independent development checks additionally exercise third-party validators;
+a quality score or schema pass alone does not establish semantic validity.
+These checks add no publication permission. Examples/documentation archives are not
 covered by the first own-release recipe; consumers must not infer their
 composition from a sibling executable's SBOM.
 
@@ -1196,10 +1345,11 @@ generated inventories and mutated documents. These checks establish
 consistency with declared inputs, not proof that an opaque tool disclosed all
 shipped code.
 
-=== Reviewed kinds, attribution and independent source references (0.9.0)
+[#reviewed-component-metadata]
+== Reviewed component metadata
 
-The `blueprint-spdx-3.0-v2` composition contract adds `kind`, `copyright`,
-`attribution`, `package_url` and `source_refs` to every component. The reviewed
+The `blueprint-spdx-3.0-v2` composition contract includes `kind`, `copyright`,
+`attribution`, `package_url` and `source_refs` on every component. The reviewed
 kinds are `file`, `application`, `library` and `unknown`; classifications never
 come from filenames, origins or dependency scopes. `Sbom.archive_members`
 produces explicit `file` records because its input is a verified file listing.
@@ -1267,3 +1417,12 @@ unaddressed evidence gap. It does not assert that dependency closure is
 incomplete or override a producer's explicit assessment. Use addressed
 `coverage` to state unknown, incomplete, complete or verified-empty closure,
 even when the supplier publishes no document.
+
+
+SPDX standard fields are authoritative for copyright, attribution, package URL
+and source references. The `standard-fields-v1` metadata marker keeps only
+otherwise unrepresented facts in Blueprint's wire comments. Readers retain
+older full comments and reject conflicting duplicate assertions; they normalize
+both encodings to the same canonical `Sbom.Package.comment`. A valid changed
+standard field cannot be identified as false merely by parsing it: compare
+with the reviewed inventory and verify exact sidecar bytes against the manifest.

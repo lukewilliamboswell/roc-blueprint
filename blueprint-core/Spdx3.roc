@@ -1,4 +1,5 @@
 import JsonData
+import SbomJson
 import Lookup
 import SbomLicenses
 
@@ -33,7 +34,7 @@ Spdx3 := [].{
 	Node : { type : Str, id : Str, tree : JsonData }
 
 	validate : Str -> Try(List(Spdx3.Node), Str)
-	validate = |text| Spdx3.check(JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?)
+	validate = |text| Spdx3.check(SbomJson.decode(text).map_err(JsonData.message)?)
 
 	## `validate` for a document already parsed.
 	check : JsonData -> Try(List(Spdx3.Node), Str)

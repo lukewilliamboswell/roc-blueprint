@@ -13,6 +13,7 @@ blueprint-platform/   the roc-blueprint platform that Blueprint.roc apps use
   host/, build.zig       Zig host, built into targets/<target>/libhost.a
   targets/               linker inputs, none committed: libhost.a is built, the rest fetched (see its README)
 blueprint-core/          roc-blueprint-core: Spec, Provider contract, validation, Steps, Value, codec
+  JsonData.roc           Blueprint value facade over roc-parser JsonValue; byte, depth and collection policies
   Project.roc            pure normalization, references and provider capability checks
   Realise.roc            pure planning of a request: what the Core supplies, and what it asks of a provider
   Sbom.roc               pure SBOM inventory; writes SPDX 3.0.1, SPDX 2.3 and CycloneDX 1.7, reads SPDX 3.0.1, 2.3 and 2.2 and its own CycloneDX
@@ -117,8 +118,10 @@ gives two Roc compilers from
 https://github.com/roc-lang/roc-overlay[roc-overlay], Zig 0.16 and the
 programs the scripts start: coreutils, git, curl, tar, gzip, zip, unzip and gh.
 On Linux it also supplies Bubblewrap, util-linux and Python for isolated
-runner tests and a restrictive-umask launcher. Nothing else uses Python: the
-product, the reporting app and every conformance check run in Roc.
+runner tests and a restrictive-umask launcher. The product, reporting app and
+pure conformance checks run in Roc. Independent standards checks additionally
+run the pinned third-party SPDX validator and JSON Schema tools in an isolated
+development environment; they add no Python dependency to the product.
 `roc` is the product compiler, the nightly in
 `blueprint-cli/compiler-version`: it builds and tests the CLI, the packages and
 the platform, and a released `blueprint` embeds it. `roc-stable` is the
@@ -241,9 +244,18 @@ revisions in `fixtures/consumer/inputs.lock` and `flake.lock`, and its
 `fixtures/consumer/main.roc` holds the staged bytes and supplied-lock
 preservation as `expect`s. Parse fuzzing also checks successful semantic
 normalization for idempotence.
+
+The November 2026 SBOM hardening is grounded in the
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/docs/reviews/sbom-landscape-2026-11-04.adoc[published downstream review]. Its
+immutable source URLs, hashes and validation outcomes are recorded in
+`tests/sbom/reviews/2026-11-04.json`; current conformance tests exercise the
+failure classes without expecting old release assets to change.
+
 SBOMs are SPDX 3.0.1 JSON-LD, with SPDX 2.3 and CycloneDX 1.7 renderings of
-the same inventory for consumers that read only those, and conformance is
-checked in Roc, with no other validator. `blueprint-core/Spdx3.roc`,
+the same inventory for consumers that read only those. Product conformance
+checks run in Roc; the optional
+xref:sbom-conformance.adoc#check-sbom-conformance-independently[independent check]
+uses separate validators to catch shared assumptions in our readers and writers. `blueprint-core/Spdx3.roc`,
 `Spdx2.roc` and `CycloneDx.roc` hold the classes or objects, members,
 enumerations and prose rules of each format, and `scripts/src/SbomTest.roc`
 holds them to the digest-pinned schemas in `tests/sbom/schema/` (the published

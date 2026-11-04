@@ -1,0 +1,85 @@
+[#check-sbom-conformance-independently]
+= Check SBOM formats with independent tools
+
+Release maintainers and CI authors can run a second set of validators on the
+SBOM files they plan to publish. These checks use tools maintained outside
+Blueprint to catch format errors that Blueprint's own checks might miss.
+They complement the artifact and inventory checks in the
+xref:sbom.adoc#bind-the-final-bytes-separately[artifact binding guide].
+
+== Run from a Blueprint checkout
+
+Use a checkout of the Blueprint revision you trust. Run the commands below
+from its repository root, with Python 3, `venv` and `pip` available. Installing
+the pinned dependencies needs network access or a populated wheel cache;
+validation itself runs offline. The Blueprint product and standalone SBOM
+tool do not need Python.
+
+Put the final sidecars in `dist/`, or change the patterns to their location.
+Install the validators in a separate environment, then check those files:
+
+[source,shell]
+----
+python3 -m venv .cache/sbom-conformance
+.cache/sbom-conformance/bin/python -m pip install \
+  --only-binary=:all: --require-hashes \
+  -r scripts/sbom-conformance/requirements.txt
+.cache/sbom-conformance/bin/python scripts/sbom-conformance/validate.py \
+  --patterns 'dist/*.spdx.json dist/*.spdx-2.3.json dist/*.cdx.json' \
+  --output .cache/sbom-conformance.json
+----
+
+Keep the patterns quoted. The checker expands them itself and fails if any
+pattern matches nothing. To check fewer formats, supply only their patterns;
+individual file paths are accepted too. Unknown formats or versions and
+unavailable validators fail rather than being skipped.
+
+The JSON report gives each file's result, errors, tool version and kind of
+validation. Exit status 0 means every selected file passed; 1 means a document
+is invalid; 2 means an unsupported input or a tool/configuration problem.
+Correct the reported error in the inventory or generator, regenerate the
+sidecars, and rerun both this check and Blueprint's binding check before
+publishing. Do not edit one rendering by hand.
+
+Dependencies are pinned by version and distribution hash. Schemas are kept
+in `tests/sbom/schema/`; their hashes are checked and schema references
+resolve only to those local files. Input is limited to 16 MiB and 64 levels
+of nesting. Duplicate JSON keys and non-JSON numeric constants are refused.
+
+== Use the check in CI
+
+The `.github/actions/sbom-conformance` action installs the same validators,
+runs their regression cases, and checks the final files selected by its
+`patterns` input. Its `report` input sets the JSON report path. Blueprint's
+release workflow runs it on generated sidecars before gathering release
+assets.
+
+Other repositories can use
+`lukewilliamboswell/roc-blueprint/.github/actions/sbom-conformance@<full-commit-SHA>`
+with a reviewed Blueprint commit. Patterns resolve in the caller's workspace;
+validators, schemas and regression cases come from that pinned action source.
+The action checks documents from any supported generator. It does not require
+the Blueprint binary or publish files.
+
+Contributors changing validation rules should also run the cases and tests
+described in
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/tests/sbom/conformance/README.adoc[the conformance fixture guide].
+That guide covers the additional requirements for generators that write native
+SPDX 2 File records.
+
+== Understand a passing result
+
+SPDX 2.3 receives the publisher's JSON Schema checks and the SPDX Python SDK's
+semantic checks: rules about relationships and field combinations. SPDX 2.2
+receives the SDK's version-specific semantic checks. SPDX 3.0.1 and CycloneDX
+1.7 receive publisher JSON Schema checks: rules about document structure and
+field values. These tools do not cover every rule in each standard.
+
+Passing does not prove that the inventory matches a binary, lists every
+dependency, has correct license conclusions, or comes from an authentic
+publisher. It also does not establish that the software is free of
+vulnerabilities. Keep Blueprint's inventory, graph and exact artifact/sidecar
+binding checks alongside this check.
+
+A quality score is not a substitute for these checks. Do not fabricate license
+conclusions or package identifiers to improve a score.

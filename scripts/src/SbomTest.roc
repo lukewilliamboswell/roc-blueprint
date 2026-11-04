@@ -239,6 +239,17 @@ expect inspect({ ..SbomTest.composition, components: SbomTest.composition.compon
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, version: "" }) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, license: "LicenseRef-restricted", license_url: "" }) }).is_err()
 
+# Input accounting errors identify the exact records a reviewer must correct.
+expect {
+	with_tasks = { ..SbomTest.spec, tasks: [{ name: "release", environment: "build", run: ["make", "release"] }] }
+	disposition = { input: "task:typo", component: "platform", reason: "Reviewed fixture input" }
+	result = Sbom.inspect(with_tasks, SbomTest.lock, "x86_64-linux", { ..SbomTest.composition, inputs: [disposition, disposition] })
+	match result {
+		Err(message) => message.contains("missing: [task:release]") and message.contains("unknown: [task:typo]") and message.contains("duplicate: [task:typo]")
+		Ok(_) => False
+	}
+}
+
 # Unknown and verified-empty inventories are distinct, explicitly asserted facts.
 empty_composition = { ..SbomTest.composition, components: [], relationships: [], coverage: [{ scope: "all", component: "Subject", aspect: "dependencies", status: "verified-empty", reason: "Reviewed generated text contains no third-party components", contact: "https://example.org/support" }] }
 expect inspect(empty_composition).is_ok()
@@ -720,7 +731,7 @@ expect {
 }
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"bom-ref\":\"native\"", "\"bom-ref\":\"platform\"")).is_err()
 expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("\"dependsOn\":[\"compiler\"]", "\"dependsOn\":[\"compiler\",\"platform\"]")).is_err()
-expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("standard-containment-v1", "unsupported-profile")).is_err()
+expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("standard-evidence-v2", "unsupported-profile")).is_err()
 expect Sbom.read_cyclonedx(fixture_legacy_cdx).is_ok()
 expect Sbom.read_cyclonedx(fixture_legacy_cdx.replace_each("blueprint:namespace", "blueprint:cyclonedx-profile")).is_err()
 
@@ -995,7 +1006,7 @@ expect Manifest.read(manifest_text) == Ok(manifest_listed)
 expect Manifest.check(manifest_text.replace_each(Sbom.profile, "blueprint-spdx-3.0-v1"), manifest_observed) == Ok({ ..manifest_listed, profile: "blueprint-spdx-3.0-v1" })
 expect Manifest.check(manifest_text, manifest_observed) == Ok(manifest_listed)
 expect Manifest.check(manifest_text, { ..manifest_observed, inventory: Unmeasured }) == Ok(manifest_listed)
-expect Manifest.check(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.prepend({ filename: "sample-artifact.spdx-2.3.json", sha256: manifest_digest("two"), size: 9 }) }) == Ok(manifest_listed)
+expect Manifest.check_listed(manifest_text, { ..manifest_observed, sidecars: manifest_observed.sidecars.prepend({ filename: "sample-artifact.spdx-2.3.json", sha256: manifest_digest("two"), size: 9 }) }) == Ok(manifest_listed)
 expect Manifest.formats == ["spdx-3.0.1", "spdx-2.3", "cyclonedx-1.7"] and Manifest.suffix == ".sbom-manifest.json"
 expect Manifest.format_of("SPDX-3.0.1") == Ok("spdx-3.0.1") and Manifest.format_of("SPDX-2.3") == Ok("spdx-2.3") and Manifest.format_of("CycloneDX-1.7") == Ok("cyclonedx-1.7") and Manifest.format_of("SPDX-2.2").is_err()
 
@@ -1024,7 +1035,7 @@ expect Manifest.render({ ..manifest_sample, sidecars: manifest_sample.sidecars.m
 expect Manifest.render({ ..manifest_sample, sidecars: manifest_sample.sidecars.map(|entry| { ..entry, sha256: Str.join_with(List.repeat("A", 64), "") }) }) == Err("sample-artifact.spdx.json needs a lowercase SHA-256")
 expect Manifest.render({ ..manifest_sample, inventory_sha256: "" }) == Err("the inventory digest must be a lowercase SHA-256")
 expect Manifest.render({ ..manifest_sample, subject: { ..manifest_sample.subject, target: "" } }) == Err("the subject needs a version, a target and a lowercase SHA-256")
-expect Manifest.render({ ..manifest_sample, context: { ..manifest_sample.context, revision: "2" } }) == Err("namespace does not end with its revision")
+expect Manifest.render({ ..manifest_sample, context: { ..manifest_sample.context, revision: "2" } }) == Err("namespace must be a UUID URN or HTTPS namespace ending with its revision")
 expect Manifest.read("{\"profile\":\"${Sbom.profile}\"}").is_err() and Manifest.read("not json").is_err()
 
 # A checked sidecar describes the manifest's subject, in the listed format.
@@ -1390,7 +1401,8 @@ expect {
 	inventory.coverage.any(|entry| entry.scope == "import:upstream:native-closure" and entry.component.is_empty() and entry.aspect.is_empty() and entry.reason == "Opaque task lacks remaining native closure metadata" and entry.contact == "https://example.org/support")
 }
 
-# Direct readers enforce the same metadata consistency as import and check.
+# Standard fields are authoritative in compact comments. The final binding
+# comparison, rather than a duplicated JSON assertion, detects changed facts.
 expect ["spdx2", "spdx3"].all(
 	|format| {
 		text = (if format == "spdx2" Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) else Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context)) ?? crash "render"
@@ -1404,7 +1416,12 @@ expect ["spdx2", "spdx3"].all(
 			text.replace_each(copyright_field, "${Json.to_str(copyright_key)}:\"Contradictory notice\""),
 			text.replace_each(identity_field, "${Json.to_str(identity_key)}:\"pkg:generic/different@1\""),
 			text.replace_each(source_field, "${Json.to_str(source_key)}:\"[]\""),
-		].all(|broken| broken != text and Sbom.read(broken).is_err())
+		].all(
+			|broken| broken != text and match Sidecar.check(broken) {
+				Ok(checked) => Sidecar.against_inventory(checked, reviewed_inventory).is_err()
+				Err(_) => True
+			},
+		)
 	},
 )
 expect {
@@ -1435,3 +1452,326 @@ expect ["unknown", "verified-empty", "complete"].all(
 								and [three, two, cdx].all(|checked| Sidecar.against_inventory(checked, inventory).is_ok())
 	},
 )
+
+# A declared build's original file inputs are known inventory inputs, even
+# when its outputs are excluded from this deliverable. No provider is invoked.
+expect {
+	declared = { ..SbomTest.spec, requires_: ["build-files"], build_files: [{ build: "native", paths: ["recipe.json", "scripts/build.roc"] }] }
+	omitted = Sbom.inspect(declared, SbomTest.lock, "x86_64-linux", SbomTest.composition)
+	accounted = {
+		..SbomTest.composition,
+		inputs: SbomTest.composition.inputs.concat([
+			{ input: "build-file:native:recipe.json", component: "", reason: "Reviewed build recipe; no source bytes are shipped" },
+			{ input: "build-file:native:scripts/build.roc", component: "", reason: "Build orchestration, not delivered code" },
+		]),
+	}
+	complete = Sbom.inspect(declared, SbomTest.lock, "x86_64-linux", accounted)
+	omitted.is_err() and complete.map_ok(|inventory| inventory.inspected.contains("build-file:native:recipe.json") and inventory.inspected.contains("build-file:native:scripts/build.roc")) == Ok(True)
+}
+
+# Real multi-target platform compositions exceed 1 MiB without exceeding the
+# graph profile. The byte guard retains its exact wire bound and depth guard.
+expect {
+	padding = Str.from_utf8(List.repeat(' ', 1024 * 1024)) ?? crash "ASCII padding"
+	Sbom.json_within_bounds("{${padding}}")
+}
+expect {
+	padding = Str.from_utf8(List.repeat(' ', Sbom.max_json_bytes - 2)) ?? crash "ASCII padding"
+	at_limit = "{${padding}}"
+	Sbom.json_within_bounds(at_limit) and !Sbom.json_within_bounds("${at_limit}\n")
+}
+
+# Profile-valid local IDs retain their full spelling in every standard format.
+# Native archive member IDs and prefixed imports can exceed 64 bytes.
+expect {
+	original = SbomTest.inventory ?? crash "inventory"
+	first = original.components.first() ?? crash "component"
+	long_id = Str.from_utf8(List.repeat('a', 256)) ?? crash "ASCII ID"
+	rename = |id| if id == first.id long_id else id
+	inventory = {
+		..original,
+		components: original.components.map(|entry| { ..entry, id: rename(entry.id) }),
+		inputs: original.inputs.map(|entry| { ..entry, component: rename(entry.component) }),
+		coverage: original.coverage.map(|entry| { ..entry, component: rename(entry.component) }),
+		relationships: original.relationships.map(|entry| { ..entry, from: rename(entry.from), to: rename(entry.to) }),
+	}
+	three = Sidecar.check(Sbom.render(inventory, SbomTest.subject, SbomTest.context) ?? crash "SPDX3") ?? crash "read SPDX3"
+	two = Sidecar.check(Sbom.render_spdx2(inventory, SbomTest.subject, SbomTest.context) ?? crash "SPDX2") ?? crash "read SPDX2"
+	cdx = Sidecar.check(Sbom.render_cyclonedx(inventory, SbomTest.subject, SbomTest.context) ?? crash "CycloneDX") ?? crash "read CycloneDX"
+	[three, two, cdx].all(|checked| Sidecar.against_inventory(checked, inventory).is_ok())
+		and Sidecar.same_graph(three, two) and Sidecar.same_graph(three, cdx)
+}
+
+# Unknown inclusion never becomes runtime optionality. The portable view has
+# proved runtime/build facts and explicitly unknown assembly completeness;
+# Blueprint retains the complete candidate graph without inventing roles.
+expect {
+	candidate = { ..component("candidate", "unresolved-library", "1"), target: "source" }
+	child = { ..component("candidate-child", "unresolved-child", "1"), target: "source" }
+	composition = { ..SbomTest.composition, components: [candidate, child], relationships: [edge("Subject", candidate.id, "other"), edge(candidate.id, child.id, "dependsOn")] }
+	inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", composition) ?? crash "candidate inventory"
+	subject = { ..SbomTest.subject, target: "source" }
+	text = Sbom.render_cyclonedx(inventory, subject, SbomTest.context) ?? crash "candidate BOM"
+	bom = JsonData.decode_with(text, JsonData.documents) ?? crash "candidate JSON"
+	standard = without_blueprint(bom)
+	three = Sidecar.check(Sbom.render(inventory, subject, SbomTest.context) ?? crash "candidate SPDX3") ?? crash "read SPDX3"
+	two = Sidecar.check(Sbom.render_spdx2(inventory, subject, SbomTest.context) ?? crash "candidate SPDX2") ?? crash "read SPDX2"
+	checked = Sidecar.check(text) ?? crash "read candidate BOM"
+	cdx_components(standard).is_empty()
+		and ((standard.field("dependencies") ?? JsonData.Array([])).array() ?? []).is_empty()
+			and ((standard.field("compositions") ?? JsonData.Array([])).array() ?? []).any(|aggregate| aggregate.field("aggregate") == Ok(JsonData.String("unknown")) and aggregate.field("assemblies") == Ok(JsonData.Array([JsonData.String("Subject")])))
+				and checked.document.packages_.len() == 3
+					and Sidecar.same_graph(checked, three) and Sidecar.same_graph(checked, two)
+						and Sidecar.against_inventory(checked, inventory).is_ok()
+							and Sbom.read_cyclonedx(text.replace_each("\"value\":\"2\"", "\"value\":\"1\"")).is_err()
+}
+
+# Build context propagates through transitive runtime dependencies of tooling;
+# a library also reached by the delivered application's runtime remains required.
+expect {
+	compiler = { ..component("build-tool", "build-tool", "1"), target: "source" }
+	private_lib = { ..component("tool-lib", "tool-lib", "1"), target: "source" }
+	shared = { ..component("shared-lib", "shared-lib", "1"), target: "source" }
+	composition = { ..SbomTest.composition, components: [compiler, private_lib, shared], relationships: [{ ..edge("Subject", compiler.id, "dependsOn"), scope: "build" }, edge(compiler.id, private_lib.id, "dependsOn"), edge(compiler.id, shared.id, "dependsOn"), edge("Subject", shared.id, "dependsOn")] }
+	inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", composition) ?? crash "build inventory"
+	bom = JsonData.decode_with(Sbom.render_cyclonedx(inventory, { ..SbomTest.subject, target: "source" }, SbomTest.context) ?? crash "build BOM", JsonData.documents) ?? crash "BOM JSON"
+	components = cdx_components(bom)
+	scope = |id| (components.find_first(|entry| entry.field("bom-ref") == Ok(JsonData.String(id))) ?? JsonData.Null).field("scope")
+	scope(compiler.id) == Ok(JsonData.String("excluded")) and scope(private_lib.id) == Ok(JsonData.String("excluded")) and scope(shared.id) == Ok(JsonData.String("required"))
+}
+
+# Generated namespaces are bounded valid UUID identities, change with generation
+# facts and keep the canonical graph/evidence consistent across all formats.
+expect {
+	inventory = SbomTest.inventory ?? crash "inventory"
+	identity = { revision: SbomTest.context.revision, created: SbomTest.context.created, author: SbomTest.context.author, generator: SbomTest.context.generator }
+	namespace = Sbom.document_namespace(inventory, SbomTest.subject, identity)
+	context = { ..SbomTest.context, namespace }
+	outputs = [Sbom.render(inventory, SbomTest.subject, context), Sbom.render_spdx2(inventory, SbomTest.subject, context), Sbom.render_cyclonedx(inventory, SbomTest.subject, context)]
+	CycloneDx.serial_number(namespace) and namespace.count_utf8_bytes() == 45
+		and namespace == Sbom.document_namespace(inventory, SbomTest.subject, identity)
+			and namespace != Sbom.document_namespace(inventory, SbomTest.subject, { ..identity, revision: "2" })
+				and namespace != Sbom.document_namespace(inventory, { ..SbomTest.subject, version: "2" }, identity)
+					and outputs.all(
+						|output| match output {
+							Ok(text) => match Sidecar.check(text) {
+								Ok(checked) => checked.document.namespace == namespace and Sidecar.against_inventory(checked, inventory).is_ok()
+								Err(_) => False
+							}
+							Err(_) => False
+						},
+					)
+}
+
+# Compact wire metadata and the old duplicate-field metadata read to the same
+# canonical Package. Legacy conflicting duplicate assertions still fail closed.
+expect {
+	text = Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context) ?? crash "SPDX3"
+	tree = JsonData.decode_with(text, JsonData.documents) ?? crash "JSON"
+	node = ((tree.field("@graph") ?? JsonData.Array([])).array() ?? []).find_first(|entry| entry.field("name") == Ok(JsonData.String(reviewed_library.name))) ?? crash "package"
+	compact = (node.field("comment") ?? JsonData.Null).string() ?? crash "comment"
+	canonical = Sbom.package_of(reviewed_library).comment
+	legacy = text.replace_each(Json.to_str(compact), Json.to_str(canonical))
+	compact != canonical and Sbom.read(legacy) == Sbom.read(text)
+		and Sbom.read(legacy.replace_each("\"software_copyrightText\":${Json.to_str(reviewed_library.copyright)}", "\"software_copyrightText\":\"Conflicting standard copyright\"")).is_err()
+}
+
+# Re-importing an escaped modification note carries it once. Each hop records
+# its direct immutable supplier document instead of recursively copying JSON.
+expect {
+	original = "Original \"notice\" with \\slashes. ".repeat(20)
+	leaf = { ..component("leaf", "leaf", "1"), target: "source", modified: original }
+	initial = { ..SbomTest.composition, components: [leaf], relationships: [edge("Subject", leaf.id, "contains")] }
+	var $inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", initial) ?? crash "initial inventory"
+	var $subject = { ..SbomTest.subject, target: "source" }
+	var $context = SbomTest.context
+	var $hop = 0.U64
+	var $valid = True
+	while $hop < 6 {
+		text = Sbom.render($inventory, $subject, $context) ?? crash "supplier rendering"
+		imported = { subject: { component: "", filename: $subject.filename, version: $subject.version, sha256: $subject.sha256 }, id: "upstream", url: if ($hop % 2 == 0) "NOASSERTION" else "https://example.org/supplier/document.json", sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), namespace: $context.namespace, target: "source", document: text, relation: "contains", basis: "Reviewed supplier source", contact: "https://example.org/support" }
+		composition = { ..SbomTest.composition, components: [], relationships: [], imported_documents: [imported] }
+		$inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", composition) ?? crash "reimported inventory"
+		retained = $inventory.components.find_first(|entry| entry.name == "leaf") ?? crash "retained leaf"
+		note : Try({ format : Str, modifications : Str }, _)
+		note = Json.parse(retained.modified)
+		$valid = $valid and note == Ok({ format: "blueprint-import-v1", modifications: original }) and retained.modified.count_utf8_bytes() < Json.to_str(original).count_utf8_bytes() + 600
+		$hop = $hop + 1
+		$subject = { ..$subject, filename: "hop-${$hop.to_str()}.tar" }
+		$context = { ..$context, namespace: Sbom.document_namespace($inventory, $subject, { revision: $context.revision, created: $context.created, author: $context.author, generator: $context.generator }) }
+	}
+	$valid
+}
+
+# Bindings compare generation context from standard fields, not merely from
+# what their manifest claims. Every rendering exposes the actual same context.
+expect SbomTest.cases.all(
+	|case| [Sbom.render(case.inventory, case.subject, case.context), Sbom.render_spdx2(case.inventory, case.subject, case.context), Sbom.render_cyclonedx(case.inventory, case.subject, case.context)].all(
+		|text| match Sidecar.check(text ?? crash "render context") {
+			Ok(checked) => checked.context == { created: case.context.created, generator: case.context.generator }
+			Err(_) => False
+		},
+	),
+)
+
+# Unreferenced tools are not the document's generator. Follow createdUsing.
+expect {
+	text = SbomTest.output ?? crash "fixture render"
+	tree = JsonData.decode_with(text, JsonData.documents) ?? crash "JSON"
+	nodes = (tree.field("@graph") ?? JsonData.Array([])).array() ?? []
+	document = nodes.find_first(|node| node.field("type") == Ok(JsonData.String("SpdxDocument"))) ?? crash "document"
+	creation = document.field("creationInfo") ?? crash "creation ref"
+	unrelated = JsonData.Object([{ name: "type", value: JsonData.String("Tool") }, { name: "name", value: JsonData.String("Unrelated first tool") }, { name: "spdxId", value: JsonData.String("${SbomTest.context.namespace}#unrelated/tool") }, { name: "creationInfo", value: creation }])
+	changed = tree.set("@graph", JsonData.Array(nodes.prepend(unrelated))) ?? crash "graph"
+	match Sidecar.check(JsonData.encode_with(changed, JsonData.documents) ?? crash "encode") {
+		Ok(checked) => checked.context == { created: SbomTest.context.created, generator: SbomTest.context.generator }
+		Err(_) => False
+	}
+}
+
+# Published v1 scope semantics stay readable; the new runtime-evidence view is
+# selected by its explicit profile marker rather than reinterpreting old BOMs.
+expect Sbom.read_cyclonedx(fixture_native_linux_cdx.replace_each("standard-evidence-v2", "standard-containment-v1")).is_ok()
+
+# Several independently documented scopes can assess the same component and
+# aspect. Keep their private reasons, but serialize each standard aggregate
+# once (CycloneDX compositions has uniqueItems:true).
+expect {
+	composition = { ..SbomTest.composition, coverage: [claim("assembly-a", "Subject", "assembly", "complete"), claim("assembly-b", "Subject", "assembly", "complete")] }
+	inventory = inspect(composition) ?? crash "overlapping assessments"
+	text = Sbom.render_cyclonedx(inventory, SbomTest.subject, SbomTest.context) ?? crash "BOM"
+	tree = JsonData.decode_with(text, JsonData.documents) ?? crash "JSON"
+	((tree.field("compositions") ?? JsonData.Array([])).array() ?? []).len() == 1
+		and match Sidecar.check(text) {
+			Ok(checked) => checked.evidence.coverage.len() == 2 and Sidecar.against_inventory(checked, inventory).is_ok()
+			Err(_) => False
+		}
+}
+
+# Renderers and filesystem-sidecar checks share the portable subject contract.
+expect ["C:artifact", "artifact:stream", "CON.txt", "ending.", "ending ", "bad\u(0000)name"].all(
+	|filename| {
+		unsafe = { ..SbomTest.subject, filename }
+		inventory = SbomTest.inventory ?? crash "fixture inventory"
+		Sbom.render(inventory, unsafe, SbomTest.context).is_err()
+			and Sbom.render_spdx2(inventory, unsafe, SbomTest.context).is_err()
+				and Sbom.render_cyclonedx(inventory, unsafe, SbomTest.context).is_err()
+	},
+)
+
+# A proved runtime child must remain in standard CycloneDX even when the
+# canonical containment parent has an unresolved inclusion role.
+expect {
+	parent = { ..component("unresolved-parent", "unresolved-parent", "1"), target: "source" }
+	child = { ..component("runtime-child", "runtime-child", "1"), target: "source" }
+	composition = { ..SbomTest.composition, components: [parent, child], relationships: [edge("Subject", parent.id, "other"), edge(parent.id, child.id, "contains"), { ..edge("Subject", child.id, "dependsOn"), scope: "runtime" }] }
+	inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", composition) ?? crash "hidden-parent inventory"
+	subject = { ..SbomTest.subject, target: "source" }
+	text = Sbom.render_cyclonedx(inventory, subject, SbomTest.context) ?? crash "hidden-parent CycloneDX"
+	bom = JsonData.decode_with(text, JsonData.documents) ?? crash "hidden-parent JSON"
+	standard = without_blueprint(bom)
+	components = (standard.field("components") ?? JsonData.Array([])).array() ?? []
+	checked = Sidecar.check(text) ?? crash "hidden-parent round trip"
+	three = Sidecar.check(Sbom.render(inventory, subject, SbomTest.context) ?? crash "hidden-parent SPDX3") ?? crash "hidden-parent SPDX3 read"
+	two = Sidecar.check(Sbom.render_spdx2(inventory, subject, SbomTest.context) ?? crash "hidden-parent SPDX2") ?? crash "hidden-parent SPDX2 read"
+	components.map(|entry| entry.field("bom-ref")) == [Ok(JsonData.String(child.id))]
+		and components.all(|entry| entry.field("components").is_err())
+			and Sidecar.same_graph(checked, three) and Sidecar.same_graph(checked, two)
+				and Sidecar.against_inventory(checked, inventory).is_ok()
+}
+
+# A component name is data, not a Blueprint profile marker. Dispatch uses
+# the parsed metadata property instead of finding a reserved-looking string.
+expect {
+	foreign = "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.7\",\"serialNumber\":\"urn:uuid:12345678-1234-4234-8234-123456789abc\",\"version\":1,\"metadata\":{\"component\":{\"type\":\"library\",\"bom-ref\":\"root\",\"name\":\"ordinary\",\"version\":\"1\"}}}"
+	ordinary = Sbom.read(foreign) ?? crash "foreign document"
+	named = Sbom.read(foreign.replace_each("ordinary", "blueprint:namespace")) ?? crash "reserved-looking foreign name"
+	ordinary.packages_.map(|entry| entry.id) == named.packages_.map(|entry| entry.id)
+		and ordinary.relationships == named.relationships and ordinary.evidence == named.evidence
+}
+
+# Profile-marked CycloneDX always uses strict 1.7 validation, including when
+# reached through Sbom.read or Sidecar.check rather than read_cyclonedx.
+expect {
+	text = Sbom.render_cyclonedx(SbomTest.inventory ?? crash "inventory", SbomTest.subject, SbomTest.context) ?? crash "own CycloneDX"
+	lowered = text.replace_each("\"specVersion\":\"1.7\"", "\"specVersion\":\"1.4\"")
+	unsupported = text.replace_each("\"bomFormat\":", "\"vulnerabilities\":[],\"bomFormat\":")
+	Sidecar.check(text).is_ok() and Sbom.read(text).is_ok()
+		and [lowered, unsupported].all(|invalid| invalid != text and Sbom.read(invalid).is_err() and Sidecar.check(invalid).is_err())
+}
+
+# Marker-looking package names cannot change the sidecar's serialization.
+expect ["spdx2", "spdx3"].all(
+	|format| {
+		inventory = SbomTest.inventory ?? crash "inventory"
+		rendered = (if format == "spdx2" Sbom.render_spdx2(inventory, SbomTest.subject, SbomTest.context) else Sbom.render(inventory, SbomTest.subject, SbomTest.context)) ?? crash "SPDX rendering"
+		original_name = (inventory.components.first() ?? crash "component").name
+		text = rendered.replace_each("\"name\":${Json.to_str(original_name)}", "\"name\":\"bomFormat\"")
+		text != rendered and Sidecar.check(text).is_ok()
+	},
+)
+
+# Arbitrary foreign JSON comments are prose, even when a small subset of keys
+# resembles Blueprint metadata. Preserve every extra fact on supplier import.
+expect [
+	("{\"modifications\":\"x\",\"license_notice\":\"retain me\"}", False),
+	("{\"digest_kind\":\"unrelated\",\"target\":\"source\",\"license_notice\":\"retain me\"}", False),
+	(Sbom.package_of({ ..component("leaf", "leaf", "1"), target: "source" }).comment.drop_suffix("}").concat(",\"license_notice\":\"retain me\"}"), False),
+	(Json.to_str({ kind: "file", copyright: "NOASSERTION", attribution: "NOASSERTION", target: "source", digest_kind: "final-deliverable-sha256", license_notice: "retain me" }), True),
+	(Json.to_str({ kind: "file", copyright: "NOASSERTION", attribution: "NOASSERTION", target: "source", digest_kind: "unrelated" }), True),
+].all(
+	|(original, on_subject)| {
+		leaf = { ..component("leaf", "leaf", "1"), target: "source" }
+		inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [leaf], relationships: [edge("Subject", leaf.id, "contains")] }) ?? crash "foreign-comment inventory"
+		subject = { ..SbomTest.subject, target: "source" }
+		text = Sbom.render(inventory, subject, SbomTest.context) ?? crash "foreign-comment source"
+		tree = JsonData.decode_with(text, JsonData.documents) ?? crash "foreign-comment JSON"
+		name = if (on_subject) subject.filename else leaf.name
+		node = ((tree.field("@graph") ?? JsonData.Array([])).array() ?? []).find_first(|candidate| candidate.field("type") == Ok(JsonData.String("software_Package")) and candidate.field("name") == Ok(JsonData.String(name))) ?? crash "leaf package"
+		comment = (node.field("comment") ?? JsonData.Null).string() ?? crash "leaf comment"
+		foreign = text.replace_each(Json.to_str(comment), Json.to_str(original))
+		imported = { subject: { component: "", filename: subject.filename, version: subject.version, sha256: subject.sha256 }, id: "upstream", url: "https://example.org/supplier/document.json", sha256: Crypto.SHA256.hash(foreign.to_utf8()).to_hex(), namespace: SbomTest.context.namespace, target: "source", document: foreign, relation: "contains", basis: "Reviewed supplier source", contact: "https://example.org/support" }
+		retained = (Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [], relationships: [], imported_documents: [imported] }) ?? crash "foreign-comment import").components.find_first(|entry| entry.name == name) ?? crash "retained leaf"
+		note : Try({ modifications : Str }, _)
+		note = Json.parse(retained.modified)
+		note == Ok({ modifications: original })
+	},
+)
+
+# Marker-looking original modification JSON is not a prior import wrapper.
+# Complete shape, exact nested keys and valid locator/hash/types are required.
+expect [
+	"{\"format\":\"blueprint-import-v1\",\"modifications\":\"x\",\"extra\":\"retain\"}",
+	Json.to_str({ format: "blueprint-import-v1", document: { namespace: SbomTest.context.namespace, url: "https://example.org/supplier/document.json", sha256: digest, license_notice: "retain" }, component: "leaf", modifications: "x", normalization: List.repeat("", 0) }),
+	Json.to_str({ format: "blueprint-import-v1", document: { namespace: SbomTest.context.namespace, url: "https://example.org/supplier/document.json", sha256: "not-a-hash" }, component: "leaf", modifications: "x", normalization: List.repeat("", 0) }),
+	Json.to_str({ format: "blueprint-import-v1", document: { namespace: SbomTest.context.namespace, url: "https://example.org/supplier", sha256: digest }, component: "leaf", modifications: "x", normalization: [1] }),
+	Json.to_str({ format: "blueprint-import-v1", document: { namespace: SbomTest.context.namespace, url: "http://example.org/supplier", sha256: digest }, component: "leaf", modifications: "x", normalization: List.repeat("", 0) }),
+].all(
+	|original| {
+		leaf = { ..component("leaf", "leaf", "1"), target: "source", modified: original }
+		inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [leaf], relationships: [edge("Subject", leaf.id, "contains")] }) ?? crash "marker-note inventory"
+		subject = { ..SbomTest.subject, target: "source" }
+		text = Sbom.render(inventory, subject, SbomTest.context) ?? crash "marker-note source"
+		imported = { subject: { component: "", filename: subject.filename, version: subject.version, sha256: subject.sha256 }, id: "upstream", url: "https://example.org/supplier/document.json", sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), namespace: SbomTest.context.namespace, target: "source", document: text, relation: "contains", basis: "Reviewed supplier source", contact: "https://example.org/support" }
+		retained = (Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [], relationships: [], imported_documents: [imported] }) ?? crash "marker-note import").components.find_first(|entry| entry.name == leaf.name) ?? crash "retained leaf"
+		note : Try({ modifications : Str }, _)
+		note = Json.parse(retained.modified)
+		note == Ok({ modifications: original })
+	},
+)
+
+# Compact metadata is a closed versioned wire record: an extra supplier notice
+# must be rejected rather than silently discarded during canonical readback.
+expect {
+	text = Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context) ?? crash "compact source"
+	tree = JsonData.decode_with(text, JsonData.documents) ?? crash "compact JSON"
+	node = ((tree.field("@graph") ?? JsonData.Array([])).array() ?? []).find_first(|entry| entry.field("name") == Ok(JsonData.String(reviewed_library.name))) ?? crash "compact package"
+	comment = (node.field("comment") ?? JsonData.Null).string() ?? crash "compact comment"
+	custom = JsonData.decode(comment) ?? crash "compact metadata"
+	with_notice = custom.set("license_notice", JsonData.String("retain me")) ?? crash "extra notice"
+	changed = text.replace_each(Json.to_str(comment), Json.to_str(JsonData.encode(with_notice) ?? crash "extra metadata"))
+	changed != text and match Sbom.read(changed) {
+		Err(message) => message.contains("unsupported keys in compact")
+		Ok(_) => False
+	}
+}
