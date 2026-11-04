@@ -188,6 +188,7 @@
                 ./blueprint-nix
                 ./fixtures/consumer/authority.lock
                 ./blueprint-core/Activation.roc
+                ./blueprint-core/ArtifactName.roc
                 ./blueprint-core/BuildModel.roc
                 ./blueprint-core/JsonData.roc
                 ./blueprint-core/LockSnapshot.roc

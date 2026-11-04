@@ -3,6 +3,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -65,6 +66,20 @@ class IndependentConformance(unittest.TestCase):
         path.write_bytes('{"spdxVersion":"SPDX-2.3"}'.encode("utf-16"))
         self.assertEqual(conformance.validate_file(path)["status"], "invalid")
 
+    def test_lone_surrogates_in_values_and_keys_fail_before_sdk(self):
+        for text in ['{"name":"\\ud800"}', '{"\\udc00":"value"}']:
+            with self.subTest(text=text):
+                result = conformance.validate_file(self.temporary_document(text))
+                self.assertEqual(result["status"], "invalid")
+                self.assertTrue(result["errors"])
+
+    def test_nonregular_input_is_not_opened(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        result = conformance.validate_file(Path(directory.name))
+        self.assertEqual(result["status"], "tool-error")
+        self.assertIn("regular file", result["errors"][0]["message"])
+
     def test_bad_spdx_shape_is_invalid_not_tool_failure(self):
         path = self.temporary_document('{"spdxVersion":"SPDX-2.3"}')
         self.assertEqual(conformance.validate_file(path)["status"], "invalid")
@@ -74,6 +89,20 @@ class IndependentConformance(unittest.TestCase):
         self.assertEqual(conformance.validate_file(path)["status"], "tool-error")
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(conformance.main([str(path)]), 2)
+
+    def test_fixture_expectations_cannot_exempt_selected_invalid_artifacts(self):
+        cases = conformance.ROOT / "tests/sbom/conformance/cases.json"
+        invalid = cases.parent / "missing-file-sha1.spdx.json"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(conformance.main(["--fixture-cases", str(cases)]), 0)
+        for selected in [str(invalid), os.path.relpath(invalid)]:
+            with self.subTest(selected=selected), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(conformance.main([selected, "--fixture-cases", str(cases)]), 1)
+
+    def test_missing_negative_fixture_is_a_configuration_failure(self):
+        manifest = self.temporary_document('[{"file":"missing-negative.spdx.json","valid":false}]')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(conformance.main(["--fixture-cases", str(manifest)]), 2)
 
     def test_remote_schema_reference_has_no_network_fallback(self):
         with self.assertRaises(conformance.ToolError):

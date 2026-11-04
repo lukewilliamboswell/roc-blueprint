@@ -71,14 +71,32 @@ def check_depth(raw):
             depth -= 1
 
 
+def check_unicode(value):
+    # Python accepts escaped lone surrogates; the product's strict Unicode
+    # reader refuses them. Check keys as well as string values before SDK use.
+    if isinstance(value, str):
+        value.encode("utf-8")
+    elif isinstance(value, dict):
+        for key, child in value.items():
+            check_unicode(key)
+            check_unicode(child)
+    elif isinstance(value, list):
+        for child in value:
+            check_unicode(child)
+
+
 def read_json(path: Path):
+    if not path.is_file():
+        raise ToolError("SBOM input must be a regular file")
     with path.open("rb") as source:
         raw = source.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
         raise ValueError(f"input exceeds {MAX_BYTES} UTF-8 bytes")
     check_depth(raw)
-    return json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object,
-                      parse_constant=reject_constant)
+    document = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object,
+                          parse_constant=reject_constant)
+    check_unicode(document)
+    return document
 
 
 def schema(name):
@@ -147,7 +165,9 @@ def validate_file(path: Path):
         record["status"] = "invalid" if record["errors"] else "valid"
     except ToolError as error:
         record.update(status="tool-error", errors=[{"message": str(error)}])
-    except (OSError, ValueError, RecursionError, UnicodeError) as error:
+    except OSError as error:
+        record.update(status="tool-error", errors=[{"message": str(error)}])
+    except (ValueError, RecursionError, UnicodeError) as error:
         record["errors"] = [{"message": str(error)}]
     except Exception as error:
         # A validator exception cannot become a successful schema-only result.
@@ -169,13 +189,17 @@ def main(argv=None):
             if not matches:
                 parser.error(f"no files match {pattern!r}")
             paths.extend(map(Path, matches))
+    strict_paths = {path.resolve() for path in paths}
     try:
         versions = {name: importlib.metadata.version(name) for name in ("spdx-tools", "jsonschema-rs")}
     except importlib.metadata.PackageNotFoundError as error:
         parser.error(f"install scripts/sbom-conformance/requirements.txt first: {error}")
     expected = {}
     if args.fixture_cases:
-        cases = read_json(args.fixture_cases)
+        try:
+            cases = read_json(args.fixture_cases)
+        except (OSError, ValueError, ToolError) as error:
+            parser.error(f"cannot read fixture manifest: {error}")
         for case in cases:
             path = args.fixture_cases.parent / case["file"]
             paths.append(path)
@@ -184,6 +208,7 @@ def main(argv=None):
         parser.error("supply SBOM files, --patterns or --fixture-cases")
     records = [validate_file(path) for path in sorted(set(paths))]
     for record in records:
+        record["artifact_required_valid"] = Path(record["file"]).resolve() in strict_paths
         if record["file"] in expected:
             case = expected[record["file"]]
             record["fixture_required_valid"] = case["valid"]
@@ -200,6 +225,8 @@ def main(argv=None):
         print(encoded, end="")
     if any(record["status"] == "tool-error" for record in records):
         return 2
+    if any(record["artifact_required_valid"] and record["status"] != "valid" for record in records):
+        return 1
     if any(not record.get("expectation_met", record["status"] == "valid") for record in records):
         return 1
     return 0

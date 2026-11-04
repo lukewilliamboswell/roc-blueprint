@@ -1,4 +1,5 @@
 import Spec
+import ArtifactName
 import Lock
 import Project
 import CycloneDx
@@ -675,7 +676,7 @@ bindable = |inventory, subject, context| {
 	if !subject.license.contains("LicenseRef-") and !subject.license_url.is_empty() {
 		return Err("license_url is only supported for LicenseRef terms; omit it for standard licenses")
 	}
-	if subject.filename.is_empty() or subject.filename.contains("/") or subject.filename.contains("\\") or subject.filename == "." or subject.filename == ".." or subject.version.is_empty() or subject.target.is_empty() or !hex(subject.sha256) {
+	if !ArtifactName.valid(subject.filename) or subject.version.is_empty() or subject.target.is_empty() or !hex(subject.sha256) {
 		return Err("invalid subject filename/version/target/SHA-256")
 	}
 	if (!CycloneDx.serial_number(context.namespace) and (!context.namespace.starts_with("https://") or !context.namespace.ends_with("revision-${context.revision}"))) or context.revision.is_empty() or !Spdx3.timestamp(context.created) or !agent(context.author) or !context.generator.starts_with("Tool: ") or context.generator == "Tool: " {

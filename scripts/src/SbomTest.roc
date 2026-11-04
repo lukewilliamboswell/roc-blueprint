@@ -1636,3 +1636,14 @@ expect {
 			Err(_) => False
 		}
 }
+
+# Renderers and filesystem-sidecar checks share the portable subject contract.
+expect ["C:artifact", "artifact:stream", "CON.txt", "ending.", "ending ", "bad\u(0000)name"].all(
+	|filename| {
+		unsafe = { ..SbomTest.subject, filename }
+		inventory = SbomTest.inventory ?? crash "fixture inventory"
+		Sbom.render(inventory, unsafe, SbomTest.context).is_err()
+			and Sbom.render_spdx2(inventory, unsafe, SbomTest.context).is_err()
+				and Sbom.render_cyclonedx(inventory, unsafe, SbomTest.context).is_err()
+	},
+)

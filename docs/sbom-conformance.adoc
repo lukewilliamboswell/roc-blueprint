@@ -32,6 +32,11 @@ pattern, unknown format/version or unavailable validator fails rather than being
 silently skipped. Explicit file arguments work as well.
 
 The JSON report records tool versions, the validation level, and errors per file.
+Explicit files and pattern-selected artifacts must pass, even when the same file
+is also an expected-negative regression case. Fixture expectations cannot exempt
+a selected release artifact; the report records each verification role.
+A missing, unreadable or nonregular fixture is a configuration failure, never
+an expected-negative document result.
 Exit status is 0 for success, 1 for invalid input and 2 for unsupported input or a
 tool/configuration error. Files are limited to 16 MiB of input, including trailing
 whitespace, and 64 levels of container nesting before parsing. Duplicate JSON keys and non-JSON numeric constants are refused before
@@ -50,6 +55,20 @@ source; the supplied patterns resolve in the caller's workspace. It does not
 install or invoke the Blueprint product binary, fetch supplier SBOMs, or
 publish anything. This lets independent native generators adopt the guard
 without first adopting Blueprint's SBOM renderer.
+
+== Prefer the shared archive inventory and renderer
+
+When adopting Blueprint, use `blueprint-sbom members` and `inspect --members`
+(or the pure `Sbom.archive_members` API), reviewed composition and `bind`.
+The member list is derived from the exact produced archive and retains each
+file's SHA-256. Blueprint represents these inventory records as packages with
+file purpose, preserving supplied version, supplier and declared license without
+hand-writing SPDX File records or package verification structures. It emits all
+three representations from the same checked inventory.
+
+A native producer that must emit SPDX File records directly can adopt the
+independent action without adopting the renderer; the requirements below still
+apply to that representation.
 
 == Native SPDX 2 producers: migration checklist
 
