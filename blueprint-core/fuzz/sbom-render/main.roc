@@ -154,35 +154,46 @@ expected = |inventory, subject| {
 ## subject's digest.
 Standard : { subject : { sha256 : Str, kind : Str, copyright : Str, supplier : Str, license : Str }, components : List({ ref : Str, parent : Str, kind : Str, copyright : Str, source_refs : List(Sbom.SourceRef), scope : Str, purl : Str, sha256 : Str, license : Str, supplier : Str, depends : List(Str) }), dependents : List(Str), dependency_refs : List(Str), compositions : List({ aggregate : Str, assemblies : List(Str), dependencies : List(Str) }) }
 
-## The standard fields as the CycloneDX specification says the inventory's
-## facts are spelled: a component the subject needs at run time is required, a
-## build, test or development tool excluded, anything else optional.
-standard : Sbom.Inventory, Sbom.Subject -> Standard
-standard = |inventory, subject| {
-	runtime = |edge| edge.relation == "contains" or (edge.relation == "dependsOn" and (edge.scope == "" or edge.scope == "runtime"))
-	var $needed = ["Subject"]
+## Independently explore two lifecycle states for every node. A runtime path
+## wins when the same component is also used by a build tool; unknown nodes
+## have neither state and must not acquire optional runtime scope.
+lifecycle_roles : Sbom.Inventory -> List({ ref : Str, scope : Str })
+lifecycle_roles = |inventory| {
+	var $states = [{ ref: "Subject", build: False }]
 	var $grew = True
 	while $grew {
 		$grew = False
-		for edge in inventory.relationships {
-			if runtime(edge) and $needed.contains(edge.from) and !$needed.contains(edge.to) {
-				$needed = $needed.append(edge.to)
-				$grew = True
+		for state in $states {
+			for edge in inventory.relationships.keep_if(|edge| edge.from == state.ref and ["contains", "dependsOn"].contains(edge.relation)) {
+				next = { ref: edge.to, build: state.build or (edge.relation == "dependsOn" and ["build", "test", "development"].contains(edge.scope)) }
+				if !$states.contains(next) {
+					$states = $states.append(next)
+					$grew = True
+				}
 			}
 		}
 	}
-	tools = inventory.relationships.keep_if(|edge| edge.relation == "dependsOn" and ["build", "test", "development"].contains(edge.scope)).map(|edge| edge.to)
-	depends = |ref| inventory.relationships.keep_if(|edge| edge.from == ref and edge.relation == "dependsOn").map(|edge| edge.to).fold([], |all, to| if (all.contains(to)) all else all.append(to))
+	inventory.components.map(|component| { ref: component.id, scope: if ($states.contains({ ref: component.id, build: False })) "required" else if ($states.contains({ ref: component.id, build: True })) "excluded" else "" })
+}
+
+## The standard view contains proved runtime and nonruntime components only.
+## Unresolved records remain evidence and participate in the full round-trip
+## oracle above, but do not pretend to be optional runtime components here.
+standard : Sbom.Inventory, Sbom.Subject -> Standard
+standard = |inventory, subject| {
+	roles = lifecycle_roles(inventory)
+	visible = roles.keep_if(|role| !role.scope.is_empty()).map(|role| role.ref).prepend("Subject")
+	depends = |ref| inventory.relationships.keep_if(|edge| edge.from == ref and edge.relation == "dependsOn" and visible.contains(edge.to)).map(|edge| edge.to).fold([], |all, to| if (all.contains(to)) all else all.append(to))
 	{
 		subject: { sha256: subject.sha256, kind: if (subject.kind == "unknown") "file" else subject.kind, copyright: if (subject.copyright == "NOASSERTION") "" else subject.copyright, supplier: supplied(subject.producer), license: expressed(subject.license) },
-		components: inventory.components.map(
+		components: inventory.components.keep_if(|component| visible.contains(component.id)).map(
 			|component| {
 				ref: component.id,
-				parent: inventory.relationships.find_first(|edge| edge.relation == "contains" and edge.to == component.id).map_ok(|edge| edge.from) ?? "",
+				parent: inventory.relationships.find_first(|edge| edge.relation == "contains" and edge.to == component.id and visible.contains(edge.from)).map_ok(|edge| edge.from) ?? "",
 				kind: if (component.kind == "unknown") "library" else component.kind,
 				copyright: if (component.copyright == "NOASSERTION") "" else component.copyright,
 				source_refs: component.source_refs,
-				scope: if ($needed.contains(component.id)) "required" else if (tools.contains(component.id)) "excluded" else "optional",
+				scope: (roles.find_first(|role| role.ref == component.id) ?? crash "missing model role").scope,
 				purl: purl(component),
 				sha256: component.sha256,
 				license: if (component.license == "NOASSERTION" or component.license == "NONE") "" else component.license,
@@ -191,8 +202,8 @@ standard = |inventory, subject| {
 			},
 		).sort_with(|a, b| Project.bytewise(a.ref, b.ref)),
 		dependents: depends("Subject"),
-		dependency_refs: inventory.components.map(|component| component.id).prepend("Subject").keep_if(|id| !depends(id).is_empty() or inventory.coverage.any(|claim| claim.component == id and claim.aspect == "dependencies" and ["complete", "verified-empty"].contains(claim.status))),
-		compositions: claims(inventory.coverage),
+		dependency_refs: visible.keep_if(|id| !depends(id).is_empty() or inventory.coverage.any(|claim| claim.component == id and claim.aspect == "dependencies" and ["complete", "verified-empty"].contains(claim.status))),
+		compositions: projected_claims(inventory, visible),
 	}
 }
 
@@ -212,12 +223,14 @@ strip_properties = |tree|
 ## only the facts plain CycloneDX carries.
 projected : Sbom.Inventory, Sbom.Subject, Str -> Sbom.Document
 projected = |inventory, subject, serial| {
-	refs = inventory.components.map(|component| component.id).prepend("Subject")
-	said = inventory.relationships.keep_if(|edge| edge.relation == "contains").map(|edge| { from: edge.from, to: edge.to, relation: "contains", scope: "", basis: "Nested in the CycloneDX component tree" }).concat(
+	model = standard(inventory, subject)
+	refs = model.components.map(|component| component.ref).prepend("Subject")
+	edges = inventory.relationships.keep_if(|edge| refs.contains(edge.from) and refs.contains(edge.to))
+	said = edges.keep_if(|edge| edge.relation == "contains").map(|edge| { from: edge.from, to: edge.to, relation: "contains", scope: "", basis: "Nested in the CycloneDX component tree" }).concat(
 		refs.fold(
 			[],
 			|all, ref| all.concat(
-				inventory.relationships.keep_if(|edge| edge.from == ref and edge.relation == "dependsOn").map(|edge| edge.to).fold([], |kept, to| if (kept.contains(to)) kept else kept.append(to)).map(|to| { from: ref, to, relation: "dependsOn", scope: "", basis: "CycloneDX dependency; CycloneDX states no lifecycle scope for it" }),
+				edges.keep_if(|edge| edge.from == ref and edge.relation == "dependsOn").map(|edge| edge.to).fold([], |kept, to| if (kept.contains(to)) kept else kept.append(to)).map(|to| { from: ref, to, relation: "dependsOn", scope: "", basis: "CycloneDX dependency; CycloneDX states no lifecycle scope for it" }),
 			),
 		),
 	)
@@ -236,14 +249,14 @@ projected = |inventory, subject, serial| {
 			}
 		}
 	}
-	listed = inventory.components.keep_if(|component| !$reached.contains(component.id) and !inventory.relationships.any(|edge| edge.relation == "contains" and edge.to == component.id)).map(|component| { from: "Subject", to: component.id, relation: "other", scope: "", basis: "Listed in the CycloneDX BOM's components; the BOM states no relationship to the described component" })
-	scope_of = standard(inventory, subject).components
+	listed = inventory.components.keep_if(|component| refs.contains(component.id) and !$reached.contains(component.id) and !edges.any(|edge| edge.relation == "contains" and edge.to == component.id)).map(|component| { from: "Subject", to: component.id, relation: "other", scope: "", basis: "Listed in the CycloneDX BOM's components; the BOM states no relationship to the described component" })
+	scope_of = model.components
 	{
 		version: "CycloneDX-1.7",
 		namespace: serial,
 		name: subject.filename,
 		roots: ["Subject"],
-		packages_: inventory.components.map(
+		packages_: inventory.components.keep_if(|component| refs.contains(component.id)).map(
 			|component| {
 				kind: if (component.kind == "unknown") "library" else component.kind,
 				copyright: component.copyright,
@@ -262,7 +275,7 @@ projected = |inventory, subject, serial| {
 			},
 		).prepend({ kind: if (subject.kind == "unknown") "file" else subject.kind, copyright: subject.copyright, attribution: "NOASSERTION", source_refs: [], id: "Subject", name: subject.filename, version: subject.version, supplier: subject.producer, download: subject.url, license: if (subject.license == "NONE") "NOASSERTION" else subject.license, license_url: subject.license_url, sha256: subject.sha256, identity: "", comment: Json.to_str({ type: if (subject.kind == "unknown") "file" else subject.kind, scope: "" }) }),
 		relationships: said.concat(listed),
-		evidence: projected_evidence(inventory.coverage),
+		evidence: projected_evidence(model.compositions),
 		gaps: [],
 	}
 }
@@ -272,17 +285,25 @@ projected = |inventory, subject, serial| {
 add_file_3 : JsonData, Str -> JsonData
 add_file_3 = |tree, namespace| {
 	objects = graph(tree)
-	file = JsonData.Object([{ name: "type", value: JsonData.String("software_File") }, { name: "spdxId", value: JsonData.String("${namespace}#File-added") }, { name: "creationInfo", value: JsonData.String("_:creationinfo") }, { name: "name", value: JsonData.String("./README") }])
-	relation = JsonData.Object([{ name: "type", value: JsonData.String("Relationship") }, { name: "spdxId", value: JsonData.String("${namespace}#spdx/relationship/added") }, { name: "creationInfo", value: JsonData.String("_:creationinfo") }, { name: "from", value: JsonData.String("${namespace}#Subject") }, { name: "relationshipType", value: JsonData.String("contains") }, { name: "to", value: JsonData.Array([JsonData.String("${namespace}#File-added")]) }])
+	document = objects.find_first(|object| object.field("type") == Ok(JsonData.String("SpdxDocument"))) ?? crash "no SPDX3 document"
+	creation = document.field("creationInfo") ?? crash "document has no creation reference"
+	file = JsonData.Object([{ name: "type", value: JsonData.String("software_File") }, { name: "spdxId", value: JsonData.String("${namespace}#File-added") }, { name: "creationInfo", value: creation }, { name: "name", value: JsonData.String("./README") }])
+	relation = JsonData.Object([{ name: "type", value: JsonData.String("Relationship") }, { name: "spdxId", value: JsonData.String("${namespace}#spdx/relationship/added") }, { name: "creationInfo", value: creation }, { name: "from", value: JsonData.String("${namespace}#Subject") }, { name: "relationshipType", value: JsonData.String("contains") }, { name: "to", value: JsonData.Array([JsonData.String("${namespace}#File-added")]) }])
 	with_graph(tree, objects.concat([file, relation]))
 }
 
 ## An SPDX 2.3 rendering with a file and the subject's CONTAINS of it.
 add_file_2 : JsonData -> JsonData
 add_file_2 = |tree| {
-	file = JsonData.Object([{ name: "SPDXID", value: JsonData.String("SPDXRef-File-added") }, { name: "fileName", value: JsonData.String("./README") }, { name: "checksums", value: JsonData.Array([JsonData.Object([{ name: "algorithm", value: JsonData.String("SHA1") }, { name: "checksumValue", value: JsonData.String(Str.join_with(List.repeat("b", 40), "")) }])]) }])
+	# SHA1("Native fuzz README\n") and SHA1(the lowercase File SHA1 text).
+	# These hashes describe an exact test payload. The package code
+	# hashes the sorted File SHA1 strings, not the file bytes or archive SHA256.
+	file_sha1 = "6448b4de6d32f248ffa4f39ebc112aa7a3316e95"
+	verification = "a22b3e28a8ffe49659420976cb36c6efec16a683"
+	file = JsonData.Object([{ name: "SPDXID", value: JsonData.String("SPDXRef-File-added") }, { name: "fileName", value: JsonData.String("./README") }, { name: "checksums", value: JsonData.Array([JsonData.Object([{ name: "algorithm", value: JsonData.String("SHA1") }, { name: "checksumValue", value: JsonData.String(file_sha1) }])]) }, { name: "licenseConcluded", value: JsonData.String("NOASSERTION") }, { name: "licenseInfoInFiles", value: JsonData.Array([JsonData.String("NOASSERTION")]) }, { name: "copyrightText", value: JsonData.String("NOASSERTION") }])
 	relation = JsonData.Object([{ name: "spdxElementId", value: JsonData.String("SPDXRef-Subject") }, { name: "relatedSpdxElement", value: JsonData.String("SPDXRef-File-added") }, { name: "relationshipType", value: JsonData.String("CONTAINS") }])
-	with_files = set(tree, "files", JsonData.Array([file]))
+	analyzed = ((tree.field("packages") ?? JsonData.Array([])).array() ?? []).map(|entry| if (entry.field("SPDXID") == Ok(JsonData.String("SPDXRef-Subject"))) set(set(set(entry, "filesAnalyzed", JsonData.Boolean(True)), "packageVerificationCode", JsonData.Object([{ name: "packageVerificationCodeValue", value: JsonData.String(verification) }])), "licenseInfoFromFiles", JsonData.Array([JsonData.String("NOASSERTION")])) else entry)
+	with_files = set(set(tree, "files", JsonData.Array([file])), "packages", JsonData.Array(analyzed))
 	set(with_files, "relationships", JsonData.Array(((tree.field("relationships") ?? JsonData.Array([])).array() ?? []).append(relation)))
 }
 
@@ -355,8 +376,8 @@ subject_of = |input| {
 	copyright: if (input.target % 2 == 0) "Copyright Fuzz producers" else "NOASSERTION",
 	attribution: if (input.target % 2 == 0) "Reviewed archive notice" else "NOASSERTION",
 	filename: {
-		name = input.filename.replace_each("/", "_").replace_each("\\", "_")
-		if (name.trim().is_empty() or name == "." or name == "..") "artifact" else name
+		name = Str.from_utf8(input.filename.to_utf8().map(|byte| if (byte < 32 or byte == 127 or "<>:\"/\\|?*".to_utf8().contains(byte)) '_' else byte)) ?? crash "UTF8 filename"
+		"artifact-${name}.bin"
 	},
 	version: filled(input.version, "1.0.0"),
 	target: if (input.target % 2 == 0) "x86_64-linux" else "source",
@@ -631,17 +652,32 @@ ordered = |document| { ..document, packages_: document.packages_.sort_with(|a, b
 flatten : List(JsonData), Str -> List({ tree : JsonData, parent : Str })
 flatten = |trees, parent| trees.fold([], |all, tree| all.append({ tree, parent }).concat(flatten((tree.field("components") ?? JsonData.Array([])).array() ?? [], (tree.field("bom-ref") ?? JsonData.Null).string() ?? "")))
 
-claims : List(Sbom.Coverage) -> List({ aggregate : Str, assemblies : List(Str), dependencies : List(Str) })
-claims = |coverage| coverage.keep_if(|claim| !claim.component.is_empty()).map(|claim| { aggregate: if (["complete", "verified-empty"].contains(claim.status)) "complete" else if (claim.status == "incomplete") "incomplete" else "unknown", assemblies: if (claim.aspect == "assembly") [claim.component] else [], dependencies: if (claim.aspect == "dependencies") [claim.component] else [] })
+Completeness : { aggregate : Str, assemblies : List(Str), dependencies : List(Str) }
 
-projected_evidence : List(Sbom.Coverage) -> List(Str)
-projected_evidence = |coverage| {
+claims : List(Sbom.Coverage) -> List(Completeness)
+claims = |coverage| coverage.keep_if(|claim| !claim.component.is_empty()).map(|claim| { aggregate: if (["complete", "verified-empty"].contains(claim.status)) "complete" else if (claim.status == "incomplete") "incomplete" else "unknown", assemblies: if (claim.aspect == "assembly") [claim.component] else [], dependencies: if (claim.aspect == "dependencies") [claim.component] else [] }).fold([], |all, claim| if (all.contains(claim)) all else all.append(claim))
+
+projected_claims : Sbom.Inventory, List(Str) -> List(Completeness)
+projected_claims = |inventory, visible| {
+	coverage = inventory.coverage.keep_if(|claim| visible.contains(claim.component))
+	stated = claims(coverage)
+	if inventory.components.any(|component| !visible.contains(component.id)) and !coverage.any(|claim| claim.component == "Subject" and claim.aspect == "assembly") {
+		stated.append({ aggregate: "unknown", assemblies: ["Subject"], dependencies: [] })
+	} else {
+		stated
+	}
+}
+
+projected_evidence : List(Completeness) -> List(Str)
+projected_evidence = |compositions| {
 	var $index = 0.U64
 	var $claims = []
-	for claim in coverage.keep_if(|entry| !entry.component.is_empty()) {
-		aggregate = if (["complete", "verified-empty"].contains(claim.status)) "complete" else if (claim.status == "incomplete") "incomplete" else "unknown"
-		aspect = if (claim.aspect == "assembly") "assemblies" else "dependencies"
-		$claims = $claims.append({ scope: "cyclonedx:${$index.to_str()}:${aspect}:${claim.component}", component: claim.component, aspect: claim.aspect, status: aggregate, reason: "Upstream CycloneDX composition aggregate ${aggregate}; supplier assertion", contact: "NOASSERTION" })
+	for composition in compositions {
+		for (aspect, refs) in [("assemblies", composition.assemblies), ("dependencies", composition.dependencies)] {
+			for ref in refs {
+				$claims = $claims.append({ scope: "cyclonedx:${$index.to_str()}:${aspect}:${ref}", component: ref, aspect: if (aspect == "assemblies") "assembly" else "dependencies", status: composition.aggregate, reason: "Upstream CycloneDX composition aggregate ${composition.aggregate}; supplier assertion", contact: "NOASSERTION" })
+			}
+		}
 		$index = $index + 1
 	}
 	if ($claims.is_empty()) [] else [Json.to_str({ coverage: $claims })]
