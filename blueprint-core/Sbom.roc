@@ -729,6 +729,12 @@ normalize_comment = |entry| {
 	match (tree.field("blueprint_metadata_format") ?? JsonData.Null).string() {
 		Err(_) => Ok(entry)
 		Ok("standard-fields-v1") => {
+			# This explicitly versioned record is closed. Unknown keys may be
+			# supplier notices and cannot be silently discarded on normalization.
+			names = if entry.id == subject_id ["blueprint_metadata_format", "kind", "target", "digest_kind"] else ["blueprint_metadata_format", "kind", "identity", "origin", "target", "modifications"]
+			if tree.keys().len() != names.len() or tree.keys().any(|name| !names.contains(name)) {
+				return Err("unsupported keys in compact standard-fields-v1 metadata")
+			}
 			if entry.id == subject_id {
 				custom : Try({ kind : Str, target : Str, digest_kind : Str }, _)
 				custom = Json.parse(entry.comment)
@@ -756,22 +762,50 @@ normalize_comment = |entry| {
 # and locator above identify the complete original evidence.
 upstream_modifications : Sbom.Package -> Str
 upstream_modifications = |entry| {
-	custom : Try({ modifications : Str }, _)
+	if entry.comment.is_empty() {
+		return "NOASSERTION"
+	}
+	# Typed JSON decoding alone ignores unknown fields. Recognize the entire
+	# canonical shape first, so foreign JSON prose never loses extra facts.
+	exact = |tree, names| tree.keys().len() == names.len() and names.all(|name| tree.keys().contains(name))
+	tree = SbomJson.decode(entry.comment) ?? JsonData.Null
+	if entry.id == subject_id and exact(tree, ["kind", "copyright", "attribution", "target", "digest_kind"]) {
+		subject : Try({ kind : Str, copyright : Str, attribution : Str, target : Str, digest_kind : Str }, _)
+		subject = Json.parse(entry.comment)
+		match subject {
+			Ok(found) if found.kind == entry.kind and found.copyright == entry.copyright and found.attribution == entry.attribution and !found.target.is_empty() and found.digest_kind == "final-deliverable-sha256" => return "NOASSERTION"
+			_ => return entry.comment
+		}
+	}
+	if entry.id == subject_id or !exact(tree, ["kind", "copyright", "attribution", "package_url", "source_refs", "identity", "origin", "target", "modifications"]) {
+		return entry.comment
+	}
+	if !((tree.field("source_refs") ?? JsonData.Null).array() ?? [JsonData.Null]).all(|reference| exact(reference, ["type", "url"])) {
+		return entry.comment
+	}
+	custom : Try({ kind : Str, copyright : Str, attribution : Str, package_url : Str, source_refs : List(Sbom.SourceRef), identity : Str, origin : Str, target : Str, modifications : Str }, _)
 	custom = Json.parse(entry.comment)
-	match custom {
-		Ok(found) => {
-			provenance : Try({ format : Str, modifications : Str }, _)
-			provenance = Json.parse(found.modifications)
-			match provenance {
-				Ok(record) if record.format == "blueprint-import-v1" => record.modifications
-				_ => if (found.modifications.is_empty()) "NOASSERTION" else found.modifications
-			}
-		}
-		Err(_) => {
-			subject : Try({ digest_kind : Str, target : Str }, _)
-			subject = Json.parse(entry.comment)
-			if (subject.is_ok() or entry.comment.is_empty()) "NOASSERTION" else entry.comment
-		}
+	found = match custom {
+		Ok(value) if value.kind == entry.kind and value.copyright == entry.copyright and value.attribution == entry.attribution and value.package_url == entry.identity and value.source_refs == entry.source_refs and !value.identity.is_empty() and !value.origin.is_empty() => value
+		_ => return entry.comment
+	}
+	if found.modifications.is_empty() {
+		return "NOASSERTION"
+	}
+	# Only our complete bounded provenance record is a wrapper. An original
+	# note that happens to contain a format marker remains original prose.
+	if found.modifications.count_utf8_bytes() > 16384 {
+		return found.modifications
+	}
+	provenance_tree = SbomJson.decode(found.modifications) ?? JsonData.Null
+	if !exact(provenance_tree, ["format", "document", "component", "modifications", "normalization"]) or !exact(provenance_tree.field("document") ?? JsonData.Null, ["namespace", "url", "sha256"]) {
+		return found.modifications
+	}
+	provenance : Try({ format : Str, document : { namespace : Str, url : Str, sha256 : Str }, component : Str, modifications : Str, normalization : List(Str) }, _)
+	provenance = Json.parse(found.modifications)
+	match provenance {
+		Ok(record) if record.format == "blueprint-import-v1" and namespace_identity(record.document.namespace) and uri(record.document.url) and hex(record.document.sha256) and (record.component == subject_id or valid_id(record.component)) and record.component.count_utf8_bytes() <= 256 and record.normalization.len() <= 4096 => record.modifications
+		_ => found.modifications
 	}
 }
 

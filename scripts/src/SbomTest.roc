@@ -1578,7 +1578,7 @@ expect {
 	var $valid = True
 	while $hop < 6 {
 		text = Sbom.render($inventory, $subject, $context) ?? crash "supplier rendering"
-		imported = { subject: { component: "", filename: $subject.filename, version: $subject.version, sha256: $subject.sha256 }, id: "upstream", url: "https://example.org/supplier/document.json", sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), namespace: $context.namespace, target: "source", document: text, relation: "contains", basis: "Reviewed supplier source", contact: "https://example.org/support" }
+		imported = { subject: { component: "", filename: $subject.filename, version: $subject.version, sha256: $subject.sha256 }, id: "upstream", url: if ($hop % 2 == 0) "NOASSERTION" else "https://example.org/supplier/document.json", sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), namespace: $context.namespace, target: "source", document: text, relation: "contains", basis: "Reviewed supplier source", contact: "https://example.org/support" }
 		composition = { ..SbomTest.composition, components: [], relationships: [], imported_documents: [imported] }
 		$inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", composition) ?? crash "reimported inventory"
 		retained = $inventory.components.find_first(|entry| entry.name == "leaf") ?? crash "retained leaf"
@@ -1699,3 +1699,68 @@ expect ["spdx2", "spdx3"].all(
 		text != rendered and Sidecar.check(text).is_ok()
 	},
 )
+
+# Arbitrary foreign JSON comments are prose, even when a small subset of keys
+# resembles Blueprint metadata. Preserve every extra fact on supplier import.
+expect [
+	("{\"modifications\":\"x\",\"license_notice\":\"retain me\"}", False),
+	("{\"digest_kind\":\"unrelated\",\"target\":\"source\",\"license_notice\":\"retain me\"}", False),
+	(Sbom.package_of({ ..component("leaf", "leaf", "1"), target: "source" }).comment.drop_suffix("}").concat(",\"license_notice\":\"retain me\"}"), False),
+	(Json.to_str({ kind: "file", copyright: "NOASSERTION", attribution: "NOASSERTION", target: "source", digest_kind: "final-deliverable-sha256", license_notice: "retain me" }), True),
+	(Json.to_str({ kind: "file", copyright: "NOASSERTION", attribution: "NOASSERTION", target: "source", digest_kind: "unrelated" }), True),
+].all(
+	|(original, on_subject)| {
+		leaf = { ..component("leaf", "leaf", "1"), target: "source" }
+		inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [leaf], relationships: [edge("Subject", leaf.id, "contains")] }) ?? crash "foreign-comment inventory"
+		subject = { ..SbomTest.subject, target: "source" }
+		text = Sbom.render(inventory, subject, SbomTest.context) ?? crash "foreign-comment source"
+		tree = JsonData.decode_with(text, JsonData.documents) ?? crash "foreign-comment JSON"
+		name = if (on_subject) subject.filename else leaf.name
+		node = ((tree.field("@graph") ?? JsonData.Array([])).array() ?? []).find_first(|candidate| candidate.field("type") == Ok(JsonData.String("software_Package")) and candidate.field("name") == Ok(JsonData.String(name))) ?? crash "leaf package"
+		comment = (node.field("comment") ?? JsonData.Null).string() ?? crash "leaf comment"
+		foreign = text.replace_each(Json.to_str(comment), Json.to_str(original))
+		imported = { subject: { component: "", filename: subject.filename, version: subject.version, sha256: subject.sha256 }, id: "upstream", url: "https://example.org/supplier/document.json", sha256: Crypto.SHA256.hash(foreign.to_utf8()).to_hex(), namespace: SbomTest.context.namespace, target: "source", document: foreign, relation: "contains", basis: "Reviewed supplier source", contact: "https://example.org/support" }
+		retained = (Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [], relationships: [], imported_documents: [imported] }) ?? crash "foreign-comment import").components.find_first(|entry| entry.name == name) ?? crash "retained leaf"
+		note : Try({ modifications : Str }, _)
+		note = Json.parse(retained.modified)
+		note == Ok({ modifications: original })
+	},
+)
+
+# Marker-looking original modification JSON is not a prior import wrapper.
+# Complete shape, exact nested keys and valid locator/hash/types are required.
+expect [
+	"{\"format\":\"blueprint-import-v1\",\"modifications\":\"x\",\"extra\":\"retain\"}",
+	Json.to_str({ format: "blueprint-import-v1", document: { namespace: SbomTest.context.namespace, url: "https://example.org/supplier/document.json", sha256: digest, license_notice: "retain" }, component: "leaf", modifications: "x", normalization: List.repeat("", 0) }),
+	Json.to_str({ format: "blueprint-import-v1", document: { namespace: SbomTest.context.namespace, url: "https://example.org/supplier/document.json", sha256: "not-a-hash" }, component: "leaf", modifications: "x", normalization: List.repeat("", 0) }),
+	Json.to_str({ format: "blueprint-import-v1", document: { namespace: SbomTest.context.namespace, url: "https://example.org/supplier", sha256: digest }, component: "leaf", modifications: "x", normalization: [1] }),
+	Json.to_str({ format: "blueprint-import-v1", document: { namespace: SbomTest.context.namespace, url: "http://example.org/supplier", sha256: digest }, component: "leaf", modifications: "x", normalization: List.repeat("", 0) }),
+].all(
+	|original| {
+		leaf = { ..component("leaf", "leaf", "1"), target: "source", modified: original }
+		inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [leaf], relationships: [edge("Subject", leaf.id, "contains")] }) ?? crash "marker-note inventory"
+		subject = { ..SbomTest.subject, target: "source" }
+		text = Sbom.render(inventory, subject, SbomTest.context) ?? crash "marker-note source"
+		imported = { subject: { component: "", filename: subject.filename, version: subject.version, sha256: subject.sha256 }, id: "upstream", url: "https://example.org/supplier/document.json", sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), namespace: SbomTest.context.namespace, target: "source", document: text, relation: "contains", basis: "Reviewed supplier source", contact: "https://example.org/support" }
+		retained = (Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [], relationships: [], imported_documents: [imported] }) ?? crash "marker-note import").components.find_first(|entry| entry.name == leaf.name) ?? crash "retained leaf"
+		note : Try({ modifications : Str }, _)
+		note = Json.parse(retained.modified)
+		note == Ok({ modifications: original })
+	},
+)
+
+# Compact metadata is a closed versioned wire record: an extra supplier notice
+# must be rejected rather than silently discarded during canonical readback.
+expect {
+	text = Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context) ?? crash "compact source"
+	tree = JsonData.decode_with(text, JsonData.documents) ?? crash "compact JSON"
+	node = ((tree.field("@graph") ?? JsonData.Array([])).array() ?? []).find_first(|entry| entry.field("name") == Ok(JsonData.String(reviewed_library.name))) ?? crash "compact package"
+	comment = (node.field("comment") ?? JsonData.Null).string() ?? crash "compact comment"
+	custom = JsonData.decode(comment) ?? crash "compact metadata"
+	with_notice = custom.set("license_notice", JsonData.String("retain me")) ?? crash "extra notice"
+	changed = text.replace_each(Json.to_str(comment), Json.to_str(JsonData.encode(with_notice) ?? crash "extra metadata"))
+	changed != text and match Sbom.read(changed) {
+		Err(message) => message.contains("unsupported keys in compact")
+		Ok(_) => False
+	}
+}
