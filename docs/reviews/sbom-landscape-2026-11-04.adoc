@@ -1,173 +1,51 @@
-= Downstream SBOM landscape review
-:toc:
-:toclevels: 2
+= Downstream SBOM review, 2026-11-04
 
-Reviewed 2026-11-04 Australia/Melbourne (retrieval occurred 2026-11-03 UTC).
-This records the read-only review that motivated the hardening changes. It is
-a snapshot of immutable published assets before those changes; it does not
-claim their producers have adopted the new implementation. No release or
-downstream repository was modified.
+This historical review records selected published SBOMs retrieved on
+2026-11-03 UTC and reviewed on 2026-11-04 Australia/Melbourne. It describes
+those release assets, not the current behavior of their generators. No
+release assets or downstream repositories were changed.
 
-== Findings that affect the next decisions
+== Retained evidence
 
-The landscape has several distinct problems, rather than one general “SBOMs are too large” problem.
-Nine of the 18 projects listed in the live roc-automation README have published standard SBOM assets somewhere in release history; eight have them on the latest GitHub-designated release. All 73 selected published SBOM files were processed with independent tooling. There were no version-unsupported tool failures in this run.
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/tests/sbom/reviews/2026-11-04.json[The review record]
+lists 18 projects from the roc-automation README and 73 selected SBOM files:
+sidecars from eight projects' latest releases and native runtime/linker supplier
+releases from the Go, Rust and Zig platform projects. Each artifact record
+contains its release URL, SHA-256, byte size, format, validator version and
+exit status. Failed checks also retain diagnostic categories.
 
-* All 23 CycloneDX 1.7 documents passed CycloneDX CLI validation, all 23 SPDX 3.0.1 documents passed the official JSON Schema, and all 20 Blueprint-generated SPDX 2.3 documents passed the official SPDX Python semantic validator.
-* All seven independently produced native/runtime/linker SPDX 2.3 documents failed semantic validation. These are concrete specification defects, not low quality-score judgments.
-* Binding manifests consistently bind the sidecars they declare, but seven manifests leave a separately published SPDX 2.3 companion outside their sidecar list.
-* Many useful completeness and provenance claims remain private Blueprint JSON rather than portable standard fields. Current Blueprint already supports addressed CycloneDX compositions: the four published roc-wasm4 documents demonstrate this. The primary work here is producer adoption and regression coverage, not inventing that support again.
-* Large SPDX 3 output is partly a representation cost we can measure. In the published Linux Blueprint example, repeated full namespace text alone is 52.6% of the raw document. The measured representation is highly compressible; a large raw byte count does not establish a bad dependency graph.
-
-Quality scores are diagnostic hints. They are not a release acceptance rule: sbomqs reports schema validity on documents that the SPDX semantic validator rejects, and it penalizes missing concluded licenses even when declared license expressions are present.
-
-== Inventory and scope
-
-The starting inventory is the https://github.com/lukewilliamboswell/roc-automation/blob/main/README.md[roc-automation README downstream table], retrieved through GitHub's API. Release history was checked for every project (4–45 releases per repository; the 100-release page limit was never reached). “No SBOM found” means no standard JSON sidecar with the SPDX/CycloneDX naming used in these releases; it is not a claim that no document exists anywhere in source, a draft, or external storage.
-
-The validation set consists of every standard JSON SBOM on the eight latest releases with such files (67), plus the most recent runtime and linker-input SBOM releases for each of Go, Rust and Zig (six more). Historical older variants were inventoried but not all revalidated. The latest-release selector can choose a native-input release rather than a product release, which is why the history check matters.
-
-[cols="2,2,1,3",options="header"]
+[cols="2,2,1,1",options="header"]
 |===
-|Project |Latest release observed |Latest SBOMs |Historical availability / interpretation
-|https://github.com/lukewilliamboswell/basic-ssg[basic-ssg] |0.14.1 |0 |No published standard JSON SBOM found in 18 releases checked.
-|https://github.com/lukewilliamboswell/plume[plume] |0.5.0 |0 |No published standard JSON SBOM found in 6 releases checked.
-|https://github.com/lukewilliamboswell/roc-ansi[roc-ansi] |0.13.4 |3 |2 release(s) with SBOMs.
-|https://github.com/lukewilliamboswell/roc-blueprint[roc-blueprint] |0.11.0 |39 |5 release(s) with SBOMs.
-|https://github.com/lukewilliamboswell/roc-fuzz[roc-fuzz] |0.5.0 |2 |8 release(s) with SBOMs.
-|https://github.com/lukewilliamboswell/roc-graph-layout[roc-graph-layout] |0.2.0 |0 |No published standard JSON SBOM found in 5 releases checked.
-|https://github.com/lukewilliamboswell/roc-gui[roc-gui] |link-inputs-sha256-3d2cc39731caa3221b26bd277ecac8be58633a3c900ae88dcd99ca7348954c95 |0 |No published standard JSON SBOM found in 20 releases checked. Candidate PR #58 is separate and was not included as published evidence.
-|https://github.com/lukewilliamboswell/roc-pandoc[roc-pandoc] |0.2.2 |0 |No published standard JSON SBOM found in 4 releases checked.
-|https://github.com/lukewilliamboswell/roc-parser[roc-parser] |4.0.0 |3 |7 release(s) with SBOMs.
-|https://github.com/lukewilliamboswell/roc-pdf[roc-pdf] |0.2.0 |0 |No published standard JSON SBOM found in 10 releases checked.
-|https://github.com/lukewilliamboswell/roc-platform-template-go[roc-platform-template-go] |0.1.0 |4 |3 release(s) with SBOMs.
-|https://github.com/lukewilliamboswell/roc-platform-template-rust[roc-platform-template-rust] |1.2.0 |0 |3 release(s) with SBOMs. Latest platform 1.2.0 has none; runtime/linker supplier SBOMs were reviewed.
-|https://github.com/lukewilliamboswell/roc-platform-template-zig[roc-platform-template-zig] |1.1.2 |1 |4 release(s) with SBOMs.
-|https://github.com/lukewilliamboswell/roc-ray[roc-ray] |0.12.0 |0 |No published standard JSON SBOM found in 45 releases checked.
-|https://github.com/lukewilliamboswell/roc-signals[roc-signals] |0.2.0 |0 |No published standard JSON SBOM found in 27 releases checked.
-|https://github.com/lukewilliamboswell/roc-time[roc-time] |0.3.2 |0 |No published standard JSON SBOM found in 9 releases checked.
-|https://github.com/lukewilliamboswell/roc-wasm4[roc-wasm4] |0.8.0 |12 |1 release(s) with SBOMs.
-|https://github.com/lukewilliamboswell/weaver[weaver] |0.10.1 |3 |3 release(s) with SBOMs.
+|Format |Validator used |Passed |Failed
+|CycloneDX 1.7 |CycloneDX CLI 0.33.1 |23 |0
+|SPDX 3.0.1 |jsonschema-rs 0.60.3 |23 |0
+|SPDX 2.3 |SPDX tools Python 0.8.5 |20 |7
 |===
 
-The latest published generator records vary: roc-ansi, roc-fuzz and the Go platform use blueprint-sbom 0.8.0; Blueprint, roc-parser, roc-wasm4 and weaver use 0.11.0. The seven standalone native SPDX files use their projects' own generators. A finding in an immutable older document is not automatically a defect in current Blueprint source.
+All seven failed checks concern native supplier SPDX 2.3 documents from the
+Go, Rust and Zig platform projects. The retained categories include missing
+File SHA1 checksums and packages declaring `filesAnalyzed:false` while
+containing File entries. The record retains categories rather than a complete
+validator transcript; it should not be used as an exhaustive list of each
+file's defects.
 
-== Independent tools and what they establish
+The SPDX 3 checks use the official SPDX 3.0.1 schema and establish JSON Schema
+validation only. Passing format
+checks does not establish exact binary composition, complete dependencies,
+license conclusions, publisher authenticity or vulnerability absence.
 
-[cols="2,1,3",options="header"]
-|===
-|Tool |Version |Use and limit
-|https://github.com/CycloneDX/cyclonedx-cli[CycloneDX CLI] |0.33.1 |`validate --input-file FILE --fail-on-errors` on all 23 CycloneDX documents. Supports their 1.7 version. This establishes format validation, not exact binary composition.
-|https://github.com/spdx/tools-python[SPDX tools Python] |0.8.5 |`python -m spdx_tools.spdx.clitools.pyspdxtools -i FILE` on all 27 SPDX 2.3 documents. Includes semantic checks that JSON Schema alone misses.
-|https://github.com/Stranger6667/jsonschema[jsonschema-rs] |0.60.3 |Draft 2020-12 validation of all 23 SPDX 3.0.1 documents against the freshly retrieved https://spdx.org/schema/3.0.1/spdx-json-schema.json[official schema]. This is schema validation, not a full JSON-LD/RDF semantic or provenance audit.
-|https://github.com/interlynk-io/sbomqs[sbomqs] |2.1.3, engine 8 |`score --json FILE` on all 73 files. Supports all three versions in this set. No paid component-analysis API or vulnerability database was used.
-|===
+== Recheck an artifact
 
-Official SPDX 3 schema SHA-256: `582c64e809d5b3ef9bd0c4de13a32391b47b0284a3e8d199569fb96f649234b1`.
+Choose an artifact in the record, download its recorded release URL, and
+verify the downloaded bytes against its recorded SHA-256 and size. Then run
+the independent checker from a trusted Blueprint checkout, following
+https://lukewilliamboswell.github.io/roc-blueprint/sbom-conformance.html[the independent-check guide].
+The current checker uses its own pinned validators; their versions and scope
+may differ from this review's tools. Compare the validation rule and affected
+element rather than expecting identical messages or exit statuses.
 
-Tool stdout and stderr are retained per artifact in `results/`, including successful empty SPDX-validator output. `review-results.json` and `summary.csv` give exact artifact hashes, sizes, commands' outcomes and score details. `review.py` is the reproducible batch driver. The SPDX validator was not run against SPDX 3 because its CLI covers SPDX 2.x; that is a tool coverage boundary, not an artifact failure.
-
-== Observed specification defects in native supplier SBOMs
-
-All seven failing documents declare SPDX 2.3. Their JSON parses and their local IDs resolve within each document; a schema-only quality check would miss the following errors.
-
-[cols="3,1,4",options="header"]
-|===
-|Document |Validator messages |Defect classes
-|https://github.com/lukewilliamboswell/roc-platform-template-go/releases/download/linker-inputs-v1.0.0/linker-inputs.spdx.json[roc-platform-template-go linker-inputs-v1.0.0: linker-inputs.spdx.json] |74 |filesAnalyzed:false while containing described files; undefined LicenseRef-Linkage-Metadata; 72 File entries without required SHA1
-|https://github.com/lukewilliamboswell/roc-platform-template-go/releases/download/runtime-v0.1.0/runtime.spdx.json[roc-platform-template-go runtime-v0.1.0: runtime.spdx.json] |119 |filesAnalyzed:false while containing described files; 118 File entries without required SHA1
-|https://github.com/lukewilliamboswell/roc-platform-template-rust/releases/download/linker-inputs-v1.0.1/linker-inputs.spdx.json[roc-platform-template-rust linker-inputs-v1.0.1: linker-inputs.spdx.json] |18 |18 File entries without required SHA1
-|https://github.com/lukewilliamboswell/roc-platform-template-rust/releases/download/runtime-v1.0.0/runtime.spdx.json[roc-platform-template-rust runtime-v1.0.0: runtime.spdx.json] |17 |filesAnalyzed:false while containing described files; 10 File entries without required SHA1; 6 invalid SPDX identifiers
-|https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/linker-inputs-v1.0.0/linker-inputs.spdx.json[roc-platform-template-zig linker-inputs-v1.0.0: linker-inputs.spdx.json] |38 |filesAnalyzed:false while containing described files; 37 File entries without required SHA1
-|https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/1.1.2/platform.spdx.json[roc-platform-template-zig 1.1.2: platform.spdx.json] |101 |filesAnalyzed:false while containing described files; 100 File entries without required SHA1
-|https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/runtime-1.0.0/runtime.spdx.json[roc-platform-template-zig runtime-1.0.0: runtime.spdx.json] |12 |filesAnalyzed:false while containing described files; 11 File entries without required SHA1
-|===
-
-SPDX 2.3 requires SHA1 on a *File* checksum even when SHA256 is also supplied; this is a serialization compatibility requirement, not a recommendation to replace SHA256 for secure artifact binding. See https://spdx.github.io/spdx-spec/v2.3/file-information/#84-file-checksum-field[the File checksum specification]. The https://spdx.github.io/spdx-spec/v2.3/how-to-use/[usage guidance] also requires filesAnalyzed:true when package-contained files are described. Correct the generator and compute verification information from exact retained files; do not fabricate missing values or mutate historical release assets.
-
-Rust runtime's six malformed IDs contain characters outside SPDX's permitted identifier alphabet. Go's `LicenseRef-Linkage-Metadata` has no matching extracted-licensing record. Exact element contexts and raw messages are in `spdx-semantic-errors.json` and the individual `*.spdx-tools.txt` logs.
-
-This native-document family should have a shared regression fixture and independent semantic validation in CI. Fixing Blueprint's standard renderers alone will not repair these separate producer scripts.
-
-== Artifact-binding coverage is good but incomplete
-
-For all 23 downloaded manifests, every *declared* sidecar is present and matches its declared SHA-256 and size. Each manifest subject's stated digest and size matches the release API record. Subject binaries/archives were not downloaded in this review, and Sigstore attestations were not verified, so this is not full subject-byte or producer-provenance verification.
-
-Seven manifests omit an adjacent published `*.spdx-2.3.json` file: roc-ansi 0.13.4, roc-parser 4.0.0, weaver 0.10.1, and all four roc-wasm4 0.8.0 subjects. The files are valid according to SPDX tools; the gap is which representations the custom binding manifest covers. The parser manifest, for example, declares CDX and SPDX 3 only despite all three formats being release assets. This is not evidence of tampering, and a contract permitting unlisted supplementary files can allow it. It does mean consumers cannot use that manifest to check the SPDX 2.3 copy through the same path.
-
-Decide and document whether every advertised SBOM representation is covered by the binding guarantee. If yes, derive sidecar lists and verification from the actual emitted set and add an extra/missing-format regression. Full details: `manifest-review.json`.
-
-== Consumer meaning and interoperability
-
-=== Completeness, build evidence and runtime scope
-
-All 23 matched CycloneDX/SPDX 3 pairs have the same component count. No duplicate local IDs, dangling SPDX 2.3 relationships or dangling CycloneDX dependency references were found. These checks do not prove that a package is linked into a native executable.
-
-Published Linux Blueprint describes 122 packages. Of the CycloneDX entries, 105 have scope `optional`, nine `excluded`, seven `required`, and the subject has no explicit scope. The private coverage record explains that the Cargo graph is available resolution metadata and does not prove that every crate ships. CycloneDX's standard meaning of `optional` is “optional at runtime”; it does not mean “we do not know whether this code is included.” See the https://cyclonedx.org/docs/1.7/json/[CycloneDX 1.7 reference]. This is a consumer-meaning risk, not a schema error.
-
-Similarly, weaver imports supplier package/file entries as `optional`; the reason is partial supplier-composition evidence, not necessarily runtime optionality. Preserve uncertainty explicitly rather than using runtime optionality as its surrogate. The correct solution may be distinct source/build/runtime views or more precise lifecycle and composition claims; it needs evidence for each claim rather than deleting inconvenient nodes.
-
-Nineteen of 23 CycloneDX documents have empty standard `compositions`; important completeness claims are instead in `blueprint:evidence` JSON. The four roc-wasm4 documents already have standard component/aspect-specific aggregates, including unknown/incomplete dependency claims. Current Blueprint supports that mapping. Update lagging producers to addressed coverage declarations and add a third-party consumer test, without overstating legacy scope-only evidence as a globally complete graph.
-
-=== Identity and license usability
-
-Five reviewed project families (roc-ansi, weaver, roc-platform-template-go, roc-platform-template-zig and roc-wasm4) have no package URLs in any selected document. Rust's selected native suppliers also have none. Parser has a useful GitHub PURL for Unicode; Blueprint has Cargo PURLs. The lack of a PURL is not a schema defect, especially for source files or local interfaces, but it limits automated package matching. Populate ecosystem identities where supported by source evidence; do not invent a Cargo/GitHub/CPE identity merely to improve a score.
-
-Blueprint's native executable SBOM retains many explicit NOASSERTION license/supplier fields for its candidate Cargo closure. Its private coverage admits that limitation. Improve supported source/registry metadata and expose coverage to consumers; do not convert a dependency-list observation into a legal conclusion or a containment claim.
-
-The sbomqs scores range from 4.66 to 7.44, but comparisons need care. For example, roc-ansi's CDX components do have declared UPL license expressions even though the tool's concluded-license features score zero. Separate declared licenses from reviewed conclusions in both documentation and acceptance checks. Detached Sigstore assets can also exist despite a score's “add signature” advice.
-
-== Why a valid SBOM becomes large
-
-A representative published pair, https://github.com/lukewilliamboswell/roc-blueprint/releases/tag/0.11.0[Blueprint 0.11.0 Linux], describes the same 122 packages:
-
-[cols="2,1,1",options="header"]
-|===
-|Representation |Raw bytes |gzip bytes (diagnostic only)
-|SPDX 3.0.1 |626,563 |34,101
-|SPDX 2.3 |233,211 |23,485
-|CycloneDX 1.7 |216,456 |21,598
-|===
-
-The SPDX 3 document has 580 JSON-LD nodes, including 445 relationships (it has explicit licensing relationships in addition to the inventory relationships). Its 131-byte document namespace occurs 2,518 times: 329,858 raw bytes, or 52.6% of the file. The document and SBOM `element` lists alone carry 1,149 references and occupy 178,032 serialized string bytes. Namespace repetition is part of those references, so these figures overlap and must not be summed as independent savings.
-
-Package/relationship comment strings occupy another 65,255 serialized bytes, and the evidence annotation 44,852. Package JSON comments repeat the standard copyright field for all 122 packages and PURL for 107. That duplication preserves Blueprint's exact round-trip metadata but is a concrete opportunity to review the profile. A change must preserve external readers, licensing data and the explicit compatibility contract.
-
-The effect appears in smaller packages too: parser is 212,763 / 71,824 / 69,270 bytes in SPDX 3 / SPDX 2.3 / CDX; 56.8% of SPDX 3 bytes are repetitions of its full namespace. Weaver is 154,291 / 59,839 / 56,494 bytes. Weaver also retains imported supplier metadata as text within its component modification fields; this needs a depth/byte-growth regression for multi-hop imports, not an assumption that current one-hop imports already exhibit an exponential bug.
-
-A shorter stable globally unique namespace and an independently validated compact representation merit a prototype. Standard-required lists and relationships must not simply be removed. Compression is very effective for transport/storage, but decoded size/depth bounds remain necessary. `byte-analysis.json` retains the measurements and field-level counts.
-
-=== What this establishes about roc-gui
-
-The https://github.com/lukewilliamboswell/roc-blueprint/pull/82[roc-gui candidate acceptance evidence] reports 1,698 components, 4,079 inventory relationships and 8.7 MB SPDX 3, versus roughly 2.45 MB CDX and 2.56 MB SPDX 2.3. Its https://github.com/lukewilliamboswell/roc-gui/pull/58[release candidate generator] separates Linux/macOS/Windows Cargo compilation graphs, native hosts, runtime distributions and linker inputs; member accounting adds delivered files. Build and procedural-macro dependencies can be present without becoming shipped runtime libraries. The generator explicitly admits that compiled-set evidence does not prove optimizer retention.
-
-Those candidate artifacts were not treated as published releases and their exact category counts were not independently reconstructed here. The published measurements show that a roughly threefold format expansion is plausible even with a consistent package graph. They do not prove that every roc-gui node is necessary. A follow-up should report unique source package/version, target-specific occurrence, delivered member, build-only and runtime-evidence counts separately, then test duplicates within each class.
-
-== Options to prioritize after this review
-
-. *Repair independent native SPDX generators.* Add exact File checksums, legal identifiers, defined LicenseRefs and correct package file-analysis information. Run the official semantic validator before release publication. Keep SHA256 binding alongside the mandatory SPDX compatibility fields.
-. *Make advertised binding coverage explicit.* Cover every emitted standard representation or document which supplementary forms are outside the manifest guarantee. Test the complete output set.
-. *Improve evidence semantics before reducing component counts.* Audit `optional` mappings for unknown inclusion, distinguish candidate resolution/compiled sets from proved delivered code, and present views by target and lifecycle.
-. *Adopt already-supported portable completeness declarations.* Update legacy producers to addressed component/aspect coverage; use current standard compositions and test third-party interpretation. Keep truthful unknowns.
-. *Prototype size improvements with real documents.* Measure a shorter namespace, necessary element references, duplicated comments and multi-hop supplier text. Preserve semantics and independently validate each format. Separate wire compression from decoded resource limits.
-. *Document consumer recipes and coverage.* Offer SPDX 2.3 for tools with limited SPDX 3 support, explain source bundles versus binaries and build evidence, and show how to inspect unresolved licenses and verify all sidecars. Recommend quality-score explanations, not a blanket numeric threshold.
-
-Do not bulk-rewrite downstream SBOMs merely because a tool assigns a low score. The evidence supports a small set of concrete fixes and separate design experiments, with the current valid renderers and already-working composition declarations as baselines.
-
-== Evidence and reproduction
-
-`tests/sbom/reviews/2026-11-04.json` records all 18 project releases and the
-exact URL, SHA-256, byte size, format and independent validation outcome of
-each of the 73 reviewed SBOMs. It is historical evidence, not a test that
-expects old published defects to disappear. The compact conformance fixtures
-exercise the diagnosed defect classes against the current implementation.
-
-Retrieve a selected immutable asset from its recorded URL, verify its hash
-and size, then run the independent conformance checker documented in the
-SBOM conformance guide. Different validator versions may report different
-messages; compare the rule and element, not only the process exit code.
-
-No vulnerability database, binary decompiler or production package manager
-installation was used. This review does not establish binary-to-SBOM
-completeness, legal completeness, attestation authenticity or vulnerability
-absence. Those require their own evidence.
+The historical JSON is evidence, not an acceptance test that expects old
+published documents to change. Small first-party cases in
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/tests/sbom/conformance/README.adoc[`tests/sbom/conformance/`]
+exercise the relevant specification rules against the current implementation
+without downloading historical release assets.

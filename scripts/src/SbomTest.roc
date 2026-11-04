@@ -239,6 +239,17 @@ expect inspect({ ..SbomTest.composition, components: SbomTest.composition.compon
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, version: "" }) }).is_err()
 expect inspect({ ..SbomTest.composition, components: SbomTest.composition.components.map(|entry| { ..entry, license: "LicenseRef-restricted", license_url: "" }) }).is_err()
 
+# Input accounting errors identify the exact records a reviewer must correct.
+expect {
+	with_tasks = { ..SbomTest.spec, tasks: [{ name: "release", environment: "build", run: ["make", "release"] }] }
+	disposition = { input: "task:typo", component: "platform", reason: "Reviewed fixture input" }
+	result = Sbom.inspect(with_tasks, SbomTest.lock, "x86_64-linux", { ..SbomTest.composition, inputs: [disposition, disposition] })
+	match result {
+		Err(message) => message.contains("missing: [task:release]") and message.contains("unknown: [task:typo]") and message.contains("duplicate: [task:typo]")
+		Ok(_) => False
+	}
+}
+
 # Unknown and verified-empty inventories are distinct, explicitly asserted facts.
 empty_composition = { ..SbomTest.composition, components: [], relationships: [], coverage: [{ scope: "all", component: "Subject", aspect: "dependencies", status: "verified-empty", reason: "Reviewed generated text contains no third-party components", contact: "https://example.org/support" }] }
 expect inspect(empty_composition).is_ok()

@@ -18,10 +18,63 @@ extracted-license example with deliberately test-only license text.
 those imports/expectations and the case manifest together when adding a case.
 
 Run the Roc side with `roc-stable test scripts/test_sbom_conformance.roc`.
-Run the independent side after installing its pinned requirements:
+Run the independent side from the repository root after installing the pinned
+requirements in `.cache/sbom-conformance` as described in
+https://lukewilliamboswell.github.io/roc-blueprint/sbom-conformance.html[the independent-check guide]:
 
 [source,shell]
 ----
-python3 scripts/sbom-conformance/validate.py \
+.cache/sbom-conformance/bin/python scripts/sbom-conformance/validate.py \
   --fixture-cases tests/sbom/conformance/cases.json
 ----
+
+== Rules for generators that write SPDX 2 File records
+
+These requirements matter when writing native SPDX File entries. Blueprint's
+`members`, `inspect --members` and `bind` workflow instead represents archive
+members as packages with file purpose, preserving their measured SHA256 and
+reviewed package metadata. It does not require callers to construct native
+File entries or package verification codes.
+
+* An SPDX File requires exactly one SHA1 checksum. Keep SHA256 as well for
+  artifact integrity and binding. SHA1 here is an SPDX 2 representation
+  requirement, not a replacement for SHA256 security checks.
+* An analyzed package uses `filesAnalyzed:true` (also the default when omitted),
+  a valid package verification code, and its actual contained file list.
+  `filesAnalyzed:false` cannot coexist with `hasFiles`, `CONTAINS` or reverse
+  `CONTAINED_BY` relationships to File entries, a package verification code,
+  or `licenseInfoFromFiles`. Containing other packages does not require
+  analyzing their files.
+* Compute the package verification code from the sorted SHA1 strings of its
+  actual included files, honoring the documented excluded files. Do not hash
+  the tarball or substitute its SHA256. `hello.txt` and
+  `valid-native.spdx.json` give a small reproducible example.
+* Use `SPDXRef-` identifiers containing only ASCII letters, digits, period
+  and hyphen; underscores are not allowed. Use the same spelling in every
+  reference.
+* Define every local `LicenseRef-` with its extracted license text. The
+  definition's identifier obeys the same alphabet, is unique, and matches
+  the expressions in packages, Files and snippets. An external
+  `DocumentRef-...:LicenseRef-...` names a declared external document; it
+  does not need a duplicate local definition.
+
+The authoritative rules are SPDX 2.3's
+https://spdx.github.io/spdx-spec/v2.3/file-information/#84-file-checksum-field[File checksum clause],
+https://spdx.github.io/spdx-spec/v2.3/package-information/[package information]
+and https://spdx.github.io/spdx-spec/v2.3/how-to-use/[package verification guidance].
+Regenerate incorrect values from exact retained archive/files, validate the
+candidate documents, and publish a corrected release. Preserve historical
+release evidence rather than replacing its bytes.
+
+== Keep independent expectations separate
+
+SPDX tools Python 0.8.5 accepts duplicate File SHA1 entries, duplicate extracted
+LicenseRef definitions and missing analyzed-package verification codes.
+Blueprint rejects those violations. `cases.json` records the SDK's expected
+outcomes separately so a change in its behavior prompts review without
+weakening Blueprint's required outcomes.
+
+An explicitly selected file must pass even if it is also an expected-negative
+fixture. Fixture expectations cannot exempt a release artifact. Missing,
+unreadable or nonregular fixture files are configuration failures, not
+expected-negative validation results.

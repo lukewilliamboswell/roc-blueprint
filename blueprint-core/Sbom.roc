@@ -407,7 +407,10 @@ Sbom := [].{
 
 		declared = composition.inputs.map(|input| input.input)
 		if unique(declared).len() != declared.len() or declared.len() != known.len() or known.any(|input| !declared.contains(input)) {
-			return Err("known input omitted or unknown/duplicate input disposition")
+			missing = known.keep_if(|input| !declared.contains(input))
+			unknown = unique(declared.keep_if(|input| !known.contains(input)))
+			repeated = unique(declared.keep_if(|input| declared.keep_if(|other| other == input).len() > 1))
+			return Err("known input omitted or unknown/duplicate input disposition; missing: [${Str.join_with(missing, ", ")}]; unknown: [${Str.join_with(unknown, ", ")}]; duplicate: [${Str.join_with(repeated, ", ")}]")
 		}
 		for disposition in composition.inputs {
 			if disposition.reason.is_empty() or (!disposition.component.is_empty() and !ids.contains(disposition.component)) {
