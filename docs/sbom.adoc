@@ -156,6 +156,10 @@ differently, and CycloneDX cannot spell all of them in its standard fields.
 | Coverage, input dispositions and reasons | an `Annotation` | an `OTHER` annotation | a `blueprint:evidence` property
 |===
 
+For unresolved candidates, the CycloneDX standard-component cells above do
+not apply: their complete facts remain in explicit candidate evidence, while
+standard tools see the confirmed graph and its incompleteness declarations.
+
 Where CycloneDX loses meaning:
 
 * *A dependency is not containment.* Nested `components` state containment;
@@ -1002,7 +1006,8 @@ kind (`file`, `application` or `library`), and its `bom-ref` is its local
 identifier. Unknown kinds use the documented adapter fallback below. Each
 component has:
 
-* `name`, `version` and a SHA-256 `hashes` entry;
+* `name` and `version`, with a SHA-256 `hashes` entry when the component's
+  own bytes were measured;
 * `supplier` for an `Organization:` producer, or `authors` for a `Person:`
   producer (none for `NOASSERTION`);
 * a `licenses` expression, omitted when the license is `NOASSERTION` or
