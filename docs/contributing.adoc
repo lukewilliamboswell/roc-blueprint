@@ -106,7 +106,7 @@ Do not reconstruct a build graph from independent JSON reports when a shared
 plan/result type can serve the interface.
 
 The November 2026 SBOM hardening is grounded in the
-link:reviews/sbom-landscape-2026-11-04.adoc[published downstream review]. Its
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/docs/reviews/sbom-landscape-2026-11-04.adoc[published downstream review]. Its
 immutable source URLs, hashes and validation outcomes are recorded in
 `tests/sbom/reviews/2026-11-04.json`; current conformance tests exercise the
 failure classes without expecting old release assets to change.

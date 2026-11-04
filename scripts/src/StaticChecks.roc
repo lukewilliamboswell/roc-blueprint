@@ -72,14 +72,15 @@ StaticChecks := [].{
 	## JSON reader in the CLI is a report or a native tool's output.
 	json_authority_problem : List((Str, Str)) -> Str
 	json_authority_problem = |modules| {
-		offenders = modules.keep_if(|(_, source)| source.split_on("\n").any(|line| !line.trim().starts_with("#") and (line.contains("Json.parse") or line.contains("JsonData.decode") or line.contains("Json.to_str") or line.contains("JsonData.encode")))).map(|(name, _)| name)
+		offenders = modules.keep_if(|(_, source)| source.split_on("\n").any(|line| !line.trim().starts_with("#") and (line.contains("Json.parse") or line.contains("JsonData.decode") or line.contains("Json.to_str") or line.contains("JsonData.encode") or line.contains("JsonValue.parse") or line.contains("JsonValue.to_str")))).map(|(name, _)| name)
 		if (offenders.is_empty()) "" else "authority and store modules must not encode or decode JSON: ${Str.join_with(offenders, ", ")}"
 	}
 
-	## Exported report codecs stay in the pure core package; no adapter or IO.
+	## Exported report codecs use pure protocol modules and the reviewed JSON
+	## library; no provider adapter or platform IO.
 	core_report_contract_problem : Str -> Str
 	core_report_contract_problem = |source| {
-		allowed = ["import Lock", "import Provider", "import Value", "import JsonData", "import Project", "import Spec", "import Sexpr", "import Tree"]
+		allowed = ["import Lock", "import Provider", "import Value", "import JsonData", "import Project", "import Spec", "import Sexpr", "import Tree", "import parser.JsonValue"]
 		if source.split_on("\n").any(|line| line.starts_with("import ") and !allowed.contains(line)) {
 			"core report modules must use only pure protocol modules"
 		} else ""
@@ -357,3 +358,7 @@ expect StaticChecks.native_grammar_problem("import core.Spec\n", "import nix.Nat
 
 expect StaticChecks.json_authority_problem([("blueprint-cli/Store.roc", "import core.Sexpr\nrecord = Sexpr.to_str(tree)\n")]) == ""
 expect StaticChecks.json_authority_problem([("blueprint-cli/Store.roc", "manifest = Json.parse(text)\n"), ("blueprint-core/Lock.roc", "# Json.parse is mentioned here only\n")]).contains("blueprint-cli/Store.roc")
+
+# The shared parser is pure, but authority/store modules still cannot use JSON.
+expect StaticChecks.core_report_contract_problem("import parser.JsonValue\n") == ""
+expect StaticChecks.json_authority_problem([("blueprint-core/Lock.roc", "value = JsonValue.parse_with(text, {})\n")]).contains("blueprint-core/Lock.roc")

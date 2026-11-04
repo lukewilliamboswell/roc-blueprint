@@ -132,3 +132,27 @@ Blueprint reconstructs all 122. This changes what a generic runtime scanner
 is asked to analyze, without hiding that the larger candidate set exists.
 The derived documents passed CycloneDX CLI 0.33.1, SPDX tools Python 0.8.5 and
 independent official SPDX 3.0.1 schema validation with jsonschema-rs 0.60.3.
+
+== Upgrade readers with producers
+
+Upgrade Blueprint's profile reader alongside the producer before consuming
+new compact metadata or the `standard-evidence-v2` CycloneDX interpretation.
+The files remain valid standard representations, but older Blueprint readers
+may refuse the new extension markers. Current readers retain the previous
+full-comment, flat and containment profiles; old evidence is not rewritten.
+Use `Sidecar.same_graph` or `against_inventory` for the complete canonical
+graph rather than comparing standard CycloneDX counts with SPDX counts.
+
+Library callers should obtain `Sidecar.Checked` from `Sidecar.check`; its
+`context` now carries actual creation time and generator for manifest checks.
+`Manifest.check` checks the exact observed output set; callers deliberately
+checking a historical subset use `Manifest.check_listed` and retain that
+limited claim. The command-line equivalent is `check --manifest ...
+--listed-only`. New default binding emits all three formats, so remove the
+separate SPDX 2.3 generation step from an older publishing recipe.
+
+An upgrade does not fill unknown licenses, invent package identifiers, prove
+that every compiled crate ships, or establish full native dependency closure.
+Keep those gaps explicit. Supply package URLs and source references only from
+reviewed source identities, and use the independent conformance checks before
+publishing a new release.
