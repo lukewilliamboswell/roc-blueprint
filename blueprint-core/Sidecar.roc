@@ -21,7 +21,9 @@ Sidecar := [].{
 
 	check : Str -> Try(Sidecar.Checked, Str)
 	check = |text| {
-		document = if (text.contains("\"bomFormat\"")) Sbom.read_cyclonedx(text)? else Sbom.read(text)?
+		# The universal reader dispatches by parsed document fields and applies
+		# strict CycloneDX checks when its metadata selects a Blueprint profile.
+		document = Sbom.read(text)?
 		ids = document.packages_.map(|entry| entry.id)
 		if !document.gaps.is_empty() {
 			return Err("a Blueprint sidecar states only what its format can carry, but this one has ${Str.join_with(document.gaps, "; ")}")

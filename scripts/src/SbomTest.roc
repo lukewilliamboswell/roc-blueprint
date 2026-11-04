@@ -1678,3 +1678,24 @@ expect {
 	ordinary.packages_.map(|entry| entry.id) == named.packages_.map(|entry| entry.id)
 		and ordinary.relationships == named.relationships and ordinary.evidence == named.evidence
 }
+
+# Profile-marked CycloneDX always uses strict 1.7 validation, including when
+# reached through Sbom.read or Sidecar.check rather than read_cyclonedx.
+expect {
+	text = Sbom.render_cyclonedx(SbomTest.inventory ?? crash "inventory", SbomTest.subject, SbomTest.context) ?? crash "own CycloneDX"
+	lowered = text.replace_each("\"specVersion\":\"1.7\"", "\"specVersion\":\"1.4\"")
+	unsupported = text.replace_each("\"bomFormat\":", "\"vulnerabilities\":[],\"bomFormat\":")
+	Sidecar.check(text).is_ok() and Sbom.read(text).is_ok()
+		and [lowered, unsupported].all(|invalid| invalid != text and Sbom.read(invalid).is_err() and Sidecar.check(invalid).is_err())
+}
+
+# Marker-looking package names cannot change the sidecar's serialization.
+expect ["spdx2", "spdx3"].all(
+	|format| {
+		inventory = SbomTest.inventory ?? crash "inventory"
+		rendered = (if format == "spdx2" Sbom.render_spdx2(inventory, SbomTest.subject, SbomTest.context) else Sbom.render(inventory, SbomTest.subject, SbomTest.context)) ?? crash "SPDX rendering"
+		original_name = (inventory.components.first() ?? crash "component").name
+		text = rendered.replace_each("\"name\":${Json.to_str(original_name)}", "\"name\":\"bomFormat\"")
+		text != rendered and Sidecar.check(text).is_ok()
+	},
+)

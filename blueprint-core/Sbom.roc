@@ -562,11 +562,15 @@ Sbom := [].{
 			Spdx2.validate(tree)?
 			read_spdx2(tree)
 		} else if tree.field("bomFormat").is_ok() {
-			ignored = CycloneDx.check_import(tree)?
 			metadata = tree.field("metadata") ?? JsonData.Null
 			properties = (metadata.field("properties") ?? JsonData.Array([])).array() ?? []
 			blueprint = properties.any(|property| property.field("name") == Ok(JsonData.String("blueprint:namespace")))
-			if (blueprint) read_bom(tree) else read_foreign_bom(tree, ignored)
+			if blueprint {
+				CycloneDx.check(tree)?
+				read_bom(tree)
+			} else {
+				read_foreign_bom(tree, CycloneDx.check_import(tree)?)
+			}
 		} else {
 			Err("not an SPDX 3 JSON-LD, SPDX 2 JSON or CycloneDX JSON document")
 		}
