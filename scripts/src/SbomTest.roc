@@ -1647,3 +1647,34 @@ expect ["C:artifact", "artifact:stream", "CON.txt", "ending.", "ending ", "bad\u
 				and Sbom.render_cyclonedx(inventory, unsafe, SbomTest.context).is_err()
 	},
 )
+
+# A proved runtime child must remain in standard CycloneDX even when the
+# canonical containment parent has an unresolved inclusion role.
+expect {
+	parent = { ..component("unresolved-parent", "unresolved-parent", "1"), target: "source" }
+	child = { ..component("runtime-child", "runtime-child", "1"), target: "source" }
+	composition = { ..SbomTest.composition, components: [parent, child], relationships: [edge("Subject", parent.id, "other"), edge(parent.id, child.id, "contains"), { ..edge("Subject", child.id, "dependsOn"), scope: "runtime" }] }
+	inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", composition) ?? crash "hidden-parent inventory"
+	subject = { ..SbomTest.subject, target: "source" }
+	text = Sbom.render_cyclonedx(inventory, subject, SbomTest.context) ?? crash "hidden-parent CycloneDX"
+	bom = JsonData.decode_with(text, JsonData.documents) ?? crash "hidden-parent JSON"
+	standard = without_blueprint(bom)
+	components = (standard.field("components") ?? JsonData.Array([])).array() ?? []
+	checked = Sidecar.check(text) ?? crash "hidden-parent round trip"
+	three = Sidecar.check(Sbom.render(inventory, subject, SbomTest.context) ?? crash "hidden-parent SPDX3") ?? crash "hidden-parent SPDX3 read"
+	two = Sidecar.check(Sbom.render_spdx2(inventory, subject, SbomTest.context) ?? crash "hidden-parent SPDX2") ?? crash "hidden-parent SPDX2 read"
+	components.map(|entry| entry.field("bom-ref")) == [Ok(JsonData.String(child.id))]
+		and components.all(|entry| entry.field("components").is_err())
+			and Sidecar.same_graph(checked, three) and Sidecar.same_graph(checked, two)
+				and Sidecar.against_inventory(checked, inventory).is_ok()
+}
+
+# A component name is data, not a Blueprint profile marker. Dispatch uses
+# the parsed metadata property instead of finding a reserved-looking string.
+expect {
+	foreign = "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.7\",\"serialNumber\":\"urn:uuid:12345678-1234-4234-8234-123456789abc\",\"version\":1,\"metadata\":{\"component\":{\"type\":\"library\",\"bom-ref\":\"root\",\"name\":\"ordinary\",\"version\":\"1\"}}}"
+	ordinary = Sbom.read(foreign) ?? crash "foreign document"
+	named = Sbom.read(foreign.replace_each("ordinary", "blueprint:namespace")) ?? crash "reserved-looking foreign name"
+	ordinary.packages_.map(|entry| entry.id) == named.packages_.map(|entry| entry.id)
+		and ordinary.relationships == named.relationships and ordinary.evidence == named.evidence
+}

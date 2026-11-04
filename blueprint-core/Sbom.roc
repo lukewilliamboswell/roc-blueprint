@@ -563,7 +563,10 @@ Sbom := [].{
 			read_spdx2(tree)
 		} else if tree.field("bomFormat").is_ok() {
 			ignored = CycloneDx.check_import(tree)?
-			if (text.contains("\"blueprint:namespace\"")) read_bom(tree) else read_foreign_bom(tree, ignored)
+			metadata = tree.field("metadata") ?? JsonData.Null
+			properties = (metadata.field("properties") ?? JsonData.Array([])).array() ?? []
+			blueprint = properties.any(|property| property.field("name") == Ok(JsonData.String("blueprint:namespace")))
+			if (blueprint) read_bom(tree) else read_foreign_bom(tree, ignored)
 		} else {
 			Err("not an SPDX 3 JSON-LD, SPDX 2 JSON or CycloneDX JSON document")
 		}
@@ -1607,8 +1610,12 @@ cyclonedx = |inventory, subject, context| {
 					.append(member("properties", JsonData.Array([property("blueprint:kind", component.kind), property("blueprint:attribution", component.attribution), property("blueprint:identity", component.identity), property("blueprint:origin", component.origin), property("blueprint:target", component.target), property("blueprint:modifications", component.modified)].concat(if (component.license == "NONE") [property("blueprint:license", "NONE")] else [])))),
 			),
 	)
-	components = assemblies(flat_components, inventory.relationships, "")
-	contained = assemblies(flat_components, inventory.relationships, subject_id)
+	# A proved component can have a containment parent whose inclusion is
+	# unresolved. Retain that canonical edge in evidence, but project only
+	# visible endpoints into the standard tree so the child stays visible.
+	visible_edges = inventory.relationships.keep_if(|edge| visible.contains(edge.from) and visible.contains(edge.to))
+	components = assemblies(flat_components, visible_edges, "")
+	contained = assemblies(flat_components, visible_edges, subject_id)
 	metadata_component = JsonData.Object(
 		[member("type", text(if (subject.kind == "unknown") "file" else subject.kind)), member("bom-ref", text(subject_id)), member("name", text(subject.filename)), member("version", text(subject.version))]
 			.concat(supplied(subject.producer))
@@ -1632,7 +1639,7 @@ cyclonedx = |inventory, subject, context| {
 		member("component", metadata_component),
 		member("properties", JsonData.Array([property("blueprint:namespace", context.namespace), property("blueprint:evidence", evidence(inventory, subject, context)), property("blueprint:cyclonedx-profile", "standard-evidence-v2"), property("blueprint:unresolved-count", candidates.len().to_str())])),
 	])
-	dependencies = dependency_ids(inventory.relationships.keep_if(|edge| visible.contains(edge.from) and visible.contains(edge.to)), inventory.coverage, visible).map(
+	dependencies = dependency_ids(visible_edges, inventory.coverage, visible).map(
 		|ref| {
 			depends = unique(inventory.relationships.keep_if(|edge| edge.from == ref and edge.relation == "dependsOn" and visible.contains(edge.to)).map(|edge| edge.to))
 			JsonData.Object([member("ref", text(ref))].concat(when(!depends.is_empty(), [member("dependsOn", texts(depends))])))
@@ -1800,7 +1807,9 @@ read_bom = |tree| {
 		containment($edges)?
 		for entry in entries {
 			ref = field_text(entry.tree, "bom-ref")
-			parents = unique($edges.keep_if(|edge| edge.relation == "contains" and edge.to == ref).map(|edge| edge.from))
+			# The standard tree projects only visible endpoints. A hidden
+			# candidate parent still exists in canonical relationship evidence.
+			parents = unique($edges.keep_if(|edge| edge.relation == "contains" and edge.to == ref and (!modern or !$candidate_ids.contains(edge.from))).map(|edge| edge.from))
 			stated = if (entry.parent.is_empty()) [] else [entry.parent]
 			if parents != stated {
 				return Err("the containment of ${ref} differs from its relationships")
