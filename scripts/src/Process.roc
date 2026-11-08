@@ -35,10 +35,12 @@ Process := [].{
 
 	product_args : List(Str) -> List(Str)
 	product_args = |args|
-		match args.first() {
-			Ok(subcommand) if ["build", "check", "test", "run", "deps"].contains(subcommand) or subcommand.ends_with(".roc") => if subcommand.ends_with(".roc") ["--replace-dep", stable_cli, product_cli].concat(args) else [subcommand, "--replace-dep", stable_cli, product_cli].concat(args.drop_first(1))
-			_ => args
-		}
+		if args.any(|argument| ["fixtures/lock-snapshot/main.roc", "fixtures/consumer/main.roc"].contains(argument)) {
+			match args {
+				[subcommand, .. as rest] if ["build", "check", "test"].contains(subcommand) => [subcommand, "--replace-dep", stable_cli, product_cli].concat(rest)
+				_ => args
+			}
+		} else args
 
 	product_command : Str, List(Str), Str -> Job
 	product_command = |program, args, directory| command(program, product_args(args), directory)
@@ -230,7 +232,7 @@ expect Process.portable("/tmp/a\\b") == "/tmp/a\\b"
 expect Process.lines("one\r\ntwo\r\n\r\n") == ["one", "two"]
 expect Process.lines(" one \r\n") == [" one "]
 
-# Product substitution never changes maintenance execution or non-compilation tools.
-expect Process.product_args(["check", "scripts/sbom.roc"]) == ["check", "--replace-dep", Process.stable_cli, Process.product_cli, "scripts/sbom.roc"]
-expect Process.product_args(["run", "https://example.test/app.tar.zst", "inspect"]) == ["run", "--replace-dep", Process.stable_cli, Process.product_cli, "https://example.test/app.tar.zst", "inspect"]
-expect [[], ["version"], ["fmt", "--check", "scripts"], ["bundle", "main.roc"]].all(|args| Process.product_args(args) == args)
+# Only the two explicitly dual-compiler consumers substitute their source platform.
+expect Process.product_args(["check", "fixtures/consumer/main.roc"]) == ["check", "--replace-dep", Process.stable_cli, Process.product_cli, "fixtures/consumer/main.roc"]
+expect Process.product_args(["test", "fixtures/lock-snapshot/main.roc"]) == ["test", "--replace-dep", Process.stable_cli, Process.product_cli, "fixtures/lock-snapshot/main.roc"]
+expect [[], ["version"], ["fmt", "--check", "fixtures"], ["build", "blueprint-cli/main.roc"], ["run", "https://example.test/app.tar.zst", "inspect"], ["bundle", "main.roc"]].all(|args| Process.product_args(args) == args)
