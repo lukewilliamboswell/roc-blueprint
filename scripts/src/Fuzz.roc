@@ -95,6 +95,22 @@ Fuzz := [].{
 		Str.join_with(lines.drop_first(if lines.len() > count lines.len() - count else 0), "\n")
 	}
 
+	## Keep compiler memory bounded independently of the number of fuzz targets.
+	## Batching changes neither selected targets nor their execution budgets.
+	compiler_jobs = 2
+
+	compiler_batches : List(a) -> List(List(a))
+	compiler_batches = |jobs| jobs.chunks_of(compiler_jobs)
+
+	## Check and build must execute from source. On the November 7 nightly,
+	## a checked module cache can make a subsequent fuzz build segfault.
+	## Neither phase may reuse a cached verdict or compiled representation.
+	check_args : Str -> List(Str)
+	check_args = |source| ["check", "--no-cache", source]
+
+	build_args : Str, Str -> List(Str)
+	build_args = |source, output| ["build", "--fuzz", "--no-cache", source, "--output=${output}"]
+
 	## Build and run the requested targets, from the repository root.
 	run! : Str, Request => Try({}, _)
 	run! = |root, asked| {
@@ -149,11 +165,20 @@ all! = |root, asked, places| {
 	# A fuzz binary built after a type error would hold runtime-error
 	# placeholders, so every target must check and build cleanly first.
 	Script.info!("==>", "Checking and building ${fuzzers.len().to_str()} fuzz targets")?
-	checks = Process.together!(fuzzers.map(|target| Process.product_command(roc, ["check", "${directory}/${target}/main.roc"], root)))?
+	checks = compile_batches!(fuzzers.map(|target| Process.product_command(roc, Fuzz.check_args("${directory}/${target}/main.roc"), root)))?
 	clean!(fuzzers, checks, "roc check")?
-	builds = Process.together!(fuzzers.map(|target| Process.product_command(roc, ["build", "--fuzz", "${directory}/${target}/main.roc", "--output=${work}/${target}"], root)))?
+	builds = compile_batches!(fuzzers.map(|target| Process.product_command(roc, Fuzz.build_args("${directory}/${target}/main.roc", "${work}/${target}"), root)))?
 	clean!(fuzzers, builds, "roc build --fuzz")?
 	each!(fuzzers, directory, asked.how, places)
+}
+
+compile_batches! : List(Process.Job) => Try(List(Process.Outcome), _)
+compile_batches! = |jobs| {
+	var $outcomes = []
+	for batch in Fuzz.compiler_batches(jobs) {
+		$outcomes = $outcomes.concat(Process.together!(batch)?)
+	}
+	Ok($outcomes)
 }
 
 clean! : List(Str), List(Process.Outcome), Str => Try({}, _)
@@ -236,3 +261,16 @@ expect Fuzz.flags(Timed(30), True, "/a/t-", []) == ["-max_total_time=30", "-prin
 expect Fuzz.flags(Timed(30), False, "/a/t-", []) == ["-max_total_time=30", "-len_control=0", "-print_final_stats=1", "-artifact_prefix=/a/t-"]
 
 expect Fuzz.tail("a\nb\nc", 2) == "b\nc" and Fuzz.tail("a\nb", 5) == "a\nb"
+
+# Both phases force compilation; fuzz instrumentation and the exact target/output remain.
+expect Fuzz.check_args("target/main.roc") == ["check", "--no-cache", "target/main.roc"]
+expect Fuzz.build_args("target/main.roc", "/work/target") == ["build", "--fuzz", "--no-cache", "target/main.roc", "--output=/work/target"]
+
+# Every target stays in order, including the final odd batch; an empty selection is empty.
+expect Fuzz.compiler_batches([]) == []
+expect Fuzz.compiler_batches(["a", "b", "c"]) == [["a", "b"], ["c"]]
+expect {
+	selected = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13"]
+	batches = Fuzz.compiler_batches(selected)
+	batches.len() == 7 and batches.all(|batch| batch.len() <= 2) and batches.fold([], List.concat) == selected
+}

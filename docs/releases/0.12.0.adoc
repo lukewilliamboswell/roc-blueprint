@@ -8,7 +8,15 @@ Maintenance scripts retain their separately pinned compiler and platform.
 
 == Upgrade
 
-Replace the platform URL in `Blueprint.roc` and install this release's binary.
+Use this release's platform in `Blueprint.roc`:
+
+[source,roc,snippet=unchecked]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+The importable core package is `{core-url}`. Install this release's matching
+`blueprint` binary.
 Quoted URLs and archive members retain their validation. Interpolated URLs and
 members now use Roc's iterator-based interpolation protocol; this changes their
 public custom-method types and requires the pre-1.0 breaking version 0.12.0.
@@ -34,3 +42,11 @@ smoke checks remain required.
 The CLI interpreter test explicitly runs without cache, so a previously cached
 success cannot stand in for execution. The documentation renderer and shared
 automation are updated while retaining immutable artifact and action identities.
+
+Fuzz validation also checks and builds every target with `--no-cache`. The
+November 7 compiler can crash when an instrumented build consumes a module
+cache populated by `roc check`; the isolated check/build/cold-build reproduction
+is recorded in https://github.com/roc-lang/roc/issues/12930[Roc issue 12930].
+The driver bounds compiler concurrency at two processes, then executes every
+selected corpus or generated-input workload with its declared assertions and
+budget. This requires fresh compilation evidence from the pinned compiler.

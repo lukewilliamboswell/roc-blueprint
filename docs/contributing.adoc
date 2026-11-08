@@ -159,6 +159,12 @@ The CLI unit tests use interpreter mode because the pinned compiler's
 native test backend crashes on the large embedded byte constant. Integration
 tests run the compiled executable.
 
+The fuzz driver checks and builds every selected target with `--no-cache`, so
+compilation uses source rather than cached verdicts or intermediate
+representations. At most two compiler processes run together to bound memory.
+The driver then executes every selected target with its declared corpus,
+generated-input count or time budget and its assertions.
+
 The `.roc` files in `scripts/` are Roc programs; they start other programs by
 argument list, not through a shell. Run one from the repository root with the
 pinned `roc` on `PATH`, or as `"$ROC" scripts/test.roc`.
