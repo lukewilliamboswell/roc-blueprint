@@ -96,10 +96,15 @@
 
           # Smoke and archive-test controllers retain their maintenance platform
           # and compiler. Product binaries use rocCross; these test helpers do not ship.
+          # Refetch the overlay's recorded bytes with this host's fetcher. A
+          # foreign-system fetch derivation itself cannot run on the Linux builder.
+          rocStableArchive = archiveSystem:
+            let recorded = roc-overlay.packages.${archiveSystem}.${rocStableTag}.src;
+            in pkgs.fetchurl { url = recorded.url; sha256 = recorded.outputHash; };
           rocStableCross = pkgs.runCommand "roc-stable-cross-${rocStableTag}" { } ''
             mkdir -p "$out" sysroot
-            tar -xzf ${roc-overlay.packages.x86_64-linux.${rocStableTag}.src} -C "$out" --strip-components=1
-            tar -xzf ${roc-overlay.packages.aarch64-darwin.${rocStableTag}.src} -C sysroot --strip-components=1
+            tar -xzf ${rocStableArchive "x86_64-linux"} -C "$out" --strip-components=1
+            tar -xzf ${rocStableArchive "aarch64-darwin"} -C sysroot --strip-components=1
             cp -r sysroot/darwin "$out/darwin"
           '';
 
