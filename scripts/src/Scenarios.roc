@@ -561,7 +561,7 @@ step! : Context, Str, Scenarios.Step => Try({}, _)
 step! = |context, project, step|
 	match step {
 		Cli(args, check) => require!(Process.command(context.blueprint, args, project), check)
-		Compiler(args, check) => require!(Process.command(context.roc, args, project), check)
+		Compiler(args, check) => require!(Process.product_command(context.roc, args, project), check)
 		Eval(attribute, check) => require!(eval(project, attribute), check)
 		SameDerivation(left, right) => {
 			left_path = derivation!(project, left)?

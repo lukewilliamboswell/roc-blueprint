@@ -86,8 +86,7 @@ The required checks are listed under
 <<repository-settings-the-workflows-rely-on>>. Keep their names aligned with
 the workflows when changing CI.
 
-basic-cli 0.26.0-rc2 requires the October 12 nightly or later. This repository
-pins `nightly-2026-10-28-bad769b` for the product and
+The product uses basic-cli 0.27.0 and pins `nightly-2026-11-07-ad3a5d2` for the product and
 `nightly-2026-10-13-b17d287` for maintenance scripts, with roc-fuzz 0.4.3.
 
 The complete suite requires x86_64 Linux and a running Nix daemon; the
@@ -133,8 +132,8 @@ exists, that it is the version the CLI and the flake report, and that the
 product compiler pin names the latest official nightly.
 
 build::
-Cross-builds the CLI and SBOM tool binaries (`scripts/build_release.roc`),
-runs the whole test suite on them, bundles the core, platform and reporting
+Cross-builds the product CLI and SBOM tool binaries (`scripts/build_release.roc`), builds the smoke and archive-test controllers
+with the separate maintenance compiler and platform, runs the whole test suite on them, bundles the core, platform and reporting
 app for the version (`scripts/bundle.roc`), checks the version against the
 public API
 (`scripts/check_version.roc bump`), archives the examples
@@ -290,14 +289,23 @@ for its supported inputs and coverage contract.
 
 === The version check
 
-`scripts/check_version.roc bump` runs `roc bump` for both packages against the
-latest release, and a release fails unless its version bumps at least as far
-as the public API changed. The core package is compared from the working
-tree. The platform is compared as bundled: in the working tree it names the
-core package by path, which `roc bump` refuses in a public type, so the script
-unpacks the platform bundle and puts the unpacked core bundle in a package
-cache of its own, where the compiler finds it by hash although its URL does
-not exist yet. A dry run reports the required bump and expects nothing.
+`scripts/check_version.roc bump` validates the requested and latest-final
+versions before choosing its evidence. A higher major version covers every
+possible API change; within `0.x`, an increased second component is the breaking
+boundary. Such a release records that conservative version proof without
+compiling the old package. This permits compiler migrations when the published
+package no longer compiles on the new compiler. It makes no claim that the two
+APIs were compared. Malformed metadata, leading zeroes, component overflow and
+prerelease tags presented as the latest final release fail the check.
+
+Releases within a breaking boundary still run `roc bump` for both packages,
+and comparison failures remain failures. The core is compared from the working
+tree. The platform is compared as bundled, with its immutable core URL and
+candidate core bytes supplied through a private package cache. A dry run uses
+the planned CLI release version for the boundary decision; within a boundary it
+reports the required bump without an expected-version assertion. It publishes
+nothing. Regression tests cover both boundaries, prereleases, equal or lower
+versions and malformed evidence.
 
 The platform exposes a type of the core package, and a package's URL is part
 of that type's identity, so the two versions move together.

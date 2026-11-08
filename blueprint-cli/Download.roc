@@ -117,7 +117,7 @@ attempt! = |url, headers, number|
 			if number >= Download.attempts {
 				Err({ status, reason: "${reason} (${tried(number)})" })
 			} else {
-				Sleep.millis!(250 * number)
+				Sleep.millis!(250 * number).map_err(|_| { status: 0, reason: "download interrupted during retry delay" })?
 				attempt!(url, headers, number + 1)
 			}
 	}
@@ -132,8 +132,9 @@ follow! : Str, Str, List((Str, Str)), U64 => Try({ bytes : List(U8), url : Str }
 follow! = |declared, current, headers, hops| {
 	plain = Request.from_method(GET).with_uri(current).with_timeout(TimeoutMilliseconds(Download.timeout_ms))
 	request = headers.fold(plain, |built, (name, value)| built.add_header(name, value))
-	response = match Http.send!(request) {
+	response = match Http.send!(request, {}) {
 		Ok(answer) => answer
+		Err(Interrupted) => return Err(Final(0, "download interrupted"))
 		Err(HttpErr(Timeout)) => return Err(Transient(0, "no answer from ${Download.shown(current)} within ${(Download.timeout_ms // 1000).to_str()} seconds"))
 		Err(HttpErr(_)) => return Err(Transient(0, "could not reach ${Download.shown(current)}"))
 		Err(InvalidUrl(_)) => return Err(Final(0, "${Download.shown(current)} is not a URL"))

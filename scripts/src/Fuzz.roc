@@ -149,9 +149,9 @@ all! = |root, asked, places| {
 	# A fuzz binary built after a type error would hold runtime-error
 	# placeholders, so every target must check and build cleanly first.
 	Script.info!("==>", "Checking and building ${fuzzers.len().to_str()} fuzz targets")?
-	checks = Process.together!(fuzzers.map(|target| Process.command(roc, ["check", "${directory}/${target}/main.roc"], root)))?
+	checks = Process.together!(fuzzers.map(|target| Process.product_command(roc, ["check", "${directory}/${target}/main.roc"], root)))?
 	clean!(fuzzers, checks, "roc check")?
-	builds = Process.together!(fuzzers.map(|target| Process.command(roc, ["build", "--fuzz", "${directory}/${target}/main.roc", "--output=${work}/${target}"], root)))?
+	builds = Process.together!(fuzzers.map(|target| Process.product_command(roc, ["build", "--fuzz", "${directory}/${target}/main.roc", "--output=${work}/${target}"], root)))?
 	clean!(fuzzers, builds, "roc build --fuzz")?
 	each!(fuzzers, directory, asked.how, places)
 }

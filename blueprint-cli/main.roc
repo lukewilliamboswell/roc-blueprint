@@ -7,10 +7,11 @@ app [main!] {
 	core: "../blueprint-core/main.roc",
 	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	nix: "../blueprint-nix/main.roc",
-	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
+	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst",
 	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
 }
 
+import Platform
 import pf.Cmd
 import pf.Env
 import pf.File
@@ -47,7 +48,7 @@ import "compiler-version" as compiler_version : Str
 import "compiler-archive" as compiler_archive : List(U8)
 
 version : Str
-version = "0.11.0"
+version = "0.12.0"
 
 ## The providers a request may be planned with. This is the only reference to
 ## a concrete provider: everything else uses the Provider contract
@@ -439,7 +440,7 @@ check! : Try(Spec, _), Context => Try({}, _)
 check! = |loaded, ctx| {
 	check_host!()?
 	native_command!(OsStr.from_str(roc!(ctx)?)).args(["check", "Blueprint.roc"].map(OsStr.from_str))
-		.cwd(path(ctx.layout.project_root)).exec!()
+		.cwd(path(ctx.layout.project_root)).call!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = loaded?
 	_ = rendered(spec)?
@@ -487,10 +488,10 @@ rendered = |spec| {
 ## Roc's Windows package roots must use the same separators as the paths it
 ## resolves. Keep our portable paths internally, and pass native cache/home
 ## variables to child programs so a URL package stays within its root.
-native_command! : OsStr => Cmd
+native_command! : OsStr => Cmd.Command
 native_command! = |program| {
 	var $command = Cmd.new(program)
-	if Env.platform!().os == WINDOWS {
+	if Platform.current!().os == WINDOWS {
 		for name in ["XDG_CACHE_HOME", "LOCALAPPDATA", "HOME"] {
 			match Env.var_str!(OsStr.from_str(name)) {
 				Ok(value) => {
@@ -511,7 +512,7 @@ exec! = |argv, root|
 			native_command!(OsStr.from_str(program))
 				.args(args.map(OsStr.from_str))
 				.cwd(path(root))
-				.exec!()
+				.call!()
 				.map_err(
 					|err|
 						match err {
@@ -543,7 +544,7 @@ exec_within! = |argv, root, directories| {
 				.args(args.map(OsStr.from_str))
 				.cwd(path(root))
 				.env(OsStr.from_str("PATH"), OsStr.from_str(search))
-				.exec!()
+				.call!()
 				.map_err(
 					|err|
 						match err {
@@ -711,7 +712,7 @@ host_target! = || host_system!() ?? "x86_64-linux"
 
 ## The System this executable itself runs on.
 host_system! : () => Try(Str, [UnsupportedHost])
-host_system! = || supported_host(Env.platform!())
+host_system! = || supported_host(Platform.current!())
 
 ## Runtime namespace authorization is local to one kernel and system.
 runner_host : Try(Str, [UnsupportedHost]), Str -> Try({}, _)
@@ -1010,8 +1011,8 @@ fetch_programs! = |steps| {
 source_is_embedded_compiler : Str, Str -> Bool
 source_is_embedded_compiler = |sha256, system| Bootstrap.compiler(compiler_version.trim(), system).map_ok(|program| program.sha256 == sha256) ?? False
 
-expect source_is_embedded_compiler("110ade54087cabc3102bb1b4a749312fa01422e442f3249b695d7133347d70c5", "x86_64-linux")
-expect !source_is_embedded_compiler("110ade54087cabc3102bb1b4a749312fa01422e442f3249b695d7133347d70c5", "aarch64-darwin")
+expect source_is_embedded_compiler("21710f7007403428d96f5927343c60c2b3dbefc298394d62cf066fe6fa966495", "x86_64-linux")
+expect !source_is_embedded_compiler("21710f7007403428d96f5927343c60c2b3dbefc298394d62cf066fe6fa966495", "aarch64-darwin")
 expect !source_is_embedded_compiler("different bytes", "x86_64-linux")
 
 ## One consumer-owned executor for standalone requests and workflow steps.
@@ -1139,8 +1140,8 @@ run_prepared! = |step, fetched, ctx, witness_directory| {
 					# Nix checks the source as its build user before mounting it. The
 					# owned parent permits traversal but no listing or other-user writes;
 					# the witness is readable even with a restrictive caller umask.
-					Cmd.new("chmod").args(["0444", "--", "${witness_directory}/witness"].map(OsStr.from_str)).exec!()?
-					Cmd.new("chmod").args(["0711", "--", witness_directory].map(OsStr.from_str)).exec!()?
+					Cmd.new("chmod").args(["0444", "--", "${witness_directory}/witness"].map(OsStr.from_str)).call!()?
+					Cmd.new("chmod").args(["0711", "--", witness_directory].map(OsStr.from_str)).call!()?
 					$argv = $argv.map(|arg| arg.replace_each(placeholder, witness_directory))
 				}
 			}
@@ -1283,7 +1284,7 @@ start! = |step, names, bin, ctx| {
 		}
 		_ => {
 			argv = match step.argv {
-				[program, .. as rest] if Env.platform!().os == WINDOWS and names.contains(program) => ["${bin}/${Store.executable_name(program)}"].concat(rest)
+				[program, .. as rest] if Platform.current!().os == WINDOWS and names.contains(program) => ["${bin}/${Store.executable_name(program)}"].concat(rest)
 				_ => started(step.argv, names, bin)
 			}
 			exec_within!(argv, layout.project_root, directories).map_err(
@@ -1353,7 +1354,7 @@ expect windows_package_cache(Err(Unset), Err(Unset), Err(Unset), "D:/a/project")
 roc_package_cache! : Str => Try(Path, _)
 roc_package_cache! = |root| {
 	unknown = |_| RocPackagesFailed("neither XDG_CACHE_HOME nor HOME says where Roc's package cache is")
-	match Env.platform!().os {
+	match Platform.current!().os {
 		WINDOWS => {
 			text! = |name| Env.var_str!(OsStr.from_str(name))
 			directory = windows_package_cache(text!("XDG_CACHE_HOME"), text!("LOCALAPPDATA"), text!("HOME"), root)

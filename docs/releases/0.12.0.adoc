@@ -1,0 +1,36 @@
+= roc-blueprint 0.12.0
+
+This release builds and evaluates projects with Roc
+`nightly-2026-11-07-ad3a5d2` and upgrades the native product platform to
+basic-cli 0.27.0. Use its `blueprint` binary with its platform bundle URL.
+All five released systems embed their matching verified compiler archive.
+Maintenance scripts retain their separately pinned compiler and platform.
+
+== Upgrade
+
+Replace the platform URL in `Blueprint.roc` and install this release's binary.
+Quoted URLs and archive members retain their validation. Interpolated URLs and
+members now use Roc's iterator-based interpolation protocol; this changes their
+public custom-method types and requires the pre-1.0 breaking version 0.12.0.
+The configuration settings and lock format are unchanged.
+
+The CLI uses basic-cli's native target discovery, command builder and
+interruptible HTTP/retry operations. Download redirects remain controlled by
+Blueprint's existing validation. The release's SBOM records the new compiler,
+platform source and complete upstream Cargo resolution graph; conditional
+native membership and unresolved licenses remain explicit uncertainties.
+
+== Release verification
+
+An increase across a breaking-version boundary is sufficient for every
+possible API change: major after 1.0, second component within 0.x. The release
+validator checks canonical bounded versions before accepting this proof and
+states when it does not compare APIs. Releases within a boundary still compare
+both packages and reject compilation or comparison errors. This release uses
+the boundary proof because the 0.11.0 platform cannot compile on the new Roc
+nightly. Product compilation, archived consumer tests and every target's native
+smoke checks remain required.
+
+The CLI interpreter test explicitly runs without cache, so a previously cached
+success cannot stand in for execution. The documentation renderer and shared
+automation are updated while retaining immutable artifact and action identities.

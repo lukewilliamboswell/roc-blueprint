@@ -78,7 +78,7 @@ script! = |context, name, args|
 	Process.passthrough!(Process.command(stable, ["scripts/${name}.roc"].concat(args), context.root))
 
 compiler! : Context, List(Str) => Try({}, _)
-compiler! = |context, args| Process.passthrough!(Process.command(context.roc, args, context.root))
+compiler! = |context, args| Process.passthrough!(Process.product_command(context.roc, args, context.root))
 
 read! : Context, Str => Try(Str, _)
 read! = |context, file| Path.read_utf8!(Path.utf8("${context.root}/${file}"))

@@ -18,7 +18,7 @@ Url :: { text : Str }.{
 			Err(BadQuotedBytes("\"${raw}\" is not a download URL; expected https://<host>/<path> with no credentials, query or fragment"))
 		}
 
-	from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+	from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidInterpolation(Str)])
 	from_interpolation = |segments|
 		Str.from_interpolation(segments).map_ok(|assemble| |values| Url.{ text: assemble(values) })
 
