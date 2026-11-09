@@ -58,12 +58,17 @@ or Nix just to decode a report.
 
 From a Blueprint checkout, with the pinned product compiler available as
 `roc` (see <<build-and-test>>), build the example and export an existing
-project's committed lock:
+project's committed lock. The command selects basic-cli 0.27.0 for this
+compiler; the fixture retains its 0.26.0-rc2 header for the separate script
+compiler. The pure consumer checks are the same under both profiles.
 
 [source,sh]
 ----
 mkdir -p .cache/lock-snapshot
-roc build fixtures/lock-snapshot/main.roc --output=.cache/lock-snapshot/consumer
+roc build --replace-dep \
+  https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst \
+  https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst \
+  fixtures/lock-snapshot/main.roc --output=.cache/lock-snapshot/consumer
 BLUEPRINT_ROOT=/absolute/path/to/project blueprint lock show --json > lock-export.json
 .cache/lock-snapshot/consumer lock-export.json > lock-roundtrip.json
 roc test fixtures/lock-snapshot/pure.roc
