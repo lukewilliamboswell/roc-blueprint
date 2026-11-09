@@ -430,7 +430,7 @@ failure. To run it on a machine that has Nix, hide Nix from `PATH`:
 
 [source,sh]
 ----
-roc build scripts/smoke_binary.roc --output=/tmp/smoke
+roc-stable build scripts/smoke_binary.roc --output=/tmp/smoke
 env PATH=/usr/bin:/bin /tmp/smoke --no-nix ./blueprint
 ----
 

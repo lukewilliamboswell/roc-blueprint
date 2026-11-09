@@ -111,7 +111,7 @@
           # Released native documentation renderer, compatible with the reviewed
           # shared build-docs action. Never
           # patch its bytes: these hashes identify the published executables.
-          rocDocsVersion = "0.10.0";
+          rocDocsVersion = "0.10.1";
           rocDocsHashes = {
             "x86_64-linux" = "sha256-/ebhQvHu9M3++19/Id+KxEkruMNfETy9HyWA3gXiW5I=";
             "aarch64-linux" = "sha256-uXrZsPGI3SkFtqXFyjEjphikhPSs6NbPq5X9DmrfSkw=";
