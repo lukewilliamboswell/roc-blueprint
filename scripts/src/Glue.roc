@@ -60,7 +60,7 @@ regenerate! = |root, how, packaged, work| {
 	Path.write_utf8!(Path.utf8(spec), Path.read_utf8!(Path.utf8(packaged))?)?
 	output = "${work}/out"
 	Path.create_all!(Path.utf8(output))?
-	_ = Process.succeed!(Process.command(Process.roc!(), Glue.glue_args(spec, output), root))?
+	_ = Process.succeed!(Process.product_command(Process.roc!(), Glue.glue_args(spec, output), root))?
 	fresh = "${output}/${Glue.generated}"
 	committed = "${root}/${Glue.bindings}"
 	match how {

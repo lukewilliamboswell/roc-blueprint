@@ -1,6 +1,6 @@
 #!/usr/bin/env roc
 app [main!] {
-	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
+	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst",
 	nix: "../../blueprint-nix/main.roc",
 }
 
@@ -283,7 +283,7 @@ wait_at! = |barrier| {
 		if $waited >= 30000 {
 			return Err("${barrier}.release did not appear in 30 seconds")
 		}
-		Sleep.millis!(10)
+		Sleep.millis!(10).map_err(|_| "interrupted while waiting for barrier")?
 		$waited = $waited + 10
 	}
 	Ok({})

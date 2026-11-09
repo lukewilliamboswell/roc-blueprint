@@ -78,7 +78,7 @@ script! = |context, name, args|
 	Process.passthrough!(Process.command(stable, ["scripts/${name}.roc"].concat(args), context.root))
 
 compiler! : Context, List(Str) => Try({}, _)
-compiler! = |context, args| Process.passthrough!(Process.command(context.roc, args, context.root))
+compiler! = |context, args| Process.passthrough!(Process.product_command(context.roc, args, context.root))
 
 read! : Context, Str => Try(Str, _)
 read! = |context, file| Path.read_utf8!(Path.utf8("${context.root}/${file}"))
@@ -311,7 +311,7 @@ unit! = |context| {
 	# The pinned compiler's native test backend crashes on the embedded
 	# archive's large byte constant. The interpreter runs the same expects;
 	# CLI integration tests exercise the actual native executable.
-	compiler!(context, ["test", "--opt=interpreter", "blueprint-cli/main.roc"])?
+	compiler!(context, ["test", "--opt=interpreter", "--no-cache", "blueprint-cli/main.roc"])?
 
 	step!("Independent library consumer")?
 	compiler!(context, ["check", "fixtures/consumer/main.roc"])?

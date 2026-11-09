@@ -505,6 +505,20 @@
       "origin": "reviewed"
     },
     {
+      "id": "cargo-libmimalloc-sys-0.1.49",
+      "name": "libmimalloc-sys",
+      "producer": "NOASSERTION",
+      "version": "0.1.49",
+      "identity": "pkg:cargo/libmimalloc-sys@0.1.49",
+      "download": "https://static.crates.io/crates/libmimalloc-sys/libmimalloc-sys-0.1.49.crate",
+      "sha256": "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9",
+      "license": "NOASSERTION",
+      "license_url": "",
+      "modified": "",
+      "target": "",
+      "origin": "reviewed"
+    },
+    {
       "id": "cargo-libsqlite3-sys-0.33.0",
       "name": "libsqlite3-sys",
       "producer": "NOASSERTION",
@@ -540,6 +554,20 @@
       "identity": "pkg:cargo/memchr@2.7.4",
       "download": "https://static.crates.io/crates/memchr/memchr-2.7.4.crate",
       "sha256": "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3",
+      "license": "NOASSERTION",
+      "license_url": "",
+      "modified": "",
+      "target": "",
+      "origin": "reviewed"
+    },
+    {
+      "id": "cargo-mimalloc-0.1.52",
+      "name": "mimalloc",
+      "producer": "NOASSERTION",
+      "version": "0.1.52",
+      "identity": "pkg:cargo/mimalloc@0.1.52",
+      "download": "https://static.crates.io/crates/mimalloc/mimalloc-0.1.52.crate",
+      "sha256": "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862",
       "license": "NOASSERTION",
       "license_url": "",
       "modified": "",
@@ -757,13 +785,13 @@
       "origin": "reviewed"
     },
     {
-      "id": "cargo-rustls-0.23.45",
+      "id": "cargo-rustls-0.23.46",
       "name": "rustls",
       "producer": "NOASSERTION",
-      "version": "0.23.45",
-      "identity": "pkg:cargo/rustls@0.23.45",
-      "download": "https://static.crates.io/crates/rustls/rustls-0.23.45.crate",
-      "sha256": "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634",
+      "version": "0.23.46",
+      "identity": "pkg:cargo/rustls@0.23.46",
+      "download": "https://static.crates.io/crates/rustls/rustls-0.23.46.crate",
+      "sha256": "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf",
       "license": "NOASSERTION",
       "license_url": "",
       "modified": "",
@@ -1978,7 +2006,7 @@
     },
     {
       "from": "cargo-hyper-rustls-0.27.6",
-      "to": "cargo-rustls-0.23.45",
+      "to": "cargo-rustls-0.23.46",
       "relation": "other",
       "scope": "",
       "basis": "Upstream Cargo.lock resolution edge, role/target/features unresolved; not a runtime dependency claim"
@@ -2117,6 +2145,13 @@
       "basis": "Upstream Cargo.lock resolution edge, role/target/features unresolved; not a runtime dependency claim"
     },
     {
+      "from": "cargo-libmimalloc-sys-0.1.49",
+      "to": "cargo-cc-1.2.40",
+      "relation": "other",
+      "scope": "",
+      "basis": "Upstream Cargo.lock resolution edge, role/target/features unresolved; not a runtime dependency claim"
+    },
+    {
       "from": "cargo-libsqlite3-sys-0.33.0",
       "to": "cargo-cc-1.2.40",
       "relation": "dependsOn",
@@ -2136,6 +2171,13 @@
       "relation": "dependsOn",
       "scope": "build",
       "basis": "Verified libsqlite3-sys 0.33.0 Cargo.toml build-dependencies; never containment proof"
+    },
+    {
+      "from": "cargo-mimalloc-0.1.52",
+      "to": "cargo-libmimalloc-sys-0.1.49",
+      "relation": "other",
+      "scope": "",
+      "basis": "Upstream Cargo.lock resolution edge, role/target/features unresolved; not a runtime dependency claim"
     },
     {
       "from": "cargo-miniz-oxide-0.8.9",
@@ -2334,42 +2376,42 @@
       "basis": "Upstream Cargo.lock resolution edge, role/target/features unresolved; not a runtime dependency claim"
     },
     {
-      "from": "cargo-rustls-0.23.45",
+      "from": "cargo-rustls-0.23.46",
       "to": "cargo-once-cell-1.21.3",
       "relation": "other",
       "scope": "",
       "basis": "Upstream Cargo.lock resolution edge, role/target/features unresolved; not a runtime dependency claim"
     },
     {
-      "from": "cargo-rustls-0.23.45",
+      "from": "cargo-rustls-0.23.46",
       "to": "cargo-ring-0.17.14",
       "relation": "other",
       "scope": "",
       "basis": "Upstream Cargo.lock resolution edge, role/target/features unresolved; not a runtime dependency claim"
     },
     {
-      "from": "cargo-rustls-0.23.45",
+      "from": "cargo-rustls-0.23.46",
       "to": "cargo-rustls-pki-types-1.12.0",
       "relation": "other",
       "scope": "",
       "basis": "Upstream Cargo.lock resolution edge, role/target/features unresolved; not a runtime dependency claim"
     },
     {
-      "from": "cargo-rustls-0.23.45",
+      "from": "cargo-rustls-0.23.46",
       "to": "cargo-rustls-webpki-0.103.15",
       "relation": "other",
       "scope": "",
       "basis": "Upstream Cargo.lock resolution edge, role/target/features unresolved; not a runtime dependency claim"
     },
     {
-      "from": "cargo-rustls-0.23.45",
+      "from": "cargo-rustls-0.23.46",
       "to": "cargo-subtle-2.6.1",
       "relation": "other",
       "scope": "",
       "basis": "Upstream Cargo.lock resolution edge, role/target/features unresolved; not a runtime dependency claim"
     },
     {
-      "from": "cargo-rustls-0.23.45",
+      "from": "cargo-rustls-0.23.46",
       "to": "cargo-zeroize-1.8.2",
       "relation": "other",
       "scope": "",
@@ -2580,7 +2622,7 @@
     },
     {
       "from": "cargo-tokio-rustls-0.26.4",
-      "to": "cargo-rustls-0.23.45",
+      "to": "cargo-rustls-0.23.46",
       "relation": "other",
       "scope": "",
       "basis": "Upstream Cargo.lock resolution edge, role/target/features unresolved; not a runtime dependency claim"

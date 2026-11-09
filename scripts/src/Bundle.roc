@@ -87,6 +87,24 @@ Bundle := [].{
 		if named.is_empty() default_repository else named
 	}
 
+	## The maintenance and product platform differ only by the explicit writer
+	## options here. Both retain atomic RequireNew and the same callback.
+	product_io : Str -> Str
+	product_io = |source| source.replace_each("RequireNew, |writer|", "RequireNew, {}, |writer|")
+
+	stage_product_tool! : Str, Str, Str, Str => Try({}, _)
+	stage_product_tool! = |root, staged, core_url, tag| {
+		copy!("${root}/scripts", staged, ["sbom.roc", "src/SbomFiles.roc"])?
+		entry = Path.read_utf8!(Path.utf8("${staged}/sbom.roc"))?
+		prepared = pinned(entry.replace_each(Process.stable_cli, Process.product_cli).replace_each(development_core, "\"${core_url}\""), tag)
+		Path.write_utf8!(Path.utf8("${staged}/main.roc"), prepared)?
+		Path.delete!(Path.utf8("${staged}/sbom.roc"))?
+		io_path = Path.utf8("${staged}/src/SbomFiles.roc")
+		io = Path.read_utf8!(io_path)?
+		Process.check!(io.split_on("RequireNew, |writer|").len() == 2, "review the product SBOM writer adapter after a source change")?
+		Path.write_utf8!(io_path, product_io(io))
+	}
+
 	## The modules of a package directory: `main.roc`, then the rest by name.
 	modules : List(Str) -> List(Str)
 	modules = |names| {
@@ -231,7 +249,7 @@ file_names! = |directory| {
 ## variables added, and return the archive's name.
 bundle! : Str, List(Str), Paths, List((Str, Str)) => Try(Str, _)
 bundle! = |directory, files, paths, environment| {
-	job = Process.with_env(Process.command(Process.roc!(), ["bundle"].concat(files).concat(["--output-dir", paths.dist]), directory), environment)
+	job = Process.with_env(Process.product_command(Process.roc!(), ["bundle"].concat(files).concat(["--output-dir", paths.dist]), directory), environment)
 	outcome = Process.capture!(job)?
 	if outcome.code != 0 {
 		return Script.fail!("${outcome.stdout}${outcome.stderr}\nroc bundle exited with code ${outcome.code.to_str()} in ${directory}")
@@ -277,7 +295,7 @@ seeded_cache! = |paths, core| {
 	Path.create_all!(Path.utf8(unpacked))?
 	Path.create_all!(Path.utf8(package_cache))?
 	Path.copy!(Path.utf8("${paths.dist}/${core}"), Path.utf8("${unpacked}/${hashed}"))?
-	unbundled = Process.capture!(Process.command(Process.roc!(), ["unbundle", hashed], unpacked))?
+	unbundled = Process.capture!(Process.product_command(Process.roc!(), ["unbundle", hashed], unpacked))?
 	Process.check!(unbundled.code == 0, "${unbundled.stdout}${unbundled.stderr}\nroc unbundle of the core bundle exited with code ${unbundled.code.to_str()}")?
 	Path.rename!(Path.utf8("${unpacked}/${hashed.drop_suffix(".tar.zst")}"), Path.utf8("${package_cache}/${hashed.drop_suffix(".tar.zst")}"))?
 	Ok(cache)
@@ -374,7 +392,7 @@ smoke! = |root, paths, server, served| {
 		return Script.fail!("examples/all-settings/Blueprint.roc does not name the local platform")
 	}
 	Path.write_utf8!(Path.utf8("${example_dir}/Blueprint.roc"), example.replace_each(local_platform, "platform \"${platform_url}\""))?
-	compiler = |args| Process.with_env(Process.command(roc, args.concat(served.arguments).concat(["Blueprint.roc"]), example_dir), environment)
+	compiler = |args| Process.with_env(Process.product_command(roc, args.concat(served.arguments).concat(["Blueprint.roc"]), example_dir), environment)
 	match server.drive!([compiler(["check"])])? {
 		[checked] => Process.check!(checked.code == 0, "${checked.stdout}${checked.stderr}\nroc check of the all-settings example exited with code ${checked.code.to_str()}")?
 		_ => return Script.fail!("roc check did not report a result")
@@ -435,15 +453,11 @@ bundle_sbom! : Str, Paths, Serve, Release, Str, Str => Try(Str, _)
 bundle_sbom! = |root, paths, core_server, release, core, cache| {
 	Script.info!("==>", "Bundling the standalone SBOM app")?
 	staged = "${paths.stage}/sbom-tool"
-	copy!("${root}/scripts", staged, ["sbom.roc", "src/SbomFiles.roc"])?
-	Path.rename!(Path.utf8("${staged}/sbom.roc"), Path.utf8("${staged}/main.roc"))?
 	core_url = Bundle.release_url(release.repository, release.version, core)
-	entry_path = Path.utf8("${staged}/main.roc")
-	entry = Path.read_utf8!(entry_path)?
 	product_tag = Path.read_utf8!(Path.utf8("${root}/blueprint-cli/compiler-version"))?.trim()
 	Process.check!(!product_tag.is_empty(), "SBOM app needs an explicit release compiler pin")?
-	staged_entry = Bundle.pinned(entry.replace_each(Bundle.development_core, "\"${core_url}\""), product_tag)
-	Path.write_utf8!(entry_path, staged_entry)?
+	Bundle.stage_product_tool!(root, staged, core_url, product_tag)?
+
 	hashed = bundle!(staged, ["main.roc", "src/SbomFiles.roc"], paths, [("XDG_CACHE_HOME", cache)])?
 	name = "${Bundle.sbom_prefix}${hashed}"
 	Path.rename!(Path.utf8("${paths.dist}/${hashed}"), Path.utf8("${paths.dist}/${name}"))?
@@ -456,9 +470,9 @@ bundle_sbom! = |root, paths, core_server, release, core, cache| {
 	workspace = "${paths.stage}/sbom-workspace"
 	copy!("${root}/tests/sbom/fixtures/input", workspace, ["Spec", "Lock", "composition.json", "subject.json", "context.json", "sample-artifact"])?
 	Path.write_utf8!(Path.utf8("${workspace}/Blueprint.roc"), "INVALID PROJECT MUST NOT BE EVALUATED\n")?
-	base = ["run"].concat(Bundle.replacing(core_url, server.url(Bundle.release_path(release.repository, release.version, core)))).concat([server.url(route), "--"])
+	base = ["run"].concat(Bundle.replacing(core_url, server.url(Bundle.release_path(release.repository, release.version, core)))).concat([server.url(route)])
 	roc = Process.roc!()
-	invoke = |args| Process.with_env(Process.command(roc, base.concat(args), workspace), [("XDG_CACHE_HOME", cache)])
+	invoke = |args| Process.with_env(Process.product_command(roc, base.concat(args), workspace), [("XDG_CACHE_HOME", cache)])
 	for args in [["inspect", "Spec", "Lock", "composition.json", "x86_64-linux", "inventory.json"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact", "sample-artifact.spdx-2.3.json", "--spdx-2.3"]] {
 		outcomes = server.drive!([invoke(args)])?
 		match outcomes {
@@ -496,3 +510,7 @@ snapshot_consumer! = |root, paths, server, core_url, route, core| {
 	}
 	Script.pass!("official core bundle consumed purely by product and script compilers from independent empty caches; packaged schema verified")
 }
+
+# Product writer adaptation preserves RequireNew, callback and every other byte.
+expect Bundle.product_io("File.with_writer!(path, RequireNew, |writer| writer.write_utf8!(text))") == "File.with_writer!(path, RequireNew, {}, |writer| writer.write_utf8!(text))"
+expect Bundle.product_io("other source") == "other source"

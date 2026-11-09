@@ -1196,7 +1196,7 @@ generated inventories and mutated documents. These checks establish
 consistency with declared inputs, not proof that an opaque tool disclosed all
 shipped code.
 
-=== Reviewed kinds, attribution and independent source references (0.9.0)
+=== Reviewed kinds, attribution and independent source references
 
 The `blueprint-spdx-3.0-v2` composition contract adds `kind`, `copyright`,
 `attribution`, `package_url` and `source_refs` to every component. The reviewed
@@ -1224,7 +1224,7 @@ CycloneDX uses standard component `type`, `copyright`, `purl`, supplier,
 licenses and typed `externalReferences`. CycloneDX has no equivalent reviewed
 attribution-text field in this adapter, so attribution is retained as
 `blueprint:attribution`. Its schema requires a component type: `unknown`
-uses the historical `library` fallback for inventory entries and `file` for
+uses the `library` compatibility fallback for inventory entries and `file` for
 the subject, with an explicit `blueprint:kind=unknown` declaration. This is
 an adapter compatibility default, not a reviewed library classification.
 Readers check these exact fallbacks and reject contradictory standard kinds.

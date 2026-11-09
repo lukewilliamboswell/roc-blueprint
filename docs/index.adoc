@@ -40,8 +40,13 @@ Writing a provider or judging a design change:: Read
 <<understand-the-architecture>> and <<the-spec-the-lock-and-providers>>.
 Changing roc-blueprint itself:: Read <<contribute>>.
 Releasing or looking after the repository:: Read <<maintain-and-release>>.
-Upgrading:: See <<release-notes>>.
 ****
+
+[#use-this-release-2]
+== Upgrade
+
+Read the https://github.com/lukewilliamboswell/roc-blueprint/releases[published releases]
+for version-specific changes and upgrade instructions.
 
 include::overview.adoc[leveloffset=+1]
 
@@ -68,5 +73,3 @@ include::spec.adoc[leveloffset=+1]
 include::contributing.adoc[leveloffset=+1]
 
 include::maintaining.adoc[leveloffset=+1]
-
-include::releases.adoc[leveloffset=+1]

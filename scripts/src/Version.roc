@@ -16,12 +16,17 @@ Version := [].{
 	## `X.Y.Z`, or `X.Y.Z-` and a suffix of letters, digits, dots and hyphens
 	## for a release candidate.
 	valid : Str -> Bool
-	valid = |version|
-		match version.split_on("-") {
-			[numbers] => numeric(numbers)
-			[numbers, .. as suffix] => numeric(numbers) and suffix.all(|part| !part.is_empty() and part.to_utf8().all(|byte| digit(byte) or letter(byte) or byte == '.'))
-			[] => False
-		}
+	valid = |version| strict_version(version, False).is_ok()
+
+	## A release crossing its breaking boundary already covers the largest API
+	## change. A zero-major release breaks at its second numeric component.
+	## Decide before compilation; failures are never converted to this proof.
+	breaking_suffices : Str, Str -> Try(Bool, Str)
+	breaking_suffices = |requested, previous| {
+		next = strict_version(requested, False)?
+		old = strict_version(previous, True)?
+		Ok(next.major > old.major or (old.major == 0 and next.major == 0 and next.minor > old.minor))
+	}
 
 	## The version a candidate is a candidate for: `roc bump` takes `X.Y.Z` alone.
 	base : Str -> Str
@@ -108,10 +113,29 @@ digit = |byte| byte >= '0' and byte <= '9'
 letter : U8 -> Bool
 letter = |byte| (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z')
 
-numeric : Str -> Bool
-numeric = |numbers| {
-	parts = numbers.split_on(".")
-	parts.len() == 3 and parts.all(|part| !part.is_empty() and part.to_utf8().all(digit))
+## Strict, bounded release metadata: each numeric component is parsed, and
+## a latest-final identity must never be inferred from a prerelease tag.
+strict_version : Str, Bool -> Try({ major : U64, minor : U64, patch : U64 }, Str)
+strict_version = |version, final| {
+	parts = version.split_on("-")
+	numbers = parts.first() ?? ""
+	if final and parts.len() != 1 {
+		return Err("latest release must be a final semantic version")
+	}
+	if parts.len() > 1 {
+		suffix = Str.join_with(parts.drop_first(1), "-")
+		if parts.drop_first(1).any(|part| part.is_empty()) or !suffix.split_on(".").all(|part| !part.is_empty() and part.to_utf8().all(|byte| digit(byte) or letter(byte) or byte == '-') and (!part.to_utf8().all(digit) or part == "0" or !part.starts_with("0"))) {
+			return Err("invalid prerelease identifiers")
+		}
+	}
+	components = numbers.split_on(".")
+	if components.len() != 3 or !components.all(|part| !part.is_empty() and part.to_utf8().all(digit) and (part == "0" or !part.starts_with("0"))) {
+		return Err("version must contain three canonical numeric components")
+	}
+	major = U64.from_str(components.get(0) ?? "").map_err(|_| "major version exceeds the supported integer range")?
+	minor = U64.from_str(components.get(1) ?? "").map_err(|_| "minor version exceeds the supported integer range")?
+	patch = U64.from_str(components.get(2) ?? "").map_err(|_| "patch version exceeds the supported integer range")?
+	Ok({ major, minor, patch })
 }
 
 ## Neither a tag nor a release of this version exists. `gh release create`
@@ -133,11 +157,27 @@ compared! = |root, version, work| {
 		_ => return Script.fail!("dist/bundles.txt does not list both bundles: run scripts/bundle.roc ${version}")
 	}
 	previous = Published.latest_bundles!(root)?
+	planned = if version == Bundle.dry_run_version {
+		match StaticChecks.constant(Path.read_utf8!(Path.utf8("${root}/blueprint-cli/main.roc"))?, "version") {
+			Ok(found) => found
+			Err(_) => return Script.fail!("dry-run API validation needs the planned CLI release version")
+		}
+	} else version
+	{
+		# Version evidence errors fail before either package is compiled.
+		crosses = match Version.breaking_suffices(planned, previous.tag) {
+			Ok(value) => value
+			Err(reason) => return Script.fail!(reason)
+		}
+		if crosses {
+			return Script.pass!("${planned} crosses the breaking-version boundary of ${previous.tag}; covers all API changes without comparing an old package on the new compiler")
+		}
+	}
 	expected = if version == Bundle.dry_run_version [] else ["--expect", Version.base(version)]
 	roc = Process.roc!()
 
 	Script.info!("==>", "roc-blueprint-core against ${previous.core_url}")?
-	core = Process.succeed!(Process.command(roc, ["bump", "--old", previous.core_url].concat(expected).concat(["${Bundle.core_dir}/main.roc"]), root))?
+	core = Process.succeed!(Process.product_command(roc, ["bump", "--old", previous.core_url].concat(expected).concat(["${Bundle.core_dir}/main.roc"]), root))?
 	Script.info!("   ", core.stdout.trim())?
 
 	# The platform in the working tree names the core package by path, which
@@ -153,13 +193,13 @@ compared! = |root, version, work| {
 	# `roc unbundle` checks an archive against the hash that is its whole name.
 	Path.copy!(Path.utf8("${root}/dist/${platform_bundle}"), Path.utf8("${unpacked}/${platform_bundle}"))?
 	Path.copy!(Path.utf8("${root}/dist/${core_bundle}"), Path.utf8("${unpacked}/${core_hashed}"))?
-	_ = Process.succeed!(Process.command(roc, ["unbundle", platform_bundle, core_hashed], unpacked))?
+	_ = Process.succeed!(Process.product_command(roc, ["unbundle", platform_bundle, core_hashed], unpacked))?
 	Path.rename!(Path.utf8("${unpacked}/${core_hashed.drop_suffix(".tar.zst")}"), Path.utf8("${package_cache}/${core_hashed.drop_suffix(".tar.zst")}"))?
 	entry = "${platform_bundle.drop_suffix(".tar.zst")}/main.roc"
 	compared = Process.succeed!(
 		Process.with_env(
 			# The bundle holds every target's linker inputs.
-			Process.command(roc, ["bump", "--old", previous.platform_url, "--max-package-mb=0"].concat(expected).concat([entry]), unpacked),
+			Process.product_command(roc, ["bump", "--old", previous.platform_url, "--max-package-mb=0"].concat(expected).concat([entry]), unpacked),
 			[("XDG_CACHE_HOME", "${work}/cache")],
 		),
 	)?
@@ -183,3 +223,17 @@ expect Version.compiler_problem("nightly-new\n", "nightly-new\n") == ""
 expect Version.compiler_problem("nightly-old", "nightly-new") != ""
 expect Version.compiler_problem("", "") != ""
 expect Version.compiler_problem("latest", "latest") != ""
+
+# A breaking boundary is an explicit version proof, including pre-1.0 minors.
+expect Version.breaking_suffices("0.12.0", "0.11.0") == Ok(True)
+expect Version.breaking_suffices("0.12.0-rc.1", "0.11.0") == Ok(True)
+expect Version.breaking_suffices("1.0.0", "0.11.0") == Ok(True)
+expect Version.breaking_suffices("2.0.0", "1.9.9") == Ok(True)
+expect Version.breaking_suffices("0.11.1", "0.11.0") == Ok(False)
+expect Version.breaking_suffices("1.10.0", "1.9.9") == Ok(False)
+expect Version.breaking_suffices("0.11.0", "0.11.0") == Ok(False)
+expect Version.breaking_suffices("0.10.99", "0.11.0") == Ok(False)
+expect Version.breaking_suffices("0.99.0", "1.0.0") == Ok(False)
+expect Version.breaking_suffices("18446744073709551615.0.0", "18446744073709551614.0.0") == Ok(True)
+expect ["", "garbage", "v0.11.0", "00.11.0", "0.011.0", "0.11.00", "0.11.0-rc.1", "18446744073709551616.0.0", "0.18446744073709551616.0", "0.11.18446744073709551616"].all(|previous| Version.breaking_suffices("0.12.0", previous).is_err())
+expect ["", "v0.12.0", "00.12.0", "0.012.0", "0.12.00", "0.12.0-", "0.12.0-rc..1", "0.12.0-01", "0.12.0-rc_1", "18446744073709551616.0.0", "0.18446744073709551616.0", "0.12.18446744073709551616"].all(|requested| Version.breaking_suffices(requested, "0.11.0").is_err())

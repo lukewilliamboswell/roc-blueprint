@@ -128,7 +128,7 @@ ReleaseNotes := [].{
 			Err(LockInvalid(reason)) => return Script.fail!("${LinkInputs.lock_file}: ${reason}")
 		}
 		flake_lock = Path.read_utf8!(Path.utf8("${root}/flake.lock"))?
-		deps = Process.succeed!(Process.command(Process.roc!(), ["deps", cli_source], root))?.stdout
+		deps = Process.succeed!(Process.product_command(Process.roc!(), ["deps", cli_source], root))?.stdout
 		built = {
 			roc_tag: first_line!("${root}/blueprint-cli/compiler-version")?,
 			roc_stable: Process.succeed!(Process.command("roc-stable", ["version"], root))?.stdout.trim(),

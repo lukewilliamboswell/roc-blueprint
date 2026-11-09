@@ -23,7 +23,7 @@ import pf.Recipes
 config = [
 	Name("my-project"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-28-bad769b"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-07-ad3a5d2"))]),
 		Expect(["git"]),
 	]),
 	Shell("default", [Use("dev")]),
@@ -48,7 +48,7 @@ release's notes give its own.
 Tasks run your scripts in declared environments. Optional Builds add explicit
 inputs, dependencies, an executor and a declared artifact output; compilation
 and packaging stay in your scripts. Providers own native execution and caching.
-See the [architecture](docs/architecture.adoc) and the [0.9.0 release notes](docs/releases/0.9.0.adoc).
+See the [architecture](docs/architecture.adoc) and the [published release notes](https://github.com/lukewilliamboswell/roc-blueprint/releases).
 
 ## Intent
 

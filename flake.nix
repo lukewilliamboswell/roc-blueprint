@@ -40,16 +40,16 @@
           # Official archives can precede their roc-overlay inventory entry.
           compilerArchives = {
             "x86_64-linux" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-linux_x86_64-2026-10-28-bad769b.tar.gz";
-              hash = "sha256-rqy+tg8nPqhWV6AD4uw5RhWV8yYbtpyeFuoYplY66Nk=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-07-ad3a5d2/roc_nightly-linux_x86_64-2026-11-07-ad3a5d2.tar.gz";
+              hash = "sha256-IXEPcAdANCjZb1knNDxgwrPb78KYOU1izwZv5vqWZJU=";
             };
             "aarch64-linux" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-linux_arm64-2026-10-28-bad769b.tar.gz";
-              hash = "sha256-D1GoBJK3C0woLwuVd9dNKerUAAAkvH2wSjCNYQLoKu8=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-07-ad3a5d2/roc_nightly-linux_arm64-2026-11-07-ad3a5d2.tar.gz";
+              hash = "sha256-cTferH96By05mDO0kyIb81W68FWKiJUYMuA9Eq3cJYI=";
             };
             "aarch64-darwin" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-10-28-bad769b/roc_nightly-macos_apple_silicon-2026-10-28-bad769b.tar.gz";
-              hash = "sha256-aZOfNTWyl3RlN56Aahlq/+28ZTEFRUedWmOO9tFTBMc=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-07-ad3a5d2/roc_nightly-macos_apple_silicon-2026-11-07-ad3a5d2.tar.gz";
+              hash = "sha256-X6swSXPt8lmV6kiDMD42uKckB91zGl+iQat3iKhZ4zk=";
             };
           };
           roc = roc-overlay.packages.${system}.nightly.overrideAttrs (previous: {
@@ -61,7 +61,7 @@
             passthru = previous.passthru // {
               tag = rocTag;
               compilerVersion = rocTag;
-              compilerCommit = "bad769be8e8855fa90e08800e31a75bfed1fb128";
+              compilerCommit = "ad3a5d2830b94fdac878ce1aaa73c64e7c57720f";
               source = {
                 inherit (compilerArchives.${system}) url;
                 sha256 = compilerArchives.${system}.hash;
@@ -94,14 +94,28 @@
             cp -r sysroot/darwin "$out/darwin"
           '';
 
+          # Smoke and archive-test controllers retain their maintenance platform
+          # and compiler. Product binaries use rocCross; these test helpers do not ship.
+          # Refetch the overlay's recorded bytes with this host's fetcher. A
+          # foreign-system fetch derivation itself cannot run on the Linux builder.
+          rocStableArchive = archiveSystem:
+            let recorded = roc-overlay.packages.${archiveSystem}.${rocStableTag}.src;
+            in pkgs.fetchurl { url = recorded.url; sha256 = recorded.outputHash; };
+          rocStableCross = pkgs.runCommand "roc-stable-cross-${rocStableTag}" { } ''
+            mkdir -p "$out" sysroot
+            tar -xzf ${rocStableArchive "x86_64-linux"} -C "$out" --strip-components=1
+            tar -xzf ${rocStableArchive "aarch64-darwin"} -C sysroot --strip-components=1
+            cp -r sysroot/darwin "$out/darwin"
+          '';
+
           # Released native documentation renderer, compatible with the reviewed
           # shared build-docs action. Never
           # patch its bytes: these hashes identify the published executables.
-          rocDocsVersion = "0.6.0";
+          rocDocsVersion = "0.10.0";
           rocDocsHashes = {
-            "x86_64-linux" = "sha256-Pl71JKoX7rgVOMY5rUlZv0aQsXiJiTDqCkKizYv3MS0=";
-            "aarch64-linux" = "sha256-qPgvFWXYuul7lW310ZA9qOYhFK9X64tA6xqtCEUYtfc=";
-            "aarch64-darwin" = "sha256-GBgXoGc/UDa3XT0pcH72ZbRep/PM/pu8NTYqcmObQPw=";
+            "x86_64-linux" = "sha256-/ebhQvHu9M3++19/Id+KxEkruMNfETy9HyWA3gXiW5I=";
+            "aarch64-linux" = "sha256-uXrZsPGI3SkFtqXFyjEjphikhPSs6NbPq5X9DmrfSkw=";
+            "aarch64-darwin" = "sha256-hJQ5Qf6FcbzgQmRx/8DM5Pt7zfjzXzma4YxGxxMMYAs=";
           };
           rocDocsArchive = pkgs.fetchurl {
             url = "https://github.com/lukewilliamboswell/roc-automation/releases/download/tools-${rocDocsVersion}/roc-docs-${system}";
@@ -123,7 +137,7 @@
               {
                 src = pkgs.fetchurl {
                   url = "https://github.com/roc-lang/nightlies/releases/download/${rocTag}/roc_nightly-source-${lib.removePrefix "nightly-" rocTag}.tar.gz";
-                  hash = "sha256-5gWOAmcaXtaQ6cOXeJ1LW7srmrUyUoG/E4wfWWUHOUY=";
+                  hash = "sha256-4ogBm4qDRdiuRlCppkhnhZ5mZbGSrQTlBHCYIO8gD84=";
                 };
               }
               ''
@@ -138,8 +152,8 @@
           # up as "package download failed" in `nix build .#blueprint`.
           rocPackages = [
             {
-              url = "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst";
-              hash = "sha256-V3jm3ANU1ef7Wwcl7/jgTaPI1lYEnGO0PjzCdevvr4s=";
+              url = "https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst";
+              hash = "sha256-gXYN2dbzHYoe9CYzVyKL3KzE7yPmumJKv/AuFhckqK8=";
             }
             {
               url = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst";
@@ -172,7 +186,7 @@
 
           blueprint = pkgs.stdenv.mkDerivation {
             pname = "blueprint";
-            version = "0.11.0";
+            version = "0.12.0";
             src = lib.fileset.toSource {
               root = ./.;
               fileset = lib.fileset.unions [
@@ -251,7 +265,10 @@
           }
           # Not in the development shell: only a release build needs it, and
           # with it the macOS archive.
-          // lib.optionalAttrs (system == "x86_64-linux") { roc-cross = rocCross; };
+          // lib.optionalAttrs (system == "x86_64-linux") {
+            roc-cross = rocCross;
+            roc-stable-cross = rocStableCross;
+          };
 
           apps.default = {
             type = "app";

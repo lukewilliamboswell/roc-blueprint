@@ -1,9 +1,9 @@
 # Reviewed upstream evidence
 
 `basic-cli-Cargo.lock`, `basic-cli-Cargo.toml` and
-`basic-cli-rust-toolchain.toml` are the files at basic-cli tag 0.26.0-rc2,
-commit `392b1df2856a4944c0fefdfa7dcd8abfdfa2622f`.
-`../basic-cli-cargo.json` preserves all 107 package instances and 201
+`basic-cli-rust-toolchain.toml` are the files at basic-cli tag 0.27.0,
+commit `b5816af5296e9cbc561837fc8344aea122e07150`.
+`../basic-cli-cargo.json` preserves all 109 package instances and 203
 resolution edges. Unclassified feature/target/build edges use the SPDX 3.0.1
 relationship `other`; they do not assert runtime dependency or containment.
 Known `cc`, `pkg-config` and `vcpkg` edges of libsqlite3-sys are `dependsOn`
@@ -21,24 +21,16 @@ SHA-256 `947e6816f7825b2b45027c2c32e7085da9934defa535de4a6a46b10a4d5257fa`,
 matching the committed upstream Cargo.lock. Its Cargo.toml establishes the
 build-only crate edges. The pinned basic-cli Cargo.toml enables `bundled`.
 
-The product compiler nightly `nightly-2026-10-21-5349569` identifies Roc commit
-`534956997e8e5c62888bc14cbc763f60109d0b72`, verified against the
-[official nightly release](https://github.com/roc-lang/nightlies/releases/tag/nightly-2026-10-21-5349569)
-and [upstream commit](https://github.com/roc-lang/roc/commit/534956997e8e5c62888bc14cbc763f60109d0b72).
-Bootstrap archive digests are read from the actual compiler table rather than
-duplicated in this inventory.
-
-The native-dependency review compared that revision with
-`1df370f0660e2086db08e6370b77689594db8928`. Their `build.zig.zon` files are
-byte-identical (SHA-256
-`7031fa50693ca4091e4edf293ce37d05eb362cce17aba718075f7c266df4b138`),
-retaining the declared external dependencies and Zig 0.17.0 minimum. Compiler
-runtime and evaluator implementation changed; reviewed linker configuration
-changes concern WebAssembly target features. This review does not establish a
-complete compiler archive closure: that remains an explicit inventory gap.
-The independently pinned linker-input producer and its supplemental component
-versions above are unchanged. The separately pinned sandbox runner compiler
-and maintenance compiler are also outside this product-compiler update.
+The product compiler nightly `nightly-2026-11-07-ad3a5d2` identifies Roc commit
+`ad3a5d2830b94fdac878ce1aaa73c64e7c57720f`, recorded by the
+[official nightly release](https://github.com/roc-lang/nightlies/releases/tag/nightly-2026-11-07-ad3a5d2)
+and [upstream commit](https://github.com/roc-lang/roc/commit/ad3a5d2830b94fdac878ce1aaa73c64e7c57720f).
+Bootstrap archive digests and sizes come from that release's asset metadata and
+are checked against downloaded bytes before embedding. This does not establish
+a complete compiler archive dependency or license inventory. The generation
+recipe retains that uncertainty explicitly. The independently pinned linker-input
+producer and its supplemental component versions above are unchanged. The
+sandbox runner and maintenance compiler retain their separate pins.
 
 Changes to the compiler, CLI imports, or linker-input producer fail closed
 until this metadata and the generation recipe are reviewed together.
