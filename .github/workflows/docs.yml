@@ -48,7 +48,7 @@ jobs:
 
       - id: docs
         name: Render the manual as a site and a PDF
-        uses: lukewilliamboswell/roc-automation/actions/build-docs@60062e8909dcaf4bf449097132e440e9bc9c9ba6 # reviewed main; tools-0.9.0 renderer
+        uses: lukewilliamboswell/roc-automation/actions/build-docs@8f0bb2254540fcdd746bdb4ed10851b4c34c8203 # reviewed main; tools-0.9.0 renderer
         with:
           site-url: https://lukewilliamboswell.github.io/roc-blueprint/
           renderer-binary: ${{ steps.roc.outputs.renderer }}
