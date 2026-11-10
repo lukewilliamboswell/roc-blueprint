@@ -112,6 +112,6 @@ expect {
 	url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-10-f7d1f19/roc_nightly-linux_arm64-2026-11-10-f7d1f19.tar.gz"
 	Bootstrap.serving([url, "https://mirror.example.org/roc.tar.gz"]).map_ok(|program| program.sha256) == Ok("5ec95f5e19bf4f5afd5fd7244631c39c91fb89bd865c29c8ccac98734ea020cf")
 		and Bootstrap.serving(["https://mirror.example.org/roc.tar.gz", url]) == Err(NotRecorded)
-			and Bootstrap.serving(["${url}.sig"]) == Err(NotRecorded)
-				and Bootstrap.serving([]) == Err(NotRecorded)
+		and Bootstrap.serving(["${url}.sig"]) == Err(NotRecorded)
+		and Bootstrap.serving([]) == Err(NotRecorded)
 }
