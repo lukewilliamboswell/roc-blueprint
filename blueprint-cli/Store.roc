@@ -1,3 +1,4 @@
+import Platform
 import pf.Cmd
 import pf.Env
 import pf.File
@@ -287,7 +288,7 @@ Store := [].{
 			xdg_cache_home: text!("XDG_CACHE_HOME"),
 			home: text!("HOME"),
 			local_app_data: text!("LOCALAPPDATA"),
-			windows: Env.platform!().os == WINDOWS,
+			windows: Platform.current!().os == WINDOWS,
 		})
 	}
 
@@ -405,10 +406,10 @@ Store := [].{
 	expose! = |bin, name, target| {
 		copy! = |destination|
 			Path.utf8(target).copy!(Path.utf8(destination)).map_err(|_| "could not expose ${name} from ${target} in ${bin}")
-		if Env.platform!().os == WINDOWS {
+		if Platform.current!().os == WINDOWS {
 			copy!("${bin}/${executable_name(name)}")
 		} else {
-			match Cmd.new("ln").args(["-s", target, "${bin}/${name}"].map(OsStr.from_str)).exec!() {
+			match Cmd.new("ln").args(["-s", target, "${bin}/${name}"].map(OsStr.from_str)).call!() {
 				Ok({}) => Ok({})
 				Err(_) => copy!("${bin}/${name}")
 			}
@@ -614,7 +615,7 @@ unpack! = |artifact, tree, unpack, name, path| {
 	match unpack {
 		File => {
 			Path.utf8(artifact).copy!(Path.utf8("${tree}/program")).map_err(|_| "cannot copy ${name} within the store")?
-			if Env.platform!().os != WINDOWS {
+			if Platform.current!().os != WINDOWS {
 				run!("chmod", ["0555", "${tree}/program"], "make ${name} executable")?
 			}
 		}
@@ -636,7 +637,7 @@ unpack! = |artifact, tree, unpack, name, path| {
 			}
 			# Files are read-only; directories stay writable, so that the
 			# tree can still be deleted.
-			for batch in (if (Env.platform!().os == WINDOWS) [] else files).chunks_of(256) {
+			for batch in (if (Platform.current!().os == WINDOWS) [] else files).chunks_of(256) {
 				run!("chmod", ["a-w"].concat(batch), "make the files of ${name} read-only")?
 			}
 		}
@@ -874,7 +875,7 @@ listed! = |args, name|
 
 run! : Str, List(Str), Str => Try({}, Str)
 run! = |program, args, purpose|
-	Cmd.new(OsStr.from_str(program)).args(args.map(OsStr.from_str)).exec!().map_err(|_| "could not ${purpose}: `${program}` failed")
+	Cmd.new(OsStr.from_str(program)).args(args.map(OsStr.from_str)).call!().map_err(|_| "could not ${purpose}: `${program}` failed")
 
 ## Every regular file below a directory. Anything that is not a file, a
 ## directory or a link is named as the error.

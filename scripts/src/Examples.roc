@@ -230,7 +230,7 @@ unpacked! = |root, version, binary, work, idle| {
 	projects = Examples.projects(files)
 	for project in projects {
 		directory = "${top}/examples/${project}"
-		compiler = |args| Process.with_env(Process.command(roc, args.concat(["--no-cache"]).concat(arguments).concat(["Blueprint.roc"]), directory), environment)
+		compiler = |args| Process.with_env(Process.product_command(roc, args.concat(["--no-cache"]).concat(arguments).concat(["Blueprint.roc"]), directory), environment)
 		recorded = expected!(suite, project)?
 		match server.drive!([compiler(["check"])])? {
 			[checked] => Process.check!(checked.code == 0, "${checked.stdout}${checked.stderr}\nroc check of the archived ${project} example exited with code ${checked.code.to_str()}")?

@@ -28,6 +28,23 @@ Process := [].{
 		label: Str.join_with([program.split_on("/").last() ?? program].concat(args), " "),
 	}
 
+	## Programs shared with maintenance scripts keep their older source platform.
+	## Only product compiler execution replaces it with the admitted product host.
+	stable_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst"
+	product_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst"
+
+	product_args : List(Str) -> List(Str)
+	product_args = |args|
+		if args.any(|argument| ["fixtures/lock-snapshot/main.roc", "fixtures/consumer/main.roc"].contains(argument)) {
+			match args {
+				[subcommand, .. as rest] if ["build", "check", "test"].contains(subcommand) => [subcommand, "--replace-dep", stable_cli, product_cli].concat(rest)
+				_ => args
+			}
+		} else args
+
+	product_command : Str, List(Str), Str -> Job
+	product_command = |program, args, directory| command(program, product_args(args), directory)
+
 	## The same command with these environment variables added.
 	with_env : Job, List((Str, Str)) -> Job
 	with_env = |job, variables| { ..job, cmd: job.cmd.envs(variables.map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) }
@@ -214,3 +231,8 @@ expect Process.portable("/tmp/a\\b") == "/tmp/a\\b"
 
 expect Process.lines("one\r\ntwo\r\n\r\n") == ["one", "two"]
 expect Process.lines(" one \r\n") == [" one "]
+
+# Only the two explicitly dual-compiler consumers substitute their source platform.
+expect Process.product_args(["check", "fixtures/consumer/main.roc"]) == ["check", "--replace-dep", Process.stable_cli, Process.product_cli, "fixtures/consumer/main.roc"]
+expect Process.product_args(["test", "fixtures/lock-snapshot/main.roc"]) == ["test", "--replace-dep", Process.stable_cli, Process.product_cli, "fixtures/lock-snapshot/main.roc"]
+expect [[], ["version"], ["fmt", "--check", "fixtures"], ["build", "blueprint-cli/main.roc"], ["run", "https://example.test/app.tar.zst", "inspect"], ["bundle", "main.roc"]].all(|args| Process.product_args(args) == args)

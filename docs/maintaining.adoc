@@ -86,8 +86,7 @@ The required checks are listed under
 <<repository-settings-the-workflows-rely-on>>. Keep their names aligned with
 the workflows when changing CI.
 
-basic-cli 0.26.0-rc2 requires the October 12 nightly or later. This repository
-pins `nightly-2026-10-28-bad769b` for the product and
+The product uses basic-cli 0.27.0 and pins `nightly-2026-11-07-ad3a5d2` for the product and
 `nightly-2026-10-13-b17d287` for maintenance scripts, with roc-fuzz 0.4.3.
 
 The complete suite requires x86_64 Linux and a running Nix daemon; the
@@ -133,8 +132,8 @@ exists, that it is the version the CLI and the flake report, and that the
 product compiler pin names the latest official nightly.
 
 build::
-Cross-builds the CLI and SBOM tool binaries (`scripts/build_release.roc`),
-runs the whole test suite on them, bundles the core, platform and reporting
+Cross-builds the product CLI and SBOM tool binaries (`scripts/build_release.roc`), builds the smoke and archive-test controllers
+with the separate maintenance compiler and platform, runs the whole test suite on them, bundles the core, platform and reporting
 app for the version (`scripts/bundle.roc`), checks the version against the
 public API
 (`scripts/check_version.roc bump`), archives the examples
@@ -290,14 +289,23 @@ for its supported inputs and coverage contract.
 
 === The version check
 
-`scripts/check_version.roc bump` runs `roc bump` for both packages against the
-latest release, and a release fails unless its version bumps at least as far
-as the public API changed. The core package is compared from the working
-tree. The platform is compared as bundled: in the working tree it names the
-core package by path, which `roc bump` refuses in a public type, so the script
-unpacks the platform bundle and puts the unpacked core bundle in a package
-cache of its own, where the compiler finds it by hash although its URL does
-not exist yet. A dry run reports the required bump and expects nothing.
+`scripts/check_version.roc bump` validates the requested and latest-final
+versions before choosing its evidence. A higher major version covers every
+possible API change; within `0.x`, an increased second component is the breaking
+boundary. Such a release records that conservative version proof without
+compiling the old package. This permits compiler migrations when the published
+package no longer compiles on the new compiler. It makes no claim that the two
+APIs were compared. Malformed metadata, leading zeroes, component overflow and
+prerelease tags presented as the latest final release fail the check.
+
+Releases within a breaking boundary still run `roc bump` for both packages,
+and comparison failures remain failures. The core is compared from the working
+tree. The platform is compared as bundled, with its immutable core URL and
+candidate core bytes supplied through a private package cache. A dry run uses
+the planned CLI release version for the boundary decision; within a boundary it
+reports the required bump without an expected-version assertion. It publishes
+nothing. Regression tests cover both boundaries, prereleases, equal or lower
+versions and malformed evidence.
 
 The platform exposes a type of the core package, and a package's URL is part
 of that type's identity, so the two versions move together.
@@ -404,56 +412,15 @@ in `flake.nix` with the new URL and hash (`nix store prefetch-file <url>`). Add
 any new transitive dependency to the same list. Rerun `scripts/test.roc`.
 If you change the weaver URL, update `rocPackages` in `flake.nix` to match.
 
-== What remains for Windows
-
-https://github.com/lukewilliamboswell/roc-blueprint/issues/40[Issue #40] asks
-for `blueprint run` on Windows. What needs nothing from upstream is in place:
-a task whose environment has no Nix tool runs with no provider, from fetched
-programs, expected tools and Roc packages, and the planner, the store's
-location and `Recipes.roc_nightly` have their Windows forms. The Windows
-target and release binary are built in CI; the Nix-free smoke test runs on
-Linux, macOS and Windows.
-
-The upstream prerequisites are now released: basic-cli 0.26.0-rc2 supplies
-its Windows MSVC host and runtime, the pinned Roc nightly links from listed
-inputs, and the locked roc-platform-template-zig release supplies this
-platform's startup and import libraries.
+== Validate Windows releases
 
 `zig build` builds `targets/x64win/host.lib`; the platform bundle carries it
 and the verified Windows linker inputs. `scripts/build_release.roc` builds
-`blueprint-x86_64-windows.exe` and its smoke program. The `no-nix` CI job runs
-that program on `windows-latest`, fetching the compiler, updating a lock,
-reporting requirements and building and running a basic-cli program twice.
-Windows skips `chmod` and exposes fetched programs as copies, since a
-symbolic link needs a privilege there and a hard link would let a consumer
-write into the store. Archives use the machine's bsdtar.
+`blueprint-x86_64-windows.exe` and its smoke program. The `no-nix` CI job checks
+compiler installation, lock updates, requirements and a basic-cli program on
+Windows Server.
 
-The full Nix suites remain Linux-only. Windows 10 and 11 desktop execution
-has not been verified here; the CI runner checks Windows Server. Tasks must
-invoke their interpreter explicitly, for example `Run(["roc-stable", "hello.roc"])`.
-
-== Upstream workarounds still in place
-
-Compile-time configuration lowering is restored with Roc
-`nightly-2026-09-23-c7852fd`: `roc check Blueprint.roc` now rejects whole-config
-errors, including a missing `Name` or duplicate shells. Older compilers
-crashed while bundling a top-level constant dependent on the app's `config`;
-the local-Spec and released-Spec bundle tests guard against that regression.
-`blueprint check` retains a compiler check for diagnostics and reuses the Spec
-already loaded for CLI parsing, rather than running the configuration again.
-The loaded Spec is still needed for shared semantic validation and provider
-compatibility checks. Runtime validation also protects consumers from external
-Spec; it does not make major-1 platforms compatible with the current CLI. Loading the
-Spec still executes Roc, so retain embedded compiler bootstrap and support
-for the `ROC` override. The Nix wrapper supplies the archive tools bootstrap
-needs, including on a machine whose `PATH` holds only Nix.
-
-These remaining dependencies and workarounds still apply:
-
-* *Pinned Roc.* `blueprint-cli/compiler-version` selects the compiler, and the basic-cli
-  release in `blueprint-cli/main.roc` must be compatible with it.
-* **`roc bundle --output-dir` must be on the same filesystem as the working
-  directory.** Otherwise the bundler fails with `CrossDevice`.
-* **Error unions in `blueprint-core/Sexpr.roc` use a named extension
-  (`..others`).** These preserve open error types without the compiler
-  warning about a redundant bare `..`.
+Windows tasks invoke their interpreter explicitly, for example
+`Run(["roc-stable", "hello.roc"])`. Fetched programs are exposed as copies so
+consumer writes cannot modify the store. Nix suites require a supported Linux
+host with enforced sandboxing.

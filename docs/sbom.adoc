@@ -1374,7 +1374,7 @@ CycloneDX uses standard component `type`, `copyright`, `purl`, supplier,
 licenses and typed `externalReferences`. CycloneDX has no equivalent reviewed
 attribution-text field in this adapter, so attribution is retained as
 `blueprint:attribution`. Its schema requires a component type: `unknown`
-uses the historical `library` fallback for inventory entries and `file` for
+uses the `library` compatibility fallback for inventory entries and `file` for
 the subject, with an explicit `blueprint:kind=unknown` declaration. This is
 an adapter compatibility default, not a reviewed library classification.
 Readers check these exact fallbacks and reject contradictory standard kinds.

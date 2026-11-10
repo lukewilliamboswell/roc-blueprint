@@ -48,7 +48,7 @@ compiling the consumer may download dependencies; the pure functions do not.
 The library does not install or invoke the Blueprint executable.
 
 This release's consumer is tested with the compiler named by
-`blueprint compiler-version`, `nightly-2026-10-28-bad769b`, and the repository's
+`blueprint compiler-version`, `nightly-2026-11-07-ad3a5d2`, and the repository's
 script compiler, `nightly-2026-10-13-b17d287`. Pin the chosen compiler in the
 outer app/toolchain. Matching the Blueprint compiler version does not share
 its embedded executable automatically. Native compiled consumers need no Roc
@@ -58,12 +58,17 @@ or Nix just to decode a report.
 
 From a Blueprint checkout, with the pinned product compiler available as
 `roc` (see <<build-and-test>>), build the example and export an existing
-project's committed lock:
+project's committed lock. The command selects basic-cli 0.27.0 for this
+compiler; the fixture retains its 0.26.0-rc2 header for the separate script
+compiler. The pure consumer checks are the same under both profiles.
 
 [source,sh]
 ----
 mkdir -p .cache/lock-snapshot
-roc build fixtures/lock-snapshot/main.roc --output=.cache/lock-snapshot/consumer
+roc build --replace-dep \
+  https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst \
+  https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst \
+  fixtures/lock-snapshot/main.roc --output=.cache/lock-snapshot/consumer
 BLUEPRINT_ROOT=/absolute/path/to/project blueprint lock show --json > lock-export.json
 .cache/lock-snapshot/consumer lock-export.json > lock-roundtrip.json
 roc test fixtures/lock-snapshot/pure.roc

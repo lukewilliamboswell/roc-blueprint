@@ -16,7 +16,7 @@ Member :: { path : Str }.{
 			Ok(Member.{ path: raw })
 		}
 
-	from_interpolation : List(Str) -> Try((List(Str) -> Member), [InvalidInterpolation(Str)])
+	from_interpolation : List(Str) -> Try((Iter(Str) -> Member), [InvalidInterpolation(Str)])
 	from_interpolation = |segments|
 		Str.from_interpolation(segments).map_ok(|assemble| |values| Member.{ path: assemble(values) })
 

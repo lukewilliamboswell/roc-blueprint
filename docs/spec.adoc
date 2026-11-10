@@ -172,8 +172,7 @@ must not expose unchecked provider JSON as configuration intent.
 
 A provider may implement resolution, environment tools, managed execution or a
 subset. Capability checks follow the selected request closure. Unsupported
-mixed resolvers or executors fail before effects; general composition and a
-second production implementation remain follow-up work.
+mixed resolvers or executors fail before effects.
 
 Shared request plans describe dependencies and preparation requirements.
 Prepared builds bind captured files, tools, pins and commands to a native build

@@ -59,7 +59,7 @@ import pf.Recipes
 config = [
 	Name("my-project"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-10-28-bad769b"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-07-ad3a5d2"))]),
 		Expect(["git"]),
 	]),
 	Shell("default", [Use("dev")]),
@@ -117,23 +117,14 @@ blueprint shell        # open a shell in dev
 .From Blueprint.roc to the same tools on each machine
 [mermaid]
 ....
----
-config:
-  theme: neutral
-  themeVariables:
-    lineColor: "#777777"
-  flowchart:
-    minNodeWidth: 70
-    wrappingWidth: 220
----
 flowchart TD
-    W["You write <b>Blueprint.roc</b>"]
-    L["You review <b>Blueprint.lock</b>"]
-    W -->|"blueprint check<br/>blueprint update"| L
-    L -->|"blueprint run · shell<br/>env · build"| U
+    W["You write Blueprint.roc"]
+    L["You review Blueprint.lock"]
+    W -->|"blueprint check · blueprint update"| L
+    L -->|"blueprint run · shell · env · build"| U
     subgraph U["The same tools on each machine"]
         C["CI"]
-        B["A colleague's<br/>laptop"]
+        B["A colleague's laptop"]
         A["Your laptop"]
     end
 ....
@@ -157,20 +148,11 @@ the same pinned tools. Only the tools you expect of the machine can differ.
 .What each part is responsible for
 [mermaid]
 ....
----
-config:
-  theme: neutral
-  themeVariables:
-    lineColor: "#777777"
-  flowchart:
-    minNodeWidth: 70
-    wrappingWidth: 220
----
 flowchart TD
-    B["<b>Blueprint</b><br/>environments · pins<br/>tasks · builds<br/>workflows · evidence"]
-    R["<b>Your repository</b><br/>scripts<br/>compile and<br/>release logic"]
-    P["<b>A provider</b><br/>such as Nix<br/>packages · caches<br/>sandboxed builds"]
-    M["<b>The machine</b><br/>tools you<br/>say you expect"]
+    B["Blueprint: environments · pins; tasks · builds; workflows · evidence"]
+    R["Your repository: scripts compile and release logic"]
+    P["A provider such as Nix: packages · caches; sandboxed builds"]
+    M["The machine: tools you say you expect"]
     B -->|runs| R
     B -->|asks| P
     B -->|checks| M
@@ -200,20 +182,11 @@ there before it runs anything.
 .What the committed files give each reader
 [mermaid]
 ....
----
-config:
-  theme: neutral
-  themeVariables:
-    lineColor: "#777777"
-  flowchart:
-    minNodeWidth: 70
-    wrappingWidth: 220
----
 flowchart TD
-    F["<b>Blueprint.roc</b> and <b>Blueprint.lock</b><br/>committed together"]
-    C["<b>A contributor</b><br/>gets the project's<br/>tools in one step"]
-    I["<b>CI</b><br/>runs with the same<br/>pinned tools"]
-    R["<b>A reviewer</b><br/>sees each pin and<br/>download change"]
+    F["Blueprint.roc and Blueprint.lock committed together"]
+    C["A contributor gets the project's tools in one step"]
+    I["CI runs with the same pinned tools"]
+    R["A reviewer sees each pin and download change"]
     F -->|"blueprint shell"| C
     F -->|"blueprint run"| I
     F -->|"the lock diff"| R

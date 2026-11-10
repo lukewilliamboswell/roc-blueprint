@@ -1,5 +1,6 @@
 import cli.Path
 import cli.Stdout
+import Bundle
 import Integrity
 import Process
 import Script
@@ -55,7 +56,7 @@ Release := [].{
 	files = |name, directory|
 		programs.keep_if(|program| program.name == name).fold(
 			[],
-			|listed, program| listed.concat(systems.map(|released| { source: program.source, target: released.target, output: "${directory}/${binary_name(program.name, released.system)}" })),
+			|listed, program| listed.concat(systems.map(|released| { source: if program.name == "blueprint-sbom" ".cache/product-sbom/main.roc" else program.source, target: released.target, output: "${directory}/${binary_name(program.name, released.system)}" })),
 		)
 
 	## The flake package that is the compiler for every target: the x86_64
@@ -88,14 +89,16 @@ Release := [].{
 		if !directory.starts_with("/nix/store/") or directory.contains("\n") {
 			return Script.fail!("nix build .#${toolchain} did not name one store path: ${built.stdout}")
 		}
-		build!(root, "${directory}/roc")
+		stable = Process.succeed!(Process.command("nix", ["build", "--no-link", "--print-out-paths", ".#roc-stable-cross"], root))?.stdout.trim()
+		Process.check!(stable.starts_with("/nix/store/") and !stable.contains("\n"), "maintenance cross compiler did not name one store path")?
+		build!(root, "${directory}/roc", "${stable}/roc")
 	}
 }
 
-build! : Str, Str => Try({}, _)
-build! = |root, roc| {
+build! : Str, Str, Str => Try({}, _)
+build! = |root, roc, stable| {
 	tag = Path.read_utf8!(Path.utf8("${root}/blueprint-cli/compiler-version"))?.split_on("\n").first() ?? ""
-	version = Process.succeed!(Process.command(roc, ["version"], root))?.stdout.trim()
+	version = Process.succeed!(Process.product_command(roc, ["version"], root))?.stdout.trim()
 	Process.check!(version == "Roc compiler version ${tag}", "the compiler of .#${Release.toolchain} is \"${version}\", not ${tag}")?
 
 	Process.passthrough!(Process.command("zig", ["build"], "${root}/blueprint-platform"))?
@@ -110,7 +113,10 @@ build! = |root, roc| {
 	compiled?
 	# The SBOM tool embeds no compiler, so it compiles like the smoke
 	# program: every target at once.
-	compile_together!(roc, root, Release.files("blueprint-sbom", dist).concat(Release.files("smoke", dist)).concat(Release.files("test-release", dist)))?
+	Bundle.stage_product_tool!(root, "${root}/.cache/product-sbom", "${root}/blueprint-core/main.roc", tag)?
+	compile_together!(roc, root, Release.files("blueprint-sbom", dist))?
+
+	compile_together_with!(stable, root, Release.files("smoke", dist).concat(Release.files("test-release", dist)), False)?
 
 	var $sums = ""
 	for program in Release.published {
@@ -144,8 +150,16 @@ compile_blueprints! = |roc, root, dist| {
 ## The compiler occasionally fails with an unexplained internal error and
 ## succeeds unchanged when run again, so each failure is retried once, alone.
 compile_together! : Str, Str, List(Release.File) => Try({}, _)
-compile_together! = |roc, root, files| {
-	jobs = files.map(|file| Process.command(roc, Release.build_args(file.source, file.target, file.output), root))
+compile_together! = |roc, root, files| compile_together_with!(roc, root, files, True)
+
+compile_together_with! : Str, Str, List(Release.File), Bool => Try({}, _)
+compile_together_with! = |roc, root, files, product| {
+	jobs = files.map(
+		|file| {
+			args = Release.build_args(file.source, file.target, file.output)
+			Process.command(roc, if product Process.product_args(args) else args, root)
+		},
+	)
 	for job in jobs {
 		Script.info!("RUN ", job.label)?
 	}
@@ -186,7 +200,7 @@ expect Release.files("smoke", "/repo/dist") == [
 	{ source: "scripts/smoke_binary.roc", target: "x64win", output: "/repo/dist/smoke-x86_64-windows.exe" },
 ]
 expect Release.files("blueprint-sbom", "dist").map(|file| file.output) == ["dist/blueprint-sbom-x86_64-linux", "dist/blueprint-sbom-aarch64-linux", "dist/blueprint-sbom-aarch64-darwin", "dist/blueprint-sbom-x86_64-darwin", "dist/blueprint-sbom-x86_64-windows.exe"]
-expect Release.files("blueprint-sbom", "dist").all(|file| file.source == "scripts/sbom.roc")
+expect Release.files("blueprint-sbom", "dist").all(|file| file.source == ".cache/product-sbom/main.roc")
 expect Release.programs.map(|program| program.name) == ["blueprint", "blueprint-sbom", "smoke", "test-release"] and Release.files("other", "dist").is_empty()
 
 # The checksum file lists the CLI and then the SBOM tool, for every system;
