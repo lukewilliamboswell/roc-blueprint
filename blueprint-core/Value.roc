@@ -14,7 +14,7 @@ Value := [Str(Str), Int(I64), Bool(Bool), List(List(Value)), Attrs(List({ name :
 	encoder_for : Format -> (Value, Out -> Try(Out, err))
 	encoder_for = |_| |value, out| encode(value, out)
 
-	parser_for : Format -> (List(Token) -> Try({ value : Value, rest : List(Token) }, [InvalidSexpr(Str), ..others]))
+	parser_for : Format -> (List(Token) -> Try({ value : Value, rest : List(Token) }, Sexpr.ParseError))
 	parser_for = |_| |tokens| parse_at(tokens, 0)
 
 	## The deepest nesting `parser_for` accepts.
@@ -77,7 +77,7 @@ Value := [Str(Str), Int(I64), Bool(Bool), List(List(Value)), Attrs(List({ name :
 			)
 		}
 
-	parse_at : List(Token), U64 -> Try({ value : Value, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+	parse_at : List(Token), U64 -> Try({ value : Value, rest : List(Token) }, Sexpr.ParseError)
 	parse_at = |tokens, depth| {
 		if depth >= max_depth {
 			return Err(InvalidSexpr("value nested deeper than ${max_depth.to_str()} levels"))
@@ -128,7 +128,7 @@ Value := [Str(Str), Int(I64), Bool(Bool), List(List(Value)), Attrs(List({ name :
 		}
 	}
 
-	parse_attr : List(Token), U64 -> Try({ value : { name : Str, value : Value }, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+	parse_attr : List(Token), U64 -> Try({ value : { name : Str, value : Value }, rest : List(Token) }, Sexpr.ParseError)
 	parse_attr = |tokens, depth| {
 		var $name = Err(Missing)
 		var $value = Err(Missing)
@@ -164,14 +164,14 @@ Value := [Str(Str), Int(I64), Bool(Bool), List(List(Value)), Attrs(List({ name :
 		}
 	}
 
-	close : Value, List(Token) -> Try({ value : Value, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+	close : Value, List(Token) -> Try({ value : Value, rest : List(Token) }, Sexpr.ParseError)
 	close = |value, tokens|
 		match tokens {
 			[Close, .. as rest] => Ok({ value, rest })
 			_ => Err(InvalidSexpr("expected ) after a Value"))
 		}
 
-	field_end : List(Token) -> Try(List(Token), [InvalidSexpr(Str), ..others])
+	field_end : List(Token) -> Try(List(Token), Sexpr.ParseError)
 	field_end = |tokens|
 		match tokens {
 			[Close, .. as rest] => Ok(rest)

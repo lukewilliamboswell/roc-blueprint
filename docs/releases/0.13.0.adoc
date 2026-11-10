@@ -1,0 +1,17 @@
+= roc-blueprint 0.13.0
+
+The SBOM tool accepts JSON up to 16 MiB and retains complete component
+identifiers through rendering and readback. A single bind writes SPDX 3.0.1,
+SPDX 2.3, CycloneDX 1.7 and one manifest that verifies the complete set.
+Inspect accounts for declared build files alongside other inputs.
+
+== Upgrade
+
+Install the matching Blueprint binary and use this platform in Blueprint.roc.
+
+[source,roc,snippet=unchecked]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+The importable core package is `{core-url}`.
