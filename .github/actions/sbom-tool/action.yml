@@ -34,8 +34,7 @@ runs:
         "$tool" inspect Spec Lock composition.json x86_64-linux inspected.json
         test "$(cat inspected.json)" = "$(cat inventory.json)" || { echo "inspect does not reproduce inventory.json" >&2; exit 1; }
         "$tool" bind inventory.json subject.json context.json sample-artifact
-        "$tool" bind inventory.json subject.json context.json sample-artifact sample-artifact.spdx-2.3.json --spdx-2.3
-        "$tool" check --artifacts . --inventory inventory.json sample-artifact.spdx.json sample-artifact.spdx-2.3.json sample-artifact.cdx.json
+        "$tool" check --manifest sample-artifact.sbom-manifest.json --artifacts . --inventory inventory.json
 
     - name: Inspect, bind and check the fixtures on Windows
       if: runner.os == 'Windows'
@@ -59,5 +58,4 @@ runs:
           throw 'inspect does not reproduce inventory.json'
         }
         Run bind inventory.json subject.json context.json sample-artifact
-        Run bind inventory.json subject.json context.json sample-artifact sample-artifact.spdx-2.3.json --spdx-2.3
-        Run check --artifacts . --inventory inventory.json sample-artifact.spdx.json sample-artifact.spdx-2.3.json sample-artifact.cdx.json
+        Run check --manifest sample-artifact.sbom-manifest.json --artifacts . --inventory inventory.json
