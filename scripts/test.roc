@@ -10,7 +10,9 @@ import cli.Path
 import cli.Stderr
 import src/TestSuite
 
-## Everything CI checks. Run from the repository root, inside `nix develop`
+## The Roc checks CI runs. Independent third-party SBOM validation is a
+## separate CI job; see docs/sbom-conformance.adoc. Run from the repository
+## root, inside `nix develop`
 ## or with the same tools on `PATH`: roc-stable, roc, zig 0.16, nix, git, tar
 ## and curl.
 ##

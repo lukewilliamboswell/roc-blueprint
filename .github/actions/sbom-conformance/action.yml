@@ -1,0 +1,38 @@
+name: Independent SBOM conformance
+description: Check SPDX semantics and publisher schemas with pinned third-party validators; no product runtime dependency
+inputs:
+  patterns:
+    description: Quoted path patterns for JSON SBOMs; unmatched patterns fail
+    required: true
+    default: tests/sbom/fixtures/*.spdx.json tests/sbom/fixtures/*.spdx-2.3.json tests/sbom/fixtures/*.cdx.json tests/sbom/fixtures/upstream/*.json
+  report:
+    description: JSON report path, including tool versions and errors per file
+    required: true
+    default: sbom-conformance.json
+runs:
+  using: composite
+  steps:
+    - name: Install the hash-pinned independent validators
+      shell: bash
+      env:
+        VALIDATOR_SOURCE: ${{ github.action_path }}/../../../scripts/sbom-conformance
+      run: |
+        set -euo pipefail
+        dependencies="$(mktemp -d "$RUNNER_TEMP/sbom-conformance.XXXXXXXX")"
+        python3 -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes \
+          --target "$dependencies" -r "$VALIDATOR_SOURCE/requirements.txt"
+        printf 'SBOM_CONFORMANCE_DEPENDENCIES=%s\n' "$dependencies" >> "$GITHUB_ENV"
+    - name: Validate regression cases and supplied documents offline
+      shell: bash
+      env:
+        VALIDATOR_SOURCE: ${{ github.action_path }}/../../../scripts/sbom-conformance
+        CONFORMANCE_CASES: ${{ github.action_path }}/../../../tests/sbom/conformance/cases.json
+        CONFORMANCE_PATTERNS: ${{ inputs.patterns }}
+        CONFORMANCE_REPORT: ${{ inputs.report }}
+      run: |
+        set -euo pipefail
+        PYTHONPATH="$SBOM_CONFORMANCE_DEPENDENCIES" python3 -m unittest discover \
+          -s "$VALIDATOR_SOURCE" -p 'test_*.py'
+        PYTHONPATH="$SBOM_CONFORMANCE_DEPENDENCIES" python3 "$VALIDATOR_SOURCE/validate.py" \
+          --fixture-cases "$CONFORMANCE_CASES" --patterns "$CONFORMANCE_PATTERNS" \
+          --output "$CONFORMANCE_REPORT"

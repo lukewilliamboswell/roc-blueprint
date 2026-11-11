@@ -40,16 +40,16 @@
           # Official archives can precede their roc-overlay inventory entry.
           compilerArchives = {
             "x86_64-linux" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-07-ad3a5d2/roc_nightly-linux_x86_64-2026-11-07-ad3a5d2.tar.gz";
-              hash = "sha256-IXEPcAdANCjZb1knNDxgwrPb78KYOU1izwZv5vqWZJU=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-10-f7d1f19/roc_nightly-linux_x86_64-2026-11-10-f7d1f19.tar.gz";
+              hash = "sha256-iR8eBdFUlMt/Km5LdH5M4WH0WH5md7rAYq79ZzirWLk=";
             };
             "aarch64-linux" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-07-ad3a5d2/roc_nightly-linux_arm64-2026-11-07-ad3a5d2.tar.gz";
-              hash = "sha256-cTferH96By05mDO0kyIb81W68FWKiJUYMuA9Eq3cJYI=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-10-f7d1f19/roc_nightly-linux_arm64-2026-11-10-f7d1f19.tar.gz";
+              hash = "sha256-XslfXhm/T1r9X9ckRjHDnJH7ib2GXCnIzKyYc06gIM8=";
             };
             "aarch64-darwin" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-07-ad3a5d2/roc_nightly-macos_apple_silicon-2026-11-07-ad3a5d2.tar.gz";
-              hash = "sha256-X6swSXPt8lmV6kiDMD42uKckB91zGl+iQat3iKhZ4zk=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-10-f7d1f19/roc_nightly-macos_apple_silicon-2026-11-10-f7d1f19.tar.gz";
+              hash = "sha256-aNzJBsi9m5hKZ0ZyWNfOvD1k4UvkpHOwYUiH0O7JnEo=";
             };
           };
           roc = roc-overlay.packages.${system}.nightly.overrideAttrs (previous: {
@@ -61,7 +61,7 @@
             passthru = previous.passthru // {
               tag = rocTag;
               compilerVersion = rocTag;
-              compilerCommit = "ad3a5d2830b94fdac878ce1aaa73c64e7c57720f";
+              compilerCommit = "f7d1f1982ff2336f39ae36ccdaa2e7e480b01367";
               source = {
                 inherit (compilerArchives.${system}) url;
                 sha256 = compilerArchives.${system}.hash;
@@ -137,7 +137,7 @@
               {
                 src = pkgs.fetchurl {
                   url = "https://github.com/roc-lang/nightlies/releases/download/${rocTag}/roc_nightly-source-${lib.removePrefix "nightly-" rocTag}.tar.gz";
-                  hash = "sha256-4ogBm4qDRdiuRlCppkhnhZ5mZbGSrQTlBHCYIO8gD84=";
+                  hash = "sha256-dAJtdR1s+fog1lYRjUz4eAJhm9exCznL7/JFIzKKgaY=";
                 };
               }
               ''
@@ -148,9 +148,17 @@
           # Roc packages blueprint-cli/main.roc downloads. Fetched here and unpacked into
           # Roc's package cache so the sandboxed build needs no network.
           # These are the `pf:` and `weaver:` URLs in blueprint-cli/main.roc plus
-          # transitive dependencies (http, roc-ansi, path). A missing one shows
+          # transitive dependencies (http, roc-ansi, path, roc-parser, unicode). A missing one shows
           # up as "package download failed" in `nix build .#blueprint`.
           rocPackages = [
+            {
+              url = "https://github.com/roc-lang/unicode/releases/download/4.3.0/7HGaK8HUHMs5judroSmUoS4TjPGZ1kAjPTyPDSCWiSKM.tar.zst";
+              hash = "sha256-0zpWbAxba/ssKUUAWAsn06KekBXAE85Z48eChycWC4E=";
+            }
+            {
+              url = "https://github.com/lukewilliamboswell/roc-parser/releases/download/4.0.0/FZVf39nPJLaMEmchcwTU5rWtMrcipBGbGsTk3nHzvjzk.tar.zst";
+              hash = "sha256-K2h4kWv5jaGd2eHhEI8xxD4lmQRGNPqqJG0WSoz4cOo=";
+            }
             {
               url = "https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst";
               hash = "sha256-gXYN2dbzHYoe9CYzVyKL3KzE7yPmumJKv/AuFhckqK8=";
@@ -186,7 +194,7 @@
 
           blueprint = pkgs.stdenv.mkDerivation {
             pname = "blueprint";
-            version = "0.12.0";
+            version = "0.13.0";
             src = lib.fileset.toSource {
               root = ./.;
               fileset = lib.fileset.unions [
@@ -194,6 +202,7 @@
                 ./blueprint-nix
                 ./fixtures/consumer/authority.lock
                 ./blueprint-core/Activation.roc
+                ./blueprint-core/ArtifactName.roc
                 ./blueprint-core/BuildModel.roc
                 ./blueprint-core/JsonData.roc
                 ./blueprint-core/LockSnapshot.roc
@@ -210,6 +219,7 @@
                 ./blueprint-core/Lock.roc
                 ./blueprint-core/Tree.roc
                 ./blueprint-core/Sbom.roc
+                ./blueprint-core/SbomJson.roc
                 ./blueprint-core/SbomLicenses.roc
                 ./blueprint-core/Sidecar.roc
                 ./blueprint-core/Manifest.roc

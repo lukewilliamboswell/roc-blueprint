@@ -39,23 +39,15 @@ SbomCheck := [].{
 	## manifest, when there is one.
 	manifest! : Str, Str, Str => Try(Manifest.Manifest, _)
 	manifest! = |path, artifacts, inventory| {
-		text = Path.read_utf8!(Path.utf8(path))?
+		text = SbomFiles.read!(path)?
 		listed = Manifest.read(text).map_err(|problem| Invalid("${path}: ${problem}"))?
 		subject_path = if (artifacts.is_empty()) Manifest.beside(path, listed.subject.filename) else "${artifacts}/${listed.subject.filename}"
-		subject_bytes = Path.read_bytes!(Path.utf8(subject_path)).map_err(|_| Invalid("${path}: no subject ${subject_path}"))?
-		var $sidecars = []
-		for entry in listed.sidecars {
-			match Path.read_bytes!(Path.utf8(Manifest.beside(path, entry.filename))) {
-				Ok(bytes) => {
-					$sidecars = $sidecars.append({ filename: entry.filename, sha256: Integrity.digest(bytes), size: bytes.len() })
-				}
-				Err(_) => {}
-			}
-		}
+		subject = SbomFiles.measure!(subject_path).map_err(|_| Invalid("${path}: no regular readable subject ${subject_path}"))?
+		sidecars = SbomFiles.observe_sidecars!(path, listed, False)?
 		left_behind = Manifest.beside(path, "${listed.subject.filename}.inventory.json")
 		inventory_path = if !inventory.is_empty() inventory else if (Path.is_file!(Path.utf8(left_behind)) ?? False) left_behind else ""
-		measured = if inventory_path.is_empty() Unmeasured else Measured(Integrity.digest(Path.read_bytes!(Path.utf8(inventory_path))?))
-		Manifest.check(text, { subject: { sha256: Integrity.digest(subject_bytes), size: subject_bytes.len() }, inventory: measured, sidecars: $sidecars }).map_err(|problem| Invalid("${path}: ${problem}"))
+		measured = if inventory_path.is_empty() Unmeasured else Measured(SbomFiles.digest!(inventory_path)?)
+		Manifest.check(text, { subject: subject, inventory: measured, sidecars: sidecars }).map_err(|problem| Invalid("${path}: ${problem}"))
 	}
 
 	## A release sidecar against the release authorities committed at `root`.
@@ -93,7 +85,7 @@ SbomCheck := [].{
 				}
 			}
 			fetched = if tool_source ["core"] else []
-			if !["basic-cli", "http", "sqlite", "rust-std"].concat(fetched).all(|id| ids.contains(id)) or ids.contains("roc-embedded") {
+			if !["basic-cli", "http", "sqlite", "rust-std", "roc-parser"].concat(fetched).all(|id| ids.contains(id)) or ids.contains("roc-embedded") {
 				return Err(Invalid("standalone tool inventory omits a dependency or claims the compiler ships"))
 			}
 		}
@@ -109,7 +101,7 @@ SbomCheck := [].{
 			}
 		}
 		if evidence.target != "source" and !tool_binary {
-			if !["basic-cli", "http", "weaver", "roc-embedded", "sqlite"].all(|id| ids.contains(id)) {
+			if !["basic-cli", "http", "weaver", "roc-embedded", "sqlite", "roc-parser"].all(|id| ids.contains(id)) {
 				return Err(Invalid("known shipped/native input omitted"))
 			}
 			archive = Bootstrap.compiler(tag, evidence.target).map_err(|_| Invalid("no embedded compiler for ${evidence.target}"))?

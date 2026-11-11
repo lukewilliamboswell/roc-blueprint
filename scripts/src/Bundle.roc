@@ -473,7 +473,7 @@ bundle_sbom! = |root, paths, core_server, release, core, cache| {
 	base = ["run"].concat(Bundle.replacing(core_url, server.url(Bundle.release_path(release.repository, release.version, core)))).concat([server.url(route)])
 	roc = Process.roc!()
 	invoke = |args| Process.with_env(Process.product_command(roc, base.concat(args), workspace), [("XDG_CACHE_HOME", cache)])
-	for args in [["inspect", "Spec", "Lock", "composition.json", "x86_64-linux", "inventory.json"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact", "sample-artifact.spdx-2.3.json", "--spdx-2.3"]] {
+	for args in [["inspect", "Spec", "Lock", "composition.json", "x86_64-linux", "inventory.json"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact"]] {
 		outcomes = server.drive!([invoke(args)])?
 		match outcomes {
 			[outcome] => Process.check!(outcome.code == 0, "SBOM app bundle smoke failed: ${outcome.stdout}${outcome.stderr}")?
@@ -481,7 +481,7 @@ bundle_sbom! = |root, paths, core_server, release, core, cache| {
 		}
 	}
 	# The released app checks its own sidecars, with nothing from this checkout.
-	checked = server.drive!([invoke(["check", "--inventory", "inventory.json", "--artifacts", ".", "sample-artifact.spdx.json", "sample-artifact.spdx-2.3.json", "sample-artifact.cdx.json"])])?
+	checked = server.drive!([invoke(["check", "--manifest", "sample-artifact.sbom-manifest.json", "--inventory", "inventory.json", "--artifacts", "."])])?
 	match checked {
 		[outcome] => Process.check!(outcome.code == 0, "SBOM app check failed: ${outcome.stdout}${outcome.stderr}")?
 		_ => return Script.fail!("SBOM app check did not report an outcome")

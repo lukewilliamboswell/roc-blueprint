@@ -277,8 +277,9 @@ unit! = |context| {
 	tested = Process.together!(scripts.map(|name| Process.command(stable, ["test", "scripts/${name}"], context.root)))?
 	report_tests!(scripts, tested)?
 
-	# SPDX 3.0.1 and 2.3 conformance runs in pure Roc with the script tests
-	# above (scripts/src/SbomTest.roc); this checks the built tool itself:
+	# Production SPDX checks run in pure Roc with the script tests above
+	# (scripts/src/SbomTest.roc); independent third-party checks have their
+	# own CI job. This checks the built tool itself:
 	# the binary the release cross-built for this machine when the caller
 	# put it in dist/ (BLUEPRINT_PREBUILT=1), otherwise one built here.
 	step!("Read-only SPDX binding with the native SBOM tool")?

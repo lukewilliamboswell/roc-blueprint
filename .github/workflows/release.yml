@@ -159,6 +159,12 @@ jobs:
       - name: Independently check SBOM conformance, subjects and known inputs
         run: nix develop -c scripts/check_sbom.roc --release-root . --artifacts dist dist/*.spdx.json dist/*.spdx-2.3.json dist/*.cdx.json
 
+      - name: Check emitted SBOMs with independent third-party validators
+        uses: ./.github/actions/sbom-conformance
+        with:
+          patterns: dist/*.spdx.json dist/*.spdx-2.3.json dist/*.cdx.json
+          report: ${{ runner.temp }}/release-sbom-conformance.json
+
       # Fails unless the binaries and blueprint.sha256 carry the names
       # roc-automation's setup-blueprint action downloads.
       - name: Gather the assets and check the names callers depend on

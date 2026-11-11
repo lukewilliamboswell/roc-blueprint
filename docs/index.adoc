@@ -62,6 +62,8 @@ include::lock-snapshot.adoc[leveloffset=+1]
 
 include::sbom.adoc[leveloffset=+1]
 
+include::sbom-conformance.adoc[leveloffset=+1]
+
 include::no-provider.adoc[leveloffset=+1]
 
 include::examples.adoc[leveloffset=+1]

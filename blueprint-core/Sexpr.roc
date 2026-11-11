@@ -17,6 +17,8 @@
 ## Nested records are indented one tab per level, so the text diffs cleanly.
 Sexpr :: [].{
 
+	ParseError : [InvalidSexpr(Str), MissingRequiredField(Str)]
+
 	## Serialise a value as S-expression text.
 	to_str : a -> Str
 		where [a.encoder_for : Format -> (a, Out -> Try(Out, []))]
@@ -28,8 +30,8 @@ Sexpr :: [].{
 	}
 
 	## Parse S-expression text into a value.
-	parse : Str -> Try(a, [InvalidSexpr(Str), ..errs])
-		where [a.parser_for : Format -> (List(Token) -> Try({ value : a, rest : List(Token) }, [InvalidSexpr(Str), ..errs]))]
+	parse : Str -> Try(a, ParseError)
+		where [a.parser_for : Format -> (List(Token) -> Try({ value : a, rest : List(Token) }, ParseError))]
 	parse = |text| {
 		Shape : a
 		tokens =
@@ -109,14 +111,14 @@ Sexpr :: [].{
 		rename_field : Format, Str -> Str
 		rename_field = |_, name| wire_name(name)
 
-		parse_str : Format, List(Token) -> Try({ value : Str, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+		parse_str : Format, List(Token) -> Try({ value : Str, rest : List(Token) }, ParseError)
 		parse_str = |_, tokens|
 			match tokens {
 				[Text(value), .. as rest] => Ok({ value, rest })
 				_ => Err(expected("a string", tokens))
 			}
 
-		parse_bool : Format, List(Token) -> Try({ value : Bool, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+		parse_bool : Format, List(Token) -> Try({ value : Bool, rest : List(Token) }, ParseError)
 		parse_bool = |_, tokens|
 			match tokens {
 				[Symbol("true"), .. as rest] => Ok({ value: True, rest })
@@ -124,25 +126,25 @@ Sexpr :: [].{
 				_ => Err(expected("true or false", tokens))
 			}
 
-		parse_u8 : Format, List(Token) -> Try({ value : U8, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+		parse_u8 : Format, List(Token) -> Try({ value : U8, rest : List(Token) }, ParseError)
 		parse_u8 = |_, tokens| number(tokens, U8.from_str)
 
-		parse_u16 : Format, List(Token) -> Try({ value : U16, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+		parse_u16 : Format, List(Token) -> Try({ value : U16, rest : List(Token) }, ParseError)
 		parse_u16 = |_, tokens| number(tokens, U16.from_str)
 
-		parse_u32 : Format, List(Token) -> Try({ value : U32, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+		parse_u32 : Format, List(Token) -> Try({ value : U32, rest : List(Token) }, ParseError)
 		parse_u32 = |_, tokens| number(tokens, U32.from_str)
 
-		parse_u64 : Format, List(Token) -> Try({ value : U64, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+		parse_u64 : Format, List(Token) -> Try({ value : U64, rest : List(Token) }, ParseError)
 		parse_u64 = |_, tokens| number(tokens, U64.from_str)
 
-		parse_i64 : Format, List(Token) -> Try({ value : I64, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+		parse_i64 : Format, List(Token) -> Try({ value : I64, rest : List(Token) }, ParseError)
 		parse_i64 = |_, tokens| number(tokens, I64.from_str)
 
-		parse_list_start : Format, List(Token) -> Try([Counted({ len : U64, rest : List(Token) }), Uncounted(List(Token))], [InvalidSexpr(Str), ..others])
+		parse_list_start : Format, List(Token) -> Try([Counted({ len : U64, rest : List(Token) }), Uncounted(List(Token))], ParseError)
 		parse_list_start = |_, tokens| open(tokens).map_ok(|rest| Uncounted(rest))
 
-		parse_list_next : Format, List(Token) -> Try([Item(List(Token)), Done(List(Token))], [InvalidSexpr(Str), ..others])
+		parse_list_next : Format, List(Token) -> Try([Item(List(Token)), Done(List(Token))], ParseError)
 		parse_list_next = |_, tokens|
 			match tokens {
 				[Close, .. as rest] => Ok(Done(rest))
@@ -150,7 +152,7 @@ Sexpr :: [].{
 				_ => Ok(Item(tokens))
 			}
 
-		parse_list_after_item : Format, List(Token) -> Try([Continue(List(Token)), Done(List(Token))], [InvalidSexpr(Str), ..others])
+		parse_list_after_item : Format, List(Token) -> Try([Continue(List(Token)), Done(List(Token))], ParseError)
 		parse_list_after_item = |_, tokens|
 			match tokens {
 				[Close, .. as rest] => Ok(Done(rest))
@@ -158,7 +160,7 @@ Sexpr :: [].{
 				_ => Ok(Continue(tokens))
 			}
 
-		parse_record_start : Format, List(Token) -> Try([Counted({ len : U64, rest : List(Token) }), Uncounted(List(Token))], [InvalidSexpr(Str), ..others])
+		parse_record_start : Format, List(Token) -> Try([Counted({ len : U64, rest : List(Token) }), Uncounted(List(Token))], ParseError)
 		parse_record_start = |_, tokens| open(tokens).map_ok(|rest| Uncounted(rest))
 
 		parse_record_field : Format,
@@ -171,7 +173,7 @@ Sexpr :: [].{
 				Continue(List(Token)),
 				Done(List(Token)),
 			],
-			[InvalidSexpr(Str), ..others],
+			ParseError,
 		)
 		parse_record_field = |_, _, tokens|
 			match tokens {
@@ -180,7 +182,7 @@ Sexpr :: [].{
 				_ => Err(expected("(field value) or )", tokens))
 			}
 
-		parse_record_after_field : Format, List(Token) -> Try([Continue(List(Token)), Done(List(Token))], [InvalidSexpr(Str), ..others])
+		parse_record_after_field : Format, List(Token) -> Try([Continue(List(Token)), Done(List(Token))], ParseError)
 		parse_record_after_field = |_, tokens|
 			match tokens {
 				[Close, Close, .. as rest] => Ok(Done(rest))
@@ -188,13 +190,17 @@ Sexpr :: [].{
 				_ => Err(expected(") after a field value", tokens))
 			}
 
-		skip_record_field : Format, List(Token) -> Try(List(Token), [InvalidSexpr(Str), ..others])
+		skip_record_field : Format, List(Token) -> Try(List(Token), ParseError)
 		skip_record_field = |_, tokens| skip_value(tokens)
 
-		invalid_value : Format, List(Token) -> [InvalidSexpr(Str)]
+		invalid_value : Format, List(Token) -> ParseError
 		invalid_value = |_, tokens| expected("a valid value", tokens)
 
-		parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), List(Token) -> Try({ value : a, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+		missing_field : Format, Str -> ParseError
+		missing_field = |_, name| MissingRequiredField(name)
+
+		# The compiler supplies the tag parser specification.
+		parse_tag_union : _
 		parse_tag_union = |format, spec, tokens|
 			match tokens {
 				[Symbol(tag), .. as rest] =>
@@ -348,14 +354,14 @@ Sexpr :: [].{
 			name
 		}
 
-	open : List(Token) -> Try(List(Token), [InvalidSexpr(Str), ..others])
+	open : List(Token) -> Try(List(Token), ParseError)
 	open = |tokens|
 		match tokens {
 			[Open, .. as rest] => Ok(rest)
 			_ => Err(expected("(", tokens))
 		}
 
-	number : List(Token), (Str -> Try(n, _)) -> Try({ value : n, rest : List(Token) }, [InvalidSexpr(Str), ..others])
+	number : List(Token), (Str -> Try(n, _)) -> Try({ value : n, rest : List(Token) }, ParseError)
 	number = |tokens, from_str|
 		match tokens {
 			[Number(raw), .. as rest] =>
@@ -367,7 +373,7 @@ Sexpr :: [].{
 		}
 
 	## Skip one complete value, used for record fields the target type lacks.
-	skip_value : List(Token) -> Try(List(Token), [InvalidSexpr(Str), ..others])
+	skip_value : List(Token) -> Try(List(Token), ParseError)
 	skip_value = |tokens| {
 		var $depth = 0
 		var $rest = tokens
@@ -398,7 +404,7 @@ Sexpr :: [].{
 		}
 	}
 
-	expected : Str, List(Token) -> [InvalidSexpr(Str), ..others]
+	expected : Str, List(Token) -> ParseError
 	expected = |what, tokens|
 		match tokens {
 			[token, ..] => InvalidSexpr("expected ${what}, found ${describe(token)}")

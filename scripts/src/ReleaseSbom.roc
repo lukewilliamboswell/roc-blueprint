@@ -52,7 +52,7 @@ ReleaseSbom := [].{
 		native : Native
 		native = Json.parse(native_json.replace_each("\"targets\"", "\"artifacts\"")).map_err(|_| Invalid("invalid linker-input authority"))?
 		actual_tag = Path.read_utf8!(Path.utf8("${root}/blueprint-cli/compiler-version"))?
-		if actual_tag.trim() != "nightly-2026-11-07-ad3a5d2" {
+		if actual_tag.trim() != "nightly-2026-11-10-f7d1f19" {
 			return Err(Invalid("compiler changed: review full source revision and native closure declaration"))
 		}
 		if native.source.sha != "5db8f9b9e661f5cbde0254d3520366ef4eab8bd4" {
@@ -84,18 +84,20 @@ ReleaseSbom := [].{
 		compiler = Bootstrap.compiler(compiler_version.trim(), target).map_err(|_| Invalid("missing embedded compiler target"))?
 		base = { ..component("blueprint", "Blueprint CLI", version, "https://github.com/lukewilliamboswell/roc-blueprint/tree/${commit}", "UPL-1.0", target), kind: "application" }
 		embedded = { ..component("roc-embedded", "Roc compiler distribution", compiler_version.trim(), compiler.urls.first() ?? "NOASSERTION", "UPL-1.0", target), kind: "file", sha256: compiler.sha256, modified: "Unmodified target archive embedded in executable; checksum describes archive bytes, not extracted roc executable" }
-		builder = { ..component("roc-builder", "Roc build compiler", compiler_version.trim(), "https://github.com/roc-lang/roc/tree/ad3a5d2830b94fdac878ce1aaa73c64e7c57720f", "UPL-1.0", ""), kind: "application" }
+		builder = { ..component("roc-builder", "Roc build compiler", compiler_version.trim(), "https://github.com/roc-lang/roc/tree/f7d1f1982ff2336f39ae36ccdaa2e7e480b01367", "UPL-1.0", ""), kind: "application" }
 		weaver = component("weaver", "weaver", "0.9.0", "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst", "NOASSERTION", target)
 		host = host_closure(base.id, target, cargo)
-		components = [base, embedded, builder, weaver].concat(host.components)
+		components = [base, embedded, builder, weaver, json_parser(target), json_unicode(target)].concat(host.components)
 		relationships = [
 			edge("Subject", base.id, "contains", "Compiled application sources"),
 			edge(base.id, embedded.id, "contains", "compiler-archive List(U8) import"),
 			build_dependency("Subject", builder.id, "Release cross compiler, distinct from embedded target archive"),
 			edge(base.id, "http", "contains", "Explicit Roc package import"),
 			edge(base.id, weaver.id, "contains", "Explicit Roc package import"),
+			edge(base.id, "roc-parser", "contains", "JsonValue codec imported through core.JsonData"),
+			json_unicode_edge,
 		].concat(host.relationships)
-		coverage = [gap("native-and-compiler-closure", "Roc archive native/compiler dependencies and exact basic-cli Cargo feature/target linkage are not exposed by committed upstream release inventories; Cargo graph is available resolution metadata, not a claim every crate ships"), gap("licenses", "Cargo registry license expressions and compiler distribution constituent notices not fully inventoried; NOASSERTION retained explicitly")]
+		coverage = [addressed_gap("native-and-compiler-closure", "Subject", "assembly", "Roc archive native/compiler dependencies and exact basic-cli Cargo feature/target linkage are not exposed by committed upstream release inventories; Cargo graph is available resolution metadata, not a claim every crate ships"), gap("licenses", "Cargo registry license expressions and compiler distribution constituent notices not fully inventoried; NOASSERTION retained explicitly")]
 		Ok({ profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components, relationships, coverage, inputs: [] })
 	}
 
@@ -106,14 +108,16 @@ ReleaseSbom := [].{
 	tool_binary_composition : Str, Str, Str, Cargo -> Sbom.Composition
 	tool_binary_composition = |version, commit, target, cargo| {
 		base = { ..component("blueprint-sbom", "Blueprint SBOM tool", version, "https://github.com/lukewilliamboswell/roc-blueprint/tree/${commit}/scripts", "UPL-1.0", target), kind: "application" }
-		builder = { ..component("roc-builder", "Roc build compiler", compiler_version.trim(), "https://github.com/roc-lang/roc/tree/ad3a5d2830b94fdac878ce1aaa73c64e7c57720f", "UPL-1.0", ""), kind: "application" }
+		builder = { ..component("roc-builder", "Roc build compiler", compiler_version.trim(), "https://github.com/roc-lang/roc/tree/f7d1f1982ff2336f39ae36ccdaa2e7e480b01367", "UPL-1.0", ""), kind: "application" }
 		host = host_closure(base.id, target, cargo)
-		components = [base, builder].concat(host.components)
+		components = [base, builder, json_parser(target), json_unicode(target)].concat(host.components)
 		relationships = [
 			edge("Subject", base.id, "contains", "Compiled scripts/sbom.roc, scripts/src/SbomFiles.roc and the core modules they import"),
 			build_dependency("Subject", builder.id, "Release cross compiler; no compiler archive is embedded"),
+			edge(base.id, "roc-parser", "contains", "JsonValue codec imported through core.JsonData"),
+			json_unicode_edge,
 		].concat(host.relationships)
-		coverage = [gap("native-closure", "Exact basic-cli Cargo feature/target linkage is not exposed by committed upstream release inventories; Cargo graph is available resolution metadata, not a claim every crate ships"), gap("licenses", "Cargo registry license expressions not fully inventoried; NOASSERTION retained explicitly")]
+		coverage = [addressed_gap("native-closure", "Subject", "assembly", "Exact basic-cli Cargo feature/target linkage is not exposed by committed upstream release inventories; Cargo graph is available resolution metadata, not a claim every crate ships"), gap("licenses", "Cargo registry license expressions not fully inventoried; NOASSERTION retained explicitly")]
 		{ profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components, relationships, coverage, inputs: [] }
 	}
 
@@ -153,7 +157,7 @@ ReleaseSbom := [].{
 	tool_composition = |version, commit, cargo| {
 		own = component("sources", "roc-blueprint-sbom", version, "https://github.com/lukewilliamboswell/roc-blueprint/tree/${commit}/scripts", "UPL-1.0", "")
 		core = component("core", "roc-blueprint-core", version, "https://github.com/lukewilliamboswell/roc-blueprint/tree/${commit}/blueprint-core", "UPL-1.0", "")
-		compiler = { ..component("roc-builder", "Roc source-app compiler", compiler_version.trim(), "https://github.com/roc-lang/roc/tree/ad3a5d2830b94fdac878ce1aaa73c64e7c57720f", "UPL-1.0", ""), kind: "application" }
+		compiler = { ..component("roc-builder", "Roc source-app compiler", compiler_version.trim(), "https://github.com/roc-lang/roc/tree/f7d1f1982ff2336f39ae36ccdaa2e7e480b01367", "UPL-1.0", ""), kind: "application" }
 		host = component("basic-cli", "basic-cli", "0.27.0", "https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst", "UPL-1.0", "")
 		http = component("http", "roc-lang/http", "1.0.0", "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst", "UPL-1.0", "")
 		sqlite = { ..component("sqlite", "SQLite", "3.49.1", "https://www.sqlite.org/2025/sqlite-amalgamation-3490100.zip", "LicenseRef-SQLite-Public-Domain", ""), license_url: "https://www.sqlite.org/copyright.html" }
@@ -162,9 +166,9 @@ ReleaseSbom := [].{
 			profile: Sbom.profile,
 			imported_documents: [],
 			unavailable_sboms: [],
-			components: [own, core, compiler, host, http, sqlite, std].concat(cargo.components),
-			relationships: [edge("Subject", own.id, "contains", "Exactly scripts/sbom.roc and src/SbomFiles.roc; staged main filename, dependency/compiler pins and explicit writer options only"), edge(own.id, core.id, "dependsOn", "Released core bundle, fetched separately by Roc"), edge(own.id, host.id, "dependsOn", "Pinned native CLI platform, fetched separately by Roc"), edge(host.id, http.id, "dependsOn", "Pinned platform imports the HTTP package"), build_dependency("Subject", compiler.id, "roc bundle produces the delivered source-app archive"), edge(own.id, compiler.id, "dependsOn", "App source requires the explicit matching compiler to run"), edge(host.id, std.id, "contains", "Platform bundle distributes Rust staticlib native hosts"), edge("cargo-libsqlite3-sys-0.33.0", sqlite.id, "contains", "Pinned bundled SQLite source in verified Rust crate")].concat(cargo.components.map(|entry| edge(host.id, entry.id, "other", "Upstream platform Cargo resolution candidate; native target/features/role unresolved"))).concat(cargo.relationships),
-			coverage: [gap("upstream-platform-closure", "App ships only its wrapper/I/O source and fetches core/basic-cli later; available Cargo graph retained, exact native target/feature/license closure remains incomplete")],
+			components: [own, core, compiler, host, http, sqlite, std, json_parser(""), json_unicode("")].concat(cargo.components),
+			relationships: [json_unicode_edge, edge(core.id, "roc-parser", "dependsOn", "Released core imports the JsonValue codec"), edge("Subject", own.id, "contains", "Exactly scripts/sbom.roc and src/SbomFiles.roc; staged main filename and dependency/compiler pins and explicit writer options only"), edge(own.id, core.id, "dependsOn", "Released core bundle, fetched separately by Roc"), edge(own.id, host.id, "dependsOn", "Pinned native CLI platform, fetched separately by Roc"), edge(host.id, http.id, "dependsOn", "Pinned platform imports the HTTP package"), build_dependency("Subject", compiler.id, "roc bundle produces the delivered source-app archive"), edge(own.id, compiler.id, "dependsOn", "App source requires the explicit matching compiler to run"), edge(host.id, std.id, "contains", "Platform bundle distributes Rust staticlib native hosts"), edge("cargo-libsqlite3-sys-0.33.0", sqlite.id, "contains", "Pinned bundled SQLite source in verified Rust crate")].concat(cargo.components.map(|entry| edge(host.id, entry.id, "other", "Upstream platform Cargo resolution candidate; native target/features/role unresolved"))).concat(cargo.relationships),
+			coverage: [addressed_gap("upstream-platform-closure", "basic-cli", "assembly", "App ships only its wrapper/I/O source and fetches core/basic-cli later; available Cargo graph retained, exact native target/feature/license closure remains incomplete")],
 			inputs: [],
 		}
 	}
@@ -218,11 +222,11 @@ ReleaseSbom := [].{
 	source_composition : Str, Str, Str, Native -> Sbom.Composition
 	source_composition = |name, version, commit, native| {
 		own = component("sources", name, version, "https://github.com/lukewilliamboswell/roc-blueprint/tree/${commit}/${if name == "roc-blueprint" "blueprint-platform" else "blueprint-core"}", "UPL-1.0", "")
-		compiler = { ..component("roc-builder", "Roc bundle compiler", compiler_version.trim(), "https://github.com/roc-lang/roc/tree/ad3a5d2830b94fdac878ce1aaa73c64e7c57720f", "UPL-1.0", ""), kind: "application" }
+		compiler = { ..component("roc-builder", "Roc bundle compiler", compiler_version.trim(), "https://github.com/roc-lang/roc/tree/f7d1f1982ff2336f39ae36ccdaa2e7e480b01367", "UPL-1.0", ""), kind: "application" }
 		base = [own, compiler]
 		edges = [edge("Subject", own.id, "contains", "Source files in content-addressed Roc bundle"), build_dependency("Subject", compiler.id, "roc bundle generates archive; compiler not shipped in source bundle")]
 		if name == "roc-blueprint-core" {
-			{ profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components: base, relationships: edges, coverage: [{ scope: "roc-import-closure", component: "", aspect: "", status: "complete", reason: "Core imports only first-party modules and Roc builtins; compiler supplied separately", contact }], inputs: [] }
+			{ profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components: base.concat([json_parser(""), json_unicode("")]), relationships: edges.concat([edge(own.id, "roc-parser", "dependsOn", "JsonValue codec fetched separately by Roc"), json_unicode_edge]), coverage: [{ scope: "roc-import-closure", component: "sources", aspect: "dependencies", status: "complete", reason: "Core imports roc-parser JsonValue; its package header also fetches Unicode during dependency resolution, though no Unicode modules are used by JsonValue; compiler supplied separately", contact }], inputs: [] }
 		} else {
 			inputs_base = { ..component("linker-inputs", "Roc/Zig linker-input archive", native.source.sha, "https://github.com/${native.repository}/releases/download/${native.release}/link-inputs-all.tar", "NOASSERTION", ""), kind: "file" }
 			inputs = { ..inputs_base, sha256: native.artifacts.all.sha256 }
@@ -232,7 +236,7 @@ ReleaseSbom := [].{
 			msvc = component("msvc-runtime", "Roc MSVC startup runtime", "7d256b954603e1170ee0d6df229c795aba6dc70d", "https://github.com/roc-lang/roc/tree/7d256b954603e1170ee0d6df229c795aba6dc70d/src/default_platform/msvc_runtime", "UPL-1.0", "")
 			windows_os = { ..component("windows-os", "Windows system DLLs", "NOASSERTION", "NOASSERTION", "LicenseRef-Windows-System-Terms", ""), identity: "urn:blueprint:runtime:windows-system-dlls", license_url: "https://www.microsoft.com/licensing/terms/", producer: "Organization: Microsoft" }
 			macos_os = { ..component("macos-os", "macOS libSystem", "NOASSERTION", "NOASSERTION", "LicenseRef-Apple-System-Terms", ""), identity: "urn:blueprint:runtime:macos-libSystem", license_url: "https://www.apple.com/legal/sla/", producer: "Organization: Apple" }
-			{ profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components: base.concat([inputs, musl, zig, core, msvc, windows_os, macos_os]), relationships: edges.concat([edge(inputs.id, own.id, "generates", "Platform source bundle includes verified extracted members, not the original input archive bytes"), edge(inputs.id, musl.id, "contains", "Pinned producer runtime/sources.json musl_version"), edge(inputs.id, zig.id, "contains", "Pinned producer runtime/sources.json zig_version"), edge(inputs.id, msvc.id, "contains", "Pinned producer linker-inputs/msvc-runtime/UPSTREAM.json"), edge(own.id, core.id, "dependsOn", "Platform references sibling core bundle, fetched later by Roc"), edge(msvc.id, windows_os.id, "dependsOn", "Windows import libraries reference system-provided DLLs; OS bytes are not shipped"), edge(own.id, macos_os.id, "dependsOn", "Bundled macOS native hosts call system-provided libSystem; its version remains unknown")]), coverage: [gap("native-closure", "Known Linux static runtimes and Windows startup included; Windows import library OS dependencies and compiler-generated host closure require deeper upstream metadata")], inputs: [] }
+			{ profile: Sbom.profile, imported_documents: [], unavailable_sboms: [], components: base.concat([inputs, musl, zig, core, msvc, windows_os, macos_os]), relationships: edges.concat([edge(inputs.id, own.id, "generates", "Platform source bundle includes verified extracted members, not the original input archive bytes"), edge(inputs.id, musl.id, "contains", "Pinned producer runtime/sources.json musl_version"), edge(inputs.id, zig.id, "contains", "Pinned producer runtime/sources.json zig_version"), edge(inputs.id, msvc.id, "contains", "Pinned producer linker-inputs/msvc-runtime/UPSTREAM.json"), edge(own.id, core.id, "dependsOn", "Platform references sibling core bundle, fetched later by Roc"), edge(msvc.id, windows_os.id, "dependsOn", "Windows import libraries reference system-provided DLLs; OS bytes are not shipped"), edge(own.id, macos_os.id, "dependsOn", "Bundled macOS native hosts call system-provided libSystem; its version remains unknown")]), coverage: [addressed_gap("native-closure", "sources", "assembly", "Known Linux static runtimes and Windows startup included; Windows import library OS dependencies and compiler-generated host closure require deeper upstream metadata")], inputs: [] }
 		}
 	}
 }
@@ -241,8 +245,56 @@ contact = "https://github.com/lukewilliamboswell/roc-blueprint/issues"
 
 gap = |scope, reason| { scope, component: "", aspect: "", status: "incomplete", reason, contact }
 
+addressed_gap = |scope, component_id, aspect, reason| { scope, component: component_id, aspect, status: "incomplete", reason, contact }
+
+# Only JsonValue and its Parser/Utf8/Literal closure are reachable here. The
+# package's Unicode-dependent format modules are not imported by this codec.
+json_parser : Str -> Sbom.Component
+json_parser = |target| component("roc-parser", "roc-parser", "4.0.0", "https://github.com/lukewilliamboswell/roc-parser/releases/download/4.0.0/FZVf39nPJLaMEmchcwTU5rWtMrcipBGbGsTk3nHzvjzk.tar.zst", "UPL-1.0", target)
+
+json_unicode : Str -> Sbom.Component
+json_unicode = |target| component("parser-unicode", "roc-lang/unicode", "4.3.0", "https://github.com/roc-lang/unicode/releases/download/4.3.0/7HGaK8HUHMs5judroSmUoS4TjPGZ1kAjPTyPDSCWiSKM.tar.zst", "UPL-1.0", target)
+
+json_unicode_edge : Sbom.Edge
+json_unicode_edge = build_dependency("roc-parser", "parser-unicode", "Compiler resolves roc-parser's Unicode package declaration; JsonValue imports no Unicode modules and does not ship their code")
+
 component : Str, Str, Str, Str, Str, Str -> Sbom.Component
-component = |id, name, version, download, license, target| { kind: "library", copyright: "NOASSERTION", attribution: "NOASSERTION", package_url: "", source_refs: [], id: "${id}", name, producer: if download.contains("github.com/roc-lang/") "Organization: Roc contributors" else if download.contains("github.com/lukewilliamboswell/") "Person: Luke Boswell" else "NOASSERTION", version, identity: "${download}#${version}", download, sha256: "", license, license_url: "", modified: "", target, origin: "reviewed" }
+component = |id, name, version, download, license, target| { kind: "library", copyright: "NOASSERTION", attribution: "NOASSERTION", package_url: reviewed_package_url(id, name, version), source_refs: reviewed_source_refs(id, download), id: "${id}", name, producer: if download.contains("github.com/roc-lang/") "Organization: Roc contributors" else if download.contains("github.com/lukewilliamboswell/") "Person: Luke Boswell" else "NOASSERTION", version, identity: "${download}#${version}", download, sha256: "", license, license_url: "", modified: "", target, origin: "reviewed" }
+
+# These package identities are reviewed declarations for this producer, never
+# inferred from an arbitrary download URL or a physical archive member.
+reviewed_package_url : Str, Str, Str -> Str
+reviewed_package_url = |id, name, version| {
+	repository = match id {
+		"blueprint" | "blueprint-sbom" => "lukewilliamboswell/roc-blueprint"
+		"core" => "lukewilliamboswell/roc-blueprint"
+		"sources" if ["roc-blueprint", "roc-blueprint-core", "roc-blueprint-sbom"].contains(name) => "lukewilliamboswell/roc-blueprint"
+		"roc-parser" => "lukewilliamboswell/roc-parser"
+		"parser-unicode" => "roc-lang/unicode"
+		"weaver" => "lukewilliamboswell/weaver"
+		"basic-cli" => "roc-lang/basic-cli"
+		"http" => "roc-lang/http"
+		_ => ""
+	}
+	if repository.is_empty() {
+		return ""
+	}
+	subpath = if id == "core" or (id == "sources" and name == "roc-blueprint-core") "#blueprint-core"
+	else if id == "sources" and name == "roc-blueprint" "#blueprint-platform"
+	else if id == "sources" and name == "roc-blueprint-sbom" "#scripts"
+	else ""
+	"pkg:github/${repository}@${version}${subpath}"
+}
+
+# First-party and pinned compiler/host tree locators are explicit recipe
+# declarations. Release downloads and arbitrary member locators are not VCS.
+reviewed_source_refs : Str, Str -> List(Sbom.SourceRef)
+reviewed_source_refs = |id, download| {
+	if ["sources", "core", "blueprint", "blueprint-sbom", "roc-builder", "basic-cli"].contains(id)
+		and download.starts_with("https://github.com/") and download.contains("/tree/") {
+		[{ type: "vcs", url: download }]
+	} else []
+}
 
 edge : Str, Str, Str, Str -> Sbom.Edge
 edge = |from, to, relation, basis| { from, to, relation, scope: "", basis }
@@ -376,33 +428,42 @@ write! = |root, kind, filename, version, target, composition, created, commit, r
 	measured = SbomFiles.measure!("${root}/dist/${filename}")?
 	digest = measured.sha256
 	subject = { kind: if kind == Source "file" else "application", producer: "NOASSERTION", license: "NOASSERTION", license_url: "", copyright: "NOASSERTION", attribution: "NOASSERTION", filename, version, target, sha256: digest, url: Bundle.release_url(Bundle.default_repository, version, filename) }
-	context = { namespace: "https://github.com/${Bundle.default_repository}/sbom/${commit}/${filename}/revision-${revision}", revision, created, author: "Organization: Roc Blueprint contributors", generator: "Tool: blueprint-sbom-${version}" }
-	text = Sbom.render(inventory, subject, context).map_err(|message| Invalid(message))?
-	SbomFiles.write_new!("${root}/dist/${filename}.spdx.json", text)?
-	Stdout.line!("${filename}.spdx.json")?
-	# The same inventory for consumers that read only SPDX 2.
-	text_2 = Sbom.render_spdx2(inventory, subject, context).map_err(|message| Invalid(message))?
-	SbomFiles.write_new!("${root}/dist/${filename}.spdx-2.3.json", text_2)?
-	Stdout.line!("${filename}.spdx-2.3.json")?
-	# And for security tooling that reads CycloneDX.
-	bom = Sbom.render_cyclonedx(inventory, subject, context).map_err(|message| Invalid(message))?
-	SbomFiles.write_new!("${root}/dist/${filename}.cdx.json", bom)?
-	Stdout.line!("${filename}.cdx.json")?
-	# The inventory the sidecars were bound from, as `inspect` would write it,
-	# stays in dist/ for the independent check; the evidence manifest beside
-	# the sidecars ties them to it and to the subject by digest and size.
+	identity = { revision, created, author: "Organization: Roc Blueprint contributors", generator: "Tool: blueprint-sbom-${version}" }
+	context = { namespace: Sbom.document_namespace(inventory, subject, identity), revision, created, author: identity.author, generator: identity.generator }
+	var $outputs = []
+	for rendering in Manifest.renderings {
+		rendered : Try(Str, Str)
+		rendered = match rendering.format {
+			"spdx-3.0.1" => Sbom.render(inventory, subject, context)
+			"spdx-2.3" => Sbom.render_spdx2(inventory, subject, context)
+			"cyclonedx-1.7" => Sbom.render_cyclonedx(inventory, subject, context)
+			_ => Err("unsupported release SBOM format")
+		}
+		contents = rendered.map_err(|message| Invalid(message))?
+		$outputs = $outputs.append({ filename: "${filename}${rendering.suffix}", format: rendering.format, contents })
+	}
 	inventory_text = "${Json.to_str(inventory)}\n"
-	SbomFiles.write_new!("${root}/dist/${filename}.inventory.json", inventory_text)?
-	listed = |name, format, content| { filename: "${filename}${name}", format, sha256: Integrity.digest(content.to_utf8()), size: content.to_utf8().len() }
+	if inventory_text.to_utf8().len() > Sbom.max_json_bytes {
+		return Err(InputTooLarge)
+	}
+	inventory_name = "${filename}.inventory.json"
+	manifest_name = "${filename}${Manifest.suffix}"
 	manifest = Manifest.render({
 		profile: Sbom.profile,
 		subject: { filename, version, target, sha256: digest, size: measured.size },
 		inventory_sha256: Integrity.digest(inventory_text.to_utf8()),
 		context: { namespace: context.namespace, revision, created, generator: context.generator },
-		sidecars: [listed(".spdx.json", "spdx-3.0.1", text), listed(".spdx-2.3.json", "spdx-2.3", text_2), listed(".cdx.json", "cyclonedx-1.7", bom)],
+		sidecars: $outputs.map(|output| { filename: output.filename, format: output.format, sha256: Integrity.digest(output.contents.to_utf8()), size: output.contents.to_utf8().len() }),
 	}).map_err(|message| Invalid(message))?
-	SbomFiles.write_new!("${root}/dist/${filename}${Manifest.suffix}", manifest)?
-	Stdout.line!("${filename}${Manifest.suffix}")
+	# All renderings and the manifest are checked before the first write.
+	SbomFiles.require_new_outputs!($outputs.map(|output| "${root}/dist/${output.filename}").concat(["${root}/dist/${inventory_name}", "${root}/dist/${manifest_name}"]))?
+	for output in $outputs {
+		SbomFiles.write_new!("${root}/dist/${output.filename}", output.contents)?
+		Stdout.line!(output.filename)?
+	}
+	SbomFiles.write_new!("${root}/dist/${inventory_name}", inventory_text)?
+	SbomFiles.write_new!("${root}/dist/${manifest_name}", manifest)?
+	Stdout.line!(manifest_name)
 }
 
 # Fail closed on new or changed imports: availability/composition changes must
@@ -424,7 +485,9 @@ reviewed_imports! = |root| {
 	if observed != expected.map(|entry| entry.url) {
 		return Err(Invalid("CLI imports changed: review SBOM composition, do not silently omit new inputs"))
 	}
-	if !platform_source.contains("core: \"../blueprint-core/main.roc\"") or !core_source.trim().ends_with("{}") {
+	core_imports = core_source.split_on("\n").keep_if(|line| !line.trim().starts_with("#") and line.contains(": \""))
+		.map(|line| line.split_on("\"").get(1) ?? "")
+	if !platform_source.contains("core: \"../blueprint-core/main.roc\"") or core_imports != [json_parser("").download] {
 		return Err(Invalid("source bundle dependencies changed: review SBOM composition"))
 	}
 	Ok(expected)
@@ -531,7 +594,7 @@ expect Release.systems.all(|released| inspects(released.system, ReleaseSbom.tool
 expect Release.systems.all(
 	|released| {
 		ids = ReleaseSbom.tool_binary_composition("0.7.0", commit_fixture, released.system, reviewed_cargo).components.map(|entry| entry.id)
-		["blueprint-sbom", "roc-builder", "basic-cli", "http", "rust-std", "sqlite", "os-runtime"].all(|id| ids.contains(id)) and !ids.contains("roc-embedded") and !ids.contains("weaver") and !ids.contains("core")
+		["blueprint-sbom", "roc-builder", "basic-cli", "http", "rust-std", "sqlite", "os-runtime", "roc-parser"].all(|id| ids.contains(id)) and !ids.contains("roc-embedded") and !ids.contains("weaver") and !ids.contains("core")
 	},
 )
 expect inspects("source", ReleaseSbom.tool_composition("0.7.0", commit_fixture, reviewed_cargo))
@@ -617,13 +680,14 @@ expect {
 	standard = standard_assemblies(subject, "").concat(standard_assemblies(bom, ""))
 	refs = standard.map(|entry| entry.ref)
 	refs.len() == unique_strings(refs).len()
-		and ["musl", "zig-runtime", "msvc-runtime"].all(|ref| standard.contains({ ref, parent: "linker-inputs" }))
-			and platform_members_fixture.all(
-				|member| {
-					ref = "member-${member.name.replace_each("/", "-").replace_each("_", "-")}"
-					standard.contains({ ref, parent: "sources" }) and platform_inventory_fixture.relationships.keep_if(|relation| relation.from == ref and relation.relation == "contains").all(|relation| standard.contains({ ref: relation.to, parent: ref }))
-				},
-			)
+		and !refs.contains("linker-inputs")
+			and ["musl", "zig-runtime", "msvc-runtime"].all(|ref| !refs.contains(ref))
+				and platform_members_fixture.all(
+					|member| {
+						ref = "member-${member.name.replace_each("/", "-").replace_each("_", "-")}"
+						standard.contains({ ref, parent: "sources" }) and platform_inventory_fixture.relationships.keep_if(|relation| relation.from == ref and relation.relation == "contains").all(|relation| standard.contains({ ref: relation.to, parent: ref }))
+					},
+				)
 }
 
 unique_strings : List(Str) -> List(Str)
@@ -641,3 +705,16 @@ expect {
 	occurrences.len() == 4 and occurrences.all(|entry| entry.sha256.is_empty() and entry.package_url == "pkg:generic/musl@1.2.5" and entry.source_refs == refs and entry.copyright == "Copyright reviewed musl contributors" and entry.attribution == "Reviewed notice")
 }
 expect ReleaseSbom.linker_members(ReleaseSbom.source_composition("roc-blueprint", "0.9.0", commit_fixture, reviewed_native), platform_members_fixture.concat(platform_members_fixture), "https://example.org/platform.tar.zst").is_err()
+
+# Dependency resolution fetches Unicode, but the JSON codec does not contain
+# its code. Preserve that distinction in source and native inventories.
+expect {
+	compositions = [ReleaseSbom.source_composition("roc-blueprint-core", "0.11.0", commit_fixture, reviewed_native), ReleaseSbom.tool_composition("0.11.0", commit_fixture, reviewed_cargo)]
+		.concat(Release.systems.map(|released| ReleaseSbom.tool_binary_composition("0.11.0", commit_fixture, released.system, reviewed_cargo)))
+	compositions.all(
+		|composition| composition.components.any(|entry| entry.id == "roc-parser" and entry.version == "4.0.0")
+			and composition.components.any(|entry| entry.id == "parser-unicode" and entry.version == "4.3.0")
+				and composition.relationships.any(|relation| relation.to == "parser-unicode" and relation.relation == "dependsOn" and relation.scope == "build")
+					and !composition.relationships.any(|relation| relation.to == "parser-unicode" and relation.relation == "contains"),
+	)
+}

@@ -1,4 +1,5 @@
 import JsonData
+import SbomJson
 import Lookup
 import SbomLicenses
 import Spdx3
@@ -25,7 +26,7 @@ CycloneDx := [].{
 
 	validate : Str -> Try(JsonData, Str)
 	validate = |text| {
-		tree = JsonData.decode_with(text, JsonData.documents).map_err(JsonData.message)?
+		tree = SbomJson.decode(text).map_err(JsonData.message)?
 		CycloneDx.check(tree)?
 		Ok(tree)
 	}

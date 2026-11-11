@@ -48,7 +48,7 @@ import "compiler-version" as compiler_version : Str
 import "compiler-archive" as compiler_archive : List(U8)
 
 version : Str
-version = "0.12.0"
+version = "0.13.0"
 
 ## The providers a request may be planned with. This is the only reference to
 ## a concrete provider: everything else uses the Provider contract
@@ -1011,8 +1011,8 @@ fetch_programs! = |steps| {
 source_is_embedded_compiler : Str, Str -> Bool
 source_is_embedded_compiler = |sha256, system| Bootstrap.compiler(compiler_version.trim(), system).map_ok(|program| program.sha256 == sha256) ?? False
 
-expect source_is_embedded_compiler("21710f7007403428d96f5927343c60c2b3dbefc298394d62cf066fe6fa966495", "x86_64-linux")
-expect !source_is_embedded_compiler("21710f7007403428d96f5927343c60c2b3dbefc298394d62cf066fe6fa966495", "aarch64-darwin")
+expect source_is_embedded_compiler("891f1e05d15494cb7f2a6e4b747e4ce161f4587e6677bac062aefd6738ab58b9", "x86_64-linux")
+expect !source_is_embedded_compiler("891f1e05d15494cb7f2a6e4b747e4ce161f4587e6677bac062aefd6738ab58b9", "aarch64-darwin")
 expect !source_is_embedded_compiler("different bytes", "x86_64-linux")
 
 ## One consumer-owned executor for standalone requests and workflow steps.

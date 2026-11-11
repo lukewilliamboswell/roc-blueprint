@@ -1,0 +1,51 @@
+= Downstream SBOM review, 2026-11-04
+
+This historical review records selected published SBOMs retrieved on
+2026-11-03 UTC and reviewed on 2026-11-04 Australia/Melbourne. It describes
+those release assets, not the current behavior of their generators. No
+release assets or downstream repositories were changed.
+
+== Retained evidence
+
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/tests/sbom/reviews/2026-11-04.json[The review record]
+lists 18 projects from the roc-automation README and 73 selected SBOM files:
+sidecars from eight projects' latest releases and native runtime/linker supplier
+releases from the Go, Rust and Zig platform projects. Each artifact record
+contains its release URL, SHA-256, byte size, format, validator version and
+exit status. Failed checks also retain diagnostic categories.
+
+[cols="2,2,1,1",options="header"]
+|===
+|Format |Validator used |Passed |Failed
+|CycloneDX 1.7 |CycloneDX CLI 0.33.1 |23 |0
+|SPDX 3.0.1 |jsonschema-rs 0.60.3 |23 |0
+|SPDX 2.3 |SPDX tools Python 0.8.5 |20 |7
+|===
+
+All seven failed checks concern native supplier SPDX 2.3 documents from the
+Go, Rust and Zig platform projects. The retained categories include missing
+File SHA1 checksums and packages declaring `filesAnalyzed:false` while
+containing File entries. The record retains categories rather than a complete
+validator transcript; it should not be used as an exhaustive list of each
+file's defects.
+
+The SPDX 3 checks use the official SPDX 3.0.1 schema and establish JSON Schema
+validation only. Passing format
+checks does not establish exact binary composition, complete dependencies,
+license conclusions, publisher authenticity or vulnerability absence.
+
+== Recheck an artifact
+
+Choose an artifact in the record, download its recorded release URL, and
+verify the downloaded bytes against its recorded SHA-256 and size. Then run
+the independent checker from a trusted Blueprint checkout, following
+https://lukewilliamboswell.github.io/roc-blueprint/sbom-conformance.html[the independent-check guide].
+The current checker uses its own pinned validators; their versions and scope
+may differ from this review's tools. Compare the validation rule and affected
+element rather than expecting identical messages or exit statuses.
+
+The historical JSON is evidence, not an acceptance test that expects old
+published documents to change. Small first-party cases in
+https://github.com/lukewilliamboswell/roc-blueprint/blob/main/tests/sbom/conformance/README.adoc[`tests/sbom/conformance/`]
+exercise the relevant specification rules against the current implementation
+without downloading historical release assets.
