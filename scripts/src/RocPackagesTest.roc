@@ -24,6 +24,9 @@ RocPackagesTest := [].{
 	## basic-cli depends on this; a project must list it too.
 	http = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"
 
+	## Roc resolves this dependency of the configuration platform itself.
+	config_parser = "FZVf39nPJLaMEmchcwTU5rWtMrcipBGbGsTk3nHzvjzk"
+
 	## Exercise the fixture compiler available in the reviewed overlay pin.
 	roc_tag = FlakeLock.compiler_pin(roc_inputs) ?? ""
 
@@ -179,15 +182,19 @@ names! = |directory| {
 same_names : List(Str), List(Str) -> Bool
 same_names = |left, right| left.len() == right.len() and left.all(|name| right.contains(name))
 
+## Read the cache entries other than the known configuration dependency.
+environment_entries! : Str => Try(List(Str), _)
+environment_entries! = |directory| Ok(names!(directory)?.keep_if(|name| !cache_entry([RocPackagesTest.config_parser], name)))
+
 ## A staging directory Blueprint or Roc left behind.
 leftover : Str -> Bool
 leftover = |name| name.starts_with("blueprint-") or name.ends_with(".tmp") or name.ends_with(".incomplete")
 
-## A cache directory may hold only complete packages and the sidecars Roc
-## writes beside them.
+## Besides the configuration dependency, the cache may hold only the
+## environment's packages and the sidecars Roc writes beside them.
 check_clean! : Str, List(Str), Str => Try({}, _)
 check_clean! = |package_dir, hashes, when| {
-	entries = names!(package_dir)?
+	entries = environment_entries!(package_dir)?
 	check!(
 		entries.all(|name| cache_entry(hashes, name)) and !entries.any(leftover),
 		"${when}, the package cache holds something unexpected: ${Str.join_with(entries, " ")}",
@@ -268,7 +275,8 @@ scenarios! = |context| {
 		return Script.fail!("refusing to run: the test cache ${cache} is inside ${real_cache}")
 	}
 	real_packages = "${real_cache}/roc/packages"
-	ours_before = published_among!(real_packages, hashes)
+	checked_hashes = hashes.append(RocPackagesTest.config_parser)
+	ours_before = published_among!(real_packages, checked_hashes)
 	Script.info!("INFO", "private XDG_CACHE_HOME ${cache}; ${real_cache} must stay untouched")?
 
 	Path.create_all!(Path.utf8(project))?
@@ -282,15 +290,17 @@ scenarios! = |context| {
 		lock.contains("tarball+${RocPackagesTest.basic_cli}") and lock.contains("tarball+${RocPackagesTest.http}"),
 		"Blueprint.lock does not pin both bundles for the build",
 	)?
-	check!(names!(package_dir)?.is_empty(), "`blueprint update` wrote into the package cache")?
+	check_published!(package_dir, RocPackagesTest.config_parser)?
+	updated = environment_entries!(package_dir)?
+	check!(updated.is_empty(), "`blueprint update` published unexpected packages: ${Str.join_with(updated, " ")}")?
 
-	# 1. With an empty cache, entering the environment publishes every listed
-	# bundle. This task resolves no package, so Roc itself downloads nothing.
+	# 1. Entering the environment publishes every listed bundle. This task
+	# resolves no package, so only the configuration dependency was downloaded by Roc.
 	version = succeed!(context, cache, project, ["run", "version"])?
 	check!(version.stdout.contains(RocPackagesTest.roc_tag), "roc-stable is not ${RocPackagesTest.roc_tag}: ${version.stdout}")?
 	# The task's output is its own: nothing of the publication is in it.
 	check!(version.stdout.split_on("\n").keep_if(|line| !line.trim().is_empty()).len() == 1 and version.stderr.contains("fetching Roc package ${cli}"), "publishing wrote to the task's standard output, or did not say what it fetched:\n${version.stdout}${version.stderr}")?
-	first = names!(package_dir)?
+	first = environment_entries!(package_dir)?
 	check!(same_names(first, hashes), "expected exactly the two packages, found: ${Str.join_with(first, " ")}")?
 	check_published!(package_dir, cli)?
 	check_published!(package_dir, http)?
@@ -380,9 +390,9 @@ scenarios! = |context| {
 	# An environment without Roc packages writes nothing, in a cache of its own.
 	plain_cache = "${context.work}/plain-cache"
 	plain = succeed!(context, plain_cache, project, ["run", "plain"])?
-	plain_names = names!("${plain_cache}/roc/packages")?
+	plain_names = environment_entries!("${plain_cache}/roc/packages")?
 	check!(plain.stdout.trim() == "Hello, world!" and plain_names.is_empty(), "an environment without Roc packages published: ${Str.join_with(plain_names, " ")}")?
-	Script.pass!("   environment without Roc packages: no package cache created")?
+	Script.pass!("   environment without Roc packages: no environment bundles published")?
 
 	# 6. A sandboxed build has no network, yet the app resolves both bundles
 	# from the build's own cache and writes the artifact.
@@ -425,7 +435,7 @@ scenarios! = |context| {
 	tasks_lock = Path.read_utf8!(Path.utf8("${tasks_only}/Blueprint.lock"))?
 	check!(!tasks_lock.contains("tarball+") and !tasks_lock.contains(cli) and !tasks_lock.contains(http), "a project with no build locked a Roc bundle:\n${tasks_lock}")?
 	fetched = succeed!(context, tasks_cache, tasks_only, ["run", "version"])?
-	check!(fetched.stderr.contains("fetching Roc package ${cli} from ${RocPackagesTest.basic_cli}") and same_names(names!("${tasks_cache}/roc/packages")?, hashes), "a task did not download its own Roc packages:\n${fetched.stderr}")?
+	check!(fetched.stderr.contains("fetching Roc package ${cli} from ${RocPackagesTest.basic_cli}") and same_names(environment_entries!("${tasks_cache}/roc/packages")?, hashes), "a task did not download its own Roc packages:\n${fetched.stderr}")?
 	unlocked = succeed!(context, tasks_cache, tasks_only, ["run", "hello"])?
 	check!(unlocked.stdout.trim() == RocPackagesTest.greeting and !unlocked.stderr.contains("fetching Roc package"), "with no bundle locked the app printed: ${unlocked.stdout}${unlocked.stderr}")?
 	Script.pass!("   no build: Blueprint.lock names no bundle; the task downloaded both itself and the app printed \"${unlocked.stdout.trim()}\"")?
@@ -457,7 +467,7 @@ scenarios! = |context| {
 	Script.pass!("   build runner: XDG_CACHE_HOME ${bare.recorded} without Roc packages; <build>/runner-cache with them, holding a link to ${cli}")?
 
 	# 7. Nothing was published into the user's own cache.
-	ours_after = published_among!(real_packages, hashes)
+	ours_after = published_among!(real_packages, checked_hashes)
 	strays = names!(real_packages)?.keep_if(|name| name.starts_with("blueprint-"))
 	check!(
 		same_names(ours_after, ours_before) and strays.is_empty(),
