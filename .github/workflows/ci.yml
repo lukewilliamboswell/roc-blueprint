@@ -68,7 +68,9 @@ jobs:
         group: [unit, package, glue, fuzz]
     name: ${{ matrix.group }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Boxy fuzz lowering avoids the pinned compiler's lambda-solver crash;
+    # retain the full generated-input budget despite its slower execution.
+    timeout-minutes: ${{ matrix.group == 'fuzz' && 90 || 30 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
