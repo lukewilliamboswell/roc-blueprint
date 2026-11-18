@@ -1,0 +1,31 @@
+= roc-blueprint 0.14.0
+
+Blueprint now builds with and embeds Roc `nightly-2026-11-18-a520eed`.
+The CLI, standalone SBOM tool, and maintenance scripts use basic-cli 0.28.1.
+Configuration evaluation and checks compile from source to avoid incompatible
+cached compiler state on this nightly.
+
+== Upgrade
+
+Install the matching Blueprint binary and use this platform in Blueprint.roc.
+
+[source,roc,snippet=unchecked]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+The importable core package is `{core-url}`. Use the release's Roc compiler
+when compiling consumers. The compiler and platform update is released at the
+next breaking-version boundary; the Spec and lock formats remain unchanged.
+
+== Development tooling
+
+`roc-stable` now selects the same November 18 nightly as the product compiler.
+Fuzz targets use roc-fuzz 0.7.0 while preserving their existing generator-entropy
+corpora and property assertions. Oversized-input tests retain their limits and
+construct their strings without the interpreter self-concatenation path reported
+in https://github.com/roc-lang/roc/issues/13210[roc#13210].
+
+Shared roc-automation actions and nightly compatibility checks use the reviewed
+November update; documentation uses the tools-0.11.1 native renderer.
+The Nix installer actions are updated to 31.11.5.

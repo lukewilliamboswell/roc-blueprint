@@ -1,10 +1,12 @@
 # Project generated Locks through a provider's pins into lock snapshots.
 app [target] {
 	core: "../../main.roc",
-	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst",
+	entropy: "../entropy.roc",
+	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.7.0/HBigHQhVZWEF2EkLxpYK35u8P6UNsAmPYxpNFTxXK1Br.tar.zst",
 }
 
 import pf.Fuzz
+import entropy.EntropyTarget
 import core.Lock
 import core.LockSnapshot
 import core.Provider
@@ -193,7 +195,7 @@ case_generator = Fuzz.map(
 	},
 )
 
-target = Fuzz.target_with({
+target = EntropyTarget.target_with({
 	name: "lock-snapshot-project",
 	generator: case_generator,
 	test,

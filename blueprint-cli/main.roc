@@ -48,7 +48,7 @@ import "compiler-version" as compiler_version : Str
 import "compiler-archive" as compiler_archive : List(U8)
 
 version : Str
-version = "0.13.0"
+version = "0.14.0"
 
 ## The providers a request may be planned with. This is the only reference to
 ## a concrete provider: everything else uses the Provider contract
@@ -434,12 +434,14 @@ store_json = |report| {
 	Json.to_str({ format: store_report_format, store: report.store, findings, counts: report.counts, repaired: report.repaired }).concat("\n")
 }
 
+## Compile from source: cached native evaluation can leave hosted symbols in
+## a later compile-time check on the pinned compiler.
 ## Type-check Blueprint.roc (including whole-config validation), then reuse
 ## the Spec loaded for CLI parsing to check provider compatibility.
 check! : Try(Spec, _), Context => Try({}, _)
 check! = |loaded, ctx| {
 	check_host!()?
-	native_command!(OsStr.from_str(roc!(ctx)?)).args(["check", "Blueprint.roc"].map(OsStr.from_str))
+	native_command!(OsStr.from_str(roc!(ctx)?)).args(["check", "--no-cache", "Blueprint.roc"].map(OsStr.from_str))
 		.cwd(path(ctx.layout.project_root)).call!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = loaded?
@@ -463,7 +465,7 @@ evaluate! = |ctx| {
 	check_host!()?
 	compiler = roc!(ctx)?
 	resolved = { ..ctx, compiler: Resolved(compiler) }
-	output = native_command!(OsStr.from_str(compiler)).args(["Blueprint.roc"].map(OsStr.from_str))
+	output = native_command!(OsStr.from_str(compiler)).args(["--no-cache", "Blueprint.roc"].map(OsStr.from_str))
 		.cwd(path(root)).capture!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = Spec.parse(output).map_err(|err| BadSpec(err))?

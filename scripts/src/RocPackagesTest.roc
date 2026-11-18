@@ -480,7 +480,7 @@ scenarios! = |context| {
 	Script.pass!("7. ${real_packages}: nothing published or staged there")
 }
 
-expect RocPackagesTest.hash(RocPackagesTest.basic_cli) == "Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af"
+expect RocPackagesTest.hash(RocPackagesTest.basic_cli) == "7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr"
 expect RocPackagesTest.relative("/tmp/work/project", "/home/me/repo/blueprint-platform/main.roc") == "../../../home/me/repo/blueprint-platform/main.roc"
 expect RocPackagesTest.relative("/repo/tests/project", "/repo/blueprint-platform/main.roc") == "../../blueprint-platform/main.roc"
 expect RocPackagesTest.relative("/repo", "/repo/blueprint-platform/main.roc") == "blueprint-platform/main.roc"

@@ -1,10 +1,12 @@
 # Mutate SPDX 3.0.1 and 2.3 documents; reading them must be total and sound.
 app [target] {
 	core: "../../main.roc",
-	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst",
+	entropy: "../entropy.roc",
+	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.7.0/HBigHQhVZWEF2EkLxpYK35u8P6UNsAmPYxpNFTxXK1Br.tar.zst",
 }
 
 import pf.Fuzz
+import entropy.EntropyTarget
 import core.CycloneDx
 import core.JsonData
 import core.Lock
@@ -151,7 +153,7 @@ importable = |document, text|
 		}
 	}
 
-target = Fuzz.target_with({
+target = EntropyTarget.target_with({
 	name: "sbom-read",
 	generator: Fuzz.raw_bytes,
 	test,

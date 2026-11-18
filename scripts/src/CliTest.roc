@@ -203,13 +203,13 @@ cases! = |bench| {
 
 	# Every command evaluates the configuration once, with a probed compiler.
 	settings!(test, work, CliTest.valid)?
-	evaluated!(test, work, ["--help"], "argument-test", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["run", "--help"], "echo-args", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["shell", "--help"], "ci", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["tasks"], "echo-args\t(ci)", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["spec"], "(name \"argument-test\")", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["flake"], "devShells", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["check"], "Blueprint.roc is valid", [["Blueprint.roc"], ["check", "Blueprint.roc"]])?
+	evaluated!(test, work, ["--help"], "argument-test", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["run", "--help"], "echo-args", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["shell", "--help"], "ci", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["tasks"], "echo-args\t(ci)", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["spec"], "(name \"argument-test\")", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["flake"], "devShells", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["check"], "Blueprint.roc is valid", [["--no-cache", "Blueprint.roc"], ["check", "--no-cache", "Blueprint.roc"]])?
 	untouched!(work)?
 	Script.pass!("help, tasks, spec, flake and check: one evaluation each, no provider, nothing generated")?
 
@@ -276,7 +276,7 @@ cases! = |bench| {
 	CliHarness.contains!(relative, "Blueprint.roc is valid", "check with a relative ROC")?
 	here = CliHarness.calls!("${work}/roc-calls")?
 	CliHarness.check!(!here.is_empty() and here.all(|call| call == ["version"]), "a relative ROC was not probed from the invocation directory: ${Str.inspect(here)}")?
-	CliHarness.same_calls!(evaluations!(elsewhere)?, [["Blueprint.roc"], ["check", "Blueprint.roc"]], "a relative ROC did not evaluate in BLUEPRINT_ROOT")?
+	CliHarness.same_calls!(evaluations!(elsewhere)?, [["--no-cache", "Blueprint.roc"], ["check", "--no-cache", "Blueprint.roc"]], "a relative ROC did not evaluate in BLUEPRINT_ROOT")?
 	untouched!(elsewhere)?
 	Script.pass!("ROC=./bin/roc-record: probed from the invocation directory, evaluated in BLUEPRINT_ROOT")?
 
@@ -501,7 +501,7 @@ cases! = |bench| {
 	update!(test, flow)?
 	CliHarness.forget!("${flow}/roc-calls")?
 	_ = invoke!(test, flow, ["workflow", "ci"], 0, [])?
-	CliHarness.same_calls!(CliHarness.calls!("${flow}/roc-calls")?, [["version"], ["Blueprint.roc"]], "workflow ci did not load the configuration exactly once")?
+	CliHarness.same_calls!(CliHarness.calls!("${flow}/roc-calls")?, [["version"], ["--no-cache", "Blueprint.roc"]], "workflow ci did not load the configuration exactly once")?
 	CliHarness.same_calls!(
 		CliHarness.calls!("${flow}/nix-calls")?,
 		[

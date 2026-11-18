@@ -1,10 +1,12 @@
 # Render generated inventories as SPDX 3.0.1 and 2.3 and read them back.
 app [target] {
 	core: "../../main.roc",
-	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst",
+	entropy: "../entropy.roc",
+	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.7.0/HBigHQhVZWEF2EkLxpYK35u8P6UNsAmPYxpNFTxXK1Br.tar.zst",
 }
 
 import pf.Fuzz
+import entropy.EntropyTarget
 import core.CycloneDx
 import core.Project
 import core.JsonData
@@ -620,7 +622,7 @@ edit_list = |bom, key, pick, chosen, change| {
 	Ok(set(bom, key, JsonData.Array($edited)))
 }
 
-target = Fuzz.target_with({
+target = EntropyTarget.target_with({
 	name: "sbom-render",
 	generator: {
 		components: Fuzz.list({ name: Fuzz.str, version: Fuzz.str, producer: Fuzz.u8, producer_name: Fuzz.str, license: Fuzz.u8, sha: Fuzz.u8, identity: Fuzz.u8, download: Fuzz.u8, modified: Fuzz.str, parent: Fuzz.u8, relation: Fuzz.u8, reverse: Fuzz.u8, basis: Fuzz.str }.Fuzz, 6),

@@ -84,7 +84,7 @@ act! = |role, args| {
 		RocWire =>
 			match argv {
 				["version"] => written!(variable!("STUB_ROC_VERSION")?)
-				["Blueprint.roc"] => written!(Path.read_utf8!(Path.utf8("wire.scm")).map_err(|_| "cannot read ./wire.scm")?)
+				["--no-cache", "Blueprint.roc"] => written!(Path.read_utf8!(Path.utf8("wire.scm")).map_err(|_| "cannot read ./wire.scm")?)
 				_ => Err("unexpected compiler arguments: ${Str.inspect(argv)}")
 			}
 

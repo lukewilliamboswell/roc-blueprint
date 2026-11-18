@@ -230,7 +230,7 @@ one! = |target, source, how, places| {
 		}
 	}
 	dictionaries = names!(source)?.keep_if(|name| name.ends_with(".dict")).map(|name| "${source}/${name}")
-	arguments = Fuzz.flags(how, has_corpus, "${artifacts}/${target}-", dictionaries).concat(corpora)
+	arguments = ["raw"].concat(Fuzz.flags(how, has_corpus, "${artifacts}/${target}-", dictionaries)).concat(corpora)
 	outcome = Process.capture!(Process.command(binary, arguments, work))?
 	# libFuzzer reports on standard error.
 	if outcome.code != 0 {
