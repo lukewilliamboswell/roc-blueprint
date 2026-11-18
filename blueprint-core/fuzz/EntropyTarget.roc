@@ -15,11 +15,19 @@ EntropyTarget := [].{
 			name: config.name,
 			example_count: || 0,
 			example: |_| crash "entropy target declares no saved examples",
-			run!: |bytes| match property(generator(Arbitrary.new(bytes)).value) {
-				Keep => 0
-				Reject => 1
+			run!: |bytes| {
+				value = prepare!(generator, bytes)
+				measured = Fuzz.measure!("$property", || property(value))
+				match measured.value {
+					Keep => 0
+					Reject => 1
+				}
 			},
 			show: |bytes| show_value(generator(Arbitrary.new(bytes)).value),
 		})
 	}
 }
+
+## Finish generator ownership cleanup before opening the observation region.
+prepare! : Fuzz.Generator(a), List(U8) => a
+prepare! = |generator, bytes| generator(Arbitrary.new(bytes)).value

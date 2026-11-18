@@ -46,7 +46,10 @@ import StubTool
 ## working directory. It runs nothing through a shell.
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
-	executable = Env.exe_path!().map_ok(Path.display) ?? ""
+	executable = match Env.exe_path!() {
+		Ok(file) => Path.canonicalize!(file).map_ok(Path.display) ?? ""
+		Err(_) => ""
+	}
 	match StubTool.role(executable) {
 		Ok(role) =>
 			match act!(role, args) {
@@ -188,7 +191,13 @@ act! = |role, args| {
 		RocStable => {
 			record!("roc-stable-calls", argv)?
 			shown = match optional!("STUB_SHOW_EXE") {
-				Ok(_) => "exe: ${Env.exe_path!().map_ok(Path.display) ?? "unknown"}\n"
+				Ok(_) => {
+					executable = match Env.exe_path!() {
+						Ok(file) => Path.canonicalize!(file).map_ok(Path.display) ?? "unknown"
+						Err(_) => "unknown"
+					}
+					"exe: ${executable}\n"
+				}
 				Err(_) => ""
 			}
 			written!("${shown}stub roc-stable: ${Str.join_with(argv, " ")}\n")

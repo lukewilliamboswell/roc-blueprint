@@ -156,6 +156,7 @@ cases! = |bench| {
 		env: CliHarness.setting(
 			[],
 			[
+				("BLUEPRINT_TARGET", "x86_64-linux"),
 				("PATH", bench.bin),
 				("HOME", bench.work),
 				("ROC", "${bench.bin}/roc-wire"),

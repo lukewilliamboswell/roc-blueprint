@@ -55,7 +55,7 @@ ReleaseSbom := [].{
 		if actual_tag.trim() != "nightly-2026-11-18-a520eed" {
 			return Err(Invalid("compiler changed: review full source revision and native closure declaration"))
 		}
-		if native.source.sha != "5db8f9b9e661f5cbde0254d3520366ef4eab8bd4" {
+		if native.source.sha != "99649586217e36d251b6ebf7ee0a5d1593b19c20" {
 			return Err(Invalid("native linker authority changed: review supplemental versions/relationships"))
 		}
 		_ = reviewed_imports!(root)?
@@ -196,7 +196,7 @@ ReleaseSbom := [].{
 			member_component = { ..declared, target: member_target, identity: "urn:blueprint:linker-member:${member}:${declared.sha256}", modified: "Member ${member} in ${release_url}; checksum names member bytes, not containing archive" }
 			$components = $components.append(member_component)
 			$edges = $edges.append(edge("sources", member_id, "contains", "Exact member named by Bundle.target_inputs and copied into platform source bundle; digest is member bytes"))
-			runtime_id = if member.ends_with("/libc.a") or member.ends_with("/crt1.o") {
+			runtime_id = if member.ends_with("/libc.a") or member.ends_with("/rcrt1.o") {
 				"musl"
 			} else if member.ends_with("/libzigc.a") or member.ends_with("/libcompiler_rt.a") {
 				"zig-runtime"
@@ -632,7 +632,7 @@ platform_context_fixture = { namespace: "https://example.org/platform/revision-1
 
 expect {
 	members = platform_members_fixture.map(|member| member.name)
-	["targets/x64musl/libc.a", "targets/arm64musl/libc.a", "targets/x64musl/crt1.o", "targets/arm64musl/crt1.o", "targets/x64musl/libcompiler_rt.a", "targets/x64win/msvc_runtime.lib"].all(|name| members.contains(name))
+	["targets/x64musl/libc.a", "targets/arm64musl/libc.a", "targets/x64musl/rcrt1.o", "targets/arm64musl/rcrt1.o", "targets/x64musl/libcompiler_rt.a", "targets/x64win/msvc_runtime.lib"].all(|name| members.contains(name))
 }
 expect {
 	composition = expanded_platform_fixture

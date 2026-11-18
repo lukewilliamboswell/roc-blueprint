@@ -1,6 +1,6 @@
 //! Builds the roc-blueprint platform host into targets/<target>/libhost.a.
 //!
-//! The musl runtime files beside libhost.a (crt1.o, libc.a, libzigc.a,
+//! The musl runtime files beside libhost.a (rcrt1.o, libc.a, libzigc.a,
 //! libcompiler_rt.a) are not built here; scripts/link_inputs.roc installs them
 //! from a locked release, see targets/README.md.
 const std = @import("std");

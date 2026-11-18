@@ -109,7 +109,7 @@ Fuzz := [].{
 	check_args = |source| ["check", "--no-cache", source]
 
 	build_args : Str, Str -> List(Str)
-	build_args = |source, output| ["build", "--fuzz", "--no-cache", source, "--output=${output}"]
+	build_args = |source, output| ["build", "--fuzz", "--specialize=no", "--no-cache", source, "--output=${output}"]
 
 	## Build and run the requested targets, from the repository root.
 	run! : Str, Request => Try({}, _)
@@ -264,7 +264,7 @@ expect Fuzz.tail("a\nb\nc", 2) == "b\nc" and Fuzz.tail("a\nb", 5) == "a\nb"
 
 # Both phases force compilation; fuzz instrumentation and the exact target/output remain.
 expect Fuzz.check_args("target/main.roc") == ["check", "--no-cache", "target/main.roc"]
-expect Fuzz.build_args("target/main.roc", "/work/target") == ["build", "--fuzz", "--no-cache", "target/main.roc", "--output=/work/target"]
+expect Fuzz.build_args("target/main.roc", "/work/target") == ["build", "--fuzz", "--specialize=no", "--no-cache", "target/main.roc", "--output=/work/target"]
 
 # Every target stays in order, including the final odd batch; an empty selection is empty.
 expect Fuzz.compiler_batches([]) == []

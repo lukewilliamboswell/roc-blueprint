@@ -11,7 +11,7 @@ with lifecycle scope `build` (SPDX 2.3 `BUILD_DEPENDENCY_OF`).
 
 `linker-runtime-sources.json` and `msvc-runtime-UPSTREAM.json` are from
 roc-platform-template-zig commit
-`5db8f9b9e661f5cbde0254d3520366ef4eab8bd4`, the exact producer selected by
+`99649586217e36d251b6ebf7ee0a5d1593b19c20`, the exact producer selected by
 `link-inputs.lock.json`. They establish musl 1.2.5, Zig 0.17.0, and Roc MSVC
 startup source revision `7d256b954603e1170ee0d6df229c795aba6dc70d`.
 
@@ -28,8 +28,7 @@ and [upstream commit](https://github.com/roc-lang/roc/commit/a520eeda6c3745f2543
 Bootstrap archive digests and sizes come from that release's asset metadata and
 are checked against downloaded bytes before embedding. This does not establish
 a complete compiler archive dependency or license inventory. The generation
-recipe retains that uncertainty explicitly. The independently pinned linker-input
-producer and its supplemental component versions above are unchanged. The
+recipe retains that uncertainty explicitly. The linker-input archive supplies the runtime inventories above. The
 sandbox runner retains its separate pins.
 
 Changes to the compiler, CLI imports, or linker-input producer fail closed
