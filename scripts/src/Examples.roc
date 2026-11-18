@@ -23,21 +23,21 @@ Examples := [].{
 	manifest = |suite, version, dependencies| Json.to_str({ ..suite, release: version, dependencies })
 
 	valid_suite : Suite, List(Str) -> Bool
-	valid_suite = |suite, projects|
+	valid_suite = |suite, project_names|
 		suite.schema_version == 1 and suite.release == "working-tree" and suite.dependencies.is_empty()
-			and Process.sorted(suite.apps.map(|example| example.path)) == Process.sorted(projects.map(|project| "examples/${project}/Blueprint.roc"))
-				and !projects.is_empty()
-					and suite.apps.all(
-						|example| match example.cases {
-							[case] => case.name == "spec" and case.args.is_empty() and case.stdin == "" and case.stderr == "" and case.exit_code == 0
-							_ => Bool.False
-						},
-					)
+			and Process.sorted(suite.apps.map(|example| example.path)) == Process.sorted(project_names.map(|project| "examples/${project}/Blueprint.roc"))
+			and !project_names.is_empty()
+			and suite.apps.all(
+				|example| match example.cases {
+					[case] => case.name == "spec" and case.args.is_empty() and case.stdin == "" and case.stderr == "" and case.exit_code == 0
+					_ => Bool.False
+				},
+			)
 
 	## What an example in this repository names as its platform.
 	local_platform = "platform \"../../blueprint-platform/main.roc\""
 
-	## The projects `blueprint` refuses to load, each with what it says. The
+	## The project_names `blueprint` refuses to load, each with what it says. The
 	## compiler still checks them and prints their Spec.
 	refused = [("extensions", "needs features: extensions")]
 
@@ -45,14 +45,14 @@ Examples := [].{
 	archive_name : Str -> Str
 	archive_name = |version| "roc-blueprint-examples-${version}"
 
-	## The files of the example projects among those git tracks under
+	## The files of the example project_names among those git tracks under
 	## `examples/`, as paths below it. A file directly in `examples/` belongs
 	## to no project.
 	project_files : Str -> List(Str)
 	project_files = |tracked|
 		Process.lines(tracked).map(|file| file.drop_prefix("examples/")).keep_if(|file| file.split_on("/").len() > 1)
 
-	## The projects: each directory with a `Blueprint.roc`.
+	## The project_names: each directory with a `Blueprint.roc`.
 	projects : List(Str) -> List(Str)
 	projects = |files| files.keep_if(|file| file.split_on("/").drop_first(1) == ["Blueprint.roc"]).map(|file| file.drop_suffix("/Blueprint.roc"))
 
@@ -148,7 +148,7 @@ tracked! : Str => Try(List(Str), _)
 tracked! = |root| {
 	listed = Process.succeed!(Process.command("git", ["ls-files", "--", "examples"], root))?
 	files = Examples.project_files(listed.stdout)
-	if Examples.projects(files).is_empty() Script.fail!("git tracks no example project under examples/") else Ok(files)
+	if (Examples.projects(files).is_empty()) Script.fail!("git tracks no example project under examples/") else Ok(files)
 }
 
 parent : Str -> Str
@@ -198,12 +198,12 @@ unpacked! = |root, version, binary, work, idle| {
 	top = "${work}/${name}"
 
 	Script.info!("==>", "The archive holds the examples with only the platform changed")?
-	windows = (Env.platform!()).os == WINDOWS
-	listed = Process.succeed!(Process.command(if windows "tar" else "unzip", if windows ["-tf", archive] else ["-Z1", archive], root))?
+	windows = Process.windows!()
+	listed = Process.succeed!(Process.command(if (windows) "tar" else "unzip", if (windows) ["-tf", archive] else ["-Z1", archive], root))?
 	held = Process.sorted(Process.lines(listed.stdout).keep_if(|entry| !entry.ends_with("/")))
 	wanted = Examples.contents(files).map(|file| "${name}/${file}")
 	Process.check!(held == wanted, "dist/${name}.zip holds:\n${Str.join_with(held, "\n")}\nexpected:\n${Str.join_with(wanted, "\n")}")?
-	_ = Process.succeed!(Process.command(if windows "tar" else "unzip", if windows ["-xf", archive, "-C", work] else ["-q", archive, "-d", work], root))?
+	_ = Process.succeed!(Process.command(if (windows) "tar" else "unzip", if (windows) ["-xf", archive, "-C", work] else ["-q", archive, "-d", work], root))?
 	suite = suite!(root, Examples.projects(files))?
 	manifest = Path.read_utf8!(Path.utf8("${top}/spec.json"))?
 	Process.check!(manifest == Examples.manifest(suite, version, [bundled.platform_url, bundled.core_url]), "archived suite differs from reviewed expectations")?
@@ -223,21 +223,21 @@ unpacked! = |root, version, binary, work, idle| {
 	server = idle.with_route(route(bundled.platform_archive), Path.read_bytes!(Path.utf8("${root}/dist/${bundled.platform_archive}"))?).with_route(route(bundled.core_archive), Path.read_bytes!(Path.utf8("${root}/dist/${bundled.core_archive}"))?)
 	arguments = Bundle.replacing(bundled.platform_url, server.url(route(bundled.platform_archive))).concat(Bundle.replacing(bundled.core_url, server.url(route(bundled.core_archive))))
 	# Its own package cache, empty: the bundles must come from this process.
-	environment = [("XDG_CACHE_HOME", if windows "${work}/cache".replace_each("/", "\\") else "${work}/cache")]
+	environment = [("XDG_CACHE_HOME", if (windows) "${work}/cache".replace_each("/", "\\") else "${work}/cache")]
 	roc = Process.roc!()
 
 	Script.info!("==>", "Each archived example checks and prints its recorded Spec against the served bundles")?
 	projects = Examples.projects(files)
 	for project in projects {
 		directory = "${top}/examples/${project}"
-		compiler = |args| Process.with_env(Process.product_command(roc, args.concat(["--no-cache"]).concat(arguments).concat(["Blueprint.roc"]), directory), environment)
+		compiler = |args| Process.with_env(Process.command(roc, args.concat(["--no-cache"]).concat(arguments).concat(["Blueprint.roc"]), directory), environment)
 		recorded = expected!(suite, project)?
 		match server.drive!([compiler(["check"])])? {
 			[checked] => Process.check!(checked.code == 0, "${checked.stdout}${checked.stderr}\nroc check of the archived ${project} example exited with code ${checked.code.to_str()}")?
 			_ => return Script.fail!("roc check did not report a result")
 		}
-		executable = "${work}/example${if windows ".exe" else ""}"
-		native_executable = if windows executable.replace_each("/", "\\") else executable
+		executable = "${work}/example${if (windows) ".exe" else ""}"
+		native_executable = if (windows) executable.replace_each("/", "\\") else executable
 		match server.drive!([compiler(["build", "--output=${native_executable}"])])? {
 			[built] => Process.check!(built.code == 0, "${built.stdout}${built.stderr}")?
 			_ => return Script.fail!("build did not report a result")

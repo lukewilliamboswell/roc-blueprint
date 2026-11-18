@@ -1,5 +1,6 @@
 import cli.Cmd
 import cli.Env
+import cli.System
 import cli.OsStr
 import cli.Path
 import Bundle
@@ -78,7 +79,7 @@ script! = |context, name, args|
 	Process.passthrough!(Process.command(stable, ["scripts/${name}.roc"].concat(args), context.root))
 
 compiler! : Context, List(Str) => Try({}, _)
-compiler! = |context, args| Process.passthrough!(Process.product_command(context.roc, args, context.root))
+compiler! = |context, args| Process.passthrough!(Process.command(context.roc, args, context.root))
 
 read! : Context, Str => Try(Str, _)
 read! = |context, file| Path.read_utf8!(Path.utf8("${context.root}/${file}"))
@@ -322,11 +323,11 @@ unit! = |context| {
 ## The released system this machine is, as the binaries in `dist/` are named.
 host_system! : () => Str
 host_system! = ||
-	match Env.platform!() {
-		{ arch: AARCH64, os: LINUX } => "aarch64-linux"
-		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
-		{ arch: X64, os: MACOS } => "x86_64-darwin"
-		{ arch: X64, os: WINDOWS } => "x86_64-windows"
+	match (System.target!().arch(), System.target!().os()) {
+		(Arm64, Linux(_)) => "aarch64-linux"
+		(Arm64, MacOS(_)) => "aarch64-darwin"
+		(X64, MacOS(_)) => "x86_64-darwin"
+		(X64, Windows(_)) => "x86_64-windows"
 		_ => "x86_64-linux"
 	}
 
@@ -428,7 +429,7 @@ packaged! = |context| {
 	step!("Nix flake: the packaged blueprint builds an artifact with nothing but Nix on PATH")?
 	work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-packaged-")?)?)?
 	result = packaged_build!(context, package_path, work)
-	_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--", work].map(OsStr.from_str)).exec!()
+	_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--", work].map(OsStr.from_str)).call!()
 	_ = Path.delete_all!(Path.utf8(work))
 	result?
 
@@ -456,7 +457,7 @@ packaged_build! = |context, package_path, work| {
 		[directory, ..] => "${directory}/nix"
 		[] => return Script.fail!("nix is not on PATH")
 	}
-	Cmd.new(OsStr.from_str("ln")).args(["-s", nix, "${only_nix}/nix"].map(OsStr.from_str)).exec!().map_err(|_| LinkFailed)?
+	Cmd.new(OsStr.from_str("ln")).args(["-s", nix, "${only_nix}/nix"].map(OsStr.from_str)).call!().map_err(|_| LinkFailed)?
 
 	packages_ref = match FlakeLock.locked(read!(context, "fixtures/consumer/inputs.lock")?, "nixpkgs") {
 		Ok(pin) => FlakeLock.ref(pin)

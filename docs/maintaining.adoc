@@ -86,8 +86,8 @@ The required checks are listed under
 <<repository-settings-the-workflows-rely-on>>. Keep their names aligned with
 the workflows when changing CI.
 
-The product uses basic-cli 0.27.0 and pins `nightly-2026-11-07-ad3a5d2` for the product and
-`nightly-2026-10-13-b17d287` for maintenance scripts, with roc-fuzz 0.4.3.
+The product and maintenance scripts use basic-cli 0.28.1 and
+`nightly-2026-11-18-a520eed`; fuzz targets use roc-fuzz 0.4.3.
 
 The complete suite requires x86_64 Linux and a running Nix daemon; the
 development shell supplies the rest. `zig build` builds the platform host for

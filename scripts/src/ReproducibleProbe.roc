@@ -17,7 +17,7 @@ ReproducibleProbe := [].{
 	run! = |root, variant, output| {
 		BuildHarness.require!(["release", "synthetic"].contains(variant), "unknown reproducibility probe variant")?
 		repository = Path.to_str(Path.canonicalize!(root)?)?
-		destination = if output.starts_with("/") output else "${repository}/${output}"
+		destination = if (output.starts_with("/")) output else "${repository}/${output}"
 		BuildHarness.run!(root, "repro-${variant}", |suite| probe!(suite, variant, destination))
 	}
 
@@ -60,7 +60,7 @@ probe! = |suite, variant, output| {
 		BuildHarness.require!(source.contains(marker), "CLI version literal not found")?
 		Path.write_utf8!(cli_source, source.replace_each(marker, "version = \"${patched}\""))?
 		# Native build only: reuse the release artifact's other platform hosts.
-		Cmd.new(OsStr.from_str(suite.roc)).args(["build", "blueprint-cli/main.roc", "--output=${suite.blueprint}"].map(OsStr.from_str)).cwd(Path.utf8(suite.root)).exec!()?
+		Cmd.new(OsStr.from_str(suite.roc)).args(["build", "blueprint-cli/main.roc", "--output=${suite.blueprint}"].map(OsStr.from_str)).cwd(Path.utf8(suite.root)).call!()?
 		patched
 	} else released
 	actual_version = Cmd.new(OsStr.from_str(suite.blueprint)).arg("--version").capture!()?.trim()

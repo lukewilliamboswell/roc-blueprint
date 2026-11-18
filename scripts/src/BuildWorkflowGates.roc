@@ -59,8 +59,8 @@ BuildWorkflowGates := [].{
 	## invocation but must not publish a store path.
 	published : List(Step), Bool -> List(Str)
 	published = |steps, good| {
-		successful = if good or steps.last().map_ok(|step| step.kind) != Ok("build") steps else steps.drop_last(1)
-		successful.map(|step| if step.kind == "build" "build" else task_line(step.argv))
+		successful = if (good or steps.last().map_ok(|step| step.kind) != Ok("build")) steps else steps.drop_last(1)
+		successful.map(|step| if (step.kind == "build") "build" else task_line(step.argv))
 	}
 
 	## Run every gate, then the smoke test of a copy of `examples/artifacts`.
@@ -239,7 +239,7 @@ workflow! : BuildHarness.Suite, BuildHarness.Layout, Str, List(BuildWorkflowGate
 workflow! = |suite, place, name, expected, refusal| {
 	good = refusal.is_empty()
 	start = BuildHarness.events!(suite)?.len()
-	ran = if good BuildHarness.ok!(suite, place, ["workflow", name])? else BuildHarness.refused!(suite, place, ["workflow", name], refusal)?
+	ran = if (good) BuildHarness.ok!(suite, place, ["workflow", name])? else BuildHarness.refused!(suite, place, ["workflow", name], refusal)?
 	# Bind each native invocation to the CLI's selected build and prepared
 	# identity. Keep every announcement: a task can change the next preparation
 	# of the same build, and failed builds still have an invocation.
@@ -277,7 +277,7 @@ workflow! = |suite, place, name, expected, refusal| {
 	for output in outputs {
 		BuildHarness.require!(BuildHarness.exists!(output), "reported artifact missing: ${output}")?
 	}
-	printed = lines.map(|line| if line.starts_with("/nix/store/") "build" else line)
+	printed = lines.map(|line| if (line.starts_with("/nix/store/")) "build" else line)
 	wanted = BuildWorkflowGates.published(expected, good)
 	BuildHarness.require!(printed == wanted, "${name}: stdout order ${Str.inspect(printed)}, expected ${Str.inspect(wanted)}")?
 	Ok({ outputs, ran })

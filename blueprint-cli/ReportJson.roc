@@ -3,7 +3,7 @@ import core.Value
 
 ReportJson := [].{
 	object : List((Str, Str)) -> Str
-	object = |fields| "{${Str.join_with(fields.map(|(name, value)| "${Json.to_str(name)}:${value}"), ",")}}"
+	object = |fields| "{${Str.join_with(fields.map(|(name, encoded)| "${Json.to_str(name)}:${encoded}"), ",")}}"
 
 	value : Value -> Try(Str, Str)
 	value = |input| match input {

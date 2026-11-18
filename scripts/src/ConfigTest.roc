@@ -78,9 +78,9 @@ ConfigTest := [].{
 				"(programs ",
 				"(environment_programs ",
 				"(expects ",
-				"(urls (\"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-07-ad3a5d2/roc_nightly-linux_x86_64-2026-11-07-ad3a5d2.tar.gz\"))",
+				"(urls (\"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-18-a520eed/roc_nightly-linux_x86_64-2026-11-18-a520eed.tar.gz\"))",
 				"(unpack TarGz)",
-				"(path \"roc_nightly-windows_x86_64-2026-11-07-ad3a5d2/roc.exe\")",
+				"(path \"roc_nightly-windows_x86_64-2026-11-18-a520eed/roc.exe\")",
 				"(unpack Zip)",
 				"(urls (\"https://example.test/1.0/tool-linux\" \"https://mirror.example.test/1.0/tool-linux\"))",
 				"(urls (\"https://example.test/windows/notes-x86_64\"))",
@@ -95,7 +95,7 @@ ConfigTest := [].{
 	app_source : Str, Str -> Str
 	app_source = |platform_ref, config| {
 		modules = ["Recipes.", "System ->", "Config."].keep_if(|use| config.contains(use)).map(|use| use.drop_suffix(".").drop_suffix(" ->"))
-		prelude = if modules.is_empty() "" else "${Str.join_with(modules.map(|needed| "import pf.${needed}"), "\n")}\n\n"
+		prelude = if (modules.is_empty()) "" else "${Str.join_with(modules.map(|needed| "import pf.${needed}"), "\n")}\n\n"
 		"app [config] { pf: platform \"${platform_ref}\" }\n\n${prelude}config = ${config}\n"
 	}
 
@@ -137,7 +137,7 @@ ConfigTest := [].{
 		log = "${outcome.stdout}${outcome.stderr}"
 		code = outcome.code.to_str()
 		match fixture.kind {
-			Valid => if outcome.code == 0 "" else "expected ${fixture.name} to be accepted, got exit ${code}"
+			Valid => if (outcome.code == 0) "" else "expected ${fixture.name} to be accepted, got exit ${code}"
 			Rejected(message) =>
 				if outcome.code == 1 and log.contains("compile time crash") and log.contains("Invalid Blueprint.roc:") and log.contains(message) {
 					""
@@ -331,32 +331,26 @@ valid_fixtures = [
 	valid(
 		"Valid",
 		\\[Name("valid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [Tools(["nix#git"])]), Shell("default", [Use("dev")])]
-		,
 	),
 	valid(
 		"EquivalentComposition",
 		\\[Name("composed"), Systems(["x86_64-linux"]), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Tools(["nix#git"])]), Environment("dev", [Tools(["nix#git", "nix#python3"])]), Environment("release", [Tools(["nix#git", "nix#python3"]), Programs([Fetch("blueprint", Recipes.file("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-{system}"))])]), Shell("default", [Use("dev")]), Task("fmt", [Use("dev"), Run(["python3", "--version"])]), Task("test", [Use("dev"), Run(["git", "--version"])]), Task("args", [Use("dev"), Run(["python3", "-c", "import json, sys; print(json.dumps(sys.argv[1:]))", "configured argument"])])]
-		,
 	),
 	valid(
 		"Commands",
 		\\[Name("commands"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Input("roc", "github:roc-lang/roc-overlay"), Environment("base", [Command("vcs", "nix#git"), Command("py", "nix#python3")]), Environment("dev", [Extend("base"), Overlays(["roc"]), Command("py", "nix#python312"), Command("roc-stable", "nix#rocpkgs.nightly")]), Shell("default", [Use("dev")])]
-		,
 	),
 	valid(
 		"ConfiguredTools",
 		\\[Name("configured"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Input("rust", "github:oxalica/rust-overlay"), Environment("base", [Overlays(["rust"]), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("x86_64-unknown-linux-musl")]))])]), Environment("dev", [Extend("base"), ToolWith("nix#rust-bin.stable.latest.default", [("targets", List([Str("aarch64-unknown-linux-musl")])), ("extensions", List([Str("rust-src")]))])]), Shell("default", [Use("dev")])]
-		,
 	),
 	valid(
 		"RocPackages",
 		\\[Name("packages"), Environment("base", [RocPackages(["https://example.test/releases/download/1.0.0/abc123.tar.zst"])]), Environment("dev", [Extend("base"), RocPackages(["https://example.test/releases/download/1.0.0/abc123.tar.zst", "https://example.test/releases/download/2.0.0/def456.tar.zst"])]), Shell("default", [Use("dev")])]
-		,
 	),
 	valid(
 		"SystemTools",
 		\\[Name("systems"), Systems(["x86_64-linux", "aarch64-darwin"]), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Tools(["nix#git"]), ToolsFor("x86_64-linux", ["nix#wayland"])]), Environment("dev", [Extend("base"), ToolsFor("x86_64-linux", ["nix#alsa-lib"])]), Shell("default", [Use("dev")])]
-		,
 	),
 	# Builds use ordinary typed settings, including forward dependencies.
 	valid("Builds", "[${build_base}, ${build_settings}]"),
@@ -371,151 +365,126 @@ lower_fixtures = [
 		"MissingName",
 		"MissingName",
 		\\[Environment("dev", [])]
-		,
 	),
 	rejected(
 		"DuplicateName",
 		"DuplicateName",
 		\\[Name("one"), Name("two")]
-		,
 	),
 	rejected(
 		"DuplicateSystems",
 		"DuplicateSystems",
 		\\[Name("duplicate"), Systems(["x86_64-linux"]), Systems(["aarch64-linux"])]
-		,
 	),
 	rejected(
 		"MissingShellUse",
 		"MissingUse",
 		\\[Name("invalid"), Shell("default", [])]
-		,
 	),
 	rejected(
 		"DuplicateShellUse",
 		"DuplicateUse",
 		\\[Name("invalid"), Environment("dev", []), Shell("default", [Use("dev"), Use("dev")])]
-		,
 	),
 	rejected(
 		"MissingTaskUse",
 		"MissingUse",
 		\\[Name("invalid"), Task("check", [Run(["git"])])]
-		,
 	),
 	rejected(
 		"DuplicateTaskUse",
 		"DuplicateUse",
 		\\[Name("invalid"), Environment("dev", []), Task("check", [Use("dev"), Use("dev"), Run(["git"])])]
-		,
 	),
 	rejected(
 		"MissingRun",
 		"MissingRun",
 		\\[Name("invalid"), Environment("dev", []), Task("check", [Use("dev")])]
-		,
 	),
 	rejected(
 		"DuplicateRun",
 		"DuplicateRun",
 		\\[Name("invalid"), Environment("dev", []), Task("check", [Use("dev"), Run(["git"]), Run(["git"])])]
-		,
 	),
 	rejected(
 		"DuplicateTools",
 		"DuplicateTools",
 		\\[Name("invalid"), Environment("dev", [Tools([]), Tools([])])]
-		,
 	),
 	rejected(
 		"DuplicateOverlays",
 		"DuplicateOverlays",
 		\\[Name("invalid"), Environment("dev", [Overlays([]), Overlays([])])]
-		,
 	),
 	rejected(
 		"DuplicateExtend",
 		"DuplicateExtend",
 		\\[Name("invalid"), Environment("base", []), Environment("dev", [Extend("base"), Extend("base")])]
-		,
 	),
 	rejected(
 		"DuplicateToolWith",
 		"DuplicateToolWith",
 		\\[Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [ToolWith("nix#zig", []), ToolWith("nix#zig", [])])]
-		,
 	),
 	rejected(
 		"PlainAndConfiguredTool",
 		"tool is both plain and configured",
 		\\[Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Tools(["nix#zig"])]), Environment("dev", [Extend("base"), ToolWith("nix#zig", [])])]
-		,
 	),
 	rejected(
 		"DuplicateRocPackages",
 		"DuplicateRocPackages",
 		\\[Name("invalid"), Environment("dev", [RocPackages([]), RocPackages([])])]
-		,
 	),
 	rejected(
 		"InsecureRocPackage",
 		"invalid Roc package URL",
 		\\[Name("invalid"), Environment("dev", [RocPackages(["http://example.test/abc123.tar.zst"])])]
-		,
 	),
 	rejected(
 		"UnhashedRocPackage",
 		"invalid Roc package URL",
 		\\[Name("invalid"), Environment("dev", [RocPackages(["https://example.test/archive.tar.gz"])])]
-		,
 	),
 	rejected(
 		"MissingBuildUse",
 		"MissingUse",
 		\\[Name("bad"), Build("app", [Run(["true"]), Output("out")])]
-		,
 	),
 	rejected(
 		"MissingBuildRun",
 		"MissingRun",
 		\\[Name("bad"), Build("app", [Use("builder"), Output("out")])]
-		,
 	),
 	rejected(
 		"MissingBuildOutput",
 		"MissingOutput",
 		\\[Name("bad"), Build("app", [Use("builder"), Run(["true"])])]
-		,
 	),
 	rejected(
 		"DuplicateBuildUse",
 		"DuplicateUse",
 		\\[Name("bad"), Build("app", [Use("builder"), Use("builder"), Run(["true"]), Output("out")])]
-		,
 	),
 	rejected(
 		"DuplicateBuildRun",
 		"DuplicateRun",
 		\\[Name("bad"), Build("app", [Use("builder"), Run(["true"]), Run(["true"]), Output("out")])]
-		,
 	),
 	rejected(
 		"DuplicateBuildOutput",
 		"DuplicateOutput",
 		\\[Name("bad"), Build("app", [Use("builder"), Run(["true"]), Output("out"), Output("out")])]
-		,
 	),
 	rejected(
 		"DuplicateBuildInputs",
 		"DuplicateInputs",
 		\\[Name("bad"), Build("app", [Execute("native"), Use("builder"), Inputs([]), Inputs([]), Run(["true"]), Output("out")])]
-		,
 	),
 	rejected(
 		"DuplicateBuildNeeds",
 		"DuplicateNeeds",
 		\\[Name("bad"), Build("app", [Execute("native"), Use("builder"), Needs([]), Needs([]), Run(["true"]), Output("out")])]
-		,
 	),
 ]
 
@@ -527,62 +496,52 @@ quote_fixtures = [
 		"BadWorkflowName",
 		"invalid workflow name",
 		\\[Name("bad"), Workflow("bad/name", [])]
-		,
 	),
 	bad_quote(
 		"BadRunWorkflowName",
 		"invalid workflow name",
 		\\[Name("bad"), Workflow("ci", [RunWorkflow("bad/name")])]
-		,
 	),
 	bad_quote(
 		"BadRunTaskName",
 		"is not a task name",
 		\\[Name("bad"), Workflow("ci", [RunTask("bad..name", [])])]
-		,
 	),
 	bad_quote(
 		"BadArtifactName",
 		"is not an input name",
 		\\[Name("bad"), Workflow("ci", [BuildArtifact("bad/name")])]
-		,
 	),
 	# A tool with no source is refused where it is written, with both fixes.
 	bad_quote(
 		"UnqualifiedTool",
 		"names no package source",
 		\\[Name("bad"), Environment("dev", [Tools(["git"])])]
-		,
 	),
 	bad_quote(
 		"UnqualifiedCommand",
 		"names no package source",
 		\\[Name("bad"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("dev", [Command("roc-stable", "rocpkgs.nightly")])]
-		,
 	),
 	bad_quote(
 		"BadTool",
 		"invalid tool reference",
 		\\[Name("bad"), Environment("dev", [Tools(["one#two#three"])])]
-		,
 	),
 	bad_quote(
 		"BadSystem",
 		"is not a system",
 		\\[Name("bad"), Systems(["linux"])]
-		,
 	),
 	bad_quote(
 		"BadFlakeRef",
 		"is not a flake reference",
 		\\[Name("bad"), Input("tools", "roc-lang/roc-overlay")]
-		,
 	),
 	bad_quote(
 		"BadEnvName",
 		"is not an environment or shell name",
 		\\[Name("bad"), Environment("bad/name", [])]
-		,
 	),
 ]
 
@@ -594,19 +553,16 @@ core_fixtures = [
 		"AutoSource",
 		"type mismatch",
 		\\[Name("invalid"), Packages("default", Auto), Environment("dev", [])]
-		,
 	),
 	rejected(
 		"UnknownSource",
 		"unknown source",
 		\\[Name("invalid"), Environment("dev", [Tools(["missing#git"])])]
-		,
 	),
 	rejected(
 		"BuildCycle",
 		"build cycle",
 		\\[Name("bad"), Executor("native", Adapter("fixture", "")), Environment("builder", []), Build("app", [Execute("native"), Use("builder"), Needs(["library"]), Run(["true"]), Output("out")]), Build("library", [Execute("native"), Use("builder"), Needs(["app"]), Run(["true"]), Output("out")])]
-		,
 	),
 	rejected("WorkflowNul", "NUL in argv", "[${workflow_base}, Workflow(\"ci\", [RunTask(\"check.all\", [Str.from_utf8([0]) ?? \"\"])])]"),
 	rejected("BuildDepth", "build dependencies exceed 128 levels", build_chain(129)),
@@ -619,7 +575,7 @@ build_chain = |count| {
 	var $items = ["Name(\"deep\")", "Environment(\"builder\", [])", "Executor(\"native\", Adapter(\"fixture\", \"\"))"]
 	var $index = 0
 	while $index < count {
-		needs = if $index == 0 "" else "Needs([\"b${($index - 1).to_str()}\"]), "
+		needs = if ($index == 0) "" else "Needs([\"b${($index - 1).to_str()}\"]), "
 		$items = $items.append("Build(\"b${$index.to_str()}\", [Execute(\"native\"), Use(\"builder\"), ${needs}Run([\"true\"]), Output(\"out\")])")
 		$index = $index + 1
 	}
@@ -708,7 +664,7 @@ recipe_definition =
 	\\		_ => Unavailable
 	\\	}
 	\\
-	\\roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-07-ad3a5d2"))
+	\\roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-18-a520eed"))
 
 ## Fetched programs and expected tools: what is accepted, and each mistake
 ## with the check that refuses it. A quoted value is refused by its own type
@@ -732,31 +688,26 @@ program_fixtures = [
 		"DuplicatePrograms",
 		"DuplicatePrograms: environment dev",
 		\\[Name("invalid"), Environment("dev", [Programs([]), Programs([])])]
-		,
 	),
 	rejected(
 		"DuplicateExpect",
 		"DuplicateExpect: environment dev",
 		\\[Name("invalid"), Environment("dev", [Expect(["git"]), Expect(["gh"])])]
-		,
 	),
 	rejected(
 		"UnavailableEverywhere",
 		"Fetch roc-stable: its recipe answers Unavailable",
-		\\[Name("invalid"), Systems(["riscv64-linux"]), Environment("dev", [Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-07-ad3a5d2"))])])]
-		,
+		\\[Name("invalid"), Systems(["riscv64-linux"]), Environment("dev", [Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-18-a520eed"))])])]
 	),
 	rejected(
 		"TwoProgramsOneName",
 		"two different programs are named tool",
 		\\[Name("invalid"), Environment("one", [Programs([Fetch("tool", Recipes.file("https://example.test/1.0/tool-{system}"))])]), Environment("two", [Programs([Fetch("tool", Recipes.file("https://example.test/2.0/tool-{system}"))])])]
-		,
 	),
 	rejected(
 		"DuplicateMirror",
 		"program tool on x86_64-linux names a URL twice",
 		\\[Name("invalid"), Systems(["x86_64-linux"]), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["https://example.test/tool"]))])])]
-		,
 	),
 	# A URL that is assembled is not checked where it is written: the shared
 	# validator refuses it, with the URL on a line of its own.
@@ -768,14 +719,12 @@ program_fixtures = [
 	rejected(
 		"ProgramAndCommand",
 		"has roc-stable as both",
-		\\[Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Command("roc-stable", "nix#rocpkgs.nightly")]), Environment("dev", [Extend("base"), Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-07-ad3a5d2"))])])]
-		,
+		\\[Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Command("roc-stable", "nix#rocpkgs.nightly")]), Environment("dev", [Extend("base"), Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-18-a520eed"))])])]
 	),
 	rejected(
 		"ProgramAndExpect",
 		"has tool as both a program",
 		\\[Name("invalid"), Environment("dev", [Programs([Fetch("tool", Recipes.file("https://example.test/tool"))]), Expect(["tool"])])]
-		,
 	),
 	# A misspelt system is refused in a pattern and beside `==`, though the
 	# branch it guards would never be taken.
@@ -788,73 +737,61 @@ program_fixtures = [
 		"SystemTypoInEquality",
 		"is not an architecture Blueprint knows",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |system| if system == "x86-linux" Unavailable else File("https://example.test/tool"))])])]
-		,
 	),
 	bad_quote(
 		"SystemTypoInSystems",
 		"is not a system",
 		\\[Name("bad"), Systems(["x86_64-linux", "macos"])]
-		,
 	),
 	bad_quote(
 		"SwappedArchiveArguments",
 		"is a URL, not the path of a program",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |_| Archive("tool/bin/tool", TarGz, "https://example.test/tool.tar.gz"))])])]
-		,
 	),
 	bad_quote(
 		"BadMember",
 		"is not the path of a program inside",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |_| Archive("https://example.test/tool.tar.gz", TarGz, "../bin/tool"))])])]
-		,
 	),
 	bad_quote(
 		"BadNightlyTag",
 		"is not a Roc nightly tag",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("roc-stable", Recipes.roc_nightly("v1.0"))])])]
-		,
 	),
 	bad_quote(
 		"InsecureUrl",
 		"is not a download URL",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |_| File("http://example.test/tool"))])])]
-		,
 	),
 	bad_quote(
 		"InsecureMirror",
 		"is not a download URL",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |_| Mirrored(File("https://example.test/tool"), ["http://mirror.example.test/tool"]))])])]
-		,
 	),
 	bad_quote(
 		"InsecureTemplate",
 		"is not a download URL",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", Recipes.file("http://example.test/tool-{system}"))])])]
-		,
 	),
 	bad_quote(
 		"BadPlaceholder",
 		"has a placeholder other than",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", Recipes.file("https://example.test/tool-{sytem}"))])])]
-		,
 	),
 	bad_quote(
 		"PlaceholderInHost",
 		"has a placeholder in its host",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", Recipes.file("https://{os}.example.test/tool"))])])]
-		,
 	),
 	bad_quote(
 		"BadFetchName",
 		"is not a program name",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("bin/tool", |_| Unavailable)])])]
-		,
 	),
 	bad_quote(
 		"BadExpectName",
 		"is not a program name",
 		\\[Name("bad"), Environment("dev", [Expect(["/usr/bin/git"])])]
-		,
 	),
 	# A program is a value: its name alone is not one, and a binding that is
 	# misspelt is not in scope.
@@ -862,7 +799,6 @@ program_fixtures = [
 		"NameForProgram",
 		"[Fetch(ProgramName,",
 		\\[Name("bad"), Environment("dev", [Programs(["roc-stable"])])]
-		,
 	),
 	refused(
 		"MisspeltBinding",
@@ -874,7 +810,6 @@ program_fixtures = [
 		"CrashingRecipe",
 		"tool 2.0 has no build for x86_64-darwin",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |system| if system == "x86_64-darwin" { crash "tool 2.0 has no build for x86_64-darwin" } else File("https://example.test/tool"))])])]
-		,
 	),
 	# The trap of this compiler: a System is not text, so it cannot stand in a
 	# URL as it is. `Recipes.file` and `system.to_str()` are the ways to write it.

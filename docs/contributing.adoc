@@ -111,8 +111,7 @@ Full development and CI require x86_64 Linux with Nix and flakes enabled.
 nix develop
 ----
 
-gives two Roc compilers from
-https://github.com/roc-lang/roc-overlay[roc-overlay], Zig 0.16 and the
+gives the pinned product and maintenance Roc compilers, Zig 0.16 and the
 programs the scripts start: coreutils, git, curl, tar, gzip, zip, unzip and gh.
 On Linux it also supplies Bubblewrap, util-linux and Python for isolated
 runner tests and a restrictive-umask launcher. The product, reporting app and

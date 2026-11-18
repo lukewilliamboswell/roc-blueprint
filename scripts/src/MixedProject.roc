@@ -75,6 +75,6 @@ MixedProject := [].{
 			}
 			config_path.write_utf8!(config)?
 		}
-		Script.pass!("mixed project uses one Linux-produced lock on ${if producer "Linux with Nix" else "Windows without Nix"}")
+		Script.pass!("mixed project uses one Linux-produced lock on ${if (producer) "Linux with Nix" else "Windows without Nix"}")
 	}
 }

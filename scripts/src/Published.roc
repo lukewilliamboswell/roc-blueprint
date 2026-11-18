@@ -38,7 +38,7 @@ Published := [].{
 				"config = [",
 				"	Name(\"my-project\"),",
 				"	Environment(\"dev\", [",
-				"		Programs([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-11-07-ad3a5d2\"))]),",
+				"		Programs([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-11-18-a520eed\"))]),",
 				"		Expect([\"git\"]),",
 				"	]),",
 				"	Shell(\"default\", [Use(\"dev\")]),",

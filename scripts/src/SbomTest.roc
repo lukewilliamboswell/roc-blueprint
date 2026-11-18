@@ -549,12 +549,12 @@ expect [fixture_native_linux_3, fixture_native_linux_2].all(
 		restricted = find("restricted")
 		native.download == "https://example.org/source/native-library/2.0.0.tar.gz"
 			and containers(document, "native").contains("Subject")
-				and !containers(document, "compiler").contains("Subject")
-					and document.relationships.any(|relation| relation.from == "Subject" and relation.to == "compiler" and relation.relation == "dependsOn" and relation.scope == "build")
-						and restricted.license == "LicenseRef-Restricted"
-							and restricted.license_url == "https://example.org/terms/4.0.0"
-								and restricted.comment.contains("4.0.0-patch1")
-									and native.sha256 != find("Subject").sha256
+			and !containers(document, "compiler").contains("Subject")
+			and document.relationships.any(|relation| relation.from == "Subject" and relation.to == "compiler" and relation.relation == "dependsOn" and relation.scope == "build")
+			and restricted.license == "LicenseRef-Restricted"
+			and restricted.license_url == "https://example.org/terms/4.0.0"
+			and restricted.comment.contains("4.0.0-patch1")
+			and native.sha256 != find("Subject").sha256
 	},
 )
 
@@ -855,9 +855,9 @@ expect
 		Ok(inventory) =>
 			inventory.target == "x86_64-linux"
 				and inventory.components.all(|entry| entry.target == "source")
-					and inventory.components.any(|entry| entry.id == "dep" and entry.sha256 == bundle_digest and entry.version == "1.2.0")
-						and inventory.relationships.any(|relation| relation.from == "dep-sbom-Subject" and relation.to == "dep" and relation.relation == "copiedTo")
-							and inventory.coverage.any(|scope| scope.scope == "import:dep-sbom" and scope.reason.starts_with("Document digest and upstream subject artifact identity match"))
+				and inventory.components.any(|entry| entry.id == "dep" and entry.sha256 == bundle_digest and entry.version == "1.2.0")
+				and inventory.relationships.any(|relation| relation.from == "dep-sbom-Subject" and relation.to == "dep" and relation.relation == "copiedTo")
+				and inventory.coverage.any(|scope| scope.scope == "import:dep-sbom" and scope.reason.starts_with("Document digest and upstream subject artifact identity match"))
 		Err(_) => False
 	}
 expect Sbom.inspect(consumer_spec, consumer_lock, "source", source_consumer).is_ok()
@@ -887,9 +887,9 @@ expect [fixture_native_source_import_3, fixture_native_source_import_2, fixture_
 			Ok(checked) =>
 				checked.evidence.target == "x86_64-linux"
 					and checked.subject.comment.contains("\"target\":\"x86_64-linux\"")
-						and checked.document.packages_.keep_if(|entry| entry.id != "Subject").all(|entry| entry.comment.contains("\"target\":\"source\""))
-							and !containers(checked.document, "dep").contains("Subject")
-								and checked.document.relationships.any(|relation| relation.from == "Subject" and relation.to == "dep" and relation.relation == "dependsOn" and relation.scope == "build")
+					and checked.document.packages_.keep_if(|entry| entry.id != "Subject").all(|entry| entry.comment.contains("\"target\":\"source\""))
+					and !containers(checked.document, "dep").contains("Subject")
+					and checked.document.relationships.any(|relation| relation.from == "Subject" and relation.to == "dep" and relation.relation == "dependsOn" and relation.scope == "build")
 			Err(_) => False
 		},
 )
@@ -928,8 +928,8 @@ expect
 		Ok(archive) =>
 			archive.components.map(|entry| entry.id) == ["member-main.roc", "member-Example.roc", "member-LICENSE", "member-message.txt"]
 				and archive.components.all(|entry| entry.origin == "reviewed" and entry.target == "source" and entry.license == "NOASSERTION" and entry.download == "NOASSERTION" and entry.producer == "NOASSERTION" and entry.version == "sha256-${entry.sha256}" and entry.identity == "urn:blueprint:archive-member:${entry.name}:${entry.sha256}" and bundle_members.any(|listed| listed.name == entry.name and listed.sha256 == entry.sha256))
-					and archive.relationships.all(|relation| relation.from == "sources" and relation.relation == "contains" and relation.scope.is_empty() and relation.basis.contains("bytes"))
-						and archive.relationships.map(|relation| relation.to) == archive.components.map(|entry| entry.id)
+				and archive.relationships.all(|relation| relation.from == "sources" and relation.relation == "contains" and relation.scope.is_empty() and relation.basis.contains("bytes"))
+				and archive.relationships.map(|relation| relation.to) == archive.components.map(|entry| entry.id)
 		Err(_) => False
 	}
 expect
@@ -1044,10 +1044,10 @@ expect {
 	bom = Sidecar.check(fixture_native_linux_cdx) ?? crash "fixture"
 	Manifest.describes(manifest_sample, "", checked) == Ok({})
 		and Manifest.describes(manifest_sample, "sample-artifact.spdx.json", checked) == Ok({})
-			and Manifest.describes(manifest_sample, "sample-artifact.cdx.json", bom) == Ok({})
-				and Manifest.describes(manifest_sample, "sample-artifact.cdx.json", checked) == Err("sample-artifact.cdx.json is a SPDX-3.0.1 document, not the cyclonedx-1.7 sidecar the manifest lists")
-					and Manifest.describes({ ..manifest_sample, subject: { ..manifest_sample.subject, version: "2.0.0" } }, "", checked) == Err("the sidecar describes sample-artifact 1.0.0, not the manifest's sample-artifact 2.0.0")
-						and Manifest.describes({ ..manifest_sample, subject: { ..manifest_sample.subject, sha256: manifest_digest("other") } }, "", bom).is_err()
+		and Manifest.describes(manifest_sample, "sample-artifact.cdx.json", bom) == Ok({})
+		and Manifest.describes(manifest_sample, "sample-artifact.cdx.json", checked) == Err("sample-artifact.cdx.json is a SPDX-3.0.1 document, not the cyclonedx-1.7 sidecar the manifest lists")
+		and Manifest.describes({ ..manifest_sample, subject: { ..manifest_sample.subject, version: "2.0.0" } }, "", checked) == Err("the sidecar describes sample-artifact 1.0.0, not the manifest's sample-artifact 2.0.0")
+		and Manifest.describes({ ..manifest_sample, subject: { ..manifest_sample.subject, sha256: manifest_digest("other") } }, "", bom).is_err()
 }
 
 subject_bytes = "fixture subject\n"
@@ -1299,7 +1299,7 @@ reviewed_inventory = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..Sb
 
 expect ["spdx3", "spdx2", "cdx"].all(
 	|format| {
-		text = if format == "cdx" Sbom.render_cyclonedx(reviewed_inventory, reviewed_subject, SbomTest.context) else if format == "spdx2" Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) else Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context)
+		text = if (format == "cdx") Sbom.render_cyclonedx(reviewed_inventory, reviewed_subject, SbomTest.context) else if (format == "spdx2") Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) else Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context)
 		checked = Sidecar.check(text ?? crash "render reviewed") ?? crash "read reviewed"
 		library = checked.document.packages_.find_first(|entry| entry.id == "ansi") ?? crash "library"
 		file = checked.document.packages_.find_first(|entry| entry.id == "ansi-file") ?? crash "file"
@@ -1339,7 +1339,7 @@ expect {
 
 expect ["spdx3", "spdx2", "cdx"].all(
 	|format| {
-		text = (if format == "cdx" Sbom.render_cyclonedx(reviewed_inventory, reviewed_subject, SbomTest.context) else if format == "spdx2" Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) else Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context)) ?? crash "render"
+		text = (if (format == "cdx") Sbom.render_cyclonedx(reviewed_inventory, reviewed_subject, SbomTest.context) else if (format == "spdx2") Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) else Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context)) ?? crash "render"
 		imported = { ..imported_document, document: text, sha256: Crypto.SHA256.hash(text.to_utf8()).to_hex(), subject: { component: "", filename: reviewed_subject.filename, version: reviewed_subject.version, sha256: reviewed_subject.sha256 }, target: "source", namespace: SbomTest.context.namespace }
 		inspected = Sbom.inspect(SbomTest.spec, SbomTest.lock, "source", { ..SbomTest.composition, components: [], relationships: [], imported_documents: [imported] }) ?? crash "import reviewed"
 		inspected.components.any(|entry| entry.kind == "library" and entry.package_url == reviewed_library.package_url and entry.source_refs == reviewed_library.source_refs and entry.copyright == reviewed_library.copyright) and inspected.components.any(|entry| entry.kind == "file" and entry.name == reviewed_file.name)
@@ -1362,17 +1362,17 @@ expect {
 	composition = |aspect, id, status| compositions.any(|entry| entry.field("aggregate") == Ok(JsonData.String(status)) and entry.field(aspect) == Ok(JsonData.Array([JsonData.String(id)])))
 	children(subject) == [JsonData.String("ansi")]
 		and children(library) == [JsonData.String("ansi-file")]
-			and library.field("type") == Ok(JsonData.String("library"))
-				and file.field("type") == Ok(JsonData.String("file"))
-					and compiler.field("type") == Ok(JsonData.String("application"))
-						and compiler.field("scope") == Ok(JsonData.String("excluded"))
-							and file.field("copyright") == Ok(JsonData.String(reviewed_file.copyright))
-								and dependencies.len() == 2
-									and dependencies.any(|entry| entry.field("ref") == Ok(JsonData.String("Subject")) and entry.field("dependsOn") == Ok(JsonData.Array([JsonData.String("roc")])))
-										and dependencies.any(|entry| entry.field("ref") == Ok(JsonData.String("ansi")) and entry.field("dependsOn").is_err())
-											and composition("assemblies", "Subject", "complete")
-												and composition("dependencies", "ansi", "complete")
-													and composition("dependencies", "roc", "unknown")
+		and library.field("type") == Ok(JsonData.String("library"))
+		and file.field("type") == Ok(JsonData.String("file"))
+		and compiler.field("type") == Ok(JsonData.String("application"))
+		and compiler.field("scope") == Ok(JsonData.String("excluded"))
+		and file.field("copyright") == Ok(JsonData.String(reviewed_file.copyright))
+		and dependencies.len() == 2
+		and dependencies.any(|entry| entry.field("ref") == Ok(JsonData.String("Subject")) and entry.field("dependsOn") == Ok(JsonData.Array([JsonData.String("roc")])))
+		and dependencies.any(|entry| entry.field("ref") == Ok(JsonData.String("ansi")) and entry.field("dependsOn").is_err())
+		and composition("assemblies", "Subject", "complete")
+		and composition("dependencies", "ansi", "complete")
+		and composition("dependencies", "roc", "unknown")
 }
 
 expect {
@@ -1405,10 +1405,10 @@ expect {
 # comparison, rather than a duplicated JSON assertion, detects changed facts.
 expect ["spdx2", "spdx3"].all(
 	|format| {
-		text = (if format == "spdx2" Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) else Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context)) ?? crash "render"
-		copyright_key = if format == "spdx2" "copyrightText" else "software_copyrightText"
-		identity_key = if format == "spdx2" "referenceLocator" else "software_packageUrl"
-		source_key = if format == "spdx2" "sourceInfo" else "software_sourceInfo"
+		text = (if (format == "spdx2") Sbom.render_spdx2(reviewed_inventory, reviewed_subject, SbomTest.context) else Sbom.render(reviewed_inventory, reviewed_subject, SbomTest.context)) ?? crash "render"
+		copyright_key = if (format == "spdx2") "copyrightText" else "software_copyrightText"
+		identity_key = if (format == "spdx2") "referenceLocator" else "software_packageUrl"
+		source_key = if (format == "spdx2") "sourceInfo" else "software_sourceInfo"
 		copyright_field = "${Json.to_str(copyright_key)}:${Json.to_str(reviewed_library.copyright)}"
 		identity_field = "${Json.to_str(identity_key)}:${Json.to_str(reviewed_library.package_url)}"
 		source_field = "${Json.to_str(source_key)}:${Json.to_str(Json.to_str(reviewed_library.source_refs))}"
@@ -1433,7 +1433,7 @@ expect {
 # Supplier-document availability cannot override reviewed closure assessments.
 expect ["unknown", "verified-empty", "complete"].all(
 	|status| {
-		composition = { ..locked_composition, components: locked_composition.components.map(|entry| if entry.id == "program" { ..entry, kind: "application" } else entry), coverage: [claim("compiler-reviewed", "program", "dependencies", status)] }
+		composition = { ..locked_composition, components: locked_composition.components.map(|entry| if (entry.id == "program") { ..entry, kind: "application" } else entry), coverage: [claim("compiler-reviewed", "program", "dependencies", status)] }
 		inventory = inspect_locked(composition) ?? crash "reviewed locked compiler coverage"
 		three = Sidecar.check(Sbom.render(inventory, SbomTest.subject, SbomTest.context) ?? crash "SPDX3") ?? crash "read SPDX3"
 		two = Sidecar.check(Sbom.render_spdx2(inventory, SbomTest.subject, SbomTest.context) ?? crash "SPDX2") ?? crash "read SPDX2"
@@ -1445,11 +1445,11 @@ expect ["unknown", "verified-empty", "complete"].all(
 		gaps = inventory.coverage.keep_if(|entry| entry.scope.starts_with("sbom:"))
 		gaps.len() == 2 and gaps.all(|entry| entry.component.is_empty() and entry.aspect.is_empty() and entry.status == "incomplete")
 			and inventory.coverage.any(|entry| entry.component == "program" and entry.aspect == "dependencies" and entry.status == status)
-				and dependencies.any(|entry| entry.field("ref") == Ok(JsonData.String("program"))) == (status != "unknown")
-					and compositions.len() == 1
-						and compositions.any(|entry| entry.field("dependencies") == Ok(JsonData.Array([JsonData.String("program")])) and entry.field("aggregate") == Ok(JsonData.String(if status == "unknown" "unknown" else "complete")))
-							and Sidecar.same_graph(three, two) and Sidecar.same_graph(three, cdx)
-								and [three, two, cdx].all(|checked| Sidecar.against_inventory(checked, inventory).is_ok())
+			and dependencies.any(|entry| entry.field("ref") == Ok(JsonData.String("program"))) == (status != "unknown")
+			and compositions.len() == 1
+			and compositions.any(|entry| entry.field("dependencies") == Ok(JsonData.Array([JsonData.String("program")])) and entry.field("aggregate") == Ok(JsonData.String(if (status == "unknown") "unknown" else "complete")))
+			and Sidecar.same_graph(three, two) and Sidecar.same_graph(three, cdx)
+			and [three, two, cdx].all(|checked| Sidecar.against_inventory(checked, inventory).is_ok())
 	},
 )
 
@@ -1487,7 +1487,7 @@ expect {
 	original = SbomTest.inventory ?? crash "inventory"
 	first = original.components.first() ?? crash "component"
 	long_id = Str.from_utf8(List.repeat('a', 256)) ?? crash "ASCII ID"
-	rename = |id| if id == first.id long_id else id
+	rename = |id| if (id == first.id) long_id else id
 	inventory = {
 		..original,
 		components: original.components.map(|entry| { ..entry, id: rename(entry.id) }),
@@ -1519,11 +1519,11 @@ expect {
 	checked = Sidecar.check(text) ?? crash "read candidate BOM"
 	cdx_components(standard).is_empty()
 		and ((standard.field("dependencies") ?? JsonData.Array([])).array() ?? []).is_empty()
-			and ((standard.field("compositions") ?? JsonData.Array([])).array() ?? []).any(|aggregate| aggregate.field("aggregate") == Ok(JsonData.String("unknown")) and aggregate.field("assemblies") == Ok(JsonData.Array([JsonData.String("Subject")])))
-				and checked.document.packages_.len() == 3
-					and Sidecar.same_graph(checked, three) and Sidecar.same_graph(checked, two)
-						and Sidecar.against_inventory(checked, inventory).is_ok()
-							and Sbom.read_cyclonedx(text.replace_each("\"value\":\"2\"", "\"value\":\"1\"")).is_err()
+		and ((standard.field("compositions") ?? JsonData.Array([])).array() ?? []).any(|aggregate| aggregate.field("aggregate") == Ok(JsonData.String("unknown")) and aggregate.field("assemblies") == Ok(JsonData.Array([JsonData.String("Subject")])))
+		and checked.document.packages_.len() == 3
+		and Sidecar.same_graph(checked, three) and Sidecar.same_graph(checked, two)
+		and Sidecar.against_inventory(checked, inventory).is_ok()
+		and Sbom.read_cyclonedx(text.replace_each("\"value\":\"2\"", "\"value\":\"1\"")).is_err()
 }
 
 # Build context propagates through transitive runtime dependencies of tooling;
@@ -1550,17 +1550,17 @@ expect {
 	outputs = [Sbom.render(inventory, SbomTest.subject, context), Sbom.render_spdx2(inventory, SbomTest.subject, context), Sbom.render_cyclonedx(inventory, SbomTest.subject, context)]
 	CycloneDx.serial_number(namespace) and namespace.count_utf8_bytes() == 45
 		and namespace == Sbom.document_namespace(inventory, SbomTest.subject, identity)
-			and namespace != Sbom.document_namespace(inventory, SbomTest.subject, { ..identity, revision: "2" })
-				and namespace != Sbom.document_namespace(inventory, { ..SbomTest.subject, version: "2" }, identity)
-					and outputs.all(
-						|output| match output {
-							Ok(text) => match Sidecar.check(text) {
-								Ok(checked) => checked.document.namespace == namespace and Sidecar.against_inventory(checked, inventory).is_ok()
-								Err(_) => False
-							}
-							Err(_) => False
-						},
-					)
+		and namespace != Sbom.document_namespace(inventory, SbomTest.subject, { ..identity, revision: "2" })
+		and namespace != Sbom.document_namespace(inventory, { ..SbomTest.subject, version: "2" }, identity)
+		and outputs.all(
+			|output| match output {
+				Ok(text) => match Sidecar.check(text) {
+					Ok(checked) => checked.document.namespace == namespace and Sidecar.against_inventory(checked, inventory).is_ok()
+					Err(_) => False
+				}
+				Err(_) => False
+			},
+		)
 }
 
 # Compact wire metadata and the old duplicate-field metadata read to the same
@@ -1655,7 +1655,7 @@ expect ["C:artifact", "artifact:stream", "CON.txt", "ending.", "ending ", "bad\u
 		inventory = SbomTest.inventory ?? crash "fixture inventory"
 		Sbom.render(inventory, unsafe, SbomTest.context).is_err()
 			and Sbom.render_spdx2(inventory, unsafe, SbomTest.context).is_err()
-				and Sbom.render_cyclonedx(inventory, unsafe, SbomTest.context).is_err()
+			and Sbom.render_cyclonedx(inventory, unsafe, SbomTest.context).is_err()
 	},
 )
 
@@ -1676,8 +1676,8 @@ expect {
 	two = Sidecar.check(Sbom.render_spdx2(inventory, subject, SbomTest.context) ?? crash "hidden-parent SPDX2") ?? crash "hidden-parent SPDX2 read"
 	components.map(|entry| entry.field("bom-ref")) == [Ok(JsonData.String(child.id))]
 		and components.all(|entry| entry.field("components").is_err())
-			and Sidecar.same_graph(checked, three) and Sidecar.same_graph(checked, two)
-				and Sidecar.against_inventory(checked, inventory).is_ok()
+		and Sidecar.same_graph(checked, three) and Sidecar.same_graph(checked, two)
+		and Sidecar.against_inventory(checked, inventory).is_ok()
 }
 
 # A component name is data, not a Blueprint profile marker. Dispatch uses
@@ -1704,7 +1704,7 @@ expect {
 expect ["spdx2", "spdx3"].all(
 	|format| {
 		inventory = SbomTest.inventory ?? crash "inventory"
-		rendered = (if format == "spdx2" Sbom.render_spdx2(inventory, SbomTest.subject, SbomTest.context) else Sbom.render(inventory, SbomTest.subject, SbomTest.context)) ?? crash "SPDX rendering"
+		rendered = (if (format == "spdx2") Sbom.render_spdx2(inventory, SbomTest.subject, SbomTest.context) else Sbom.render(inventory, SbomTest.subject, SbomTest.context)) ?? crash "SPDX rendering"
 		original_name = (inventory.components.first() ?? crash "component").name
 		text = rendered.replace_each("\"name\":${Json.to_str(original_name)}", "\"name\":\"bomFormat\"")
 		text != rendered and Sidecar.check(text).is_ok()

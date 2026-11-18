@@ -72,8 +72,8 @@ CliIsolationTest := [].{
 
 Test : { bench : CliHarness.Bench, env : List((OsStr, OsStr)) }
 
-run! : Test, Str, List(Str), List((Str, Str)) => Try(CliHarness.Outcome, _)
-run! = |test, root, args, extra|
+invoke! : Test, Str, List(Str), List((Str, Str)) => Try(CliHarness.Outcome, _)
+invoke! = |test, root, args, extra|
 	CliHarness.blueprint!(test.bench, root, args, CliHarness.setting(test.env, extra))
 
 ## How many times the provider was asked to build in this project.
@@ -87,7 +87,7 @@ project! = |test, name| {
 	Path.create_dir!(Path.utf8(root))?
 	Path.write_utf8!(Path.utf8("${root}/Blueprint.roc"), "stub\n")?
 	Path.write_utf8!(Path.utf8("${root}/wire.scm"), CliIsolationTest.wire)?
-	CliHarness.exited!(run!(test, root, ["update"], [])?, 0, "blueprint update in ${name}")?
+	CliHarness.exited!(invoke!(test, root, ["update"], [])?, 0, "blueprint update in ${name}")?
 	Ok(root)
 }
 
@@ -189,7 +189,7 @@ cases! = |bench| {
 	}
 	Path.write_utf8!(Path.utf8("${root}/.blueprint/excluded-secret"), "workspace excluded\n")?
 	before = builds!(root)?
-	planned = run!(test, root, ["plan", "build", "app", "--prepare", "--json"], [])?
+	planned = invoke!(test, root, ["plan", "build", "app", "--prepare", "--json"], [])?
 	CliHarness.exited!(planned, 0, "prepare build without execution")?
 	prepared : BuildModel.Inspection
 	prepared = Json.parse(planned.stdout).map_err(|_| ScriptFailed)?
@@ -198,7 +198,7 @@ cases! = |bench| {
 	# Nix has read the copy of the project into its store by then, so none
 	# stays to be read again with the generated root.
 	CliHarness.check!(!CliHarness.present!("${root}/.blueprint/snapshots"), "preparation left a copy of the project behind")?
-	built = run!(test, root, ["build", "app"], [])?
+	built = invoke!(test, root, ["build", "app"], [])?
 	CliHarness.exited!(built, 0, "blueprint build app")?
 	CliHarness.check!(built.stdout == "${CliIsolationTest.store}\n", "build app printed ${Str.inspect(built.stdout)}, not the artifact")?
 	CliHarness.check!(builds!(root)? == before + 1, "build app did not run exactly one provider build")?
@@ -248,13 +248,13 @@ cases! = |bench| {
 		CliHarness.check!(Path.read_bytes!(Path.utf8("${hashed}/${source.file}"))? == original and Path.is_executable!(Path.utf8("${hashed}/${source.file}"))? == executable, "the copy of ${source.file} differed in bytes or in whether it is executable")?
 	}
 	# An unchanged caller stages identical bytes, so Nix can reuse the build.
-	CliHarness.exited!(run!(test, root, ["build", "app"], [])?, 0, "a second blueprint build app")?
+	CliHarness.exited!(invoke!(test, root, ["build", "app"], [])?, 0, "a second blueprint build app")?
 	CliHarness.check!(Path.read_utf8!(Path.utf8("${root}/.blueprint/flake.nix"))? == flake and Path.read_utf8!(Path.utf8("${root}/.blueprint/project-app.json"))? == project_text, "a second build staged a different flake or project record")?
 	second = captured!(test)?
 	CliHarness.check!(second.directory != observed.directory and !CliHarness.present!(second.directory), "two builds reused a mutable witness or left it behind")?
 	baseline_path = "${root}/.blueprint/build-records/x86_64-linux/app.scm"
 	baseline_before = Path.read_bytes!(Path.utf8(baseline_path))?
-	invalid_result = run!(test, root, ["build", "app"], [("STUB_NIX_RESULT_DRV", "/nix/store/wrong-recipe.drv")])?
+	invalid_result = invoke!(test, root, ["build", "app"], [("STUB_NIX_RESULT_DRV", "/nix/store/wrong-recipe.drv")])?
 	CliHarness.check!(invalid_result.code == 1 and invalid_result.stderr.contains("does not match the prepared build") and Path.read_bytes!(Path.utf8(baseline_path))? == baseline_before, "invalid provider result advanced successful build evidence")?
 	Script.pass!("build app: private caller witness is cleaned; derivation excludes namespace/CLI identity and stays unchanged across invocations")?
 
@@ -291,17 +291,17 @@ cases! = |bench| {
 	odd_directory = "${bytes}/".to_utf8().concat(['d', 0xfe])
 	Path.create_dir!(Path.unix_bytes(odd_directory))?
 	Path.write_bytes!(Path.unix_bytes(odd_directory.append('/').concat(['f', 0xff])), [1, 2, 3])?
-	CliHarness.exited!(run!(test, bytes, ["build", "app"], [])?, 0, "build app with names that are not UTF-8")?
+	CliHarness.exited!(invoke!(test, bytes, ["build", "app"], [])?, 0, "build app with names that are not UTF-8")?
 	copied = Path.read_bytes!(Path.unix_bytes("${bench.work}/hashed/app/".to_utf8().concat(['d', 0xfe, '/', 'f', 0xff])))?
 	CliHarness.check!(copied == [1, 2, 3] and !CliHarness.present!("${bytes}/.blueprint/snapshots"), "a file whose name is not UTF-8 was copied as ${Str.inspect(copied)}, or the copy stayed")?
 	CliHarness.tool!(["ln", "-s", "--", "absent", "${bytes}/dangling"])?
 	bytes_before = builds!(bytes)?
-	linked_entry = run!(test, bytes, ["build", "app"], [])?
+	linked_entry = invoke!(test, bytes, ["build", "app"], [])?
 	CliHarness.check!(linked_entry.code == 1 and linked_entry.stderr.contains("snapshot refuses symlink: ${bytes}/dangling") and builds!(bytes)? == bytes_before and !CliHarness.present!("${bytes}/.blueprint/snapshots"), "a project symlink was not refused before the provider, or a partial copy stayed:\n${linked_entry.stderr}")?
 	# What an interrupted run left is removed before anything is staged.
 	Path.delete!(Path.utf8("${bytes}/dangling"))?
 	Path.create_all!(Path.utf8("${bytes}/.blueprint/snapshots/stale"))?
-	CliHarness.exited!(run!(test, bytes, ["build", "app"], [])?, 0, "build app after an interrupted one")?
+	CliHarness.exited!(invoke!(test, bytes, ["build", "app"], [])?, 0, "build app after an interrupted one")?
 	flake_source = CliHarness.names!("${bytes}/.blueprint")?
 	CliHarness.check!(!flake_source.contains("snapshots"), "a leftover copy stayed in the generated root: ${Str.join_with(flake_source, " ")}")?
 	Script.pass!("selected files are copied with their names' bytes; a symlink is refused before Nix")?
@@ -312,12 +312,12 @@ cases! = |bench| {
 	Path.create_dir!(Path.utf8(real))?
 	CliHarness.tool!(["ln", "-s", "--", real, "${linked}/work"])?
 	linked_before = builds!(linked)?
-	followed = run!(test, linked, ["build", "app"], [("BLUEPRINT_WORKSPACE", "work")])?
+	followed = invoke!(test, linked, ["build", "app"], [("BLUEPRINT_WORKSPACE", "work")])?
 	CliHarness.check!(followed.code == 1 and followed.stderr.contains("unsafe"), "a build into a symlinked workspace exited with code ${followed.code.to_str()}:\n${followed.stderr}")?
 	CliHarness.check!(builds!(linked)? == linked_before and CliHarness.names!(real)?.is_empty(), "a build into a symlinked workspace reached the provider or wrote through the link")?
 	Script.pass!("a workspace that is a link: refused as unsafe, nothing written through it")?
 
-	help = run!(test, linked, ["--help"], [])?
+	help = invoke!(test, linked, ["--help"], [])?
 	CliHarness.check!(!help.stdout.contains("__build-runner"), "--help exposes an obsolete runner entrypoint")?
 
 	used = CliHarness.calls!(python_log)?

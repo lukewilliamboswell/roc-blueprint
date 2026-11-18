@@ -7,14 +7,14 @@ import cli.Stdout
 Script := [].{
 
 	## A command-line program. Arguments are passed as a list; no shell is involved.
-	Command := { base : Cmd, program : Str }.{
+	Command := { base : Cmd.Command, program : Str }.{
 
 		## Print a `RUN` line, append the arguments and run the command with
 		## inherited output. A non-zero exit is an error.
 		run! : Command, List(Str) => Try({}, _)
 		run! = |self, args| {
 			Stdout.line!("RUN  ${Str.join_with([self.program].concat(args), " ")}")?
-			self.base.args(args.map(OsStr.from_str)).exec!()
+			self.base.args(args.map(OsStr.from_str)).call!()
 		}
 	}
 

@@ -34,7 +34,7 @@ BuildGates := [].{
 	## ordered by name, with the name and bytes in hexadecimal.
 	manifest : List(Entry) -> Str
 	manifest = |ledger| {
-		lines = ledger.map(|entry| "${BuildHarness.hex(entry.name)} ${if entry.executable "x" else "-"} ${BuildHarness.hex(entry.data)}\n")
+		lines = ledger.map(|entry| "${BuildHarness.hex(entry.name)} ${if (entry.executable) "x" else "-"} ${BuildHarness.hex(entry.data)}\n")
 		Str.join_with(BuildHarness.sorted(lines), "")
 	}
 
@@ -289,7 +289,7 @@ build! = |suite, place, name, service| {
 graph! : BuildHarness.Suite, State => Try(Str, _)
 graph! = |suite, state| {
 	project = state.place.project
-	task = if BuildHarness.exists!("${project}/task-produced.txt") read!("${project}/task-produced.txt")? else "<absent>".to_utf8()
+	task = if (BuildHarness.exists!("${project}/task-produced.txt")) read!("${project}/task-produced.txt")? else "<absent>".to_utf8()
 	wanted = BuildGates.expected(read!("${project}/untracked.txt")?, task, read!("${project}/assets/message.txt")?)
 	# The typed plan owns dependency metadata; the native executor builds the
 	# whole closure in one prepared request and reports only the selected result.
@@ -463,7 +463,7 @@ reject_unsafe_project_entries! = |suite, place| {
 				BuildHarness.fifo!(bad)?
 				"snapshot refuses special file: ${bad}"
 			} else {
-				target = if kind == "file-link" "untracked.txt" else if kind == "dir-link" "nested" else "absent"
+				target = if (kind == "file-link") "untracked.txt" else if (kind == "dir-link") "nested" else "absent"
 				BuildHarness.link!("${project}/${target}", bad)?
 				"snapshot refuses symlink: ${bad}"
 			}

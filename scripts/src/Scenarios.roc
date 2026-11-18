@@ -408,17 +408,17 @@ Scenarios := [].{
 	verdict = |check, outcome| {
 		code = outcome.code.to_str()
 		match check {
-			Succeeds => if outcome.code == 0 "" else "expected exit 0, got ${code}"
+			Succeeds => if (outcome.code == 0) "" else "expected exit 0, got ${code}"
 			Prints(text) =>
-				if outcome.code == 0 and outcome.stdout == text "" else "expected exit 0 printing exactly ${Str.inspect(text)}, got exit ${code} and ${Str.inspect(outcome.stdout)}"
+				if (outcome.code == 0 and outcome.stdout == text) "" else "expected exit 0 printing exactly ${Str.inspect(text)}, got exit ${code} and ${Str.inspect(outcome.stdout)}"
 			Says(text) =>
-				if outcome.code == 0 and outcome.stdout.drop_suffix("\n") == text "" else "expected exit 0 saying ${Str.inspect(text)}, got exit ${code} and ${Str.inspect(outcome.stdout)}"
+				if (outcome.code == 0 and outcome.stdout.drop_suffix("\n") == text) "" else "expected exit 0 saying ${Str.inspect(text)}, got exit ${code} and ${Str.inspect(outcome.stdout)}"
 			LineStarts(prefix) =>
-				if outcome.code == 0 and outcome.stdout.split_on("\n").any(|line| line.starts_with(prefix)) "" else "expected exit 0 and a line starting with ${Str.inspect(prefix)}, got exit ${code}"
+				if (outcome.code == 0 and outcome.stdout.split_on("\n").any(|line| line.starts_with(prefix))) "" else "expected exit 0 and a line starting with ${Str.inspect(prefix)}, got exit ${code}"
 			Contains(text) =>
-				if outcome.code == 0 and outcome.stdout.contains(text) "" else "expected exit 0 and output containing ${Str.inspect(text)}, got exit ${code}"
+				if (outcome.code == 0 and outcome.stdout.contains(text)) "" else "expected exit 0 and output containing ${Str.inspect(text)}, got exit ${code}"
 			FailsWith(text) =>
-				if outcome.code != 0 and "${outcome.stdout}${outcome.stderr}".contains(text) "" else "expected a failure containing ${Str.inspect(text)}, got exit ${code}"
+				if (outcome.code != 0 and "${outcome.stdout}${outcome.stderr}".contains(text)) "" else "expected a failure containing ${Str.inspect(text)}, got exit ${code}"
 		}
 	}
 
@@ -487,7 +487,7 @@ Scenarios := [].{
 		toolchains = { zig: pinned!(flake_lock, "zig-overlay", "flake.lock")?, rust: rust_overlay }
 		result = each!(context, scenarios(packages_ref, overlay_ref, roc, toolchains), 0)
 		# A scenario leaves its lock read-only.
-		_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--", work].map(OsStr.from_str)).exec!()
+		_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--", work].map(OsStr.from_str)).call!()
 		_ = Path.delete_all!(Path.utf8(work))
 		result
 	}
@@ -539,7 +539,7 @@ one! = |context, scenario, index|
 
 chmod! : Str, Str => Try({}, _)
 chmod! = |mode, target|
-	Cmd.new(OsStr.from_str("chmod")).args([mode, "--", target].map(OsStr.from_str)).exec!().map_err(|_| ChmodFailed(target))
+	Cmd.new(OsStr.from_str("chmod")).args([mode, "--", target].map(OsStr.from_str)).call!().map_err(|_| ChmodFailed(target))
 
 ## Run each step in order. `lock` is the authority a fresh project was given;
 ## it must read the same after every step. An example has none to compare.
@@ -549,7 +549,7 @@ steps! = |context, project, lock, remaining|
 		[] => Ok({})
 		[step, .. as rest] => {
 			step!(context, project, step)?
-			now = if lock.is_empty() "" else Path.read_utf8!(Path.utf8("${project}/Blueprint.lock"))?
+			now = if (lock.is_empty()) "" else Path.read_utf8!(Path.utf8("${project}/Blueprint.lock"))?
 			if now != lock {
 				return Script.fail!("a step after `blueprint update` changed Blueprint.lock:\n${Scenarios.changed_lines(lock, now)}")
 			}
@@ -561,7 +561,7 @@ step! : Context, Str, Scenarios.Step => Try({}, _)
 step! = |context, project, step|
 	match step {
 		Cli(args, check) => require!(Process.command(context.blueprint, args, project), check)
-		Compiler(args, check) => require!(Process.product_command(context.roc, args, project), check)
+		Compiler(args, check) => require!(Process.command(context.roc, args, project), check)
 		Eval(attribute, check) => require!(eval(project, attribute), check)
 		SameDerivation(left, right) => {
 			left_path = derivation!(project, left)?
@@ -628,7 +628,7 @@ launcher_entries! = |directories, names, found|
 		[] => Ok(found)
 		[directory, .. as rest] => {
 			holds = holds_any!(directory, names)
-			entries = if holds entry_names!(directory)? else []
+			entries = if (holds) entry_names!(directory)? else []
 			launcher_entries!(rest, names, found.concat(entries))
 		}
 	}

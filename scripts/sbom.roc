@@ -1,6 +1,6 @@
 #!/usr/bin/env roc-stable
 app [main!] {
-	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
+	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst",
 	core: "../blueprint-core/main.roc",
 }
 
@@ -122,7 +122,7 @@ check! = |args, options|
 		documents => {
 			# A manifest is held to the files before its sidecars are read as
 			# documents, so a tampered sidecar is reported as such.
-			manifest = if options.manifest.is_empty() Err(NoManifest) else Ok(verify_manifest!(options)?)
+			manifest = if (options.manifest.is_empty()) Err(NoManifest) else Ok(verify_manifest!(options)?)
 			listed = match manifest {
 				Ok(verified) => verified.sidecars.map(|entry| Manifest.beside(options.manifest, entry.filename))
 				Err(NoManifest) => []
@@ -168,8 +168,8 @@ verify_manifest! = |options| {
 	subject_path = if (options.artifacts.is_empty()) Manifest.beside(options.manifest, manifest.subject.filename) else "${options.artifacts}/${manifest.subject.filename}"
 	subject = SbomFiles.measure!(subject_path).map_err(|_| Invalid("${options.manifest}: no regular file ${subject_path} to hold its subject to"))?
 	sidecars = SbomFiles.observe_sidecars!(options.manifest, manifest, options.listed_only)?
-	inventory = if options.inventory.is_empty() Unmeasured else Measured(SbomFiles.digest!(options.inventory)?)
-	checker = if options.listed_only Manifest.check_listed else Manifest.check
+	inventory = if (options.inventory.is_empty()) Unmeasured else Measured(SbomFiles.digest!(options.inventory)?)
+	checker = if (options.listed_only) Manifest.check_listed else Manifest.check
 	checker(text, { subject, inventory, sidecars }).map_err(|problem| Invalid("${options.manifest}: ${problem}"))
 }
 

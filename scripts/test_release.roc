@@ -1,6 +1,6 @@
 #!/usr/bin/env roc-stable
 app [main!] {
-	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
+	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst",
 }
 
 import cli.Env
@@ -47,6 +47,6 @@ main! = |args| {
 run! = |version, given| {
 	root = Process.portable(Path.to_str(Path.canonicalize!(Env.cwd!()?)?)?)
 	# The binary runs in each example's directory.
-	binary = if given.is_empty() "" else Process.portable(Path.to_str(Path.canonicalize!(Path.utf8(given))?)?)
+	binary = if (given.is_empty()) "" else Process.portable(Path.to_str(Path.canonicalize!(Path.utf8(given))?)?)
 	Examples.test!(root, version, binary)
 }

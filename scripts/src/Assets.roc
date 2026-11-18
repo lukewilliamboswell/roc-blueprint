@@ -109,7 +109,7 @@ Assets := [].{
 		}
 		Path.create_all!(Path.utf8(gathered))?
 		for name in names {
-			source = if name == manual(version) pdf else "${root}/dist/${name}"
+			source = if (name == manual(version)) pdf else "${root}/dist/${name}"
 			if !(Path.is_file!(Path.utf8(source)) ?? False) {
 				return Script.fail!("${source} does not exist, so the release would lack ${name}")
 			}

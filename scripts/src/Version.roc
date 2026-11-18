@@ -34,7 +34,7 @@ Version := [].{
 
 	## What a workflow step reads back through `$GITHUB_OUTPUT`.
 	outputs : Str -> Str
-	outputs = |version| "version=${version}\ntitle=${ReleaseNotes.title(version)}\nprerelease=${if ReleaseNotes.prerelease(version) "true" else "false"}\n"
+	outputs = |version| "version=${version}\ntitle=${ReleaseNotes.title(version)}\nprerelease=${if (ReleaseNotes.prerelease(version)) "true" else "false"}\n"
 
 	## Releases build with the newest official nightly, pinned in source. A
 	## newer upstream release requires another reviewed update and test run.
@@ -87,7 +87,7 @@ Version := [].{
 		Script.pass!("${version} may be released with ${authored}")?
 		match Env.var_str!(OsStr.from_str("GITHUB_OUTPUT")) {
 			Ok(file) => {
-				earlier = if Path.exists!(Path.utf8(file))? Path.read_utf8!(Path.utf8(file))? else ""
+				earlier = if (Path.exists!(Path.utf8(file))?) Path.read_utf8!(Path.utf8(file))? else ""
 				Path.write_utf8!(Path.utf8(file), "${earlier}${outputs(version)}compiler-tag=${compiler_tag}\n")
 			}
 			Err(_) => Ok({})
@@ -173,11 +173,11 @@ compared! = |root, version, work| {
 			return Script.pass!("${planned} crosses the breaking-version boundary of ${previous.tag}; covers all API changes without comparing an old package on the new compiler")
 		}
 	}
-	expected = if version == Bundle.dry_run_version [] else ["--expect", Version.base(version)]
+	expected = if (version == Bundle.dry_run_version) [] else ["--expect", Version.base(version)]
 	roc = Process.roc!()
 
 	Script.info!("==>", "roc-blueprint-core against ${previous.core_url}")?
-	core = Process.succeed!(Process.product_command(roc, ["bump", "--old", previous.core_url].concat(expected).concat(["${Bundle.core_dir}/main.roc"]), root))?
+	core = Process.succeed!(Process.command(roc, ["bump", "--old", previous.core_url].concat(expected).concat(["${Bundle.core_dir}/main.roc"]), root))?
 	Script.info!("   ", core.stdout.trim())?
 
 	# The platform in the working tree names the core package by path, which
@@ -193,13 +193,13 @@ compared! = |root, version, work| {
 	# `roc unbundle` checks an archive against the hash that is its whole name.
 	Path.copy!(Path.utf8("${root}/dist/${platform_bundle}"), Path.utf8("${unpacked}/${platform_bundle}"))?
 	Path.copy!(Path.utf8("${root}/dist/${core_bundle}"), Path.utf8("${unpacked}/${core_hashed}"))?
-	_ = Process.succeed!(Process.product_command(roc, ["unbundle", platform_bundle, core_hashed], unpacked))?
+	_ = Process.succeed!(Process.command(roc, ["unbundle", platform_bundle, core_hashed], unpacked))?
 	Path.rename!(Path.utf8("${unpacked}/${core_hashed.drop_suffix(".tar.zst")}"), Path.utf8("${package_cache}/${core_hashed.drop_suffix(".tar.zst")}"))?
 	entry = "${platform_bundle.drop_suffix(".tar.zst")}/main.roc"
 	compared = Process.succeed!(
 		Process.with_env(
 			# The bundle holds every target's linker inputs.
-			Process.product_command(roc, ["bump", "--old", previous.platform_url, "--max-package-mb=0"].concat(expected).concat([entry]), unpacked),
+			Process.command(roc, ["bump", "--old", previous.platform_url, "--max-package-mb=0"].concat(expected).concat([entry]), unpacked),
 			[("XDG_CACHE_HOME", "${work}/cache")],
 		),
 	)?

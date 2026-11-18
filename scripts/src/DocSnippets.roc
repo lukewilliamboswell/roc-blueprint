@@ -82,9 +82,9 @@ DocSnippets := [].{
 			CoreModule => "package [] { core: \"${core_ref}\" }\n\n${snippet.text}\n"
 			_ => {
 				modules = [("Recipes.", "Recipes"), ("Config.", "Config"), ("System ->", "System")].keep_if(|(use, _)| snippet.text.contains(use)).map(|(_, name)| "import pf.${name}\n")
-				name = if snippet.text.contains("\tName(") or snippet.text.starts_with("Name(") [] else ["\tName(\"snippet\"),"]
-				source = if snippet.text.contains("\"nix#") and !snippet.text.contains("Packages(\"nix\"") ["\tPackages(\"nix\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),"] else []
-				settings = snippet.text.split_on("\n").map(|line| if line.is_empty() line else "\t${line}")
+				name = if (snippet.text.contains("\tName(") or snippet.text.starts_with("Name(")) [] else ["\tName(\"snippet\"),"]
+				source = if (snippet.text.contains("\"nix#") and !snippet.text.contains("Packages(\"nix\"")) ["\tPackages(\"nix\", From(NixPackages(\"github:NixOS/nixpkgs/nixos-unstable\"))),"] else []
+				settings = snippet.text.split_on("\n").map(|line| if (line.is_empty()) line else "\t${line}")
 				"app [config] { pf: platform \"${platform_ref}\" }\n\n${Str.join_with(modules, "")}\nconfig = [\n${Str.join_with(name.concat(source).concat(settings), "\n")}\n]\n"
 			}
 		}
@@ -108,8 +108,8 @@ DocSnippets := [].{
 	problem = |snippet, outcome| {
 		place = "${snippet.file}:${snippet.line.to_str()}"
 		match snippet.kind {
-			Refused => if outcome.code == 0 "${place}: the manual says the compiler refuses this, and it was accepted" else ""
-			_ => if outcome.code == 0 "" else "${place}: this block of the manual does not compile"
+			Refused => if (outcome.code == 0) "${place}: the manual says the compiler refuses this, and it was accepted" else ""
+			_ => if (outcome.code == 0) "" else "${place}: this block of the manual does not compile"
 		}
 	}
 
