@@ -174,7 +174,7 @@ ConfigTest := [].{
 			Path.write_utf8!(Path.utf8("${options.work}/${name}"), text)?
 		}
 		chosen = selected(options.subset)
-		compiler = |args, name| Process.with_env(Process.command(options.roc, args.concat(options.arguments).concat(["${name}.roc"]), options.work), options.environment)
+		compiler = |args, name| Process.with_env(Process.command(options.roc, args.concat(["--no-cache"]).concat(options.arguments).concat(["${name}.roc"]), options.work), options.environment)
 
 		checked = drive!(chosen.map(|fixture| compiler(["check"], fixture.name)))?
 		report_checks!(chosen, checked)?

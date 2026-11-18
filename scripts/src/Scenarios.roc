@@ -107,8 +107,8 @@ Scenarios := [].{
 			files: [],
 			executable: [],
 			steps: [
-				Compiler(["check", "Blueprint.roc"], Succeeds),
-				Compiler(["Blueprint.roc"], Contains("(kind \"services\")")),
+				Compiler(["check", "--no-cache", "Blueprint.roc"], Succeeds),
+				Compiler(["--no-cache", "Blueprint.roc"], Contains("(kind \"services\")")),
 				Cli(["check"], FailsWith("needs features: extensions")),
 			],
 		},

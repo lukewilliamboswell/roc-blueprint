@@ -181,6 +181,7 @@ cases! = |bench| {
 		env: CliHarness.setting(
 			bench.env,
 			[
+				("BLUEPRINT_TARGET", "x86_64-linux"),
 				("PATH", "${bench.bin}:${search}"),
 				("ROC", record),
 				("STUB_REAL_ROC", bench.roc),

@@ -383,7 +383,7 @@ smoke! = |root, paths, server, served| {
 		return Script.fail!("examples/all-settings/Blueprint.roc does not name the local platform")
 	}
 	Path.write_utf8!(Path.utf8("${example_dir}/Blueprint.roc"), example.replace_each(local_platform, "platform \"${platform_url}\""))?
-	compiler = |args| Process.with_env(Process.command(roc, args.concat(served.arguments).concat(["Blueprint.roc"]), example_dir), environment)
+	compiler = |args| Process.with_env(Process.command(roc, args.concat(["--no-cache"]).concat(served.arguments).concat(["Blueprint.roc"]), example_dir), environment)
 	match server.drive!([compiler(["check"])])? {
 		[checked] => Process.check!(checked.code == 0, "${checked.stdout}${checked.stderr}\nroc check of the all-settings example exited with code ${checked.code.to_str()}")?
 		_ => return Script.fail!("roc check did not report a result")
@@ -461,7 +461,7 @@ bundle_sbom! = |root, paths, core_server, release, core, cache| {
 	workspace = "${paths.stage}/sbom-workspace"
 	copy!("${root}/tests/sbom/fixtures/input", workspace, ["Spec", "Lock", "composition.json", "subject.json", "context.json", "sample-artifact"])?
 	Path.write_utf8!(Path.utf8("${workspace}/Blueprint.roc"), "INVALID PROJECT MUST NOT BE EVALUATED\n")?
-	base = ["run"].concat(Bundle.replacing(core_url, server.url(Bundle.release_path(release.repository, release.version, core)))).concat([server.url(route)])
+	base = ["run", "--no-cache"].concat(Bundle.replacing(core_url, server.url(Bundle.release_path(release.repository, release.version, core)))).concat([server.url(route)])
 	roc = Process.roc!()
 	invoke = |args| Process.with_env(Process.command(roc, base.concat(args), workspace), [("XDG_CACHE_HOME", cache)])
 	for args in [["inspect", "Spec", "Lock", "composition.json", "x86_64-linux", "inventory.json"], ["bind", "inventory.json", "subject.json", "context.json", "sample-artifact"]] {

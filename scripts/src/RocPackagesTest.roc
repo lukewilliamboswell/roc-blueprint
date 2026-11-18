@@ -284,7 +284,7 @@ scenarios! = |context| {
 	# evaluating it. Record those entries in a separate cache before running
 	# Blueprint, which alone can publish the environment's declared bundles.
 	config_cache = "${context.work}/config-cache"
-	evaluation = Process.command(Process.roc!(), ["Blueprint.roc"], project)
+	evaluation = Process.command(Process.roc!(), ["--no-cache", "Blueprint.roc"], project)
 	_ = Process.succeed!(Process.with_env(evaluation, [("XDG_CACHE_HOME", config_cache)]))?
 	config_entries = names!("${config_cache}/roc/packages")?
 	check!(!config_entries.any(|name| cache_entry(hashes, name) or leftover(name)), "the configuration cache contains an environment bundle or staging files")?

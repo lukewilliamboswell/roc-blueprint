@@ -131,7 +131,7 @@ DocSnippets := [].{
 		for snippet in compiled {
 			name = "Snippet${$jobs.len().to_str()}.roc"
 			Path.write_utf8!(Path.utf8("${options.work}/${name}"), program(options.platform_ref, options.core_ref, snippet))?
-			$jobs = $jobs.append(Process.command(options.roc, ["check", name], options.work))
+			$jobs = $jobs.append(Process.command(options.roc, ["check", "--no-cache", name], options.work))
 		}
 		outcomes = drive!($jobs)?
 		var $at = 0
