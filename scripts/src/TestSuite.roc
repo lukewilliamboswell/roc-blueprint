@@ -316,8 +316,8 @@ unit! = |context| {
 	compiler!(context, ["test", "--opt=interpreter", "--specialize=yes", "--no-cache", "blueprint-cli/main.roc"])?
 
 	step!("Independent library consumer")?
-	compiler!(context, ["check", "fixtures/consumer/main.roc"])?
-	compiler!(context, ["test", "fixtures/consumer/main.roc"])
+	compiler!(context, ["check", "--no-cache", "fixtures/consumer/main.roc"])?
+	compiler!(context, ["test", "--opt=interpreter", "--specialize=yes", "--no-cache", "fixtures/consumer/main.roc"])
 }
 
 ## The released system this machine is, as the binaries in `dist/` are named.
@@ -498,5 +498,5 @@ expect TestSuite.requested(["unit", "units"]) == Err(UnknownGroup("units"))
 expect TestSuite.packaged_project("../pf/main.roc", "github:NixOS/nixpkgs/abc").contains("Packages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\")))")
 
 # The hosts are the built files of every target the platform declares.
-expect TestSuite.hosts(["targets/x64musl/crt1.o", "targets/x64musl/libhost.a", "targets/x64musl/libc.a", "targets/arm64mac/libhost.a"]) == ["targets/x64musl/libhost.a", "targets/arm64mac/libhost.a"]
-expect TestSuite.hosts(["targets/x64musl/libhost.a.sig", "targets/x64musl/crt1.o"]).is_empty()
+expect TestSuite.hosts(["targets/x64musl/rcrt1.o", "targets/x64musl/libhost.a", "targets/x64musl/libc.a", "targets/arm64mac/libhost.a"]) == ["targets/x64musl/libhost.a", "targets/arm64mac/libhost.a"]
+expect TestSuite.hosts(["targets/x64musl/libhost.a.sig", "targets/x64musl/rcrt1.o"]).is_empty()

@@ -148,7 +148,8 @@ archive by hash, so its sandboxed build needs no network.
 scripts/link_inputs.roc fetch             # the musl runtime files the platform links
 (cd blueprint-platform && zig build)      # libhost.a or host.lib for all five hosts
 roc test blueprint-core/main.roc      # Spec round trips and format tests
-roc test --opt=interpreter --specialize=yes blueprint-cli/main.roc # CLI, provider and core expects
+roc test --opt=interpreter --specialize=yes --no-cache blueprint-cli/main.roc # CLI, provider and core expects
+roc test --opt=interpreter --specialize=yes --no-cache fixtures/consumer/main.roc # independent consumer
 roc build blueprint-cli/main.roc --output=./blueprint
 (cd examples/all-settings && ../../blueprint run --help) # try the CLI
 scripts/test.roc                            # all local CI test groups
@@ -157,9 +158,10 @@ scripts/test.roc unit cli                   # or only some groups: static, unit,
 scripts/fuzz.roc 300                        # fuzz each target for 5 minutes
 ----
 
-The CLI unit tests use the specialized interpreter because the pinned
-compiler's dev test backend and boxy interpreter crash on this entry point. Integration
-tests run the compiled executable.
+The CLI and independent-consumer unit tests use the specialized interpreter
+because the pinned compiler's dev test backend crashes on these entry points;
+the CLI also crashes in the boxy interpreter. Integration tests run the compiled
+executable.
 
 The fuzz driver checks and builds every selected target with `--no-cache`, so
 compilation uses source rather than cached verdicts or intermediate

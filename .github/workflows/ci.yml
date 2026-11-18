@@ -49,7 +49,7 @@ jobs:
             dist/blueprint-*
             dist/smoke-*
             blueprint-platform/targets/*/*.a
-            blueprint-platform/targets/*/crt1.o
+            blueprint-platform/targets/*/rcrt1.o
             blueprint-platform/targets/*/*.lib
           if-no-files-found: error
 
