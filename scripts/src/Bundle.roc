@@ -87,22 +87,13 @@ Bundle := [].{
 		if (named.is_empty()) default_repository else named
 	}
 
-	## The maintenance and product platform differ only by the explicit writer
-	## options here. Both retain atomic RequireNew and the same callback.
-	product_io : Str -> Str
-	product_io = |source| source.replace_each("RequireNew, |writer|", "RequireNew, {}, |writer|")
-
 	stage_product_tool! : Str, Str, Str, Str => Try({}, _)
 	stage_product_tool! = |root, staged, core_url, tag| {
 		copy!("${root}/scripts", staged, ["sbom.roc", "src/SbomFiles.roc"])?
 		entry = Path.read_utf8!(Path.utf8("${staged}/sbom.roc"))?
 		prepared = pinned(entry.replace_each(development_core, "\"${core_url}\""), tag)
 		Path.write_utf8!(Path.utf8("${staged}/main.roc"), prepared)?
-		Path.delete!(Path.utf8("${staged}/sbom.roc"))?
-		io_path = Path.utf8("${staged}/src/SbomFiles.roc")
-		io = Path.read_utf8!(io_path)?
-		Process.check!(io.split_on("RequireNew, |writer|").len() == 2, "review the product SBOM writer adapter after a source change")?
-		Path.write_utf8!(io_path, product_io(io))
+		Path.delete!(Path.utf8("${staged}/sbom.roc"))
 	}
 
 	## The modules of a package directory: `main.roc`, then the rest by name.
@@ -510,7 +501,3 @@ snapshot_consumer! = |root, paths, server, core_url, route, core| {
 	}
 	Script.pass!("official core bundle consumed purely by product and script compilers from independent empty caches; packaged schema verified")
 }
-
-# Product writer adaptation preserves RequireNew, callback and every other byte.
-expect Bundle.product_io("File.with_writer!(path, RequireNew, |writer| writer.write_utf8!(text))") == "File.with_writer!(path, RequireNew, {}, |writer| writer.write_utf8!(text))"
-expect Bundle.product_io("other source") == "other source"
