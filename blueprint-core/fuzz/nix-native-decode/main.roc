@@ -1,11 +1,13 @@
 # Mutate the JSON Nix prints for derivations, builds and dev shells.
 app [target] {
 	core: "../../main.roc",
+	entropy: "../entropy.roc",
 	nix: "../../../blueprint-nix/main.roc",
-	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst",
+	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.7.0/HBigHQhVZWEF2EkLxpYK35u8P6UNsAmPYxpNFTxXK1Br.tar.zst",
 }
 
 import pf.Fuzz
+import entropy.EntropyTarget
 import core.Activation
 import nix.NixProvider
 
@@ -62,7 +64,7 @@ in_store = |path| {
 	path.starts_with("/nix/store/") and !name.is_empty() and name != "." and name != ".." and !name.contains("/")
 }
 
-target = Fuzz.target_with({
+target = EntropyTarget.target_with({
 	name: "nix-native-decode",
 	generator: Fuzz.raw_bytes,
 	test,

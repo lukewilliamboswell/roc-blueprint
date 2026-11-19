@@ -176,7 +176,6 @@ expect StubTool.declared(
 	\\    "assets" = { url = "path:/project/assets"; flake = false; };
 	\\    "foreign-overlay" = { url = "github:example/unused-overlay"; flake = true; };
 	\\  };
-	,
 ) == [
 	{ name: "default", url: "github:NixOS/nixpkgs/nixos-unstable" },
 	{ name: "foreign-overlay", url: "github:example/unused-overlay" },

@@ -11,7 +11,7 @@ Tar := [].{
 		parts = Str.split_on(name, "/")
 		!name.is_empty() and !name.starts_with("-")
 			and !parts.any(|part| part.is_empty() or part == "." or part == "..")
-				and name.to_utf8().all(|b| (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '+' or b == '-' or b == '.' or b == '/' or b == '_')
+			and name.to_utf8().all(|b| (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '+' or b == '-' or b == '.' or b == '/' or b == '_')
 	}
 
 	## Every member of the archive, in order. Anything other than a regular
@@ -69,9 +69,9 @@ parse_header = |block| {
 		return Err(TarInvalid("bad header checksum"))
 	}
 	base = text(block.sublist({ start: 0, len: 100 }))?
-	prefix = if block.sublist({ start: 257, len: 5 }) == "ustar".to_utf8() text(block.sublist({ start: 345, len: 155 }))? else ""
+	prefix = if (block.sublist({ start: 257, len: 5 }) == "ustar".to_utf8()) text(block.sublist({ start: 345, len: 155 }))? else ""
 	Ok({
-		name: if prefix.is_empty() base else "${prefix}/${base}",
+		name: if (prefix.is_empty()) base else "${prefix}/${base}",
 		size: octal(block.sublist({ start: 124, len: 12 }))?,
 		typeflag: block.get(156) ?? 255,
 	})

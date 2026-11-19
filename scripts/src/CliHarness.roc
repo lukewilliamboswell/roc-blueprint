@@ -130,7 +130,7 @@ CliHarness := [].{
 
 	## Fail the script unless `holds`.
 	check! : Bool, Str => Try({}, _)
-	check! = |holds, message| if holds Ok({}) else Script.fail!(message)
+	check! = |holds, message| if (holds) Ok({}) else Script.fail!(message)
 
 	## Fail unless a command ended with `code`, showing what it printed.
 	exited! : Outcome, I32, Str => Try({}, _)
@@ -231,7 +231,7 @@ CliHarness := [].{
 	## Verify executable symlink targets while preserving the invocation name.
 	which! : Str, Str => Try(Str, [NotFound])
 	which! = |name, search| {
-		candidates = if name.contains("/") [name] else search.split_on(":").keep_if(|part| !part.is_empty()).map(|part| "${part}/${name}")
+		candidates = if (name.contains("/")) [name] else search.split_on(":").keep_if(|part| !part.is_empty()).map(|part| "${part}/${name}")
 		for candidate in candidates {
 			match Path.canonicalize!(Path.utf8(candidate)) {
 				Ok(resolved) => {
@@ -282,14 +282,14 @@ CliHarness := [].{
 
 Call : { program : Str, args : List(Str), cwd : Str, env : List((OsStr, OsStr)) }
 
-command : Call -> Cmd
+command : Call -> Cmd.Command
 command = |call|
 	Cmd.new(OsStr.from_str(call.program)).args(call.args.map(OsStr.from_str)).cwd(Path.utf8(call.cwd)).clear_envs().envs(call.env).timeout(Duration.millis(60000))
 
 describe : Call -> Str
 describe = |call| Str.join_with([call.program].concat(call.args), " ")
 
-finished! : Try(Cmd.Output, [Closed, CmdErr(Cmd.Err)]), Str => Try(CliHarness.Outcome, _)
+finished! : Try(Cmd.Output, [Closed, CmdErr(Cmd.Err), Interrupted]), Str => Try(CliHarness.Outcome, _)
 finished! = |ran, what|
 	match ran {
 		Ok(output) => {

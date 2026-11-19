@@ -3,15 +3,15 @@
 ProviderSource := { provider : Str, version : U64, reference : Str }.{
 	is_eq : _
 	checked : Str, U64, Str, (Str -> Try({}, Str)) -> Try(ProviderSource, Str)
-	checked = |provider, version, reference, validate| {
-		if provider.is_empty() or !provider.to_utf8().all(|byte| (byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9') or byte == '-') or version == 0 {
+	checked = |source_provider, source_version, source_reference, validate| {
+		if source_provider.is_empty() or !source_provider.to_utf8().all(|byte| (byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9') or byte == '-') or source_version == 0 {
 			return Err("invalid provider name or declaration version")
 		}
-		_ = validate(reference)?
-		if reference.is_empty() or reference.to_utf8().any(|byte| byte <= 32 or byte == 127) {
+		_ = validate(source_reference)?
+		if source_reference.is_empty() or source_reference.to_utf8().any(|byte| byte <= 32 or byte == 127) {
 			return Err("invalid source reference")
 		}
-		Ok(ProviderSource.{ provider, version, reference })
+		Ok(ProviderSource.{ provider: source_provider, version: source_version, reference: source_reference })
 	}
 
 	provider : ProviderSource -> Str

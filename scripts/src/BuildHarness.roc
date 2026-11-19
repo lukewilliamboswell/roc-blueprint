@@ -1,6 +1,7 @@
 import cli.Duration
 import cli.Cmd
 import cli.Env
+import cli.System
 import cli.OsStr
 import cli.Path
 import cli.Stderr
@@ -63,7 +64,7 @@ BuildHarness := [].{
 	## Set to `1` to keep a passing run's temporary directory.
 	keep_variable = "BLUEPRINT_TEST_KEEP_TMP"
 
-	basic_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst"
+	basic_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst"
 
 	## `to` as seen from the directory `from`; both absolute. Roc refuses an
 	## absolute platform path.
@@ -90,7 +91,7 @@ BuildHarness := [].{
 			([], []) => Same
 			([], _) => Before
 			(_, []) => After
-			([first, .. as rest], [other, .. as others]) => if first < other Before else if first > other After else order(rest, others)
+			([first, .. as rest], [other, .. as others]) => if (first < other) Before else if (first > other) After else order(rest, others)
 		}
 
 	sorted : List(Str) -> List(Str)
@@ -121,11 +122,11 @@ BuildHarness := [].{
 
 	## The values every fixture template takes from the pins.
 	pinned_values : Pins -> List((Str, Str))
-	pinned_values = |pins| [
-		("PACKAGES", pins.nixpkgs.ref),
-		("ROC_OVERLAY", pins.overlay.ref),
-		("ROC_COMPILER", pins.compiler),
-		("ROC_PACKAGES", Str.join_with(pins.bundles.map(|bundle| "\"${bundle.ref}\""), ", ")),
+	pinned_values = |locked| [
+		("PACKAGES", locked.nixpkgs.ref),
+		("ROC_OVERLAY", locked.overlay.ref),
+		("ROC_COMPILER", locked.compiler),
+		("ROC_PACKAGES", Str.join_with(locked.bundles.map(|bundle| "\"${bundle.ref}\""), ", ")),
 	]
 
 	## Decode the two committed lock files.
@@ -149,7 +150,7 @@ BuildHarness := [].{
 	}
 
 	require! : Bool, Str => Try({}, _)
-	require! = |holds, message| if holds Ok({}) else Script.fail!(message)
+	require! = |holds, message| if (holds) Ok({}) else Script.fail!(message)
 
 	## Run a suite from the repository root in a new temporary directory. A
 	## failure keeps the directory and says where it is.
@@ -162,7 +163,7 @@ BuildHarness := [].{
 					Script.info!("KEPT", "${name} fixture and logs: ${suite.work}")
 				} else {
 					# The authority and some fixture directories are read-only.
-					_ = Cmd.new("chmod").args(["-R", "u+w", "--", OsStr.from_str(suite.work)]).exec!()
+					_ = Cmd.new("chmod").args(["-R", "u+w", "--", OsStr.from_str(suite.work)]).call!()
 					_ = Path.delete_all!(Path.utf8(suite.work))
 					Ok({})
 				}
@@ -337,7 +338,7 @@ BuildHarness := [].{
 		var $index = 0
 		for entry in paths {
 			file = Path.utf8(entry)
-			contents = if Path.is_file!(file)? Integrity.digest(Path.read_bytes!(file)?) else "-"
+			contents = if (Path.is_file!(file)?) Integrity.digest(Path.read_bytes!(file)?) else "-"
 			$lines = $lines.append("${entry} ${contents} ${stats.get($index) ?? "?"}")
 			$index = $index + 1
 		}
@@ -367,11 +368,11 @@ BuildHarness := [].{
 
 	mode! : Str, Path => Try({}, _)
 	mode! = |bits, file|
-		Cmd.new("chmod").args([OsStr.from_str(bits), "--", Path.to_os_str(file)]).exec!().map_err(|_| ToolFailed("chmod ${bits} ${Path.display(file)}"))
+		Cmd.new("chmod").args([OsStr.from_str(bits), "--", Path.to_os_str(file)]).call!().map_err(|_| ToolFailed("chmod ${bits} ${Path.display(file)}"))
 
 	tool! : Str, List(Str) => Try({}, _)
 	tool! = |program, args|
-		Cmd.new(OsStr.from_str(program)).args(args.map(OsStr.from_str)).exec!().map_err(|_| ToolFailed("${program} ${Str.join_with(args, " ")}"))
+		Cmd.new(OsStr.from_str(program)).args(args.map(OsStr.from_str)).call!().map_err(|_| ToolFailed("${program} ${Str.join_with(args, " ")}"))
 
 	## Where a program is, searching `PATH` as a shell would.
 	which! : Str => Try(Str, _)
@@ -399,18 +400,18 @@ shown : List(Str) -> Str
 shown = |argv| {
 	plain = |arg| !arg.is_empty() and arg.to_utf8().all(|byte| byte > ' ' and byte < 127 and byte != '"' and byte != '\\' and byte != '\'')
 	program = Str.from_utf8_lossy(base((argv.first() ?? "").to_utf8()))
-	Str.join_with([program].concat(argv.drop_first(1).map(|arg| if plain(arg) arg else Json.to_str(arg))), " ")
+	Str.join_with([program].concat(argv.drop_first(1).map(|arg| if (plain(arg)) arg else Json.to_str(arg))), " ")
 }
 
 ## Three digits, so that log names sort in the order the commands ran.
 padded : U64 -> Str
-padded = |number| if number < 10 "00${number.to_str()}" else if number < 100 "0${number.to_str()}" else number.to_str()
+padded = |number| if (number < 10) "00${number.to_str()}" else if (number < 100) "0${number.to_str()}" else number.to_str()
 
 hex_digit : U8 -> U8
-hex_digit = |nibble| if nibble < 10 '0' + nibble else 'a' + (nibble - 10)
+hex_digit = |nibble| if (nibble < 10) '0' + nibble else 'a' + (nibble - 10)
 
 base : List(U8) -> List(U8)
-base = |bytes| bytes.fold([], |name, byte| if byte == '/' [] else name.append(byte))
+base = |bytes| bytes.fold([], |name, byte| if (byte == '/') [] else name.append(byte))
 
 ## `nix flake update` and `nix flake lock` write a lock.
 locks : List(Str) -> Bool
@@ -427,9 +428,9 @@ read_only = |argv| argv.contains("--no-update-lock-file") and argv.contains("--n
 walk! : Str, Str => Try(List(Str), _)
 walk! = |directory, prefix| {
 	var $found = []
-	for entry in Path.list!(Path.utf8(if prefix.is_empty() directory else "${directory}/${prefix}"))? {
+	for entry in Path.list!(Path.utf8(if (prefix.is_empty()) directory else "${directory}/${prefix}"))? {
 		leaf = Str.from_utf8_lossy(base(Path.to_os_str(entry).to_bytes()))
-		name = if prefix.is_empty() leaf else "${prefix}/${leaf}"
+		name = if (prefix.is_empty()) leaf else "${prefix}/${leaf}"
 		$found = $found.append(name)
 		if Path.type!(entry)? == IsDir {
 			$found = $found.concat(walk!(directory, name)?)
@@ -466,7 +467,7 @@ outcome = |output, requests| {
 }
 
 ## The suite's variables with the invocation's own replacing any of that name.
-prepared : BuildHarness.Suite, BuildHarness.Invocation -> Cmd
+prepared : BuildHarness.Suite, BuildHarness.Invocation -> Cmd.Command
 prepared = |suite, invocation| {
 	replaced = invocation.extra.map(|(name, _)| OsStr.from_str(name))
 	kept = suite.variables.keep_if(|(name, _)| !replaced.contains(name))
@@ -482,13 +483,13 @@ prepared = |suite, invocation| {
 		.stdout(Capture)
 		.stderr(Capture)
 		.timeout(Duration.millis(300_000))
-	if invocation.stdin.is_empty() command.stdin(Null) else command.stdin(Bytes(invocation.stdin))
+	if (invocation.stdin.is_empty()) command.stdin(Null) else command.stdin(Bytes(invocation.stdin))
 }
 
 ## Run a command to completion. With a service, this process also answers
 ## connections while the command runs: basic-cli has no threads, so it takes
 ## turns between asking whether the command has finished and accepting.
-serve_while! : Cmd, BuildHarness.Service => Try(BuildHarness.Outcome, _)
+serve_while! : Cmd.Command, BuildHarness.Service => Try(BuildHarness.Outcome, _)
 serve_while! = |command, service| {
 	if match service {
 		NoService => True
@@ -496,15 +497,15 @@ serve_while! = |command, service| {
 	} {
 		return match command.run!() {
 			Ok(output) => Ok(outcome(output, []))
-			Err(CmdErr(TimedOut(_))) => Script.fail!("timed out: ${Cmd.to_str(command)}")
-			Err(_) => Script.fail!("could not run: ${Cmd.to_str(command)}")
+			Err(CmdErr(TimedOut(_))) => Script.fail!("timed out: ${command.to_str()}")
+			Err(_) => Script.fail!("could not run: ${command.to_str()}")
 		}
 	}
-	child = command.spawn!().map_err(|_| SpawnFailed(Cmd.to_str(command)))?
+	child = command.spawn!().map_err(|_| SpawnFailed(command.to_str()))?
 	var $requests = []
 	var $finished = []
 	while $finished.is_empty() {
-		$finished = match child.poll!().map_err(|_| WaitFailed(Cmd.to_str(command)))? {
+		$finished = match child.poll!().map_err(|_| WaitFailed(command.to_str()))? {
 			Running => []
 			Finished(output) => [output]
 		}
@@ -514,7 +515,7 @@ serve_while! = |command, service| {
 	}
 	match $finished {
 		[output, ..] => Ok(outcome(output, $requests))
-		[] => Script.fail!("lost the command: ${Cmd.to_str(command)}")
+		[] => Script.fail!("lost the command: ${command.to_str()}")
 	}
 }
 
@@ -583,7 +584,10 @@ http_head = |status, length|
 ## the recording `nix`.
 start! : Path, Str => Try(BuildHarness.Suite, _)
 start! = |root_path, name| {
-	if Env.platform!() != { arch: X64, os: LINUX } {
+	if match (System.target!().arch(), System.target!().os()) {
+		(X64, Linux(_)) => False
+		_ => True
+	} {
 		return Script.fail!("${name} requires x86_64 Linux; unsupported is not a pass")
 	}
 	root = Path.to_str(Path.canonicalize!(root_path)?)?
@@ -608,7 +612,7 @@ start! = |root_path, name| {
 		Path.create_dir!(Path.utf8(directory))?
 	}
 	requested = Env.var_str!("ROC") ?? "roc"
-	found = if requested.contains("/") requested else BuildHarness.which!(requested)?
+	found = if (requested.contains("/")) requested else BuildHarness.which!(requested)?
 	roc = Path.to_str(Path.canonicalize!(Path.utf8(found)).map_err(|_| NoCompiler(found))?)?
 	nix = BuildHarness.which!("nix")?
 

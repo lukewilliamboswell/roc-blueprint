@@ -1,11 +1,13 @@
 # Mutate Nix lock authority text and the native lock JSON Nix writes.
 app [target] {
 	core: "../../main.roc",
+	entropy: "../entropy.roc",
 	nix: "../../../blueprint-nix/main.roc",
-	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst",
+	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.7.0/HBigHQhVZWEF2EkLxpYK35u8P6UNsAmPYxpNFTxXK1Br.tar.zst",
 }
 
 import pf.Fuzz
+import entropy.EntropyTarget
 import core.Layout
 import core.Spec
 import nix.Locks
@@ -81,7 +83,7 @@ project = Spec.{
 	extensions: [],
 }
 
-target = Fuzz.target_with({
+target = EntropyTarget.target_with({
 	name: "nix-lock-decode",
 	generator: Fuzz.raw_bytes,
 	test,

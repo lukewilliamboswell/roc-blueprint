@@ -65,7 +65,8 @@ jobs:
     name: Build the release
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # The complete suite includes the full generated-input fuzz budget.
+    timeout-minutes: 180
     permissions:
       contents: read
     env:
@@ -129,7 +130,7 @@ jobs:
 
       - id: docs
         name: Render the manual as a site and a PDF
-        uses: lukewilliamboswell/roc-automation/actions/build-docs@6c796f299012707d2e9bad23fd6449ed93f1f475 # reviewed PR138; tools-0.10.1 renderer
+        uses: lukewilliamboswell/roc-automation/actions/build-docs@6c796f299012707d2e9bad23fd6449ed93f1f475 # tools-0.11.1 renderer
         with:
           site-url: https://lukewilliamboswell.github.io/roc-blueprint/
           renderer-binary: ${{ steps.roc.outputs.renderer }}
@@ -181,7 +182,7 @@ jobs:
           path: |
             dist/
             blueprint-platform/targets/*/*.a
-            blueprint-platform/targets/*/crt1.o
+            blueprint-platform/targets/*/rcrt1.o
             blueprint-platform/targets/*/*.lib
           if-no-files-found: error
 

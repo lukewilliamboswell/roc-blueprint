@@ -40,11 +40,11 @@ LinkInputs := [].{
 	## The files `blueprint-platform/main.roc` links, relative to both the
 	## archive root and the platform directory.
 	linked = [
-		"targets/x64musl/crt1.o",
+		"targets/x64musl/rcrt1.o",
 		"targets/x64musl/libc.a",
 		"targets/x64musl/libzigc.a",
 		"targets/x64musl/libcompiler_rt.a",
-		"targets/arm64musl/crt1.o",
+		"targets/arm64musl/rcrt1.o",
 		"targets/arm64musl/libc.a",
 		"targets/arm64musl/libzigc.a",
 		"targets/arm64musl/libcompiler_rt.a",
@@ -437,7 +437,7 @@ match_manifest = |lock_text, encoded| match LinkInputs.parse_lock(lock_text) {
 		}
 }
 
-committed_manifest = "{\"assets\":{\"all\":{\"asset\":\"link-inputs-all.tar\",\"sha256\":\"a057de193f8c1f6e7f3bfc6f1999853e6c2a868567913af9384d7ecb99c5462a\",\"size\":8253440}},\"kind\":\"roc-zig-link-inputs\",\"schema_version\":1,\"source\":{\"input_fingerprint\":\"a0a3a4bd00e19228089ae1fcab72f5760e75d373a994db82c391f27560283001\",\"ref\":\"refs/heads/windows-startup-inputs\",\"repository\":\"lukewilliamboswell/roc-platform-template-zig\",\"sha\":\"5db8f9b9e661f5cbde0254d3520366ef4eab8bd4\",\"workflow\":\"lukewilliamboswell/roc-platform-template-zig/.github/workflows/linker-inputs.yml\"}}"
+committed_manifest = "{\"assets\":{\"all\":{\"asset\":\"link-inputs-all.tar\",\"sha256\":\"2e3b30d54b2e0b5d243585641e1613ebd4961bc435fb3fb868543e3318d3ca92\",\"size\":8253440}},\"kind\":\"roc-zig-link-inputs\",\"schema_version\":1,\"source\":{\"input_fingerprint\":\"1e6d05b6df5be038409e0977e38e4d9e2fe437ad552c2d5db46ca16c69c8540f\",\"ref\":\"refs/heads/upgrade/nightly-pie-2026-11-14\",\"repository\":\"lukewilliamboswell/roc-platform-template-zig\",\"sha\":\"99649586217e36d251b6ebf7ee0a5d1593b19c20\",\"workflow\":\"lukewilliamboswell/roc-platform-template-zig/.github/workflows/linker-inputs.yml\"}}"
 
 # The committed lock is valid, and each identity it carries is checked.
 expect lock_error(committed_lock) == "accepted"
@@ -446,15 +446,15 @@ expect lock_error(Str.replace_each(committed_lock, "\"targets\"", "\"artifacts\"
 expect lock_error(Str.replace_each(committed_lock, "\"schema_version\": 1", "\"schema_version\": 2")) == "unsupported schema_version or kind"
 # A release that is not named after the pinned manifest is refused, whichever
 # of the two was edited.
-expect lock_error(Str.replace_each(committed_lock, "link-inputs-sha256-28", "link-inputs-sha256-38")) == "release must be link-inputs-sha256-<manifest.sha256>"
-expect lock_error(Str.replace_each(committed_lock, "\"sha256\": \"28", "\"sha256\": \"38")) == "release must be link-inputs-sha256-<manifest.sha256>"
-expect lock_error(Str.replace_each(committed_lock, "\"sha256\": \"a057", "\"sha256\": \"A057")) == "targets.all must be link-inputs-all.tar with a SHA-256 and a size"
+expect lock_error(Str.replace_each(committed_lock, "link-inputs-sha256-f9", "link-inputs-sha256-e9")) == "release must be link-inputs-sha256-<manifest.sha256>"
+expect lock_error(Str.replace_each(committed_lock, "\"sha256\": \"f9", "\"sha256\": \"e9")) == "release must be link-inputs-sha256-<manifest.sha256>"
+expect lock_error(Str.replace_each(committed_lock, "\"sha256\": \"2e3b", "\"sha256\": \"2E3B")) == "targets.all must be link-inputs-all.tar with a SHA-256 and a size"
 expect lock_error(Str.replace_each(committed_lock, "\"size\": 8253440", "\"size\": 0")) == "targets.all must be link-inputs-all.tar with a SHA-256 and a size"
 expect lock_error(Str.replace_each(committed_lock, "\"repository\": \"lukewilliamboswell/roc-platform-template-zig\",\n  \"release\"", "\"repository\": \"../elsewhere\",\n  \"release\"")) == "repository must be a GitHub owner/name"
 
 # The release manifest must pin the same archive as the lock.
 expect manifest_error(committed_manifest) == "accepted"
-expect manifest_error(Str.replace_each(committed_manifest, "a057", "b057")) == "assets disagree with the lock's targets"
+expect manifest_error(Str.replace_each(committed_manifest, "2e3b", "3e3b")) == "assets disagree with the lock's targets"
 expect manifest_error(Str.replace_each(committed_manifest, "8253440", "8253441")) == "assets disagree with the lock's targets"
-expect manifest_error(Str.replace_each(committed_manifest, "5db8f9b", "6db8f9b")) == "source disagrees with the lock"
+expect manifest_error(Str.replace_each(committed_manifest, "9964958", "8964958")) == "source disagrees with the lock"
 expect manifest_error("[]") == "not a linker-input release manifest"

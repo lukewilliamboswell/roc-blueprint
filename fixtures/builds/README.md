@@ -12,10 +12,9 @@ The suite (`scripts/src/BuildGates.roc`, on the harness in
 `scripts/src/BuildHarness.roc`) copies the fixture files into a temporary
 project and renders `Blueprint.roc.in` with the local platform and the pinned
 inputs. The tasks and builds of the fixture are Roc scripts on basic-cli, run
-as `roc-stable <script>.roc -- ARGS` in an environment that declares that one
-compiler and the two bundles the scripts need through `RocPackages`. Roc takes
-the first `--` of its arguments for itself, so every command has one before
-the script's own arguments.
+as `roc-stable <script>.roc ARGS` in an environment that declares that one
+compiler and the two bundles the scripts need through `RocPackages`. Script
+arguments follow the entry point directly.
 
 ## Pins and the network
 

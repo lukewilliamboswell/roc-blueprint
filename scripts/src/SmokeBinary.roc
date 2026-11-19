@@ -1,5 +1,6 @@
 import cli.Cmd
 import cli.Env
+import cli.System
 import cli.OsStr
 import cli.Path
 import cli.Stdout
@@ -59,7 +60,7 @@ SmokeBinary := [].{
 	## The Roc packages of the script the Nix-free project runs: basic-cli
 	## and the package it depends on.
 	roc_packages = [
-		"https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst",
+		"https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst",
 		"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	]
 
@@ -85,10 +86,10 @@ SmokeBinary := [].{
 	## The project that takes nothing from Nix: the compiler of `tag` as a
 	## fetched program, `git` expected of the machine, and the script's Roc
 	## packages.
-	no_nix_roc : Str, Str, Bool -> Str
-	no_nix_roc = |platform_path, tag, windows| {
-		# Work around roc-lang/roc#12429 while still compiling and linking.
-		cache_flag = if windows "\"--no-cache\", " else ""
+	no_nix_roc : Str, Str -> Str
+	no_nix_roc = |platform_path, tag| {
+		# Compile and link from source: the cached path fails on Windows
+		# (roc-lang/roc#12429) and arm64 Linux with the pinned nightly.
 		Str.join_with(
 			[
 				"app [config] { pf: platform \"${platform_path}\" }",
@@ -104,7 +105,7 @@ SmokeBinary := [].{
 				"		RocPackages([${Str.join_with(roc_packages.map(|url| "\"${url}\""), ", ")}]),",
 				"	]),",
 				"	Task(\"roc-version\", [Use(\"dev\"), Run([\"roc-stable\", \"version\"])]),",
-				"	Task(\"script\", [Use(\"dev\"), Run([\"roc-stable\", ${cache_flag}\"hello.roc\"])]),",
+				"	Task(\"script\", [Use(\"dev\"), Run([\"roc-stable\", \"--no-cache\", \"hello.roc\"])]),",
 				"]",
 				"",
 			],
@@ -203,7 +204,7 @@ SmokeBinary := [].{
 			_ => (Nix(Pinned), arguments)
 		}
 		match rest {
-			[binary] => if binary.is_empty() or binary.starts_with("-") Err(Usage) else Ok({ binary, mode })
+			[binary] => if (binary.is_empty() or binary.starts_with("-")) Err(Usage) else Ok({ binary, mode })
 			_ => Err(Usage)
 		}
 	}
@@ -239,7 +240,7 @@ SmokeBinary := [].{
 		# platform path must be computed from the real location.
 		# A relative platform dependency cannot cross Windows drive letters.
 		# Keep the project on the checkout's drive, even when TEMP is on C:.
-		temporary = if Env.platform!().os == WINDOWS {
+		temporary = if Process.windows!() {
 			cache = Path.utf8("${root}/.cache")
 			cache.create_all!()?
 			Env.create_temp_dir_in!(cache, "blueprint-smoke-")?
@@ -264,19 +265,19 @@ smoke! = |root, blueprint, work, mode| {
 				Ok(chosen) => chosen
 				Err(NoPin(file)) => return Script.fail!("${file} has no pin for the smoke test")
 			}
-			Script.info!("==>", "packages ${if references.source.is_empty() "the provider's default" else references.source}, overlay ${references.overlay}, compiler ${references.compiler}")?
+			Script.info!("==>", "packages ${if (references.source.is_empty()) "the provider's default" else references.source}, overlay ${references.overlay}, compiler ${references.compiler}")?
 			Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), SmokeBinary.blueprint_roc(platform_path, references))?
 			Path.write_utf8!(Path.utf8("${project}/hello.roc"), SmokeBinary.hello_script)?
 		}
 		NoNix => {
 			tag = roc_version.trim()
 			Script.info!("==>", "no Nix: roc-stable is the fetched ${tag}, git is the machine's")?
-			Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), SmokeBinary.no_nix_roc(platform_path, tag, Env.platform!().os == WINDOWS))?
+			Path.write_utf8!(Path.utf8("${project}/Blueprint.roc"), SmokeBinary.no_nix_roc(platform_path, tag))?
 			Path.write_utf8!(Path.utf8("${project}/hello.roc"), SmokeBinary.linked_script)?
 		}
 	}
-	if Env.platform!().os != WINDOWS {
-		Cmd.new("chmod").args(["+x", "${project}/hello.roc"].map(OsStr.from_str)).exec!().map_err(|_| ChmodFailed)?
+	if !Process.windows!() {
+		Cmd.new("chmod").args(["+x", "${project}/hello.roc"].map(OsStr.from_str)).call!().map_err(|_| ChmodFailed)?
 	}
 
 	# Leave no Roc for the binary to find.
@@ -314,11 +315,11 @@ smoke! = |root, blueprint, work, mode| {
 			[] => return Script.fail!("there is no `false` on PATH to stand in for python3")
 		}
 	}
-	python_path = "${stand_in}/python3${if Env.platform!().os == WINDOWS ".exe" else ""}"
-	if Env.platform!().os == WINDOWS {
+	python_path = "${stand_in}/python3${if (Process.windows!()) ".exe" else ""}"
+	if Process.windows!() {
 		Path.utf8(target).copy!(Path.utf8(python_path)).map_err(|_| LinkFailed)?
 	} else {
-		Cmd.new("ln").args(["-s", target, python_path].map(OsStr.from_str)).exec!().map_err(|_| LinkFailed)?
+		Cmd.new("ln").args(["-s", target, python_path].map(OsStr.from_str)).call!().map_err(|_| LinkFailed)?
 	}
 	probe = Process.command(python_path, ["--version"], project)
 	probed = Process.capture!({ ..probe, cmd: probe.cmd.clear_envs().envs([(SmokeBinary.witness_variable, witness)].map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) })?
@@ -337,7 +338,7 @@ smoke! = |root, blueprint, work, mode| {
 	}
 	kept = ["ROC", "PATH"].concat(private.map(|(name, _)| name))
 	inherited = Env.dict!().map(|(name, value)| (OsStr.display(name), OsStr.display(value))).keep_if(|(name, _)| !kept.contains(name))
-	variables = inherited.concat(private).concat([("PATH", Str.join_with([stand_in].concat(without_roc), if Env.platform!().os == WINDOWS ";" else ":")), (SmokeBinary.witness_variable, witness)])
+	variables = inherited.concat(private).concat([("PATH", Str.join_with([stand_in].concat(without_roc), if (Process.windows!()) ";" else ":")), (SmokeBinary.witness_variable, witness)])
 	binary = |args| {
 		job = Process.command(blueprint, args, project)
 		{ ..job, cmd: job.cmd.clear_envs().envs(variables.map(|(key, value)| (OsStr.from_str(key), OsStr.from_str(value)))) }
@@ -369,9 +370,9 @@ smoke! = |root, blueprint, work, mode| {
 	if Path.exists!(Path.utf8(witness))? {
 		return Script.fail!("blueprint used a host python3: ${Path.read_utf8!(Path.utf8(witness)) ?? ""}")
 	}
-	machine = Env.platform!()
-	python = if records "a python3 that records its use" else "a failing python3"
-	Script.pass!("blueprint binary smoke test passed on ${Str.inspect(machine.os)} ${Str.inspect(machine.arch)} with ${described}, no roc and ${python} on PATH")
+	machine = System.target!()
+	python = if (records) "a python3 that records its use" else "a failing python3"
+	Script.pass!("blueprint binary smoke test passed on ${Str.inspect(machine.os())} ${Str.inspect(machine.arch())} with ${described}, no roc and ${python} on PATH")
 }
 
 ## Both release smoke modes fetch this task's compiler from the same
@@ -448,7 +449,7 @@ expect match SmokeBinary.resolved(Pinned) {
 	Ok(pins) =>
 		pins.source.starts_with("github:NixOS/nixpkgs/") and pins.source.to_utf8().len() == 61
 			and pins.overlay.starts_with("github:roc-lang/roc-overlay/") and pins.overlay.to_utf8().len() == 68
-				and pins.compiler.starts_with("rocpkgs.nightly-2")
+			and pins.compiler.starts_with("rocpkgs.nightly-2")
 	Err(_) => False
 }
 expect SmokeBinary.is_script_host("/home/me/.cache/roc/nightly/tmp/G7Edog/smoke_binary.roc") and !SmokeBinary.is_script_host("/repo/dist/smoke-x86_64-linux")
@@ -461,7 +462,7 @@ expect [[], ["--floating"], ["--no-nix"], ["--pinned", "blueprint"], ["blueprint
 # The Nix-free project names no package source, overlay or tool of one: its
 # compiler is a fetched program and git is the machine's.
 expect {
-	text = SmokeBinary.no_nix_roc("../pf/main.roc", "nightly-2026-10-28-bad769b", False)
+	text = SmokeBinary.no_nix_roc("../pf/main.roc", "nightly-2026-10-28-bad769b")
 	text.starts_with("app [config] { pf: platform \"../pf/main.roc\" }\n\nimport pf.Recipes\n\nconfig = [\n\tName(\"smoke\"),\n\tSystems([\"x86_64-linux\", \"aarch64-linux\", \"aarch64-darwin\", \"x86_64-darwin\", \"x86_64-windows\"]),\n\tEnvironment(\"dev\", [\n\t\tPrograms([Fetch(\"roc-stable\", Recipes.roc_nightly(\"nightly-2026-10-28-bad769b\"))]),\n\t\tExpect([\"git\"]),\n\t\tRocPackages([\"https://github.com/roc-lang/basic-cli/")
 		and ["NixPackages", "Input(", "Tools(", "Command(", "#"].all(|part| !text.contains(part))
 }

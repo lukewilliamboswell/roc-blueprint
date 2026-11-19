@@ -18,7 +18,7 @@ suite: see [its README](../builds/README.md). Real sandboxed builds require
 x86_64 Linux and an effective Nix sandbox. Tasks deliberately run on the host.
 
 The tasks and builds are Roc scripts on basic-cli, run as
-`roc-stable <script>.roc -- ARGS`.
+`roc-stable <script>.roc ARGS`.
 
 The representative `ci` workflow is a task → build → task. Additional workflows
 exercise nested/repeated tasks with literal empty, quoted, multiline and

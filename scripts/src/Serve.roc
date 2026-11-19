@@ -70,7 +70,7 @@ Serve := { listener : Tcp.Listener, port : U16, routes : List(Route) }.{
 	requested : Str -> Try(Str, [BadRequest])
 	requested = |line|
 		match line.trim().split_on(" ") {
-			["GET", target, ..] => if target.starts_with("/") Ok(target.drop_prefix("/")) else Err(BadRequest)
+			["GET", target, ..] => if (target.starts_with("/")) Ok(target.drop_prefix("/")) else Err(BadRequest)
 			_ => Err(BadRequest)
 		}
 
@@ -88,7 +88,7 @@ Serve := { listener : Tcp.Listener, port : U16, routes : List(Route) }.{
 				"Content-Type: application/octet-stream",
 				"Content-Length: ${length.to_str()}",
 			]
-				.concat(if location.is_empty() [] else ["Location: ${location}"])
+				.concat(if (location.is_empty()) [] else ["Location: ${location}"])
 				.concat(["Connection: close", "", ""]),
 			"\r\n",
 		)
@@ -141,7 +141,7 @@ skip_headers! : Tcp.Connection, U64 => {}
 skip_headers! = |stream, remaining|
 	if remaining > 0 {
 		match stream.with_line_limit(max_line_bytes).read_line!() {
-			Ok(line) => if line.trim().is_empty() {} else skip_headers!(stream, remaining - 1)
+			Ok(line) => if (line.trim().is_empty()) {} else skip_headers!(stream, remaining - 1)
 			Err(_) => {}
 		}
 	}

@@ -40,16 +40,16 @@
           # Official archives can precede their roc-overlay inventory entry.
           compilerArchives = {
             "x86_64-linux" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-10-f7d1f19/roc_nightly-linux_x86_64-2026-11-10-f7d1f19.tar.gz";
-              hash = "sha256-iR8eBdFUlMt/Km5LdH5M4WH0WH5md7rAYq79ZzirWLk=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-18-a520eed/roc_nightly-linux_x86_64-2026-11-18-a520eed.tar.gz";
+              hash = "sha256-2TlUlfndB8OWKcM/FW9/7mjo0i+KdkUi5c3RzDCHm1E=";
             };
             "aarch64-linux" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-10-f7d1f19/roc_nightly-linux_arm64-2026-11-10-f7d1f19.tar.gz";
-              hash = "sha256-XslfXhm/T1r9X9ckRjHDnJH7ib2GXCnIzKyYc06gIM8=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-18-a520eed/roc_nightly-linux_arm64-2026-11-18-a520eed.tar.gz";
+              hash = "sha256-Fvsr1azozXjjSFQ2OYBk0svl4o08hOFVskYNMhAXIsM=";
             };
             "aarch64-darwin" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-10-f7d1f19/roc_nightly-macos_apple_silicon-2026-11-10-f7d1f19.tar.gz";
-              hash = "sha256-aNzJBsi9m5hKZ0ZyWNfOvD1k4UvkpHOwYUiH0O7JnEo=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-18-a520eed/roc_nightly-macos_apple_silicon-2026-11-18-a520eed.tar.gz";
+              hash = "sha256-O5ujzHNX5HkW8DaJl5vmw1wZhqH9WlS/DQbqYJ/gZI0=";
             };
           };
           roc = roc-overlay.packages.${system}.nightly.overrideAttrs (previous: {
@@ -61,7 +61,7 @@
             passthru = previous.passthru // {
               tag = rocTag;
               compilerVersion = rocTag;
-              compilerCommit = "f7d1f1982ff2336f39ae36ccdaa2e7e480b01367";
+              compilerCommit = "a520eeda6c3745f2543fcdd0fb836d3d1336c5ac";
               source = {
                 inherit (compilerArchives.${system}) url;
                 sha256 = compilerArchives.${system}.hash;
@@ -73,10 +73,13 @@
           # The compiler the scripts in scripts/ run on, under the command name
           # `roc-stable` alone. It moves only by a reviewed edit here, so the
           # scripts keep working while the product moves to a newer nightly.
-          rocStableTag = "nightly-2026-10-13-b17d287";
+          rocStableTag = "nightly-2026-11-18-a520eed";
+          # Reuse the official archive when both pins agree, including before
+          # roc-overlay inventories it. The maintenance pin remains explicit.
+          rocStableCompiler = if rocStableTag == rocTag then roc else roc-overlay.packages.${system}.${rocStableTag};
           rocStable = pkgs.runCommand "roc-stable-${rocStableTag}" { } ''
             mkdir -p "$out/bin"
-            ln -s ${lib.getExe roc-overlay.packages.${system}.${rocStableTag}} "$out/bin/roc-stable"
+            ln -s ${lib.getExe rocStableCompiler} "$out/bin/roc-stable"
           '';
 
           # The compiler scripts/build_release.roc cross-builds every released
@@ -94,11 +97,12 @@
             cp -r sysroot/darwin "$out/darwin"
           '';
 
-          # Smoke and archive-test controllers retain their maintenance platform
-          # and compiler. Product binaries use rocCross; these test helpers do not ship.
+          # Smoke and archive-test controllers use the maintenance compiler.
+          # Product binaries use rocCross; these test helpers do not ship.
           # Refetch the overlay's recorded bytes with this host's fetcher. A
           # foreign-system fetch derivation itself cannot run on the Linux builder.
           rocStableArchive = archiveSystem:
+            if rocStableTag == rocTag then rocArchive archiveSystem else
             let recorded = roc-overlay.packages.${archiveSystem}.${rocStableTag}.src;
             in pkgs.fetchurl { url = recorded.url; sha256 = recorded.outputHash; };
           rocStableCross = pkgs.runCommand "roc-stable-cross-${rocStableTag}" { } ''
@@ -111,7 +115,7 @@
           # Released native documentation renderer, compatible with the reviewed
           # shared build-docs action. Never
           # patch its bytes: these hashes identify the published executables.
-          rocDocsVersion = "0.10.1";
+          rocDocsVersion = "0.11.1";
           rocDocsHashes = {
             "x86_64-linux" = "sha256-/ebhQvHu9M3++19/Id+KxEkruMNfETy9HyWA3gXiW5I=";
             "aarch64-linux" = "sha256-uXrZsPGI3SkFtqXFyjEjphikhPSs6NbPq5X9DmrfSkw=";
@@ -137,7 +141,7 @@
               {
                 src = pkgs.fetchurl {
                   url = "https://github.com/roc-lang/nightlies/releases/download/${rocTag}/roc_nightly-source-${lib.removePrefix "nightly-" rocTag}.tar.gz";
-                  hash = "sha256-dAJtdR1s+fog1lYRjUz4eAJhm9exCznL7/JFIzKKgaY=";
+                  hash = "sha256-xLvquWljaYXvfcYDFQCICTijjsChh+PveimJpMO9pIA=";
                 };
               }
               ''
@@ -160,8 +164,8 @@
               hash = "sha256-K2h4kWv5jaGd2eHhEI8xxD4lmQRGNPqqJG0WSoz4cOo=";
             }
             {
-              url = "https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst";
-              hash = "sha256-gXYN2dbzHYoe9CYzVyKL3KzE7yPmumJKv/AuFhckqK8=";
+              url = "https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst";
+              hash = "sha256-qrtLJLrKBPhmB7ZEvp9OyP83PeExua6pCeLsci6Qg1Y=";
             }
             {
               url = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst";
@@ -194,7 +198,7 @@
 
           blueprint = pkgs.stdenv.mkDerivation {
             pname = "blueprint";
-            version = "0.13.0";
+            version = "0.14.0";
             src = lib.fileset.toSource {
               root = ./.;
               fileset = lib.fileset.unions [

@@ -1,4 +1,5 @@
 import cli.Env
+import cli.System
 import cli.OsStr
 import cli.Path
 import compilers.Bootstrap
@@ -91,7 +92,7 @@ bootstrap! = |bench| {
 	CliHarness.exited!(cold, 0, "embedded compiler bootstrap")?
 	CliHarness.contains!(cold.stderr, "installing embedded Roc compiler", "cold bootstrap")?
 	CliHarness.check!(!cold.stderr.contains("fetching"), "cold bootstrap downloaded its compiler:\n${cold.stderr}")?
-	program = Bootstrap.compiler(compiler_version.trim(), system_of(Env.platform!()))?
+	program = Bootstrap.compiler(compiler_version.trim(), system_of(System.target!()))?
 	artifact = "${store}/v1/artifacts/sha256/${program.sha256}"
 	tree = "${store}/v1/trees/sha256/${program.sha256}.tar.gz"
 	CliHarness.check!(CliHarness.present!(artifact), "embedded compiler artifact missing: ${artifact}; stored artifacts: ${Str.inspect(CliHarness.names!("${store}/v1/artifacts/sha256")?)}")?
@@ -135,11 +136,11 @@ bootstrap! = |bench| {
 	Script.pass!("embedded compiler: cold install, cache reuse, corruption repair and concurrent installs, with no roc on PATH or compiler download")
 }
 
-system_of : { arch : [X86, X64, ARM, AARCH64, OTHER(Str)], os : [LINUX, MACOS, WINDOWS, OTHER(Str)] } -> Str
+system_of : System.Target -> Str
 system_of = |machine|
-	match machine {
-		{ arch: AARCH64, os: LINUX } => "aarch64-linux"
-		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
+	match (machine.arch(), machine.os()) {
+		(Arm64, Linux(_)) => "aarch64-linux"
+		(Arm64, MacOS(_)) => "aarch64-darwin"
 		_ => "x86_64-linux"
 	}
 

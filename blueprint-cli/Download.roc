@@ -53,11 +53,11 @@ Download := [].{
 	## hop never names credentials. A `Location` that starts at `/` is on the
 	## host that sent it.
 	hop : Str, Str, Str -> Try(Str, Str)
-	hop = |declared, current, location| {
-		target = if location.starts_with("/") and !location.starts_with("//") {
-			"${origin(current)}${location}"
+	hop = |declared, current, redirect| {
+		target = if redirect.starts_with("/") and !redirect.starts_with("//") {
+			"${origin(current)}${redirect}"
 		} else {
-			location
+			redirect
 		}
 		if target.to_utf8().any(|b| b <= 32 or b >= 127) {
 			return Err("a redirect to an address that is not plain text")
@@ -146,7 +146,7 @@ follow! = |declared, current, headers, hops| {
 		if hops >= Download.max_hops {
 			return Err(Final(status, "more than ${Download.max_hops.to_str()} redirects"))
 		}
-		target = match Download.location(Response.headers(response)) {
+		target = match Download.location(Response.headers(response).map(|header| { name: header.name, value: header.value })) {
 			Ok(value) => Download.hop(declared, current, value).map_err(|reason| Final(status, reason))?
 			Err(NoLocation) => return Err(Final(status, "HTTP ${status.to_str()} from ${Download.shown(current)} with no Location"))
 		}

@@ -37,7 +37,7 @@ Fuzz := [].{
 			[] => Ok({ how: Replay, only: [] })
 			[seconds, .. as only] =>
 				match U64.from_str(seconds) {
-					Ok(count) => if count > 0 Ok({ how: Timed(count), only }) else Err(BadArguments)
+					Ok(count) => if (count > 0) Ok({ how: Timed(count), only }) else Err(BadArguments)
 					Err(_) => Err(BadArguments)
 				}
 		}
@@ -48,7 +48,7 @@ Fuzz := [].{
 	chosen = |present, only|
 		match only.find_first(|name| !present.contains(name)) {
 			Ok(name) => Err(NoTarget(name))
-			Err(_) => Ok(if only.is_empty() present else present.keep_if(|name| only.contains(name)))
+			Err(_) => Ok(if (only.is_empty()) present else present.keep_if(|name| only.contains(name)))
 		}
 
 	## Where a target's inputs live for one run. `Scratch` is a copy of the
@@ -63,21 +63,21 @@ Fuzz := [].{
 	corpus = |how, persistent, target|
 		match how {
 			Replay => Scratch
-			Timed(_) => if persistent.is_empty() Scratch else Kept("${persistent}/${target}")
+			Timed(_) => if (persistent.is_empty()) Scratch else Kept("${persistent}/${target}")
 		}
 
 	## libFuzzer's arguments before the corpus directory.
 	flags : Mode, Bool, Str, List(Str) -> List(Str)
 	flags = |how, has_corpus, artifact_prefix, dictionaries| {
 		length = match how {
-			Replay => if has_corpus ["-runs=0"] else ["-runs=${generated_runs.to_str()}", "-seed=1"]
+			Replay => if (has_corpus) ["-runs=0"] else ["-runs=${generated_runs.to_str()}", "-seed=1"]
 			Timed(seconds) => ["-max_total_time=${seconds.to_str()}"]
 		}
 		# A generator decodes its value's choices from the input's bytes. libFuzzer
 		# starts from inputs of a few bytes and lengthens them slowly, so without
 		# this nearly every choice decodes from exhausted input, as its first
 		# option; a corpus of real documents needs no such help.
-		generated = if has_corpus [] else ["-len_control=0"]
+		generated = if (has_corpus) [] else ["-len_control=0"]
 		length.concat(generated).concat(["-print_final_stats=1", "-artifact_prefix=${artifact_prefix}"]).concat(dictionaries.map(|dictionary| "-dict=${dictionary}"))
 	}
 
@@ -92,7 +92,7 @@ Fuzz := [].{
 	tail : Str, U64 -> Str
 	tail = |text, count| {
 		lines = text.split_on("\n")
-		Str.join_with(lines.drop_first(if lines.len() > count lines.len() - count else 0), "\n")
+		Str.join_with(lines.drop_first(if (lines.len() > count) lines.len() - count else 0), "\n")
 	}
 
 	## Keep compiler memory bounded independently of the number of fuzz targets.
@@ -109,7 +109,7 @@ Fuzz := [].{
 	check_args = |source| ["check", "--no-cache", source]
 
 	build_args : Str, Str -> List(Str)
-	build_args = |source, output| ["build", "--fuzz", "--no-cache", source, "--output=${output}"]
+	build_args = |source, output| ["build", "--fuzz", "--specialize=no", "--no-cache", source, "--output=${output}"]
 
 	## Build and run the requested targets, from the repository root.
 	run! : Str, Request => Try({}, _)
@@ -165,9 +165,9 @@ all! = |root, asked, places| {
 	# A fuzz binary built after a type error would hold runtime-error
 	# placeholders, so every target must check and build cleanly first.
 	Script.info!("==>", "Checking and building ${fuzzers.len().to_str()} fuzz targets")?
-	checks = compile_batches!(fuzzers.map(|target| Process.product_command(roc, Fuzz.check_args("${directory}/${target}/main.roc"), root)))?
+	checks = compile_batches!(fuzzers.map(|target| Process.command(roc, Fuzz.check_args("${directory}/${target}/main.roc"), root)))?
 	clean!(fuzzers, checks, "roc check")?
-	builds = compile_batches!(fuzzers.map(|target| Process.product_command(roc, Fuzz.build_args("${directory}/${target}/main.roc", "${work}/${target}"), root)))?
+	builds = compile_batches!(fuzzers.map(|target| Process.command(roc, Fuzz.build_args("${directory}/${target}/main.roc", "${work}/${target}"), root)))?
 	clean!(fuzzers, builds, "roc build --fuzz")?
 	each!(fuzzers, directory, asked.how, places)
 }
@@ -226,11 +226,11 @@ one! = |target, source, how, places| {
 		}
 		Kept(directory) => {
 			Path.create_all!(Path.utf8(directory))?
-			if has_corpus [directory, "${source}/corpus"] else [directory]
+			if (has_corpus) [directory, "${source}/corpus"] else [directory]
 		}
 	}
 	dictionaries = names!(source)?.keep_if(|name| name.ends_with(".dict")).map(|name| "${source}/${name}")
-	arguments = Fuzz.flags(how, has_corpus, "${artifacts}/${target}-", dictionaries).concat(corpora)
+	arguments = ["raw"].concat(Fuzz.flags(how, has_corpus, "${artifacts}/${target}-", dictionaries)).concat(corpora)
 	outcome = Process.capture!(Process.command(binary, arguments, work))?
 	# libFuzzer reports on standard error.
 	if outcome.code != 0 {
@@ -264,7 +264,7 @@ expect Fuzz.tail("a\nb\nc", 2) == "b\nc" and Fuzz.tail("a\nb", 5) == "a\nb"
 
 # Both phases force compilation; fuzz instrumentation and the exact target/output remain.
 expect Fuzz.check_args("target/main.roc") == ["check", "--no-cache", "target/main.roc"]
-expect Fuzz.build_args("target/main.roc", "/work/target") == ["build", "--fuzz", "--no-cache", "target/main.roc", "--output=/work/target"]
+expect Fuzz.build_args("target/main.roc", "/work/target") == ["build", "--fuzz", "--specialize=no", "--no-cache", "target/main.roc", "--output=/work/target"]
 
 # Every target stays in order, including the final odd batch; an empty selection is empty.
 expect Fuzz.compiler_batches([]) == []

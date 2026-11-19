@@ -54,7 +54,7 @@ CliTest := [].{
 	develop : Str, Str, List(Str) -> List(Str)
 	develop = |cwd, entry, command| {
 		argv = ["develop", "--no-update-lock-file", "--no-write-lock-file", "path:${cwd}/.blueprint#devShells.x86_64-linux.${entry}"]
-		if command.is_empty() argv else argv.append("--command").concat(command)
+		if (command.is_empty()) argv else argv.append("--command").concat(command)
 	}
 
 	## What the configured task runs, before any extra argument.
@@ -82,8 +82,8 @@ Test : { bench : CliHarness.Bench, env : List((OsStr, OsStr)), pin : Str }
 ## Run `./blueprint` and return everything it printed. Only `update` may
 ## change the authority: after anything else it must be the same file, with
 ## the same bytes, not written since.
-run! : Test, Str, List(Str), I32, List((Str, Str)) => Try(Str, _)
-run! = |test, cwd, args, status, overrides| {
+invoke! : Test, Str, List(Str), I32, List((Str, Str)) => Try(Str, _)
+invoke! = |test, cwd, args, status, overrides| {
 	authority = "${cwd}/Blueprint.lock"
 	before = CliHarness.identity!(authority)?
 	outcome = CliHarness.blueprint!(test.bench, cwd, args, CliHarness.setting(test.env, overrides))?
@@ -99,7 +99,7 @@ run! = |test, cwd, args, status, overrides| {
 ## and an authority whose Nix pins are the native lock the provider wrote.
 update! : Test, Str => Try({}, _)
 update! = |test, cwd| {
-	_ = run!(test, cwd, ["update"], 0, [])?
+	_ = invoke!(test, cwd, ["update"], 0, [])?
 	CliHarness.same_calls!(
 		CliHarness.calls!("${cwd}/nix-calls")?,
 		[["flake", "update", "--flake", "path:${cwd}/.blueprint"]],
@@ -163,7 +163,7 @@ evaluated! : Test, Str, List(Str), Str, List(List(Str)) => Try({}, _)
 evaluated! = |test, cwd, args, expected, compiler_runs| {
 	CliHarness.forget!("${cwd}/roc-calls")?
 	what = "blueprint ${Str.join_with(args, " ")}"
-	CliHarness.contains!(run!(test, cwd, args, 0, [])?, expected, what)?
+	CliHarness.contains!(invoke!(test, cwd, args, 0, [])?, expected, what)?
 	CliHarness.check!(CliHarness.calls!("${cwd}/roc-calls")?.contains(["version"]), "${what} did not probe the compiler's version")?
 	CliHarness.same_calls!(evaluations!(cwd)?, compiler_runs, "${what} did not evaluate the configuration exactly once")
 }
@@ -181,6 +181,7 @@ cases! = |bench| {
 		env: CliHarness.setting(
 			bench.env,
 			[
+				("BLUEPRINT_TARGET", "x86_64-linux"),
 				("PATH", "${bench.bin}:${search}"),
 				("ROC", record),
 				("STUB_REAL_ROC", bench.roc),
@@ -193,23 +194,23 @@ cases! = |bench| {
 	work = bench.work
 
 	# These must work without Blueprint.roc.
-	CliHarness.check!(CliHarness.is_version(run!(test, work, ["--version"], 0, [])?), "--version did not print a version")?
-	CliHarness.contains!(run!(test, work, ["--help"], 0, [])?, "workflow", "--help")?
-	CliHarness.contains!(run!(test, work, ["workflow", "--help"], 0, [])?, "workflow", "workflow --help")?
-	_ = run!(test, work, ["workflow"], 2, [])?
-	_ = run!(test, work, ["unknown-command"], 2, [])?
-	CliHarness.contains!(run!(test, work, ["tasks"], 1, [])?, "there is no Blueprint.roc", "tasks without a Blueprint.roc")?
+	CliHarness.check!(CliHarness.is_version(invoke!(test, work, ["--version"], 0, [])?), "--version did not print a version")?
+	CliHarness.contains!(invoke!(test, work, ["--help"], 0, [])?, "workflow", "--help")?
+	CliHarness.contains!(invoke!(test, work, ["workflow", "--help"], 0, [])?, "workflow", "workflow --help")?
+	_ = invoke!(test, work, ["workflow"], 2, [])?
+	_ = invoke!(test, work, ["unknown-command"], 2, [])?
+	CliHarness.contains!(invoke!(test, work, ["tasks"], 1, [])?, "there is no Blueprint.roc", "tasks without a Blueprint.roc")?
 	Script.pass!("without Blueprint.roc: version, help and usage errors (exit 2); tasks says there is no Blueprint.roc")?
 
 	# Every command evaluates the configuration once, with a probed compiler.
 	settings!(test, work, CliTest.valid)?
-	evaluated!(test, work, ["--help"], "argument-test", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["run", "--help"], "echo-args", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["shell", "--help"], "ci", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["tasks"], "echo-args\t(ci)", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["spec"], "(name \"argument-test\")", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["flake"], "devShells", [["Blueprint.roc"]])?
-	evaluated!(test, work, ["check"], "Blueprint.roc is valid", [["Blueprint.roc"], ["check", "Blueprint.roc"]])?
+	evaluated!(test, work, ["--help"], "argument-test", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["run", "--help"], "echo-args", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["shell", "--help"], "ci", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["tasks"], "echo-args\t(ci)", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["spec"], "(name \"argument-test\")", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["flake"], "devShells", [["--no-cache", "Blueprint.roc"]])?
+	evaluated!(test, work, ["check"], "Blueprint.roc is valid", [["--no-cache", "Blueprint.roc"], ["check", "--no-cache", "Blueprint.roc"]])?
 	untouched!(work)?
 	Script.pass!("help, tasks, spec, flake and check: one evaluation each, no provider, nothing generated")?
 
@@ -222,15 +223,15 @@ cases! = |bench| {
 	for case in probing {
 		cwd = isolated!(test, "compiler-${case.name}")?
 		settings!(test, cwd, CliTest.valid)?
-		output = run!(test, cwd, ["spec"], 1, case.overrides)?
+		output = invoke!(test, cwd, ["spec"], 1, case.overrides)?
 		what = "spec with a ${case.name} compiler"
 		CliHarness.contains!(output, case.diagnostic, what)?
 		CliHarness.contains!(output, pin, what)?
 		CliHarness.contains!(output, "set ROC", what)?
 		CliHarness.same_calls!(CliHarness.calls!("${cwd}/roc-calls")?, case.probes, "${what} ran the compiler for more than its version")?
 		untouched!(cwd)?
-		CliHarness.contains!(run!(test, cwd, ["--help"], 0, case.overrides)?, "blueprint", "--help with a ${case.name} compiler")?
-		CliHarness.check!(CliHarness.is_version(run!(test, cwd, ["--version"], 0, case.overrides)?), "--version with a ${case.name} compiler did not print a version")?
+		CliHarness.contains!(invoke!(test, cwd, ["--help"], 0, case.overrides)?, "blueprint", "--help with a ${case.name} compiler")?
+		CliHarness.check!(CliHarness.is_version(invoke!(test, cwd, ["--version"], 0, case.overrides)?), "--version with a ${case.name} compiler did not print a version")?
 	}
 	Script.pass!("ROC missing, incompatible or failing: refused before any evaluation, naming ${pin}; help and version still work")?
 
@@ -248,7 +249,7 @@ cases! = |bench| {
 		}
 		env = CliHarness.setting(
 			# The compiler on PATH needs its own cache; the others never start.
-			CliHarness.unsetting(test.env, if case.name == "path" ["ROC"] else ["ROC", "HOME", "XDG_CACHE_HOME"]),
+			CliHarness.unsetting(test.env, if (case.name == "path") ["ROC"] else ["ROC", "HOME", "XDG_CACHE_HOME"]),
 			[
 				("PATH", "${on_path}:${bench.bin}:/usr/bin:/bin"),
 				("STUB_PROBE_VERSION", "Roc compiler version other-nightly"),
@@ -272,40 +273,40 @@ cases! = |bench| {
 	elsewhere = isolated!(test, "compiler-relative-root")?
 	settings!(test, elsewhere, CliTest.valid)?
 	CliHarness.forget!("${work}/roc-calls")?
-	relative = run!(test, work, ["check"], 0, [("ROC", "./bin/roc-record"), ("BLUEPRINT_ROOT", elsewhere)])?
+	relative = invoke!(test, work, ["check"], 0, [("ROC", "./bin/roc-record"), ("BLUEPRINT_ROOT", elsewhere)])?
 	CliHarness.contains!(relative, "Blueprint.roc is valid", "check with a relative ROC")?
 	here = CliHarness.calls!("${work}/roc-calls")?
 	CliHarness.check!(!here.is_empty() and here.all(|call| call == ["version"]), "a relative ROC was not probed from the invocation directory: ${Str.inspect(here)}")?
-	CliHarness.same_calls!(evaluations!(elsewhere)?, [["Blueprint.roc"], ["check", "Blueprint.roc"]], "a relative ROC did not evaluate in BLUEPRINT_ROOT")?
+	CliHarness.same_calls!(evaluations!(elsewhere)?, [["--no-cache", "Blueprint.roc"], ["check", "--no-cache", "Blueprint.roc"]], "a relative ROC did not evaluate in BLUEPRINT_ROOT")?
 	untouched!(elsewhere)?
 	Script.pass!("ROC=./bin/roc-record: probed from the invocation directory, evaluated in BLUEPRINT_ROOT")?
 
 	# First use cannot initialize pins implicitly, even for plain generation.
 	for command in [["gen"], ["shell", "ci"], ["run", "echo-args"]] {
-		output = run!(test, work, command, 1, [])?
+		output = invoke!(test, work, command, 1, [])?
 		what = "blueprint ${Str.join_with(command, " ")} without a lock"
 		CliHarness.contains!(output, "missing authoritative lock", what)?
 		CliHarness.contains!(output, "blueprint update", what)?
 		untouched!(work)?
 	}
 	update!(test, work)?
-	_ = run!(test, work, ["gen"], 0, [])?
+	_ = invoke!(test, work, ["gen"], 0, [])?
 	CliHarness.same_calls!(CliHarness.calls!("${work}/nix-calls")?, [], "gen ran the provider")?
 	# Generated state ignores itself. The file is written once: a later run
 	# leaves it alone, whatever it then holds.
 	ignore = "${work}/.blueprint/.gitignore"
 	CliHarness.check!(Path.read_utf8!(Path.utf8(ignore))? == "*\n", "gen did not write .blueprint/.gitignore ignoring everything")?
 	written = CliHarness.identity!(ignore)?
-	_ = run!(test, work, ["gen"], 0, [])?
+	_ = invoke!(test, work, ["gen"], 0, [])?
 	CliHarness.check!(CliHarness.identity!(ignore)? == written, "a second gen rewrote .blueprint/.gitignore")?
 	Path.write_utf8!(Path.utf8(ignore), "*\n!flake.nix\n")?
-	_ = run!(test, work, ["gen"], 0, [])?
+	_ = invoke!(test, work, ["gen"], 0, [])?
 	CliHarness.check!(Path.read_utf8!(Path.utf8(ignore))? == "*\n!flake.nix\n", "gen replaced an edited .blueprint/.gitignore")?
 	Script.pass!("gen: .blueprint/.gitignore ignores everything, is written once and an edit to it survives")?
-	_ = run!(test, work, ["shell", "ci"], 0, [])?
+	_ = invoke!(test, work, ["shell", "ci"], 0, [])?
 	CliHarness.same_calls!(CliHarness.calls!("${work}/nix-calls")?, [CliTest.develop(work, "ci", [])], "shell ci")?
 	CliHarness.forget!("${work}/nix-calls")?
-	_ = run!(test, work, ["run", "echo-args", "--", "first", "two words", "--literal", ""], 0, [])?
+	_ = invoke!(test, work, ["run", "echo-args", "--", "first", "two words", "--literal", ""], 0, [])?
 	CliHarness.same_calls!(
 		CliHarness.calls!("${work}/nix-calls")?,
 		[CliTest.develop(work, "blueprint-env-ci", CliTest.task.concat(["first", "two words", "--literal", ""]))],
@@ -317,11 +318,11 @@ cases! = |bench| {
 	# an unsupported feature, a configuration that does not compile, and a Raw
 	# target that only the provider can refuse.
 	settings!(test, work, "${CliTest.valid}	Custom(\"services\", \"demo\", Str(\"value\")),\n")?
-	CliHarness.contains!(run!(test, work, ["check"], 1, [])?, "needs features: extensions", "check with a Custom setting")?
+	CliHarness.contains!(invoke!(test, work, ["check"], 1, [])?, "needs features: extensions", "check with a Custom setting")?
 	settings!(test, work, "	${CliTest.source}\n	Environment(\"ci\", [Tools([\"default#git\"])]),\n	Shell(\"default\", [Use(\"ci\")]),\n")?
-	CliHarness.contains!(run!(test, work, ["check"], 1, [])?, "MissingName", "check without a Name")?
+	CliHarness.contains!(invoke!(test, work, ["check"], 1, [])?, "MissingName", "check without a Name")?
 	settings!(test, work, "${CliTest.valid}	Raw(\"nix\", \"unknown\", Attrs([])),\n")?
-	CliHarness.contains!(run!(test, work, ["check"], 1, [])?, "unknown raw nix target", "check with an unknown Raw target")?
+	CliHarness.contains!(invoke!(test, work, ["check"], 1, [])?, "unknown raw nix target", "check with an unknown Raw target")?
 	Script.pass!("check: refuses an unsupported feature, a configuration without a Name and an unknown Raw target")?
 
 	# The real loader must distrust wire data even if a compiler emits it: one
@@ -335,19 +336,19 @@ cases! = |bench| {
 	]
 	for case in rejected {
 		cwd = wired!(test, "wire-${case.name}", case.text)?
-		output = run!(test, cwd, ["run", "echo-args"], 1, [("ROC", wire_roc)])?
+		output = invoke!(test, cwd, ["run", "echo-args"], 1, [("ROC", wire_roc)])?
 		CliHarness.contains!(output, case.diagnostic, "run echo-args with the ${case.name} wire Spec")?
 		untouched!(cwd)?
 	}
 	# Same-major future minors and optional fields remain forward compatible.
 	future = wired!(test, "wire-future-minor", "${CliTest.wire.replace_each("(minor 0)", "(minor 999)").drop_suffix(")")}(future-field (Future \"ignored\")))")?
-	accepted = run!(test, future, ["spec"], 0, [("ROC", wire_roc)])?
+	accepted = invoke!(test, future, ["spec"], 0, [("ROC", wire_roc)])?
 	CliHarness.contains!(accepted, "(minor 999)", "spec of a future minor")?
 	CliHarness.contains!(accepted, "(name \"wire\")", "spec of a future minor")?
 	untouched!(future)?
 	# A future minor preserves known workflow steps, rather than ignoring them.
 	future_flow = wired!(test, "wire-workflow-future-minor", CliTest.workflow_wire.replace_each("(minor 2)", "(minor 999)"))?
-	preserved = run!(test, future_flow, ["spec"], 0, [("ROC", wire_roc)])?
+	preserved = invoke!(test, future_flow, ["spec"], 0, [("ROC", wire_roc)])?
 	CliHarness.contains!(preserved, "(minor 999)", "spec of a future minor with a workflow")?
 	CliHarness.contains!(preserved, "(RunTask \"echo-args\" ())", "spec of a future minor with a workflow")?
 	CliHarness.contains!(preserved, "(workflows (", "spec of a future minor with a workflow")?
@@ -365,7 +366,7 @@ cases! = |bench| {
 	for case in incompatible {
 		cwd = isolated!(test, "request-${case.name}")?
 		settings!(test, cwd, "${CliTest.valid.replace_each("Tools([\"default#git\"])", "Tools([\"${case.tool}\"])").replace_each("\t${CliTest.source}\n", "")}	${case.declaration}\n")?
-		output = run!(test, cwd, case.command, 1, [])?
+		output = invoke!(test, cwd, case.command, 1, [])?
 		CliHarness.contains!(output, case.diagnostic, "blueprint ${Str.join_with(case.command, " ")} with an incompatible ${case.name}")?
 		untouched!(cwd)?
 	}
@@ -376,14 +377,14 @@ cases! = |bench| {
 	# refused as the configuration is read, and so is a name with no source.
 	sourceless = isolated!(test, "sourceless")?
 	settings!(test, sourceless, "	Name(\"sourceless\"),\n	Environment(\"ci\", [Expect([\"git\"])]),\n	Task(\"echo-args\", [Use(\"ci\"), Run([\"true\"])]),\n")?
-	shown = run!(test, sourceless, ["flake"], 0, [])?
+	shown = invoke!(test, sourceless, ["flake"], 0, [])?
 	CliHarness.contains!(shown, "nothing is generated for this project: it declares no source that nix supplies", "flake with no package source")?
 	CliHarness.check!(!shown.contains("devShells") and !shown.contains("nixpkgs"), "flake with no package source printed a flake:\n${shown}")?
-	CliHarness.contains!(run!(test, sourceless, ["check"], 0, [])?, "Blueprint.roc is valid", "check with no package source")?
+	CliHarness.contains!(invoke!(test, sourceless, ["check"], 0, [])?, "Blueprint.roc is valid", "check with no package source")?
 	settings!(test, sourceless, "	Name(\"sourceless\"),\n	Environment(\"ci\", [Tools([\"default#git\"])]),\n")?
-	CliHarness.contains!(run!(test, sourceless, ["check"], 1, [])?, "unknown source: default; Blueprint.roc declares no", "check with a tool of an undeclared source")?
+	CliHarness.contains!(invoke!(test, sourceless, ["check"], 1, [])?, "unknown source: default; Blueprint.roc declares no", "check with a tool of an undeclared source")?
 	settings!(test, sourceless, "	Name(\"sourceless\"),\n	${CliTest.source}\n	Environment(\"ci\", [Tools([\"git\"])]),\n")?
-	CliHarness.contains!(run!(test, sourceless, ["check"], 1, [])?, "names no package source", "check with a tool that names no source")?
+	CliHarness.contains!(invoke!(test, sourceless, ["check"], 1, [])?, "names no package source", "check with a tool that names no source")?
 	untouched!(sourceless)?
 	Script.pass!("no package source: nothing is generated or implied; a tool of an undeclared source, and a tool with no source, are refused as the configuration is read")?
 
@@ -400,7 +401,7 @@ cases! = |bench| {
 	)
 	closure = isolated!(test, "closure")?
 	settings!(test, closure, "${CliTest.valid}${foreign}")?
-	rendered = run!(test, closure, ["flake"], 0, [])?
+	rendered = invoke!(test, closure, ["flake"], 0, [])?
 	untouched!(closure)?
 	CliHarness.check!(!rendered.contains("python@3.12:out") and !rendered.contains("blueprint-env-foreign"), "the inspected flake holds the unselected Guix environment:\n${rendered}")?
 	# Stable declarations may mention an unused overlay, but neither the
@@ -410,7 +411,7 @@ cases! = |bench| {
 	# Resolution owns every declared source, even if no selected Nix task uses
 	# it. Without a registered Guix resolver, explicit update must refuse it.
 	settings!(test, closure, "${CliTest.valid}${foreign}	Shell(\"foreign\", [Use(\"foreign\")]),\n")?
-	CliHarness.contains!(run!(test, closure, ["update"], 1, [])?, "no registered resolver for guix", "update with an unregistered declared resolver")?
+	CliHarness.contains!(invoke!(test, closure, ["update"], 1, [])?, "no registered resolver for guix", "update with an unregistered declared resolver")?
 	untouched!(closure)?
 	Script.pass!("inspection excludes unselected Guix tools and overlays; update refuses the unregistered resolver before effects")?
 
@@ -420,12 +421,12 @@ cases! = |bench| {
 	settings!(test, entered, CliTest.valid)?
 	update!(test, entered)?
 	installable = "path:${entered}/.blueprint#devShells.x86_64-linux.ci"
-	exported = run!(test, entered, ["env", "ci"], 0, [])?
+	exported = invoke!(test, entered, ["env", "ci"], 0, [])?
 	CliHarness.check!(exported == "export PATH='/nix/store/00000000000000000000000000000000-stub-env/bin':\"$PATH\"\nexport STUB_DEV_SHELL='${installable}'\n", "env ci printed ${Str.inspect(exported)}")?
 	CliHarness.same_calls!(CliHarness.calls!("${entered}/nix-calls")?, [["print-dev-env", "--json", "--no-update-lock-file", "--no-write-lock-file", installable]], "env ci asked Nix for its shell as data")?
-	as_json = run!(test, entered, ["env", "ci", "--json"], 0, [])?
+	as_json = invoke!(test, entered, ["env", "ci", "--json"], 0, [])?
 	CliHarness.check!(as_json.starts_with("{\"format\":1,") and as_json.contains("\"directory\":\"/nix/store/00000000000000000000000000000000-stub-env/bin\"") and as_json.contains("\"origin\":\"nix\""), "env ci --json printed ${Str.inspect(as_json)}")?
-	github = run!(test, entered, ["env", "ci", "--github-env"], 0, [])?
+	github = invoke!(test, entered, ["env", "ci", "--github-env"], 0, [])?
 	CliHarness.check!(github == "STUB_DEV_SHELL=${installable}\n", "env ci --github-env printed ${Str.inspect(github)}")?
 	# Each rendering asked Nix for the shell as data once and entered nothing.
 	asked = CliHarness.calls!("${entered}/nix-calls")?
@@ -439,7 +440,7 @@ cases! = |bench| {
 	settings!(test, stale, CliTest.valid)?
 	update!(test, stale)?
 	settings!(test, stale, "${CliTest.valid}	Input(\"utils\", \"github:numtide/flake-utils\"),\n")?
-	CliHarness.contains!(run!(test, stale, ["run", "echo-args"], 1, [])?, "changed its inputs, resolver ownership since the lock was resolved", "run echo-args with a stale lock")?
+	CliHarness.contains!(invoke!(test, stale, ["run", "echo-args"], 1, [])?, "changed its inputs, resolver ownership since the lock was resolved", "run echo-args with a stale lock")?
 	CliHarness.same_calls!(CliHarness.calls!("${stale}/nix-calls")?, [], "the provider ran with a stale lock")?
 	Script.pass!("a lock resolved for other inputs is refused, naming them, before the provider runs")?
 
@@ -455,7 +456,7 @@ cases! = |bench| {
 		cwd = isolated!(test, "collision-${case.name}")?
 		settings!(test, cwd, "${CliTest.valid}	Executor(\"native\", Nix(\"default\")), Build(\"app\", [Execute(\"native\"), Use(\"ci\"), Run([\"true\"]), Output(\"result\")]),\n")?
 		generated = "${cwd}/generated"
-		output = run!(test, cwd, case.command, 1, [("BLUEPRINT_GENERATED_ROOT", generated), ("BLUEPRINT_WORKSPACE", "${generated}/${case.workspace}")])?
+		output = invoke!(test, cwd, case.command, 1, [("BLUEPRINT_GENERATED_ROOT", generated), ("BLUEPRINT_WORKSPACE", "${generated}/${case.workspace}")])?
 		CliHarness.contains!(output, "must not overlap", "blueprint ${case.name} with its workspace at ${case.workspace}")?
 		CliHarness.check!(!CliHarness.present!(generated), "a layout collision caused staging in ${generated}")?
 		untouched!(cwd)?
@@ -472,7 +473,7 @@ cases! = |bench| {
 		cwd = isolated!(test, "no-fallback-${case.name}")?
 		settings!(test, cwd, CliTest.valid)?
 		update!(test, cwd)?
-		output = run!(test, cwd, case.command, 1, [("STUB_NIX_FAIL", "1")])?
+		output = invoke!(test, cwd, case.command, 1, [("STUB_NIX_FAIL", "1")])?
 		what = "blueprint ${Str.join_with(case.command, " ")} when Nix fails"
 		CliHarness.contains!(output, "native package command failed", what)?
 		CliHarness.contains!(output, case.diagnostic, what)?
@@ -496,12 +497,12 @@ cases! = |bench| {
 			"\n",
 		),
 	)?
-	CliHarness.contains!(run!(test, flow, ["workflow", "absent"], 1, [])?, "unknown workflow: absent", "workflow absent")?
+	CliHarness.contains!(invoke!(test, flow, ["workflow", "absent"], 1, [])?, "unknown workflow: absent", "workflow absent")?
 	untouched!(flow)?
 	update!(test, flow)?
 	CliHarness.forget!("${flow}/roc-calls")?
-	_ = run!(test, flow, ["workflow", "ci"], 0, [])?
-	CliHarness.same_calls!(CliHarness.calls!("${flow}/roc-calls")?, [["version"], ["Blueprint.roc"]], "workflow ci did not load the configuration exactly once")?
+	_ = invoke!(test, flow, ["workflow", "ci"], 0, [])?
+	CliHarness.same_calls!(CliHarness.calls!("${flow}/roc-calls")?, [["version"], ["--no-cache", "Blueprint.roc"]], "workflow ci did not load the configuration exactly once")?
 	CliHarness.same_calls!(
 		CliHarness.calls!("${flow}/nix-calls")?,
 		[

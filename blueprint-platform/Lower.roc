@@ -145,11 +145,11 @@ Lower :: [].{
 			Name(name) => { ..acc, names: acc.names.append(name) }
 			Systems(systems) => { ..acc, systems: acc.systems.append(systems) }
 			Resolver(provider, inputs) => { ..acc, resolvers: acc.resolvers.append({ provider, inputs: inputs.map(|input| input.to_str()) }) }
-			Executor(name, selected) => { ..acc, executors: acc.executors.append(executor(name.to_str(), selected)) }
-			Packages(name, source) => { ..acc, sources: acc.sources.append({ name: name.to_str(), provider: provider(source) }) }
+			Executor(name, selected) => { ..acc, executors: acc.executors.append(lower_executor(name.to_str(), selected)) }
+			Packages(name, source) => { ..acc, sources: acc.sources.append({ name: name.to_str(), provider: lower_provider(source) }) }
 			Input(name, ref) => { ..acc, inputs: acc.inputs.append({ name: name.to_str(), url: ref.to_str() }) }
 			Environment(name, inner) => {
-				lowered = environment(name.to_str(), inner)?
+				lowered = lower_environment(name.to_str(), inner)?
 				# Environments sharing a bundle share its one locked source.
 				new_sources = lowered.roc_sources.keep_if(|source| !acc.build_sources.contains(source))
 				{ ..acc, environments: acc.environments.append(lowered.environment), system_tools: acc.system_tools.concat(lowered.system_tools), commands: acc.commands.concat(lowered.commands), configured_tools: acc.configured_tools.concat(lowered.configured_tools), roc_packages: acc.roc_packages.concat(lowered.roc_packages), recipes: acc.recipes.concat(lowered.recipes), environment_programs: acc.environment_programs.concat(lowered.environment_programs), expects: acc.expects.concat(lowered.expects), build_sources: acc.build_sources.concat(new_sources) }
@@ -267,8 +267,8 @@ Lower :: [].{
 		}
 
 	## Lower an executor declaration to its provider name and bootstrap source.
-	executor : Str, Config.ExecutorProvider -> Spec.Executor
-	executor = |name, selected|
+	lower_executor : Str, Config.ExecutorProvider -> Spec.Executor
+	lower_executor = |name, selected|
 		match selected {
 			Nix(source) => { name, provider: "nix", source: source.to_str() }
 			Adapter(provider_name, source) => { name, provider: provider_name, source }
@@ -293,8 +293,8 @@ Lower :: [].{
 	}
 
 	## Lower an explicitly declared package source.
-	provider : Config.PackageSource -> Spec.Provider
-	provider = |source|
+	lower_provider : Config.PackageSource -> Spec.Provider
+	lower_provider = |source|
 		match source {
 			From(NixPackages(ref)) => { name: "nix", version: 1, ref: ref.to_str() }
 			From(GuixPackages(channel)) => { name: "guix", version: 1, ref: channel }
@@ -306,8 +306,8 @@ Lower :: [].{
 	explicit_sources : Str
 	explicit_sources = "explicit-sources"
 
-	environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command), configured_tools : List(Spec.ConfiguredTool), roc_packages : List(Spec.RocPackage), roc_sources : List(Spec.BuildSource), recipes : List(Recipe), environment_programs : List(Spec.EnvironmentPrograms), expects : List(Spec.Expects) }, Str)
-	environment = |name, inner| {
+	lower_environment : Str, List(Config.EnvironmentSetting) -> Try({ environment : Spec.Environment, system_tools : List(Spec.SystemTools), commands : List(Spec.Command), configured_tools : List(Spec.ConfiguredTool), roc_packages : List(Spec.RocPackage), roc_sources : List(Spec.BuildSource), recipes : List(Recipe), environment_programs : List(Spec.EnvironmentPrograms), expects : List(Spec.Expects) }, Str)
+	lower_environment = |name, inner| {
 		draft = inner.fold(
 			{ tools: [], system_tools: [], commands: [], configured_tools: [], roc_urls: [], overlays: [], parents: [], programs: [], expects: [] },
 			|acc, setting|

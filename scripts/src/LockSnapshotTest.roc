@@ -283,15 +283,15 @@ supported = |schema| match schema {
 			|keyword|
 				known.contains(keyword.name)
 					and (keyword.name != "pattern" or patterns.contains(JsonData.string(keyword.value) ?? ""))
-						and (
-							if ["properties", "$defs"].contains(keyword.name) {
-								members(keyword.value).all(|member| supported(member.value))
-							} else if ["required", "type", "const"].contains(keyword.name) {
-								True
-							} else {
-								supported(keyword.value)
-							}
-						),
+					and (
+						if ["properties", "$defs"].contains(keyword.name) {
+							members(keyword.value).all(|member| supported(member.value))
+						} else if ["required", "type", "const"].contains(keyword.name) {
+							True
+						} else {
+							supported(keyword.value)
+						}
+					),
 		)
 	Array(items) => items.all(supported)
 	_ => True

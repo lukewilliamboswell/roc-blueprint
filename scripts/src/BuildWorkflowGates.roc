@@ -59,8 +59,8 @@ BuildWorkflowGates := [].{
 	## invocation but must not publish a store path.
 	published : List(Step), Bool -> List(Str)
 	published = |steps, good| {
-		successful = if good or steps.last().map_ok(|step| step.kind) != Ok("build") steps else steps.drop_last(1)
-		successful.map(|step| if step.kind == "build" "build" else task_line(step.argv))
+		successful = if (good or steps.last().map_ok(|step| step.kind) != Ok("build")) steps else steps.drop_last(1)
+		successful.map(|step| if (step.kind == "build") "build" else task_line(step.argv))
 	}
 
 	## Run every gate, then the smoke test of a copy of `examples/artifacts`.
@@ -239,7 +239,7 @@ workflow! : BuildHarness.Suite, BuildHarness.Layout, Str, List(BuildWorkflowGate
 workflow! = |suite, place, name, expected, refusal| {
 	good = refusal.is_empty()
 	start = BuildHarness.events!(suite)?.len()
-	ran = if good BuildHarness.ok!(suite, place, ["workflow", name])? else BuildHarness.refused!(suite, place, ["workflow", name], refusal)?
+	ran = if (good) BuildHarness.ok!(suite, place, ["workflow", name])? else BuildHarness.refused!(suite, place, ["workflow", name], refusal)?
 	# Bind each native invocation to the CLI's selected build and prepared
 	# identity. Keep every announcement: a task can change the next preparation
 	# of the same build, and failed builds still have an invocation.
@@ -270,14 +270,14 @@ workflow! = |suite, place, name, expected, refusal| {
 	}
 	BuildHarness.require!($prepared.is_empty(), "${name}: selected preparation was not executed")?
 	BuildHarness.require!($observed == expected, "${name}: effect order ${Str.inspect($observed)}, expected ${Str.inspect(expected)}")?
-	tasks = expected.keep_if(|step| step.kind == "task").map(|step| ["roc-stable", "task.roc", "--", suite.events].concat(step.argv))
+	tasks = expected.keep_if(|step| step.kind == "task").map(|step| ["roc-stable", "task.roc", suite.events].concat(step.argv))
 	BuildHarness.require!($commands == tasks, "${name}: task process argv ${Str.inspect($commands)}, expected ${Str.inspect(tasks)}")?
 	lines = ran.out.split_on("\n").drop_last(1)
 	outputs = lines.keep_if(|line| line.starts_with("/nix/store/"))
 	for output in outputs {
 		BuildHarness.require!(BuildHarness.exists!(output), "reported artifact missing: ${output}")?
 	}
-	printed = lines.map(|line| if line.starts_with("/nix/store/") "build" else line)
+	printed = lines.map(|line| if (line.starts_with("/nix/store/")) "build" else line)
 	wanted = BuildWorkflowGates.published(expected, good)
 	BuildHarness.require!(printed == wanted, "${name}: stdout order ${Str.inspect(printed)}, expected ${Str.inspect(wanted)}")?
 	Ok({ outputs, ran })
@@ -377,7 +377,7 @@ example_smoke! = |suite| {
 	config = "${project}/Blueprint.roc"
 	Path.write_utf8!(Path.utf8(config), replacements.fold(authored, |edited, (old, new)| edited.replace_each(old, new)))?
 	place = BuildHarness.layout(project)
-	_ = BuildHarness.command!(suite, { argv: [suite.roc, "check", config], cwd: suite.caller, extra: [], stdin: [], code: 0, service: NoService })?
+	_ = BuildHarness.command!(suite, { argv: [suite.roc, "check", "--no-cache", config], cwd: suite.caller, extra: [], stdin: [], code: 0, service: NoService })?
 	_ = BuildHarness.refused!(suite, place, ["build", "app"], "blueprint update")?
 	_ = BuildHarness.ok!(suite, place, ["update"])?
 	BuildHarness.require!(Path.is_file!(Path.utf8(place.lock)) ?? Bool.False, "example update did not publish authority")?

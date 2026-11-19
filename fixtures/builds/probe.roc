@@ -1,4 +1,4 @@
-app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst" }
+app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst" }
 
 import cli.IOErr
 import cli.Duration
@@ -12,8 +12,8 @@ import cli.Tcp
 ## `probe.json` names a marker file outside the project, a listening TCP port
 ## on the host's loopback address and the token both hold.
 ##
-##   roc-stable probe.roc -- host      a task: both must be reachable
-##   roc-stable probe.roc -- sandbox   a build: neither may be
+##   roc-stable probe.roc host      a task: both must be reachable
+##   roc-stable probe.roc sandbox   a build: neither may be
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	result = match args.map(OsStr.display) {
@@ -80,7 +80,7 @@ probe! = |sandbox| {
 ## refused (an isolated loopback has no such listener), denied, timed out, or
 ## no route. basic-cli has no tag for "network unreachable" and "host
 ## unreachable", so those arrive as the text of the operating system's error.
-unreachable : [TcpErr(IOErr)] -> Bool
+unreachable : [Interrupted, TcpErr(IOErr)] -> Bool
 unreachable = |refusal|
 	match refusal {
 		TcpErr(ConnectionRefused) => Bool.True
@@ -92,4 +92,4 @@ unreachable = |refusal|
 
 expect unreachable(TcpErr(ConnectionRefused)) and unreachable(TcpErr(TimedOut)) and unreachable(TcpErr(PermissionDenied))
 expect unreachable(TcpErr(Other("ErrorKind::NetworkUnreachable"))) and unreachable(TcpErr(Other("ErrorKind::HostUnreachable")))
-expect !unreachable(TcpErr(AddrNotAvailable)) and !unreachable(TcpErr(Unsupported)) and !unreachable(TcpErr(Other("ErrorKind::InvalidInput")))
+expect !unreachable(Interrupted) and !unreachable(TcpErr(AddrNotAvailable)) and !unreachable(TcpErr(Unsupported)) and !unreachable(TcpErr(Other("ErrorKind::InvalidInput")))

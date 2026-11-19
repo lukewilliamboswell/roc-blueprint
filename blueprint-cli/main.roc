@@ -7,7 +7,7 @@ app [main!] {
 	core: "../blueprint-core/main.roc",
 	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	nix: "../blueprint-nix/main.roc",
-	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst",
+	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst",
 	weaver: "https://github.com/lukewilliamboswell/weaver/releases/download/0.9.0/7j6KBFBEZ8pNMLQHkx9xiwyZ2PmwQPgKNDPUih6gKe77.tar.zst",
 }
 
@@ -48,7 +48,7 @@ import "compiler-version" as compiler_version : Str
 import "compiler-archive" as compiler_archive : List(U8)
 
 version : Str
-version = "0.13.0"
+version = "0.14.0"
 
 ## The providers a request may be planned with. This is the only reference to
 ## a concrete provider: everything else uses the Provider contract
@@ -434,12 +434,14 @@ store_json = |report| {
 	Json.to_str({ format: store_report_format, store: report.store, findings, counts: report.counts, repaired: report.repaired }).concat("\n")
 }
 
+## Compile from source: cached native evaluation can leave hosted symbols in
+## a later compile-time check on the pinned compiler.
 ## Type-check Blueprint.roc (including whole-config validation), then reuse
 ## the Spec loaded for CLI parsing to check provider compatibility.
 check! : Try(Spec, _), Context => Try({}, _)
 check! = |loaded, ctx| {
 	check_host!()?
-	native_command!(OsStr.from_str(roc!(ctx)?)).args(["check", "Blueprint.roc"].map(OsStr.from_str))
+	native_command!(OsStr.from_str(roc!(ctx)?)).args(["check", "--no-cache", "Blueprint.roc"].map(OsStr.from_str))
 		.cwd(path(ctx.layout.project_root)).call!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = loaded?
@@ -463,7 +465,7 @@ evaluate! = |ctx| {
 	check_host!()?
 	compiler = roc!(ctx)?
 	resolved = { ..ctx, compiler: Resolved(compiler) }
-	output = native_command!(OsStr.from_str(compiler)).args(["Blueprint.roc"].map(OsStr.from_str))
+	output = native_command!(OsStr.from_str(compiler)).args(["--no-cache", "Blueprint.roc"].map(OsStr.from_str))
 		.cwd(path(root)).capture!()
 		.map_err(|err| CompilerFailed(Str.inspect(err)))?
 	spec = Spec.parse(output).map_err(|err| BadSpec(err))?
@@ -1011,8 +1013,8 @@ fetch_programs! = |steps| {
 source_is_embedded_compiler : Str, Str -> Bool
 source_is_embedded_compiler = |sha256, system| Bootstrap.compiler(compiler_version.trim(), system).map_ok(|program| program.sha256 == sha256) ?? False
 
-expect source_is_embedded_compiler("891f1e05d15494cb7f2a6e4b747e4ce161f4587e6677bac062aefd6738ab58b9", "x86_64-linux")
-expect !source_is_embedded_compiler("891f1e05d15494cb7f2a6e4b747e4ce161f4587e6677bac062aefd6738ab58b9", "aarch64-darwin")
+expect source_is_embedded_compiler("d9395495f9dd07c39629c33f156f7fee68e8d22f8a764522e5cdd1cc30879b51", "x86_64-linux")
+expect !source_is_embedded_compiler("d9395495f9dd07c39629c33f156f7fee68e8d22f8a764522e5cdd1cc30879b51", "aarch64-darwin")
 expect !source_is_embedded_compiler("different bytes", "x86_64-linux")
 
 ## One consumer-owned executor for standalone requests and workflow steps.

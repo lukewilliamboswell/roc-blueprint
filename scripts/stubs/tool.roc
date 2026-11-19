@@ -1,6 +1,6 @@
 #!/usr/bin/env roc
 app [main!] {
-	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst",
+	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst",
 	nix: "../../blueprint-nix/main.roc",
 }
 
@@ -46,7 +46,10 @@ import StubTool
 ## working directory. It runs nothing through a shell.
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
-	executable = Env.exe_path!().map_ok(Path.display) ?? ""
+	executable = match Env.exe_path!() {
+		Ok(file) => Path.canonicalize!(file).map_ok(Path.display) ?? ""
+		Err(_) => ""
+	}
 	match StubTool.role(executable) {
 		Ok(role) =>
 			match act!(role, args) {
@@ -84,7 +87,7 @@ act! = |role, args| {
 		RocWire =>
 			match argv {
 				["version"] => written!(variable!("STUB_ROC_VERSION")?)
-				["Blueprint.roc"] => written!(Path.read_utf8!(Path.utf8("wire.scm")).map_err(|_| "cannot read ./wire.scm")?)
+				["--no-cache", "Blueprint.roc"] => written!(Path.read_utf8!(Path.utf8("wire.scm")).map_err(|_| "cannot read ./wire.scm")?)
 				_ => Err("unexpected compiler arguments: ${Str.inspect(argv)}")
 			}
 
@@ -188,7 +191,13 @@ act! = |role, args| {
 		RocStable => {
 			record!("roc-stable-calls", argv)?
 			shown = match optional!("STUB_SHOW_EXE") {
-				Ok(_) => "exe: ${Env.exe_path!().map_ok(Path.display) ?? "unknown"}\n"
+				Ok(_) => {
+					executable = match Env.exe_path!() {
+						Ok(file) => Path.canonicalize!(file).map_ok(Path.display) ?? "unknown"
+						Err(_) => "unknown"
+					}
+					"exe: ${executable}\n"
+				}
 				Err(_) => ""
 			}
 			written!("${shown}stub roc-stable: ${Str.join_with(argv, " ")}\n")

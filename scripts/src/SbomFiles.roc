@@ -22,7 +22,7 @@ SbomFiles := [].{
 		var $done = False
 		while !$done {
 			remaining = Sbom.max_json_bytes + 1 - $bytes.len()
-			match reader.read_up_to!(if remaining < 65536 remaining else 65536) {
+			match reader.read_up_to!(if (remaining < 65536) remaining else 65536) {
 				Ok(chunk) => {
 					$bytes = $bytes.concat(chunk)
 					if $bytes.len() > Sbom.max_json_bytes {
@@ -116,7 +116,7 @@ SbomFiles := [].{
 		if text.to_utf8().len() > Sbom.max_json_bytes {
 			return Err(InputTooLarge)
 		}
-		File.with_writer!(Path.utf8(output), RequireNew, |writer| writer.write_utf8!(text))
+		File.with_writer!(Path.utf8(output), RequireNew, {}, |writer| writer.write_utf8!(text))
 	}
 
 	## The members of a `.tar.zst` archive, a `roc bundle` for one: each

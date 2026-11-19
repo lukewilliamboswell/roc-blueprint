@@ -23,7 +23,7 @@ LockJson := [
 
 	from_data : JsonData -> LockJson
 	from_data = |value| match value {
-		Object(fields) => Object(fields.map(|field| { name: field.name, value: from_data(field.value) }))
+		Object(fields) => Object(fields.map(|entry| { name: entry.name, value: from_data(entry.value) }))
 		Array(items) => Array(items.map(from_data))
 		String(text) => String(text)
 		Number(text) => Number(text)
@@ -33,7 +33,7 @@ LockJson := [
 
 	to_data : LockJson -> JsonData
 	to_data = |value| match value {
-		Object(fields) => JsonData.Object(fields.map(|field| { name: field.name, value: to_data(field.value) }))
+		Object(fields) => JsonData.Object(fields.map(|entry| { name: entry.name, value: to_data(entry.value) }))
 		Array(items) => JsonData.Array(items.map(to_data))
 		String(text) => JsonData.String(text)
 		Number(text) => JsonData.Number(text)

@@ -20,7 +20,7 @@ StandaloneRunner := [].{
 	bridge! = |context| {
 		program = "${context.work}/witness-bridge"
 		if !(Path.is_file!(Path.utf8(program)) ?? False) {
-			Cmd.new(OsStr.from_str(Process.roc!())).args(["build", "${context.root}/fixtures/builds/witness_bridge.roc", "--output=${program}"].map(OsStr.from_str)).exec!()?
+			Cmd.new(OsStr.from_str(Process.roc!())).args(["build", "${context.root}/fixtures/builds/witness_bridge.roc", "--output=${program}"].map(OsStr.from_str)).call!()?
 		}
 		Ok(program)
 	}
@@ -29,7 +29,7 @@ StandaloneRunner := [].{
 	payload! = |context| {
 		program = "${context.work}/runner-payload"
 		if !(Path.is_file!(Path.utf8(program)) ?? False) {
-			Cmd.new(OsStr.from_str(Process.roc!())).args(["build", "${context.root}/fixtures/builds/runner_payload.roc", "--output=${program}"].map(OsStr.from_str)).exec!()?
+			Cmd.new(OsStr.from_str(Process.roc!())).args(["build", "${context.root}/fixtures/builds/runner_payload.roc", "--output=${program}"].map(OsStr.from_str)).call!()?
 		}
 		Ok(program)
 	}

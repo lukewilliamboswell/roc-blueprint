@@ -1,8 +1,8 @@
 # Reviewed upstream evidence
 
 `basic-cli-Cargo.lock`, `basic-cli-Cargo.toml` and
-`basic-cli-rust-toolchain.toml` are the files at basic-cli tag 0.27.0,
-commit `b5816af5296e9cbc561837fc8344aea122e07150`.
+`basic-cli-rust-toolchain.toml` are the files at basic-cli tag 0.28.1,
+commit `4bc39663b90e5117e3fd5e4fbb740e7138df5965`.
 `../basic-cli-cargo.json` preserves all 109 package instances and 203
 resolution edges. Unclassified feature/target/build edges use the SPDX 3.0.1
 relationship `other`; they do not assert runtime dependency or containment.
@@ -11,7 +11,7 @@ with lifecycle scope `build` (SPDX 2.3 `BUILD_DEPENDENCY_OF`).
 
 `linker-runtime-sources.json` and `msvc-runtime-UPSTREAM.json` are from
 roc-platform-template-zig commit
-`5db8f9b9e661f5cbde0254d3520366ef4eab8bd4`, the exact producer selected by
+`99649586217e36d251b6ebf7ee0a5d1593b19c20`, the exact producer selected by
 `link-inputs.lock.json`. They establish musl 1.2.5, Zig 0.17.0, and Roc MSVC
 startup source revision `7d256b954603e1170ee0d6df229c795aba6dc70d`.
 
@@ -21,16 +21,15 @@ SHA-256 `947e6816f7825b2b45027c2c32e7085da9934defa535de4a6a46b10a4d5257fa`,
 matching the committed upstream Cargo.lock. Its Cargo.toml establishes the
 build-only crate edges. The pinned basic-cli Cargo.toml enables `bundled`.
 
-The product compiler nightly `nightly-2026-11-07-ad3a5d2` identifies Roc commit
-`ad3a5d2830b94fdac878ce1aaa73c64e7c57720f`, recorded by the
-[official nightly release](https://github.com/roc-lang/nightlies/releases/tag/nightly-2026-11-07-ad3a5d2)
-and [upstream commit](https://github.com/roc-lang/roc/commit/ad3a5d2830b94fdac878ce1aaa73c64e7c57720f).
+The product compiler nightly `nightly-2026-11-18-a520eed` identifies Roc commit
+`a520eeda6c3745f2543fcdd0fb836d3d1336c5ac`, recorded by the
+[official nightly release](https://github.com/roc-lang/nightlies/releases/tag/nightly-2026-11-18-a520eed)
+and [upstream commit](https://github.com/roc-lang/roc/commit/a520eeda6c3745f2543fcdd0fb836d3d1336c5ac).
 Bootstrap archive digests and sizes come from that release's asset metadata and
 are checked against downloaded bytes before embedding. This does not establish
 a complete compiler archive dependency or license inventory. The generation
-recipe retains that uncertainty explicitly. The independently pinned linker-input
-producer and its supplemental component versions above are unchanged. The
-sandbox runner and maintenance compiler retain their separate pins.
+recipe retains that uncertainty explicitly. The linker-input archive supplies the runtime inventories above. The
+sandbox runner retains its separate pins.
 
 Changes to the compiler, CLI imports, or linker-input producer fail closed
 until this metadata and the generation recipe are reviewed together.

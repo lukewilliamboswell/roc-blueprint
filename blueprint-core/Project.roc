@@ -1291,11 +1291,9 @@ expect {
 	Project.validate(build_fixture([{ ..library, run: $argv }])).is_err()
 }
 expect {
-	var $argument = "x"
-	while $argument.to_utf8().len() < 1048576 {
-		$argument = $argument.concat($argument)
-	}
-	Project.validate(build_fixture([{ ..library, run: ["cmd", $argument] }])).is_err()
+	# Avoid interpreter self-concat crash: roc-lang/roc#13210.
+	argument = "x".repeat(1048576)
+	Project.validate(build_fixture([{ ..library, run: ["cmd", argument] }])).is_err()
 }
 expect {
 	build_sources = chain_fixture(1025).map(|build| { name: build.name, ref: "path:./assets" })
@@ -1548,13 +1546,11 @@ expect {
 
 # Repetition has an argv-byte budget independent of the atomic-step count.
 expect {
-	var $arg = "x"
-	while $arg.to_utf8().len() < 524288 {
-		$arg = $arg.concat($arg)
-	}
+	# Avoid interpreter self-concat crash: roc-lang/roc#13210.
+	arg = "x".repeat(524288)
 	Project.validate(
 		workflow_fixture([
-			{ name: "leaf", steps: [RunTask("check.all", [$arg])] },
+			{ name: "leaf", steps: [RunTask("check.all", [arg])] },
 			{ name: "twice", steps: [RunWorkflow("leaf"), RunWorkflow("leaf")] },
 		]),
 	) == Err("workflow expansion exceeds 1 MiB argv bytes")

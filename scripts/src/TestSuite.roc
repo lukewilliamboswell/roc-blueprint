@@ -1,5 +1,6 @@
 import cli.Cmd
 import cli.Env
+import cli.System
 import cli.OsStr
 import cli.Path
 import Bundle
@@ -78,7 +79,7 @@ script! = |context, name, args|
 	Process.passthrough!(Process.command(stable, ["scripts/${name}.roc"].concat(args), context.root))
 
 compiler! : Context, List(Str) => Try({}, _)
-compiler! = |context, args| Process.passthrough!(Process.product_command(context.roc, args, context.root))
+compiler! = |context, args| Process.passthrough!(Process.command(context.roc, args, context.root))
 
 read! : Context, Str => Try(Str, _)
 read! = |context, file| Path.read_utf8!(Path.utf8("${context.root}/${file}"))
@@ -309,24 +310,24 @@ unit! = |context| {
 
 	# Every core and Nix provider expect runs here too: the CLI imports both.
 	step!("CLI, provider and core tests")?
-	# The pinned compiler's native test backend crashes on the embedded
-	# archive's large byte constant. The interpreter runs the same expects;
+	# The pinned compiler's dev test backend and boxy interpreter crash on
+	# this entry point. The specialized interpreter runs the same expects;
 	# CLI integration tests exercise the actual native executable.
-	compiler!(context, ["test", "--opt=interpreter", "--no-cache", "blueprint-cli/main.roc"])?
+	compiler!(context, ["test", "--opt=interpreter", "--specialize=yes", "--no-cache", "blueprint-cli/main.roc"])?
 
 	step!("Independent library consumer")?
-	compiler!(context, ["check", "fixtures/consumer/main.roc"])?
-	compiler!(context, ["test", "fixtures/consumer/main.roc"])
+	compiler!(context, ["check", "--no-cache", "fixtures/consumer/main.roc"])?
+	compiler!(context, ["test", "--opt=interpreter", "--specialize=yes", "--no-cache", "fixtures/consumer/main.roc"])
 }
 
 ## The released system this machine is, as the binaries in `dist/` are named.
 host_system! : () => Str
 host_system! = ||
-	match Env.platform!() {
-		{ arch: AARCH64, os: LINUX } => "aarch64-linux"
-		{ arch: AARCH64, os: MACOS } => "aarch64-darwin"
-		{ arch: X64, os: MACOS } => "x86_64-darwin"
-		{ arch: X64, os: WINDOWS } => "x86_64-windows"
+	match (System.target!().arch(), System.target!().os()) {
+		(Arm64, Linux(_)) => "aarch64-linux"
+		(Arm64, MacOS(_)) => "aarch64-darwin"
+		(X64, MacOS(_)) => "x86_64-darwin"
+		(X64, Windows(_)) => "x86_64-windows"
 		_ => "x86_64-linux"
 	}
 
@@ -428,7 +429,7 @@ packaged! = |context| {
 	step!("Nix flake: the packaged blueprint builds an artifact with nothing but Nix on PATH")?
 	work = Path.to_str(Path.canonicalize!(Env.create_temp_dir_with_prefix!("blueprint-packaged-")?)?)?
 	result = packaged_build!(context, package_path, work)
-	_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--", work].map(OsStr.from_str)).exec!()
+	_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--", work].map(OsStr.from_str)).call!()
 	_ = Path.delete_all!(Path.utf8(work))
 	result?
 
@@ -456,7 +457,7 @@ packaged_build! = |context, package_path, work| {
 		[directory, ..] => "${directory}/nix"
 		[] => return Script.fail!("nix is not on PATH")
 	}
-	Cmd.new(OsStr.from_str("ln")).args(["-s", nix, "${only_nix}/nix"].map(OsStr.from_str)).exec!().map_err(|_| LinkFailed)?
+	Cmd.new(OsStr.from_str("ln")).args(["-s", nix, "${only_nix}/nix"].map(OsStr.from_str)).call!().map_err(|_| LinkFailed)?
 
 	packages_ref = match FlakeLock.locked(read!(context, "fixtures/consumer/inputs.lock")?, "nixpkgs") {
 		Ok(pin) => FlakeLock.ref(pin)
@@ -497,5 +498,5 @@ expect TestSuite.requested(["unit", "units"]) == Err(UnknownGroup("units"))
 expect TestSuite.packaged_project("../pf/main.roc", "github:NixOS/nixpkgs/abc").contains("Packages(\"default\", From(NixPackages(\"github:NixOS/nixpkgs/abc\")))")
 
 # The hosts are the built files of every target the platform declares.
-expect TestSuite.hosts(["targets/x64musl/crt1.o", "targets/x64musl/libhost.a", "targets/x64musl/libc.a", "targets/arm64mac/libhost.a"]) == ["targets/x64musl/libhost.a", "targets/arm64mac/libhost.a"]
-expect TestSuite.hosts(["targets/x64musl/libhost.a.sig", "targets/x64musl/crt1.o"]).is_empty()
+expect TestSuite.hosts(["targets/x64musl/rcrt1.o", "targets/x64musl/libhost.a", "targets/x64musl/libc.a", "targets/arm64mac/libhost.a"]) == ["targets/x64musl/libhost.a", "targets/arm64mac/libhost.a"]
+expect TestSuite.hosts(["targets/x64musl/libhost.a.sig", "targets/x64musl/rcrt1.o"]).is_empty()

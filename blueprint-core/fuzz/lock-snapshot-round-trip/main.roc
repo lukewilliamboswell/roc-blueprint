@@ -1,10 +1,12 @@
 # Generate well-formed lock snapshots, including arbitrary provider metadata.
 app [target] {
 	core: "../../main.roc",
-	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst",
+	entropy: "../entropy.roc",
+	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.7.0/HBigHQhVZWEF2EkLxpYK35u8P6UNsAmPYxpNFTxXK1Br.tar.zst",
 }
 
 import pf.Fuzz
+import entropy.EntropyTarget
 import core.JsonData
 import core.LockSnapshot
 
@@ -147,7 +149,7 @@ snapshot_generator = Fuzz.map(
 	},
 )
 
-target = Fuzz.target_with({
+target = EntropyTarget.target_with({
 	name: "lock-snapshot-round-trip",
 	generator: snapshot_generator,
 	test,

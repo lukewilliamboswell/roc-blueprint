@@ -306,14 +306,10 @@ expect {
 }
 
 expect {
-	var $text = "a"
-	var $doublings = 0
-	while $doublings < 23 {
-		$text = $text.concat($text)
-		$doublings = $doublings + 1
-	}
-	JsonData.decode($text.concat("a")) == Err(LimitExceeded("JSON exceeds 8 MiB"))
-		and JsonData.encode(JsonData.String($text)) == Err(LimitExceeded("JSON exceeds 8 MiB"))
+	# Avoid interpreter self-concat crash: roc-lang/roc#13210.
+	text = "a".repeat(8388608)
+	JsonData.decode(text.concat("a")) == Err(LimitExceeded("JSON exceeds 8 MiB"))
+		and JsonData.encode(JsonData.String(text)) == Err(LimitExceeded("JSON exceeds 8 MiB"))
 }
 
 # Larger documents may hold more items; a key repeated with an equal value is

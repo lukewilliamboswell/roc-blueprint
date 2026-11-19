@@ -1,10 +1,12 @@
 # Mutate lock snapshot JSON; whatever parses must re-encode to a fixed point.
 app [target] {
 	core: "../../main.roc",
-	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.4.3/41NK5FShyGC9Z8HNpUdUeXMWwLmLNfFxsfmLvdPL4Fxb.tar.zst",
+	entropy: "../entropy.roc",
+	pf: platform "https://github.com/lukewilliamboswell/roc-fuzz/releases/download/0.7.0/HBigHQhVZWEF2EkLxpYK35u8P6UNsAmPYxpNFTxXK1Br.tar.zst",
 }
 
 import pf.Fuzz
+import entropy.EntropyTarget
 import core.JsonData
 import core.LockSnapshot
 
@@ -64,7 +66,7 @@ test = |bytes|
 		}
 	}
 
-target = Fuzz.target_with({
+target = EntropyTarget.target_with({
 	name: "lock-snapshot-parse",
 	generator: Fuzz.raw_bytes,
 	test,

@@ -45,8 +45,8 @@ SbomCheck := [].{
 		subject = SbomFiles.measure!(subject_path).map_err(|_| Invalid("${path}: no regular readable subject ${subject_path}"))?
 		sidecars = SbomFiles.observe_sidecars!(path, listed, False)?
 		left_behind = Manifest.beside(path, "${listed.subject.filename}.inventory.json")
-		inventory_path = if !inventory.is_empty() inventory else if (Path.is_file!(Path.utf8(left_behind)) ?? False) left_behind else ""
-		measured = if inventory_path.is_empty() Unmeasured else Measured(SbomFiles.digest!(inventory_path)?)
+		inventory_path = if (!inventory.is_empty()) inventory else if (Path.is_file!(Path.utf8(left_behind)) ?? False) left_behind else ""
+		measured = if (inventory_path.is_empty()) Unmeasured else Measured(SbomFiles.digest!(inventory_path)?)
 		Manifest.check(text, { subject: subject, inventory: measured, sidecars: sidecars }).map_err(|problem| Invalid("${path}: ${problem}"))
 	}
 
@@ -84,7 +84,7 @@ SbomCheck := [].{
 					return Err(Invalid("standalone tool source ${name} omitted"))
 				}
 			}
-			fetched = if tool_source ["core"] else []
+			fetched = if (tool_source) ["core"] else []
 			if !["basic-cli", "http", "sqlite", "rust-std", "roc-parser"].concat(fetched).all(|id| ids.contains(id)) or ids.contains("roc-embedded") {
 				return Err(Invalid("standalone tool inventory omits a dependency or claims the compiler ships"))
 			}
@@ -214,7 +214,7 @@ expect {
 	inventory = Json.parse(inventory_json) ?? crash "inventory"
 	SbomCheck.against_inventory(checked, { ..inventory, relationships: inventory.relationships.drop_first(1) }) == Err("relationships differ from the inventory")
 		and SbomCheck.against_inventory(checked, { ..inventory, relationships: inventory.relationships.map(|edge| { ..edge, basis: "A different reviewed assertion" }) }).is_err()
-			and SbomCheck.against_inventory(checked, { ..inventory, relationships: inventory.relationships.fold([], |all, edge| all.prepend(edge)) }).is_ok()
+		and SbomCheck.against_inventory(checked, { ..inventory, relationships: inventory.relationships.fold([], |all, edge| all.prepend(edge)) }).is_ok()
 }
 
 # Legacy documents predate standard completeness; they cannot carry new claims.

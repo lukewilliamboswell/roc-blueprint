@@ -30,7 +30,7 @@ Release := [].{
 	]
 
 	binary_name : Str, Str -> Str
-	binary_name = |name, system| "${name}-${system}${if system == "x86_64-windows" ".exe" else ""}"
+	binary_name = |name, system| "${name}-${system}${if (system == "x86_64-windows") ".exe" else ""}"
 
 	## The program each system's binary is built from, and its name in `dist/`.
 	programs = [
@@ -56,7 +56,7 @@ Release := [].{
 	files = |name, directory|
 		programs.keep_if(|program| program.name == name).fold(
 			[],
-			|listed, program| listed.concat(systems.map(|released| { source: if program.name == "blueprint-sbom" ".cache/product-sbom/main.roc" else program.source, target: released.target, output: "${directory}/${binary_name(program.name, released.system)}" })),
+			|listed, program| listed.concat(systems.map(|released| { source: if (program.name == "blueprint-sbom") ".cache/product-sbom/main.roc" else program.source, target: released.target, output: "${directory}/${binary_name(program.name, released.system)}" })),
 		)
 
 	## The flake package that is the compiler for every target: the x86_64
@@ -98,7 +98,7 @@ Release := [].{
 build! : Str, Str, Str => Try({}, _)
 build! = |root, roc, stable| {
 	tag = Path.read_utf8!(Path.utf8("${root}/blueprint-cli/compiler-version"))?.split_on("\n").first() ?? ""
-	version = Process.succeed!(Process.product_command(roc, ["version"], root))?.stdout.trim()
+	version = Process.succeed!(Process.command(roc, ["version"], root))?.stdout.trim()
 	Process.check!(version == "Roc compiler version ${tag}", "the compiler of .#${Release.toolchain} is \"${version}\", not ${tag}")?
 
 	Process.passthrough!(Process.command("zig", ["build"], "${root}/blueprint-platform"))?
@@ -116,7 +116,7 @@ build! = |root, roc, stable| {
 	Bundle.stage_product_tool!(root, "${root}/.cache/product-sbom", "${root}/blueprint-core/main.roc", tag)?
 	compile_together!(roc, root, Release.files("blueprint-sbom", dist))?
 
-	compile_together_with!(stable, root, Release.files("smoke", dist).concat(Release.files("test-release", dist)), False)?
+	compile_together!(stable, root, Release.files("smoke", dist).concat(Release.files("test-release", dist)))?
 
 	var $sums = ""
 	for program in Release.published {
@@ -135,7 +135,7 @@ compile_blueprints! : Str, Str, Str => Try({}, _)
 compile_blueprints! = |roc, root, dist| {
 	for released in Release.systems {
 		Process.passthrough!(Process.command("roc-stable", ["scripts/embed_compiler.roc", released.system], root))?
-		extension = if released.system == "x86_64-windows" "zip" else "tar.gz"
+		extension = if (released.system == "x86_64-windows") "zip" else "tar.gz"
 		Path.copy!(Path.utf8("${root}/blueprint-cli/compiler-archive"), Path.utf8("${dist}/roc-${released.system}.${extension}"))?
 		files = Release.files("blueprint", dist).keep_if(|file| file.target == released.target)
 		compile_together!(roc, root, files)?
@@ -150,14 +150,11 @@ compile_blueprints! = |roc, root, dist| {
 ## The compiler occasionally fails with an unexplained internal error and
 ## succeeds unchanged when run again, so each failure is retried once, alone.
 compile_together! : Str, Str, List(Release.File) => Try({}, _)
-compile_together! = |roc, root, files| compile_together_with!(roc, root, files, True)
-
-compile_together_with! : Str, Str, List(Release.File), Bool => Try({}, _)
-compile_together_with! = |roc, root, files, product| {
+compile_together! = |roc, root, files| {
 	jobs = files.map(
 		|file| {
 			args = Release.build_args(file.source, file.target, file.output)
-			Process.command(roc, if product Process.product_args(args) else args, root)
+			Process.command(roc, args, root)
 		},
 	)
 	for job in jobs {
@@ -176,7 +173,7 @@ finish_each! = |files, jobs, outcomes|
 				Stdout.write!("${job.label} exited with code ${outcome.code.to_str()}:\n${outcome.stdout}${outcome.stderr}\nRetrying it once.\n")?
 				_ = Process.succeed!(job)?
 			}
-			size = if Path.is_file!(Path.utf8(file.output))? Path.size_in_bytes!(Path.utf8(file.output))? else 0
+			size = if (Path.is_file!(Path.utf8(file.output))?) Path.size_in_bytes!(Path.utf8(file.output))? else 0
 			Process.check!(size > 0, "${file.output} was not built")?
 			Script.info!("==>", file.output)?
 			finish_each!(other_files, other_jobs, other_outcomes)

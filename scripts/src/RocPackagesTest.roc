@@ -20,7 +20,7 @@ import "../../fixtures/roc-inputs.lock.json" as roc_inputs : Str
 ## creates, so the Roc package cache it publishes into, breaks and repairs is
 ## never the user's.
 RocPackagesTest := [].{
-	basic_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst"
+	basic_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst"
 
 	## basic-cli depends on this; a project must list it too.
 	http = "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"
@@ -120,7 +120,7 @@ RocPackagesTest := [].{
 		}
 		result = scenarios!({ overlay, root: Path.to_str(Path.canonicalize!(root)?)?, blueprint, work: Path.to_str(work)? })
 		# A failed scenario may have left a directory read-only.
-		_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--"].map(OsStr.from_str)).arg(Path.to_os_str(work)).exec!()
+		_ = Cmd.new(OsStr.from_str("chmod")).args(["-R", "u+w", "--"].map(OsStr.from_str)).arg(Path.to_os_str(work)).call!()
 		_ = Path.delete_all!(work)
 		result
 	}
@@ -162,7 +162,7 @@ succeed! = |context, cache, project, args| {
 }
 
 check! : Bool, Str => Try({}, _)
-check! = |holds, message| if holds Ok({}) else Script.fail!(message)
+check! = |holds, message| if (holds) Ok({}) else Script.fail!(message)
 
 ## The entry names of a directory, or none when it does not exist.
 names! : Str => Try(List(Str), _)
@@ -217,7 +217,7 @@ stamp! = |package_dir, name| {
 
 chmod! : Str, Str => Try({}, _)
 chmod! = |mode, target|
-	Cmd.new(OsStr.from_str("chmod")).args([mode, "--", target].map(OsStr.from_str)).exec!().map_err(|_| ChmodFailed(target))
+	Cmd.new(OsStr.from_str("chmod")).args([mode, "--", target].map(OsStr.from_str)).call!().map_err(|_| ChmodFailed(target))
 
 ## Whether a package is complete in this cache: Roc reads its `main.roc`.
 ## Blueprint's publication and Roc's own download leave the same files, so
@@ -284,7 +284,7 @@ scenarios! = |context| {
 	# evaluating it. Record those entries in a separate cache before running
 	# Blueprint, which alone can publish the environment's declared bundles.
 	config_cache = "${context.work}/config-cache"
-	evaluation = Process.command(Process.roc!(), ["Blueprint.roc"], project)
+	evaluation = Process.command(Process.roc!(), ["--no-cache", "Blueprint.roc"], project)
 	_ = Process.succeed!(Process.with_env(evaluation, [("XDG_CACHE_HOME", config_cache)]))?
 	config_entries = names!("${config_cache}/roc/packages")?
 	check!(!config_entries.any(|name| cache_entry(hashes, name) or leftover(name)), "the configuration cache contains an environment bundle or staging files")?
@@ -460,7 +460,7 @@ scenarios! = |context| {
 	check!(
 		given.outcome.code == 0 and given.recorded == "${given.top}/runner-cache" and same_names(names!(linked)?, [cli])
 			and Path.type!(Path.utf8("${linked}/${cli}"))? == IsSymLink
-				and (Path.is_file!(Path.utf8("${linked}/${cli}/main.roc")) ?? False),
+			and (Path.is_file!(Path.utf8("${linked}/${cli}/main.roc")) ?? False),
 		"a build with Roc packages did not get its own cache (code ${given.outcome.code.to_str()}, XDG_CACHE_HOME ${given.recorded}):\n${given.outcome.stderr}",
 	)?
 	escaping = runner!(context, "${context.work}/runner-escaping", ",\"roc_packages\":[{\"name\":\"../escape\",\"path\":\"${package_dir}/${cli}\"}],\"ln\":${linker}")?
@@ -480,7 +480,7 @@ scenarios! = |context| {
 	Script.pass!("7. ${real_packages}: nothing published or staged there")
 }
 
-expect RocPackagesTest.hash(RocPackagesTest.basic_cli) == "Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af"
+expect RocPackagesTest.hash(RocPackagesTest.basic_cli) == "7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr"
 expect RocPackagesTest.relative("/tmp/work/project", "/home/me/repo/blueprint-platform/main.roc") == "../../../home/me/repo/blueprint-platform/main.roc"
 expect RocPackagesTest.relative("/repo/tests/project", "/repo/blueprint-platform/main.roc") == "../../blueprint-platform/main.roc"
 expect RocPackagesTest.relative("/repo", "/repo/blueprint-platform/main.roc") == "blueprint-platform/main.roc"

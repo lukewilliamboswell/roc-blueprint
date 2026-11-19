@@ -60,7 +60,7 @@ CliUpdateTest := [].{
 	last_changed : List(U8) -> List(U8)
 	last_changed = |bytes|
 		match bytes.last() {
-			Ok(byte) => bytes.drop_last(1).append(if byte == '0' '1' else '0')
+			Ok(byte) => bytes.drop_last(1).append(if (byte == '0') '1' else '0')
 			Err(_) => bytes
 		}
 
@@ -81,8 +81,8 @@ project! = |test, name, text| {
 	Ok(root)
 }
 
-run! : Test, Str, List(Str), List((Str, Str)) => Try(CliHarness.Outcome, _)
-run! = |test, root, args, extra|
+invoke! : Test, Str, List(Str), List((Str, Str)) => Try(CliHarness.Outcome, _)
+invoke! = |test, root, args, extra|
 	CliHarness.blueprint!(test.bench, root, args, CliHarness.setting(test.env, extra))
 
 ## Start `blueprint update` with a stub Nix that stops at `barrier` before it
@@ -101,7 +101,7 @@ paused_update! = |test, root, barrier, extra| {
 		if $waited >= 20000 {
 			return Script.fail!("blueprint update did not reach the provider within 20 seconds")
 		}
-		Sleep.millis!(10)
+		Sleep.millis!(10)?
 		$waited = $waited + 10
 	}
 	Ok(child)
@@ -168,7 +168,7 @@ observed! = |test, case| {
 	} else {
 		CliHarness.exited!(outcome, 1, what)?
 		CliHarness.contains!(outcome.stderr, "authority changed during update", what)?
-		now = if CliHarness.present!(lock) [Path.read_bytes!(Path.utf8(lock))?] else []
+		now = if (CliHarness.present!(lock)) [Path.read_bytes!(Path.utf8(lock))?] else []
 		CliHarness.check!(now == case.replacement, "${what} did not leave the competing authority as it was")?
 	}
 	left = CliUpdateTest.leftovers(CliHarness.names!(root)?)
@@ -184,6 +184,7 @@ cases! = |bench| {
 		env: CliHarness.setting(
 			bench.env,
 			[
+				("BLUEPRINT_TARGET", "x86_64-linux"),
 				("PATH", "${bench.bin}:${search}"),
 				("ROC", "${bench.bin}/roc-wire"),
 				("STUB_ROC_VERSION", bench.roc_version),
@@ -206,7 +207,7 @@ cases! = |bench| {
 		Path.write_bytes!(Path.utf8(lock), old)?
 		before = CliHarness.identity!(lock)?
 		what = "update with a ${form.kind} below a symlinked directory"
-		refused!(run!(test, root, ["update"], [])?, "unsafe", what)?
+		refused!(invoke!(test, root, ["update"], [])?, "unsafe", what)?
 		no_effects!(root, what)?
 		CliHarness.check!(CliHarness.identity!(lock)? == before, "${what} rewrote the authority")?
 	}
@@ -227,7 +228,7 @@ cases! = |bench| {
 			CliHarness.tool!(["mkfifo", "--", "${source}/fifo"])?
 		}
 		what = "update with a ${kind} local source"
-		outcome = run!(test, root, ["update"], [])?
+		outcome = invoke!(test, root, ["update"], [])?
 		CliHarness.check!(outcome.code != 0, "${what} succeeded")?
 		no_effects!(root, what)?
 		CliHarness.check!(!CliHarness.present!("${root}/Blueprint.lock"), "${what} published an authority")?
@@ -240,7 +241,7 @@ cases! = |bench| {
 	Path.write_bytes!(Path.utf8(race_lock), "invalid ".to_utf8().concat(old))?
 	race_barrier = "${work}/race-existing-barrier"
 	older = paused_update!(test, race, race_barrier, [("BLUEPRINT_GENERATED_ROOT", "${work}/race-existing-a"), ("STUB_NIX_REV", "a")])?
-	newer = run!(test, race, ["update"], [("BLUEPRINT_GENERATED_ROOT", "${work}/race-existing-b"), ("STUB_NIX_REV", "b")])?
+	newer = invoke!(test, race, ["update"], [("BLUEPRINT_GENERATED_ROOT", "${work}/race-existing-b"), ("STUB_NIX_REV", "b")])?
 	CliHarness.exited!(newer, 0, "the newer update")?
 	winner = Path.read_bytes!(Path.utf8(race_lock))?
 	CliHarness.check!(pinned_rev!(race_lock)? == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "the newer update did not publish its pins")?
@@ -251,10 +252,10 @@ cases! = |bench| {
 	race_left = CliUpdateTest.leftovers(CliHarness.names!(race)?)
 	CliHarness.check!(race_left.is_empty(), "the lost update left ${Str.join_with(race_left, " ")}")?
 	published = CliHarness.identity!(race_lock)?
-	CliHarness.exited!(run!(test, race, ["gen"], [])?, 0, "gen after the race")?
+	CliHarness.exited!(invoke!(test, race, ["gen"], [])?, 0, "gen after the race")?
 	CliHarness.check!(CliHarness.identity!(race_lock)? == published, "gen rewrote the authority")?
 	# The conflict did not poison a subsequent explicit update.
-	CliHarness.exited!(run!(test, race, ["update"], [])?, 0, "an update after the race")?
+	CliHarness.exited!(invoke!(test, race, ["update"], [])?, 0, "an update after the race")?
 	Script.pass!("two updates at once: the one that resolved first but published last fails, the newer authority stays, gen does not rewrite it, update works again")?
 
 	# The authority is observed by its raw bytes, in bounded chunks: while an
@@ -275,7 +276,7 @@ cases! = |bench| {
 		target = "${work}/linked-authority-${kind}-target"
 		Path.create_dir!(Path.utf8(target))?
 		Path.write_bytes!(Path.utf8("${target}/Blueprint.lock"), elsewhere)?
-		extra = if kind == "parent" [("BLUEPRINT_LOCK", "locks/Blueprint.lock")] else []
+		extra = if (kind == "parent") [("BLUEPRINT_LOCK", "locks/Blueprint.lock")] else []
 		link = if kind == "parent" {
 			["ln", "-s", "--", target, "${root}/locks"]
 		} else if kind == "file" {
@@ -285,8 +286,8 @@ cases! = |bench| {
 		}
 		CliHarness.tool!(link)?
 		what = "an authority that is a link (${kind})"
-		refused!(run!(test, root, ["update"], extra)?, "unsafe", "update with ${what}")?
-		refused!(run!(test, root, ["gen"], extra)?, "unsafe", "gen with ${what}")?
+		refused!(invoke!(test, root, ["update"], extra)?, "unsafe", "update with ${what}")?
+		refused!(invoke!(test, root, ["gen"], extra)?, "unsafe", "gen with ${what}")?
 		CliHarness.check!(Path.read_bytes!(Path.utf8("${target}/Blueprint.lock"))? == elsewhere, "${what}: the link target was rewritten")?
 		CliHarness.check!(CliHarness.names!(target)? == ["Blueprint.lock"], "${what}: something was written beside the link target")?
 		no_effects!(root, what)?
@@ -296,9 +297,9 @@ cases! = |bench| {
 	# A special-file authority must fail, not block inside a file read.
 	special = project!(test, "fifo-authority", CliUpdateTest.wire)?
 	CliHarness.tool!(["mkfifo", "--", "${special}/Blueprint.lock"])?
-	refused!(run!(test, special, ["gen"], [])?, "unsafe", "gen with a fifo authority")?
-	refused!(run!(test, special, ["shell", "default"], [])?, "unsafe", "shell with a fifo authority")?
-	refused!(run!(test, special, ["update"], [])?, "authority is not a regular file", "update with a fifo authority")?
+	refused!(invoke!(test, special, ["gen"], [])?, "unsafe", "gen with a fifo authority")?
+	refused!(invoke!(test, special, ["shell", "default"], [])?, "unsafe", "shell with a fifo authority")?
+	refused!(invoke!(test, special, ["update"], [])?, "authority is not a regular file", "update with a fifo authority")?
 	no_effects!(special, "a fifo authority")?
 	special_left = CliUpdateTest.leftovers(CliHarness.names!(special)?)
 	CliHarness.check!(special_left.is_empty(), "a fifo authority left ${Str.join_with(special_left, " ")}")?
@@ -310,13 +311,13 @@ cases! = |bench| {
 	# flake: the stub fails a named update that finds none.
 	named = project!(test, "named", CliUpdateTest.wire)?
 	named_lock = "${named}/Blueprint.lock"
-	refused!(run!(test, named, ["update", "default"], [])?, "without input names first", "a named update with no lock")?
+	refused!(invoke!(test, named, ["update", "default"], [])?, "without input names first", "a named update with no lock")?
 	no_effects!(named, "a named update with no lock")?
-	CliHarness.exited!(run!(test, named, ["update"], [("STUB_NIX_REV", "a")])?, 0, "the update before a named one")?
+	CliHarness.exited!(invoke!(test, named, ["update"], [("STUB_NIX_REV", "a")])?, 0, "the update before a named one")?
 	before_named = CliHarness.identity!(named_lock)?
-	refused!(run!(test, named, ["update", "default", "nope"], [])?, "no input or program named nope; Blueprint.roc declares the inputs default and no program", "an update of an undeclared input")?
+	refused!(invoke!(test, named, ["update", "default", "nope"], [])?, "no input or program named nope; Blueprint.roc declares the inputs default and no program", "an update of an undeclared input")?
 	CliHarness.check!(CliHarness.identity!(named_lock)? == before_named, "an update of an undeclared input rewrote the authority")?
-	CliHarness.exited!(run!(test, named, ["update", "default"], [("STUB_NIX_REV", "b")])?, 0, "a named update")?
+	CliHarness.exited!(invoke!(test, named, ["update", "default"], [("STUB_NIX_REV", "b")])?, 0, "a named update")?
 	CliHarness.check!(pinned_rev!(named_lock)? == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "a named update did not publish its pins")?
 	updates = CliHarness.calls!("${named}/nix-calls")?.map(|call| call.drop_last(1))
 	CliHarness.same_calls!(updates, [["flake", "update", "--flake"], ["flake", "update", "default", "--flake"]], "the provider calls of a full and a named update")?
@@ -326,22 +327,22 @@ cases! = |bench| {
 	# An explicit full update creates current authority and resolves pins anew.
 	earlier = project!(test, "unsupported-lock", CliUpdateTest.wire)?
 	earlier_lock = "${earlier}/Blueprint.lock"
-	CliHarness.exited!(run!(test, earlier, ["update"], [("STUB_NIX_REV", "a")])?, 0, "create current authority")?
+	CliHarness.exited!(invoke!(test, earlier, ["update"], [("STUB_NIX_REV", "a")])?, 0, "create current authority")?
 	unsupported = Path.read_utf8!(Path.utf8(earlier_lock))?.replace_each("(major 2)", "(major 1)")
 	Path.write_utf8!(Path.utf8(earlier_lock), unsupported)?
 	Path.delete_all!(Path.utf8("${earlier}/.blueprint"))?
 	CliHarness.forget!("${earlier}/nix-calls")?
 	for args in [["gen"], ["shell", "default"], ["update", "default"]] {
-		refused!(run!(test, earlier, args, [])?, "requires Lock 2", "${Str.join_with(args, " ")} with unsupported authority")?
+		refused!(invoke!(test, earlier, args, [])?, "requires Lock 2", "${Str.join_with(args, " ")} with unsupported authority")?
 	}
 	no_effects!(earlier, "unsupported authority")?
 	CliHarness.check!(Path.read_utf8!(Path.utf8(earlier_lock))? == unsupported, "a refused command rewrote unsupported authority")?
-	CliHarness.exited!(run!(test, earlier, ["lock", "migrate"], [])?, 2, "removed lock command")?
+	CliHarness.exited!(invoke!(test, earlier, ["lock", "migrate"], [])?, 2, "removed lock command")?
 	no_effects!(earlier, "removed lock command")?
-	CliHarness.exited!(run!(test, earlier, ["update"], [("STUB_NIX_REV", "b")])?, 0, "explicitly resolve current authority")?
+	CliHarness.exited!(invoke!(test, earlier, ["update"], [("STUB_NIX_REV", "b")])?, 0, "explicitly resolve current authority")?
 	renewed = Path.read_utf8!(Path.utf8(earlier_lock))?
 	CliHarness.check!(renewed.contains("(major 2)") and pinned_rev!(earlier_lock)? == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "explicit update did not create current authority with new pins")?
-	CliHarness.exited!(run!(test, earlier, ["gen"], [])?, 0, "gen with current authority")?
+	CliHarness.exited!(invoke!(test, earlier, ["gen"], [])?, 0, "gen with current authority")?
 	Script.pass!("unsupported lock formats are refused; an explicit full update resolves current authority")?
 
 	used = CliHarness.calls!(python_log)?

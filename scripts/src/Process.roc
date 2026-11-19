@@ -1,5 +1,6 @@
 import cli.Cmd
 import cli.Env
+import cli.System
 import cli.OsStr
 import cli.Path
 import cli.Stdout
@@ -8,18 +9,27 @@ import Script
 ## Child processes whose exit code and output are data, for scripts that
 ## compare them. Programs are run by argument list; no shell is involved.
 Process := [].{
+
+	## Whether the native host uses Windows paths and executables.
+	windows! : () => Bool
+	windows! = ||
+		match System.target!().os() {
+			Windows(_) => True
+			_ => False
+		}
+
 	Outcome : { code : I32, stdout : Str, stderr : Str }
 
 	## The compiler under test: `$ROC`, or `roc` on `PATH`.
 	roc! : () => Str
 	roc! = ||
 		match Env.var_str!(OsStr.from_str("ROC")) {
-			Ok(value) => if value.is_empty() "roc" else value
+			Ok(value) => if (value.is_empty()) "roc" else value
 			Err(_) => "roc"
 		}
 
 	## A command and how to show it: the program and its arguments.
-	Job : { cmd : Cmd, label : Str }
+	Job : { cmd : Cmd.Command, label : Str }
 
 	## A program with string arguments, run in `directory`.
 	command : Str, List(Str), Str -> Job
@@ -27,23 +37,6 @@ Process := [].{
 		cmd: Cmd.new(OsStr.from_str(program)).args(args.map(OsStr.from_str)).cwd(Path.utf8(directory)),
 		label: Str.join_with([program.split_on("/").last() ?? program].concat(args), " "),
 	}
-
-	## Programs shared with maintenance scripts keep their older source platform.
-	## Only product compiler execution replaces it with the admitted product host.
-	stable_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst"
-	product_cli = "https://github.com/roc-lang/basic-cli/releases/download/0.27.0/9yjxqdGTP4xSpSEmDazwTmRsehfRZzA19pwEKkR6fj1g.tar.zst"
-
-	product_args : List(Str) -> List(Str)
-	product_args = |args|
-		if args.any(|argument| ["fixtures/lock-snapshot/main.roc", "fixtures/consumer/main.roc"].contains(argument)) {
-			match args {
-				[subcommand, .. as rest] if ["build", "check", "test"].contains(subcommand) => [subcommand, "--replace-dep", stable_cli, product_cli].concat(rest)
-				_ => args
-			}
-		} else args
-
-	product_command : Str, List(Str), Str -> Job
-	product_command = |program, args, directory| command(program, product_args(args), directory)
 
 	## The same command with these environment variables added.
 	with_env : Job, List((Str, Str)) -> Job
@@ -62,7 +55,7 @@ Process := [].{
 	## started is an error; any exit code is an `Outcome`.
 	capture! : Job => Try(Outcome, _)
 	capture! = |job|
-		match Cmd.run!(job.cmd) {
+		match job.cmd.run!() {
 			Ok(output) => Ok(outcome(output))
 			Err(_) => Script.fail!("could not run ${job.label}")
 		}
@@ -98,9 +91,9 @@ Process := [].{
 	## Start a command with both streams captured, to be waited for later.
 	spawn! : Job => Try(Cmd.Child, _)
 	spawn! = |job| {
-		captured = Cmd.stderr(Cmd.stdout(job.cmd, Capture), Capture)
-		# Not `captured.spawn!()`: inside this module that names this function.
-		match Cmd.spawn!(captured) {
+		captured = job.cmd.stdout(Capture).stderr(Capture)
+		# Dispatch on the command type, rather than this module's spawn helper.
+		match Cmd.Command.spawn!(captured) {
 			Ok(child) => Ok(child)
 			Err(_) => Script.fail!("could not start ${job.label}")
 		}
@@ -133,7 +126,7 @@ Process := [].{
 	## through a symbolic link.
 	holds_program! : Str, Str => Bool
 	holds_program! = |directory, name|
-		match Path.canonicalize!(Path.utf8("${directory}/${name}${if Env.platform!().os == WINDOWS ".exe" else ""}")) {
+		match Path.canonicalize!(Path.utf8("${directory}/${name}${if (windows!()) ".exe" else ""}")) {
 			Ok(real) => !directory.is_empty() and (Path.is_file!(real) ?? False) and (Path.is_executable!(real) ?? False)
 			Err(_) => False
 		}
@@ -150,7 +143,7 @@ Process := [].{
 
 	## The directories of `PATH`, in order.
 	search_path! : () => List(Str)
-	search_path! = || (Env.var_str!(OsStr.from_str("PATH")) ?? "").split_on(if Env.platform!().os == WINDOWS ";" else ":").keep_if(|directory| !directory.is_empty())
+	search_path! = || (Env.var_str!(OsStr.from_str("PATH")) ?? "").split_on(if (windows!()) ";" else ":").keep_if(|directory| !directory.is_empty())
 
 	## The directories among these that hold an executable called `name`.
 	holding! : List(Str), Str => List(Str)
@@ -166,7 +159,7 @@ Process := [].{
 
 	## Fail with `message` unless `holds`.
 	check! : Bool, Str => Try({}, _)
-	check! = |holds, message| if holds Ok({}) else Script.fail!(message)
+	check! = |holds, message| if (holds) Ok({}) else Script.fail!(message)
 
 	## `to` as seen from the directory `from`; both absolute. Roc refuses an
 	## absolute platform path.
@@ -207,7 +200,7 @@ compare_bytes : List(U8), List(U8) -> [Before, Same, After]
 compare_bytes = |left, right|
 	match (left, right) {
 		([a, .. as left_rest], [b, .. as right_rest]) =>
-			if a < b Before else if a > b After else compare_bytes(left_rest, right_rest)
+			if (a < b) Before else if (a > b) After else compare_bytes(left_rest, right_rest)
 		([], []) => Same
 		([], _) => Before
 		(_, []) => After
@@ -231,8 +224,3 @@ expect Process.portable("/tmp/a\\b") == "/tmp/a\\b"
 
 expect Process.lines("one\r\ntwo\r\n\r\n") == ["one", "two"]
 expect Process.lines(" one \r\n") == [" one "]
-
-# Only the two explicitly dual-compiler consumers substitute their source platform.
-expect Process.product_args(["check", "fixtures/consumer/main.roc"]) == ["check", "--replace-dep", Process.stable_cli, Process.product_cli, "fixtures/consumer/main.roc"]
-expect Process.product_args(["test", "fixtures/lock-snapshot/main.roc"]) == ["test", "--replace-dep", Process.stable_cli, Process.product_cli, "fixtures/lock-snapshot/main.roc"]
-expect [[], ["version"], ["fmt", "--check", "fixtures"], ["build", "blueprint-cli/main.roc"], ["run", "https://example.test/app.tar.zst", "inspect"], ["bundle", "main.roc"]].all(|args| Process.product_args(args) == args)

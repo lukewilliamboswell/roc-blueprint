@@ -1,7 +1,7 @@
 ## Independent operational-report consumer; all I/O stays in main!.
 app [main!] {
 	core: "../../blueprint-core/main.roc",
-	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0-rc2/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af.tar.zst",
+	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst",
 }
 
 import core.LockSnapshot

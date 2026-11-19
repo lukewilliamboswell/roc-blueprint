@@ -2,22 +2,22 @@
   "schema_version": 1,
   "kind": "roc-zig-link-inputs",
   "repository": "lukewilliamboswell/roc-platform-template-zig",
-  "release": "link-inputs-sha256-2889e4c509a3a247cb2d38ae1400ea71f87ec79c6d6cec58cd7a953e051bdf08",
+  "release": "link-inputs-sha256-f9f8f03f88bd43957c2da73772c9a47363b48494acfbeab561972aaf9947883a",
   "manifest": {
     "asset": "build-input-release.json",
-    "sha256": "2889e4c509a3a247cb2d38ae1400ea71f87ec79c6d6cec58cd7a953e051bdf08"
+    "sha256": "f9f8f03f88bd43957c2da73772c9a47363b48494acfbeab561972aaf9947883a"
   },
   "source": {
-    "input_fingerprint": "a0a3a4bd00e19228089ae1fcab72f5760e75d373a994db82c391f27560283001",
-    "ref": "refs/heads/windows-startup-inputs",
+    "input_fingerprint": "1e6d05b6df5be038409e0977e38e4d9e2fe437ad552c2d5db46ca16c69c8540f",
+    "ref": "refs/heads/upgrade/nightly-pie-2026-11-14",
     "repository": "lukewilliamboswell/roc-platform-template-zig",
-    "sha": "5db8f9b9e661f5cbde0254d3520366ef4eab8bd4",
+    "sha": "99649586217e36d251b6ebf7ee0a5d1593b19c20",
     "workflow": "lukewilliamboswell/roc-platform-template-zig/.github/workflows/linker-inputs.yml"
   },
   "targets": {
     "all": {
       "asset": "link-inputs-all.tar",
-      "sha256": "a057de193f8c1f6e7f3bfc6f1999853e6c2a868567913af9384d7ecb99c5462a",
+      "sha256": "2e3b30d54b2e0b5d243585641e1613ebd4961bc435fb3fb868543e3318d3ca92",
       "size": 8253440
     }
   }
