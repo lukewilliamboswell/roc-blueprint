@@ -80,7 +80,7 @@ probe! = |sandbox| {
 ## refused (an isolated loopback has no such listener), denied, timed out, or
 ## no route. basic-cli has no tag for "network unreachable" and "host
 ## unreachable", so those arrive as the text of the operating system's error.
-unreachable : [TcpErr(IOErr)] -> Bool
+unreachable : [Interrupted, TcpErr(IOErr)] -> Bool
 unreachable = |refusal|
 	match refusal {
 		TcpErr(ConnectionRefused) => Bool.True
@@ -92,4 +92,4 @@ unreachable = |refusal|
 
 expect unreachable(TcpErr(ConnectionRefused)) and unreachable(TcpErr(TimedOut)) and unreachable(TcpErr(PermissionDenied))
 expect unreachable(TcpErr(Other("ErrorKind::NetworkUnreachable"))) and unreachable(TcpErr(Other("ErrorKind::HostUnreachable")))
-expect !unreachable(TcpErr(AddrNotAvailable)) and !unreachable(TcpErr(Unsupported)) and !unreachable(TcpErr(Other("ErrorKind::InvalidInput")))
+expect !unreachable(Interrupted) and !unreachable(TcpErr(AddrNotAvailable)) and !unreachable(TcpErr(Unsupported)) and !unreachable(TcpErr(Other("ErrorKind::InvalidInput")))
