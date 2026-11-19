@@ -20,6 +20,12 @@ The importable core package is `{core-url}`. Use the release's Roc compiler
 when compiling consumers. The compiler and platform update is released at the
 next breaking-version boundary; the Spec and lock formats remain unchanged.
 
+Pass Roc script arguments directly after the entry point, for example
+`Run(["roc-stable", "scripts/build.roc", "--release"])`; an extra `--` is
+forwarded to the script. On arm64 Linux, run basic-cli scripts with
+`roc --no-cache script.roc` to avoid the pinned compiler's cached execution
+failure. The no-Nix smoke tests use that mode on every system.
+
 == Development tooling
 
 `roc-stable` now selects the same November 18 nightly as the product compiler.

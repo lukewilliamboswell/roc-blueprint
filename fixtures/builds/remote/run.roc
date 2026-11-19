@@ -8,7 +8,7 @@ import cli.Stderr
 ## It says on stderr that it ran and writes the nonce it was given, so that
 ## neither a cached result nor silence can stand in for a real run.
 ##
-##   roc-stable run.roc -- NONCE
+##   roc-stable run.roc NONCE
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args|
 	match args.map(OsStr.display) {

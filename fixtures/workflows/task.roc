@@ -9,7 +9,7 @@ import cli.Utc
 
 ## Unsandboxed workflow tasks: exact argv events and deliberate source edits.
 ##
-##   roc-stable task.roc -- EVENTS MODE ARGS...
+##   roc-stable task.roc EVENTS MODE ARGS...
 ##
 ## Every run adds a record of `MODE ARGS...` to the directory EVENTS, in the
 ## form the suite's recording `nix` uses: each argument followed by a NUL

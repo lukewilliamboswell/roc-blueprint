@@ -7,9 +7,9 @@ import cli.Stderr
 
 ## Sandboxed artifacts expose exact current-source and dependency bytes.
 ##
-##   roc-stable build.roc -- library
-##   roc-stable build.roc -- app ARGS...
-##   roc-stable build.roc -- fail
+##   roc-stable build.roc library
+##   roc-stable build.roc app ARGS...
+##   roc-stable build.roc fail
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	result = match args.map(OsStr.display) {

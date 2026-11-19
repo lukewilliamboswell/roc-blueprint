@@ -10,8 +10,8 @@ config = [
 	Packages("default", From(NixPackages("@PACKAGES@"))),
 	Input("roc", "@ROC_OVERLAY@"),
 	# The fixture's tasks and builds are Roc scripts: one pinned compiler and
-	# the bundles those scripts name, and no other tool. Roc takes the first
-	# `--` for itself, so each command has one before the script's arguments.
+	# the bundles those scripts name, and no other tool. Arguments follow the
+	# entry point directly; the pinned compiler forwards an explicit `--`.
 	Environment(
 		"builder",
 		[
@@ -28,15 +28,15 @@ config = [
 	Shell("default", [Use("builder")]),
 	Source("assets", "path:./assets"),
 	Source("extra", "path:./packages"),
-	Task("args", [Use("builder"), Run(["roc-stable", "task.roc", "--", "args"])]),
-	Task("edit", [Use("builder"), Run(["roc-stable", "task.roc", "--", "edit"])]),
-	Task("control", [Use("builder"), Run(["roc-stable", "probe.roc", "--", "host"])]),
+	Task("args", [Use("builder"), Run(["roc-stable", "task.roc", "args"])]),
+	Task("edit", [Use("builder"), Run(["roc-stable", "task.roc", "edit"])]),
+	Task("control", [Use("builder"), Run(["roc-stable", "probe.roc", "host"])]),
 	Build(
 		"library",
 		[
 			Execute("native"),
 			Use("builder"),
-			Run(["roc-stable", "build.roc", "--", "library"]),
+			Run(["roc-stable", "build.roc", "library"]),
 			Output("dist/library"),
 		],
 	),
@@ -47,7 +47,7 @@ config = [
 			Use("builder"),
 			Inputs(["assets"]),
 			Needs(["library"]),
-			Run(["roc-stable", "build.roc", "--", "bundle"]),
+			Run(["roc-stable", "build.roc", "bundle"]),
 			Output("dist/bundle"),
 		],
 	),
@@ -61,7 +61,6 @@ config = [
 			Run([
 				"roc-stable",
 				"build.roc",
-				"--",
 				"app",
 				"",
 				"two words",
@@ -82,7 +81,7 @@ config = [
 		[
 			Execute("native"),
 			Use("builder"),
-			Run(["roc-stable", "probe.roc", "--", "sandbox"]),
+			Run(["roc-stable", "probe.roc", "sandbox"]),
 			Output("dist/isolation"),
 		],
 	),
@@ -94,7 +93,7 @@ config = [
 	Build("nested-link", [Execute("native"), Use("coreutils"), Run(["ln", "-s", "/etc/passwd", "nested/escape"]), Output("nested")]),
 	# None of these commands is declared: `roc-stable` belongs to another
 	# environment, and `builder` has neither a shell nor coreutils.
-	Build("undeclared", [Execute("native"), Use("bare"), Run(["roc-stable", "build.roc", "--", "library"]), Output("dist/library")]),
+	Build("undeclared", [Execute("native"), Use("bare"), Run(["roc-stable", "build.roc", "library"]), Output("dist/library")]),
 	Build("undeclared-shell", [Execute("native"), Use("builder"), Run(["sh", "-c", "mkdir dist && echo implicit >dist/shell"]), Output("dist/shell")]),
 	Build("undeclared-coreutils", [Execute("native"), Use("builder"), Run(["ls"]), Output("dist/listing")]),
 ]

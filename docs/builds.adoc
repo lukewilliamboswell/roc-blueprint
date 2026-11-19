@@ -31,9 +31,9 @@ builds with Nix and takes its bootstrap package set from the source `nix`;
 `Execute("native")` selects it. A `Source` belongs to Nix without a
 `Resolver`.
 
-`Run` is any argv; nothing about a build requires Roc. Roc takes the first
-`--` of its arguments for itself, so pass a script its own arguments after
-one: `Run(["roc-stable", "scripts/build.roc", "--", "--release"])`.
+`Run` is any argv; nothing about a build requires Roc. Pass a Roc script its
+arguments directly after its entry point:
+`Run(["roc-stable", "scripts/build.roc", "--release"])`.
 
 == What a build sees and produces
 

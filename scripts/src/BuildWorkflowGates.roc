@@ -270,7 +270,7 @@ workflow! = |suite, place, name, expected, refusal| {
 	}
 	BuildHarness.require!($prepared.is_empty(), "${name}: selected preparation was not executed")?
 	BuildHarness.require!($observed == expected, "${name}: effect order ${Str.inspect($observed)}, expected ${Str.inspect(expected)}")?
-	tasks = expected.keep_if(|step| step.kind == "task").map(|step| ["roc-stable", "task.roc", "--", suite.events].concat(step.argv))
+	tasks = expected.keep_if(|step| step.kind == "task").map(|step| ["roc-stable", "task.roc", suite.events].concat(step.argv))
 	BuildHarness.require!($commands == tasks, "${name}: task process argv ${Str.inspect($commands)}, expected ${Str.inspect(tasks)}")?
 	lines = ran.out.split_on("\n").drop_last(1)
 	outputs = lines.keep_if(|line| line.starts_with("/nix/store/"))

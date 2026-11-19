@@ -7,8 +7,8 @@ import cli.Stdout
 
 ## Host tasks expose exact argv and alter later, fresh build inputs.
 ##
-##   roc-stable task.roc -- args ARGS...   print the arguments as a JSON list
-##   roc-stable task.roc -- edit           write a file the next build must see
+##   roc-stable task.roc args ARGS...   print the arguments as a JSON list
+##   roc-stable task.roc edit           write a file the next build must see
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	result = match args.map(OsStr.display) {

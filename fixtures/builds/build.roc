@@ -8,9 +8,9 @@ import cli.Stderr
 
 ## Real builds with exact outputs, filtered trees and immutable inputs.
 ##
-##   roc-stable build.roc -- library
-##   roc-stable build.roc -- bundle
-##   roc-stable build.roc -- app ARGS...
+##   roc-stable build.roc library
+##   roc-stable build.roc bundle
+##   roc-stable build.roc app ARGS...
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	result = match args.map(OsStr.display) {

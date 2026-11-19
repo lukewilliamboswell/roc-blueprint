@@ -12,8 +12,8 @@ import cli.Tcp
 ## `probe.json` names a marker file outside the project, a listening TCP port
 ## on the host's loopback address and the token both hold.
 ##
-##   roc-stable probe.roc -- host      a task: both must be reachable
-##   roc-stable probe.roc -- sandbox   a build: neither may be
+##   roc-stable probe.roc host      a task: both must be reachable
+##   roc-stable probe.roc sandbox   a build: neither may be
 main! : List(OsStr) => Try({}, [Exit(I32)])
 main! = |args| {
 	result = match args.map(OsStr.display) {
