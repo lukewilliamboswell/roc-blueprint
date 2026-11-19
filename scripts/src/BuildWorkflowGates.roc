@@ -377,7 +377,7 @@ example_smoke! = |suite| {
 	config = "${project}/Blueprint.roc"
 	Path.write_utf8!(Path.utf8(config), replacements.fold(authored, |edited, (old, new)| edited.replace_each(old, new)))?
 	place = BuildHarness.layout(project)
-	_ = BuildHarness.command!(suite, { argv: [suite.roc, "check", config], cwd: suite.caller, extra: [], stdin: [], code: 0, service: NoService })?
+	_ = BuildHarness.command!(suite, { argv: [suite.roc, "check", "--no-cache", config], cwd: suite.caller, extra: [], stdin: [], code: 0, service: NoService })?
 	_ = BuildHarness.refused!(suite, place, ["build", "app"], "blueprint update")?
 	_ = BuildHarness.ok!(suite, place, ["update"])?
 	BuildHarness.require!(Path.is_file!(Path.utf8(place.lock)) ?? Bool.False, "example update did not publish authority")?
