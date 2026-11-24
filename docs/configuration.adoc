@@ -254,9 +254,9 @@ Environment("dev", [
 ]),
 ----
 
-With `${system}` alone the compiler reports a type mismatch of
-`from_interpolation` on `Url`, at the first line of the file and not at the
-recipe. `Recipes.file` avoids the interpolation altogether:
+With `${system}` alone the compiler points at the interpolation, reports the
+`System` and `Str` type mismatch and suggests `.to_str()`.
+`Recipes.file` accepts a literal template with placeholders.
 
 [source,roc,snippet=refused]
 ----

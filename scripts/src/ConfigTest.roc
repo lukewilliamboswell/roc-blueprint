@@ -811,11 +811,11 @@ program_fixtures = [
 		"tool 2.0 has no build for x86_64-darwin",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |system| if system == "x86_64-darwin" { crash "tool 2.0 has no build for x86_64-darwin" } else File("https://example.test/tool"))])])]
 	),
-	# The trap of this compiler: a System is not text, so it cannot stand in a
-	# URL as it is. `Recipes.file` and `system.to_str()` are the ways to write it.
+	# A System needs conversion to stand in a URL. The compiler points at
+	# the interpolation and suggests .to_str().
 	refused(
 		"SystemInUrl",
-		"from_interpolation",
+		"Convert it to a Str with .to_str()",
 		"[Name(\"bad\"), Environment(\"dev\", [Programs([Fetch(\"tool\", |system| File(\"https://example.test/tool-\${system}\"))])])]",
 	),
 ]
