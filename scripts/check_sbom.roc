@@ -3,7 +3,7 @@ app [main!] {
 	cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst",
 	compilers: "../blueprint-cli/compilers.roc",
 	core: "../blueprint-core/main.roc",
-	roc: "nightly-2026-11-18-a520eed",
+	roc: "nightly-2026-11-23-b5c77fc",
 }
 
 import cli.OsStr

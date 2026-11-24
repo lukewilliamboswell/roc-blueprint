@@ -47,7 +47,7 @@ and Roc bundle hash pin immutable source. Preparing the package cache and
 compiling the consumer may download dependencies; the pure functions do not.
 The library does not install or invoke the Blueprint executable.
 
-The consumer is tested with `nightly-2026-11-18-a520eed`, named by
+The consumer is tested with `nightly-2026-11-23-b5c77fc`, named by
 `blueprint compiler-version` and used by the repository's maintenance scripts.
 Pin this compiler in the outer app/toolchain. Matching the Blueprint compiler version does not share
 its embedded executable automatically. Native compiled consumers need no Roc
