@@ -33,7 +33,7 @@ config = [
 			Extend("dev"),
 			RocPackages(["https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"]),
 			Programs([
-				Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-23-b5c77fc")),
+				Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-24-ff5e544")),
 				Fetch("blueprint", Recipes.file("https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.5.0/blueprint-{system}")),
 			]),
 			Expect(["gh"]),

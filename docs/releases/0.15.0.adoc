@@ -1,6 +1,6 @@
 = roc-blueprint 0.15.0
 
-Blueprint builds with and embeds Roc `nightly-2026-11-23-b5c77fc`.
+Blueprint builds with and embeds Roc `nightly-2026-11-24-ff5e544`.
 The maintenance scripts and the manual's fetched compiler examples use the
 same nightly. The compiler now points at a `System` interpolated into a URL and
 suggests converting it with `.to_str()`.
