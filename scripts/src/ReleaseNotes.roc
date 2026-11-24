@@ -88,7 +88,8 @@ ReleaseNotes := [].{
 				"## Built from",
 				"",
 				"- Roc `${built.roc_tag}` and Zig `${built.zig}`; release scripts run with `roc-stable` ${built.roc_stable}",
-				"- Official compiler archives (roc-overlay inventory `${built.overlay_rev}`): ${Str.join_with(archives, ", ")}",
+				"- Official compiler archive hashes: ${Str.join_with(archives, ", ")}",
+				"- roc-overlay `${built.overlay_rev}`",
 				"- nixpkgs `${built.nixpkgs_rev}`",
 				"- roc-blueprint-core `${built.core_url}`",
 				"- Standalone SBOM tool: `blueprint-sbom-<system>` beside the CLI binaries, listed in `blueprint.sha256`; recommended for CI, which then needs no Roc and compiles nothing. The same tool as a [pinned Roc app bundle](${built.sbom_url}) runs with the compiler (same compiler pin; no Blueprint project required)",
@@ -226,7 +227,8 @@ expect ReleaseNotes.built_from(built_sample) ==
 	\\## Built from
 	\\
 	\\- Roc `nightly-1` and Zig `0.16.0`; release scripts run with `roc-stable` Roc compiler version nightly-0
-	\\- Official compiler archives (roc-overlay inventory `fb02fef7`): x86_64-linux `sha256-iTyG=`, aarch64-darwin `sha256-4BR/=`
+	\\- Official compiler archive hashes: x86_64-linux `sha256-iTyG=`, aarch64-darwin `sha256-4BR/=`
+	\\- roc-overlay `fb02fef7`
 	\\- nixpkgs `4975466d`
 	\\- roc-blueprint-core `https://example.test/core.tar.zst`
 	\\- Standalone SBOM tool: `blueprint-sbom-<system>` beside the CLI binaries, listed in `blueprint.sha256`; recommended for CI, which then needs no Roc and compiles nothing. The same tool as a [pinned Roc app bundle](https://example.test/roc-blueprint-sbom-tool.tar.zst) runs with the compiler (same compiler pin; no Blueprint project required)

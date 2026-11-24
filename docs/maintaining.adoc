@@ -87,7 +87,7 @@ The required checks are listed under
 the workflows when changing CI.
 
 The product and maintenance scripts use basic-cli 0.28.1 and
-`nightly-2026-11-18-a520eed`; fuzz targets use roc-fuzz 0.7.0.
+`nightly-2026-11-24-ff5e544`; fuzz targets use roc-fuzz 0.7.0.
 
 The complete suite requires x86_64 Linux and a running Nix daemon; the
 development shell supplies the rest. `zig build` builds the platform host for

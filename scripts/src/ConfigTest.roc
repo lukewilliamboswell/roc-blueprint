@@ -78,9 +78,9 @@ ConfigTest := [].{
 				"(programs ",
 				"(environment_programs ",
 				"(expects ",
-				"(urls (\"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-18-a520eed/roc_nightly-linux_x86_64-2026-11-18-a520eed.tar.gz\"))",
+				"(urls (\"https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-24-ff5e544/roc_nightly-linux_x86_64-2026-11-24-ff5e544.tar.gz\"))",
 				"(unpack TarGz)",
-				"(path \"roc_nightly-windows_x86_64-2026-11-18-a520eed/roc.exe\")",
+				"(path \"roc_nightly-windows_x86_64-2026-11-24-ff5e544/roc.exe\")",
 				"(unpack Zip)",
 				"(urls (\"https://example.test/1.0/tool-linux\" \"https://mirror.example.test/1.0/tool-linux\"))",
 				"(urls (\"https://example.test/windows/notes-x86_64\"))",
@@ -664,7 +664,7 @@ recipe_definition =
 	\\		_ => Unavailable
 	\\	}
 	\\
-	\\roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-18-a520eed"))
+	\\roc_stable = Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-24-ff5e544"))
 
 ## Fetched programs and expected tools: what is accepted, and each mistake
 ## with the check that refuses it. A quoted value is refused by its own type
@@ -697,7 +697,7 @@ program_fixtures = [
 	rejected(
 		"UnavailableEverywhere",
 		"Fetch roc-stable: its recipe answers Unavailable",
-		\\[Name("invalid"), Systems(["riscv64-linux"]), Environment("dev", [Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-18-a520eed"))])])]
+		\\[Name("invalid"), Systems(["riscv64-linux"]), Environment("dev", [Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-24-ff5e544"))])])]
 	),
 	rejected(
 		"TwoProgramsOneName",
@@ -719,7 +719,7 @@ program_fixtures = [
 	rejected(
 		"ProgramAndCommand",
 		"has roc-stable as both",
-		\\[Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Command("roc-stable", "nix#rocpkgs.nightly")]), Environment("dev", [Extend("base"), Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-18-a520eed"))])])]
+		\\[Name("invalid"), Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))), Environment("base", [Command("roc-stable", "nix#rocpkgs.nightly")]), Environment("dev", [Extend("base"), Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-24-ff5e544"))])])]
 	),
 	rejected(
 		"ProgramAndExpect",
@@ -811,11 +811,11 @@ program_fixtures = [
 		"tool 2.0 has no build for x86_64-darwin",
 		\\[Name("bad"), Environment("dev", [Programs([Fetch("tool", |system| if system == "x86_64-darwin" { crash "tool 2.0 has no build for x86_64-darwin" } else File("https://example.test/tool"))])])]
 	),
-	# The trap of this compiler: a System is not text, so it cannot stand in a
-	# URL as it is. `Recipes.file` and `system.to_str()` are the ways to write it.
+	# A System needs conversion to stand in a URL. The compiler points at
+	# the interpolation and suggests .to_str().
 	refused(
 		"SystemInUrl",
-		"from_interpolation",
+		"Convert it to a Str with .to_str()",
 		"[Name(\"bad\"), Environment(\"dev\", [Programs([Fetch(\"tool\", |system| File(\"https://example.test/tool-\${system}\"))])])]",
 	),
 ]

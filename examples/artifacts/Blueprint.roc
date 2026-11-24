@@ -6,14 +6,14 @@ config = [
 	Name("artifacts"),
 	Systems(["x86_64-linux"]),
 	Packages("nix", From(NixPackages("github:NixOS/nixpkgs/nixos-unstable"))),
-	Input("roc", "github:roc-lang/roc-overlay/1181a21dee94818725b9ecfa5ed54e7d9219cd0e"),
+	Input("roc", "github:roc-lang/roc-overlay/eb487e7307a6d664289c22d15be07766f490178f"),
 	# The scripts are Roc programs. A build has no network, so the bundles
 	# they name are locked here: basic-cli, and http, which basic-cli needs.
 	Environment(
 		"dev",
 		[
 			Overlays(["roc"]),
-			Command("roc-stable", "nix#rocpkgs.nightly-2026-11-15-f25da45"),
+			Command("roc-stable", "nix#rocpkgs.nightly-2026-11-22-3350b1c"),
 			RocPackages([
 				"https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst",
 				"https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",

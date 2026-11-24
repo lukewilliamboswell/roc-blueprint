@@ -1,0 +1,18 @@
+= roc-blueprint 0.15.0
+
+Blueprint builds with and embeds Roc `nightly-2026-11-24-ff5e544`.
+The maintenance scripts and the manual's fetched compiler examples use the
+same nightly. The compiler now points at a `System` interpolated into a URL and
+suggests converting it with `.to_str()`.
+
+== Upgrade
+
+Install the Blueprint binary from this release and use its platform in Blueprint.roc.
+
+[source,roc,snippet=unchecked]
+----
+app [config] { pf: platform "{platform-url}" }
+----
+
+Use the release's Roc nightly to compile consumers of the importable core
+package at `{core-url}`. The Spec and lock formats are unchanged.

@@ -4,7 +4,7 @@ app [main!] {
 	compilers: "../blueprint-cli/compilers.roc",
 	core: "../blueprint-core/main.roc",
 	nix: "../blueprint-nix/main.roc",
-	roc: "nightly-2026-11-18-a520eed",
+	roc: "nightly-2026-11-24-ff5e544",
 }
 
 import cli.Env

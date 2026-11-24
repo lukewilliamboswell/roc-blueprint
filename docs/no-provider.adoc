@@ -20,7 +20,7 @@ import pf.Recipes
 config = [
 	Name("my-package"),
 	Environment("dev", [
-		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-18-a520eed"))]),
+		Programs([Fetch("roc-stable", Recipes.roc_nightly("nightly-2026-11-24-ff5e544"))]),
 		Expect(["git"]),
 		RocPackages([
 			"https://github.com/roc-lang/basic-cli/releases/download/0.28.1/7brgwR8YUqfeGrkdfF1V4GPPN7DnP7ftqub9KcrTEZtr.tar.zst",
