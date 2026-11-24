@@ -7,7 +7,7 @@ suggests converting it with `.to_str()`.
 
 == Upgrade
 
-Install the 0.15.0 Blueprint binary and use this platform in Blueprint.roc.
+Install the Blueprint binary from this release and use its platform in Blueprint.roc.
 
 [source,roc,snippet=unchecked]
 ----
