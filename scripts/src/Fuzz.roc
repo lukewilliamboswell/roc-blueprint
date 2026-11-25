@@ -102,14 +102,11 @@ Fuzz := [].{
 	compiler_batches : List(a) -> List(List(a))
 	compiler_batches = |jobs| jobs.chunks_of(compiler_jobs)
 
-	## Check and build must execute from source. On the November 7 nightly,
-	## a checked module cache can make a subsequent fuzz build segfault.
-	## Neither phase may reuse a cached verdict or compiled representation.
 	check_args : Str -> List(Str)
-	check_args = |source| ["check", "--no-cache", source]
+	check_args = |source| ["check", source]
 
 	build_args : Str, Str -> List(Str)
-	build_args = |source, output| ["build", "--fuzz", "--specialize=no", "--no-cache", source, "--output=${output}"]
+	build_args = |source, output| ["build", "--fuzz", source, "--output=${output}"]
 
 	## Build and run the requested targets, from the repository root.
 	run! : Str, Request => Try({}, _)
@@ -263,8 +260,8 @@ expect Fuzz.flags(Timed(30), False, "/a/t-", []) == ["-max_total_time=30", "-len
 expect Fuzz.tail("a\nb\nc", 2) == "b\nc" and Fuzz.tail("a\nb", 5) == "a\nb"
 
 # Both phases force compilation; fuzz instrumentation and the exact target/output remain.
-expect Fuzz.check_args("target/main.roc") == ["check", "--no-cache", "target/main.roc"]
-expect Fuzz.build_args("target/main.roc", "/work/target") == ["build", "--fuzz", "--specialize=no", "--no-cache", "target/main.roc", "--output=/work/target"]
+expect Fuzz.check_args("target/main.roc") == ["check", "target/main.roc"]
+expect Fuzz.build_args("target/main.roc", "/work/target") == ["build", "--fuzz", "target/main.roc", "--output=/work/target"]
 
 # Every target stays in order, including the final odd batch; an empty selection is empty.
 expect Fuzz.compiler_batches([]) == []
