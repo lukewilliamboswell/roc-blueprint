@@ -40,16 +40,16 @@
           # Official archives can precede their roc-overlay inventory entry.
           compilerArchives = {
             "x86_64-linux" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-24-ff5e544/roc_nightly-linux_x86_64-2026-11-24-ff5e544.tar.gz";
-              hash = "sha256-Rx2IsK9nR6yWVPL3oLQmCAvU7JKairUZoRHo9U6YZU4=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-25-d5a4f1e/roc_nightly-linux_x86_64-2026-11-25-d5a4f1e.tar.gz";
+              hash = "sha256-5EB0uWwJQPRoxMvyZiJBCu34C1wuJl9EtuHxDJM2AHg=";
             };
             "aarch64-linux" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-24-ff5e544/roc_nightly-linux_arm64-2026-11-24-ff5e544.tar.gz";
-              hash = "sha256-YCU2xNbwa/G0jG/0f7EBoan7T4hySAyVydMXoaO0/uY=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-25-d5a4f1e/roc_nightly-linux_arm64-2026-11-25-d5a4f1e.tar.gz";
+              hash = "sha256-6WqCk+whpXaC2IMvmIgdN6yUBEdM9+VYjHixpWbv08s=";
             };
             "aarch64-darwin" = {
-              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-24-ff5e544/roc_nightly-macos_apple_silicon-2026-11-24-ff5e544.tar.gz";
-              hash = "sha256-adFE/EqJrBsfkaWOr2BhZxWibTtrWY7v4L/8lyTmD6M=";
+              url = "https://github.com/roc-lang/nightlies/releases/download/nightly-2026-11-25-d5a4f1e/roc_nightly-macos_apple_silicon-2026-11-25-d5a4f1e.tar.gz";
+              hash = "sha256-5Qfs3poCSbZ9TAgTOqmkvwtllFI9bQ4CR+Mb0t94MB8=";
             };
           };
           roc = roc-overlay.packages.${system}.nightly.overrideAttrs (previous: {
@@ -61,7 +61,7 @@
             passthru = previous.passthru // {
               tag = rocTag;
               compilerVersion = rocTag;
-              compilerCommit = "ff5e5447850e6ae4ad06f9dcc1a255fae582123a";
+              compilerCommit = "d5a4f1e9e128359a8d4d3caea40fe3ba7e6eb1e2";
               source = {
                 inherit (compilerArchives.${system}) url;
                 sha256 = compilerArchives.${system}.hash;
@@ -73,7 +73,7 @@
           # The compiler the scripts in scripts/ run on, under the command name
           # `roc-stable` alone. It moves only by a reviewed edit here, so the
           # scripts keep working while the product moves to a newer nightly.
-          rocStableTag = "nightly-2026-11-24-ff5e544";
+          rocStableTag = "nightly-2026-11-25-d5a4f1e";
           # Reuse the official archive when both pins agree, including before
           # roc-overlay inventories it. The maintenance pin remains explicit.
           rocStableCompiler = if rocStableTag == rocTag then roc else roc-overlay.packages.${system}.${rocStableTag};
@@ -141,7 +141,7 @@
               {
                 src = pkgs.fetchurl {
                   url = "https://github.com/roc-lang/nightlies/releases/download/${rocTag}/roc_nightly-source-${lib.removePrefix "nightly-" rocTag}.tar.gz";
-                  hash = "sha256-myYqIdnnzAxn4n9MJRnymCqhqJlDqoPdABBXNiAPzRU=";
+                  hash = "sha256-xiI4q729Jpa+Vq9IC8r1RsQ22L2s/czOVU1UmAQ+uoQ=";
                 };
               }
               ''
