@@ -8,6 +8,8 @@ Read the https://github.com/lukewilliamboswell/roc-blueprint/releases[published 
 for version-specific changes and upgrade instructions.
 
 ifdef::release-records[]
+include::releases/0.14.1.adoc[leveloffset=+1]
+
 include::releases/0.15.0.adoc[leveloffset=+1]
 
 include::releases/0.14.0.adoc[leveloffset=+1]
