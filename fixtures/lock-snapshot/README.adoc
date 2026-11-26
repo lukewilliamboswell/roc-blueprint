@@ -14,7 +14,7 @@ identities and metadata across Roc, Python, `jq`, Nix and other tools.
 
 == Run from a Blueprint checkout
 
-Run these commands at the repository root with `nightly-2026-11-24-ff5e544`
+Run these commands at the repository root with `nightly-2026-11-25-d5a4f1e`
 as `roc`. The fixture uses basic-cli 0.28.1, as do the maintenance scripts.
 The compiler may prepare this dependency; the pure functions perform no I/O.
 
@@ -70,7 +70,7 @@ core: "https://github.com/lukewilliamboswell/roc-blueprint/releases/download/0.7
 `<content-hash>` is a placeholder, not a published asset name. Get the exact
 `roc-blueprint-core-*.tar.zst` URL from the release's assets once that release
 is published; do not use a branch URL or the configuration-platform bundle.
-Use `nightly-2026-11-24-ff5e544` with the checked example's basic-cli 0.28.1
+Use `nightly-2026-11-25-d5a4f1e` with the checked example's basic-cli 0.28.1
 URL. Pin this pair in your own toolchain. The
 Blueprint executable's embedded compiler is not a standalone compiler for
 your app.

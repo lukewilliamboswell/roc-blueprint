@@ -21,10 +21,10 @@ SHA-256 `947e6816f7825b2b45027c2c32e7085da9934defa535de4a6a46b10a4d5257fa`,
 matching the committed upstream Cargo.lock. Its Cargo.toml establishes the
 build-only crate edges. The pinned basic-cli Cargo.toml enables `bundled`.
 
-The product compiler nightly `nightly-2026-11-24-ff5e544` identifies Roc commit
-`ff5e5447850e6ae4ad06f9dcc1a255fae582123a`, recorded by the
-[official nightly release](https://github.com/roc-lang/nightlies/releases/tag/nightly-2026-11-24-ff5e544)
-and [upstream commit](https://github.com/roc-lang/roc/commit/ff5e5447850e6ae4ad06f9dcc1a255fae582123a).
+The product compiler nightly `nightly-2026-11-25-d5a4f1e` identifies Roc commit
+`d5a4f1e9e128359a8d4d3caea40fe3ba7e6eb1e2`, recorded by the
+[official nightly release](https://github.com/roc-lang/nightlies/releases/tag/nightly-2026-11-25-d5a4f1e)
+and [upstream commit](https://github.com/roc-lang/roc/commit/d5a4f1e9e128359a8d4d3caea40fe3ba7e6eb1e2).
 Bootstrap archive digests and sizes come from that release's asset metadata and
 are checked against downloaded bytes before embedding. This does not establish
 a complete compiler archive dependency or license inventory. The generation
